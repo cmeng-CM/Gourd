@@ -146,7 +146,7 @@ git status --porcelain                             # 干净
 | A9 | CI 产品名 + **日志导出筛选的消费方** | `APP_NAME: Atoll`（`release.yml:30`）、DMG 名、`Atoll Logs.zip`、`exportLogs` 里按 `subsystem == 'com.Ebullioscopic.Atoll'` 与 `contains("Atoll")` 筛选（**基线 c7305ec 实为 `DynamicIslandApp.swift:1211,1223,1229`**，docs 早先记的 1321/1347/1353 来自 dev HEAD） | `DynamicIsland/DynamicIslandApp.swift:1211,1223,1229`（T9 已改为 `com.cmeng.gourd` / `contains("Gourd")`）、`.github/workflows/release.yml`（P0 不动，见 P0-5/D-08：推送前必须先改为手动触发或删除） | `Gourd` / `com.cmeng.gourd` |
 | A10 | CI 里 entitlements 路径 | `DynamicIsland/DynamicIsland.entitlements` | `.github/workflows/ci.yml`（Build 步骤） | 保持不变即可（文件路径不含产品名，仅需确认） |
 | A11 | 应用图标 | `AppIcon` / `AppIconDev` / `AppIconAlpha/Beta/Nightly` 五套 | `Assets.xcassets/` | 替换 `AppIcon`（Release）与 `AppIconDev`（Debug）；其余可先留 |
-| ~~A13~~ | ~~Swift 模块名~~ | — | — | **不改**：加 `PRODUCT_MODULE_NAME = Atoll` 保持模块名不变（D-10）——改了会让 4 个上游单测文件的 `@testable import Atoll` 编译失败，而本地只构建 app、CI 不实跑，看不见 |
+| ~~A13~~ | ~~Swift 模块名~~ | — | — | **不改**：加 `PRODUCT_MODULE_NAME = Atoll` 保持模块名不变（D-10）——改了会让 4 个上游单测文件的 `@testable import Atoll` 编译失败，而本地只构建 app、CI 不实跑，看不见。**（2026-09-27 晚反转**：用户要求清除一切 Atoll 字样 → `PRODUCT_MODULE_NAME = Gourd`，4 个测试文件 import 已同步，见 [12](12-p1-batches.md)；季度同步在 pbxproj 该行的冲突为接受代价**）** |
 | A12 | 日志 subsystem | 四种变体：`com.ebullioscopic.Atoll`（`Logger.swift:66`、`ReminderLiveActivityManager.swift:50`）、`com.Ebullioscopic.Atoll`（`TimerManager.swift:131`、`SystemTimerBridge.swift:30`、`SpotifyLoginSheet.swift:39`）、`com.atoll.DynamicIsland`（`CodexQuotaClient.swift:6`、`AntigravityUsageProvider.swift:7`）、`com.atoll.dynamicisland`（`audio/AudioTap.swift:30`） | `utils/Logger.swift:66`、`managers/TimerManager.swift:131`、`managers/SystemTimerBridge.swift:30`、`managers/ReminderLiveActivityManager.swift:50`、`components/Settings/SpotifyLoginSheet.swift:39`、`managers/LLMUsage/Quota/CodexQuotaClient.swift:6`、`managers/LLMUsage/AntigravityUsageProvider.swift:7`、`audio/AudioTap.swift:30`（T7 回写：补上 `AudioTap.swift`） | 统一 `com.cmeng.gourd`（T3/T9 已落） |
 
 > **A5/A6/A7 是 P0 里唯一有安全后果的改动**：不处理的话，Sparkle 会按照上游 feed 检查更新，并有可能把 **Atoll 的包安装到壶中天（Gourd）上**（公钥仍是上游的，签名校验会通过）。必须在第一次分发前修掉，P0 就修。
@@ -174,6 +174,8 @@ git status --porcelain                             # 干净
 ### C. 文案相关（不影响功能，随手改）
 
 `os.Logger` category、菜单标识 `Atoll.Focus.Menu` 等（`DynamicIslandApp.swift:1120-1311`）、无障碍标识 `AtollNotch`（`ContentView.swift:688`，**UI 测试依赖它，改了要同步改测试**）、音频设备名 `Atoll_Virtual_Tap`（`audio/AudioTap.swift:285`）、Apple Notes 同步文件夹名 `Atoll`（`AppleNotesSyncManager.swift:56`）、Codex User-Agent（`CodexQuotaClient.swift:42`）、`caffeinate` 理由字符串（`CaffeinateManager.swift:155`）、Localizable.xcstrings 里的 "Atoll"、市场链接 `getatoll.app/marketplace`（`ExtensionsSettings.swift:72`，应改为我们自己的插件清单仓库或直接移除）。
+
+> **C 表已于 2026-09-27 晚清算**（用户要求清除一切 Atoll 字样）：上述各项除「笔记 `atoll:id` 数据标记」（数据格式，随 B 表留到 P4）外全部落地，范围与保留项详见 [12](12-p1-batches.md)「本批已完成」。
 
 **验收**
 ```bash

@@ -169,6 +169,6 @@ log show --last 6m --predicate 'process == "Gourd"'               # 0 条
 
 **单测失败定性**：TEST_HOST（Gourd.app）在 runner 上**正常启动**（日志中 BluetoothAudioManager 等管理器逐个初始化），但 360s 内测试通道未建立连接、被判定 hung——P0-8 预判的「headless runner 上 LSUIElement 宿主」风险**坐实**。日志另有 `Accessibility permission missing; prompt user to enable it`（headless 无法响应授权弹窗，疑似有管理器阻塞在授权等待；未定论）。
 
-**本机不受影响**：同日晚在签名去上游化（pbxproj 改 ad-hoc，见 10「已知限制」）后，**不带任何签名覆盖**裸跑 `xcodebuild test -only-testing:DynamicIslandTests` → `** TEST SUCCEEDED **`。
+**根因已定位并修复（2026-09-27 晚）**：本地清扫后重跑单测复现了与 CI 相同的 "test runner hung"，逐帧采样定位到**两个启动期主线程阻塞**——① `DownloadManager.init()` 在主线程同步枚举 TCC 保护的 `~/Downloads`，授权弹窗未响应即死锁（headless CI 上弹窗永远无法响应 → 必然挂起）；② `BluetoothAudioManager.init()` 的 `IOBluetoothHostController.default()` 在 XCTest 宿主下 dispatch_once 卡死主队列。两处均改为后台队列探测后本地 **27/27 恢复**。CI 预计同根因，推送后复跑确认。
 
-**待决策**：CI 单测 job 的处置（移除 / `continue-on-error` / 调研 headless 阻塞根因）——未定前该 job 持续红。
+**本机不受影响**：同日晚在签名去上游化（pbxproj 改 ad-hoc，见 10「已知限制」）后，**不带任何签名覆盖**裸跑 `xcodebuild test -only-testing:DynamicIslandTests` → `** TEST SUCCEEDED **`。
