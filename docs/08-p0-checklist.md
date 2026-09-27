@@ -94,18 +94,19 @@ git merge --allow-unrelated-histories l0
 | `NOTICE` | **boring.notch 署名声明**（Atoll 的 GPL 义务） | **合并，不覆盖**：保留上游段 + 加"壶中天（Gourd）基于 Atoll 修改" + 我们的登记表。详见 P0-6 |
 | `LICENSE` | GPL-3.0 | **无冲突**（已实测与我们的字节相同） |
 | `.gitignore` | 上游规则 | 合并（取并集） |
-| `scripts/` | 9 个 ruby 脚本（构建辅助） | 无同名文件冲突。**但**按 P0-2 下一步把我们的工具迁走 |
+| `scripts/` | 9 个 ruby 脚本（构建辅助） | 无同名文件冲突。**但**按 P0-2 把我们的工具迁到 `tools/`（T8 已完成，见下） |
 | `docs/` | **上游无此目录** | 无冲突 |
 
-**收尾：把仓库自身工具从 `scripts/` 迁到 `tools/`**
+**收尾：把仓库自身工具从 `scripts/` 迁到 `tools/`（T8 已完成）**
 
 上游 `scripts/` 是 Xcode 构建辅助脚本（`add_unit_test_target.rb` / `fix_test_host.rb` 等），与我们的"上游同步与校验"脚本职责完全不同。混在一起会让未来的合并冲突难以判断归属。
 
 ```bash
-git mv scripts/sync-upstreams.sh tools/sync-upstreams.sh
-git mv scripts/verify-upstreams.sh tools/verify-upstreams.sh
-# 同步更新 references: README.md / docs/04-upstreams.md 里的路径
+mkdir -p tools
+git mv scripts/*-upstreams.sh tools/     # 实际迁走的是 sync-upstreams.sh 与 verify-upstreams.sh 两个
 ```
+
+迁完 `scripts/` 只剩上游自带的 9 个 ruby 脚本；引用路径已同步到 `README.md`（上手章节 + 目录约定）与两个脚本自身的 usage 行。同批收尾：`tools/verify-upstreams.sh` 增加 dependency 行豁免与 `Package.resolved` pin 一致性检查（验收：`bash tools/verify-upstreams.sh` 退出码 0）。
 
 ### 分支模型
 

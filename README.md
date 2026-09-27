@@ -40,7 +40,8 @@
 ├── NotchDrop/ OpenYoink/ DynamicNotchKit/ ...   ← 功能来源（MIT/Apache/MPL）
 └── lagoon/                ← 本项目仓库（应用名 壶中天 / Gourd；目录名将在 P0 改为 gourd）
     ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射
-    ├── scripts/           ← 上游同步与校验脚本
+    ├── tools/             ← 本仓库自身的工具：上游同步与校验脚本
+    ├── scripts/           ← 上游自带的构建辅助 ruby 脚本（随基线引入，不改）
     ├── upstreams.tsv      ← 机器可读的上游清单（用途 + 许可 + 使用方式）
     ├── NOTICE             ← 上游署名（GPL 义务之一）
     └── LICENSE            ← GPL-3.0
@@ -50,10 +51,10 @@
 
 ```bash
 # 1) 按清单校验上游是否齐全
-bash scripts/verify-upstreams.sh
+bash tools/verify-upstreams.sh
 
 # 2) 拉取缺失的上游 / 更新已有上游
-bash scripts/sync-upstreams.sh
+bash tools/sync-upstreams.sh
 
 # 3) 阅读设计，从 docs/02-roadmap.md 的 P0 开始
 ```

@@ -1,6 +1,7 @@
 #!/bin/bash
 # 按 upstreams.tsv 拉取缺失的上游仓库 / 刷新已有的参考仓库
-# 用法: bash scripts/sync-upstreams.sh [dir]   # 不带参数=全部；带 dir=只处理该目录
+# （mode=dependency 的行由 SPM 引入，不 clone 到同级目录）
+# 用法: bash tools/sync-upstreams.sh [dir]   # 不带参数=全部；带 dir=只处理该目录
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$(dirname "$HERE")"          # ~/workspace/github
@@ -34,6 +35,8 @@ tail -n +2 "$MANIFEST" | while IFS=$'\t' read -r dir repo mode license usage pur
         echo "SKIP   $dir  (mode=$mode)"
         ;;
     esac
+  elif [[ "$mode" == "dependency" ]]; then
+    echo "SKIP   $dir  (mode=dependency：SPM 依赖，按 upstreams.tsv 登记的 revision 由 Package.resolved 锁定)"
   else
     if [[ "$mode" == "full" ]]; then
       git clone "https://github.com/$repo.git" "$target" >/dev/null 2>&1
@@ -45,4 +48,4 @@ tail -n +2 "$MANIFEST" | while IFS=$'\t' read -r dir repo mode license usage pur
       || echo "FAIL   $dir  ($repo)"
   fi
 done
-echo "完成。基座合并前请先跑 scripts/verify-upstreams.sh 并自测（多屏 / 合盖 / 展开动画 / 各模块）。"
+echo "完成。基座合并前请先跑 tools/verify-upstreams.sh 并自测（多屏 / 合盖 / 展开动画 / 各模块）。"

@@ -1,5 +1,6 @@
 dir	repo	mode	license	usage	purpose	clone_commit	key
-Atoll	Ebullioscopic/Atoll	full	GPL-3.0	fork	代码基座（含 XPC 扩展体系）	ad6834e	base
+Atoll	Ebullioscopic/Atoll	full	GPL-3.0	fork	代码基座（含 XPC 扩展体系）	c7305ec (v2.3.3-beta.3)	base
+AtollExtensionKit	Ebullioscopic/AtollExtensionKit	dependency	LGPL-3.0（上游当前；我们 pin 的 e2d30af 早于上游 29656205 加入该 LICENSE，抬 pin 需另行决策）	dependency	上游内容描述符与 XPC 协议定义	e2d30af	lib
 boring.notch	TheBoredTeam/boring.notch	full	GPL-3.0	partial	功能对照：媒体控制、HUD、手势、日历	d58240c	feature
 NotchDrop	Lakr233/NotchDrop	shallow	MIT	partial	文件暂存 + AirDrop	e70b3d7	feature
 OpenYoink	MuQY1818/OpenYoink	shallow	MIT	partial	拖拽暂存与岛形态	874bd05	feature
@@ -9,7 +10,7 @@ OnlySwitch	jacklandrin/OnlySwitch	shallow	MIT	partial	快捷开关实现	e3bf4a9
 Maccy	p0deje/Maccy	shallow	MIT	partial	剪贴板历史	c376789	feature
 LyricsX	ddddxxx/LyricsX	shallow	MPL-2.0	partial	歌词渲染与同步（保持 MPL 文件独立）	c16b6a4	feature
 lyrimuse	Yudaotor/lyrimuse	shallow	GPL-3.0	partial	逐字歌词、国内音乐源	56ec070	feature
-KeyboardShortcuts	sindresorhus/KeyboardShortcuts	shallow	MIT	dependency	全局快捷键	772133d	lib
+KeyboardShortcuts	sindresorhus/KeyboardShortcuts	shallow	MIT	dependency	全局快捷键	045cf174 (v2.3.0 依赖 pin；本地参照 clone 772133d = 3.1.0)	lib
 alt-tab-macos	lwouis/alt-tab-macos	shallow	GPL-3.0	reference	窗口切换（非目标，仅参考）	0d9d710	reference
 LaunchNext	RoversX/LaunchNext	shallow	GPL-3.0	reference	启动台数据与交互参考	0c7d0f7	reference
 KeepingYouAwake	newmarcel/KeepingYouAwake	shallow	MIT	partial	防休眠	2be93dd	feature
