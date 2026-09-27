@@ -134,19 +134,19 @@ git status --porcelain                             # 干净
 
 | # | 项 | 现值（上游） | 文件:行 | 新值 |
 |---|---|---|---|---|
-| A1 | Release Bundle ID | `com.Ebullioscopic.Atoll`（`project.pbxproj:907`） | `project.pbxproj:832,907` | `com.cmeng.<应用名>`（域名根已定，后缀见 D-9） |
-| A2 | Debug Bundle ID | `com.Ebullioscopic.Atoll.dev`（`:832`） | 同上 | `com.cmeng.<应用名>.dev` |
-| A3 | `PRODUCT_NAME` | `Atoll` | `project.pbxproj:833,908` | `Gourd`（二进制名/路径用 ASCII，避免中文路径） |
-| A4 | `CFBundleDisplayName` | `Atoll` | `project.pbxproj:808,883` | **`壶中天`**（用户可见名；也可先设 `Gourd`，后续走 InfoPlist.strings 本地化） |
-| A5 | **Sparkle feed URL** | `raw.githubusercontent.com/Ebullioscopic/Atoll/main/Updates/appcast.xml` | `DynamicIsland/Info.plist:21` | **P0 必须处理**：指向本仓库的空 appcast，或清空 + 关闭自动更新 |
-| A6 | **Sparkle EdDSA 公钥** | `q2YQaJ1umGkaIJWMGN9Isj5fx/...` | `DynamicIsland/Info.plist:23` | P0 置空；P5 生成我们自己的密钥对 |
-| A7 | Sparkle 下载/安装服务 | `SUEnableDownloaderService`/`SUEnableInstallerLauncherService = true` | `DynamicIsland/Info.plist` | P0 改 `false` |
-| A8 | 测试 host 路径 | `$(BUILT_PRODUCTS_DIR)/Atoll.app/Contents/MacOS/Atoll` | `scripts/fix_test_host.rb:9`、`scripts/add_unit_test_target.rb:38` | 跟随 `PRODUCT_NAME` |
-| A9 | CI 产品名 + **日志导出筛选的消费方** | `APP_NAME: Atoll`、DMG 名、`Atoll Logs.zip`、`exportLogs` 里按 `subsystem == 'com.Ebullioscopic.Atoll'` 与 `contains("Atoll")` 筛选（**基线 c7305ec 实为 `DynamicIslandApp.swift:1211,1223,1229`**，docs 早先记的 1321/1347/1353 来自 dev HEAD） | `.github/workflows/release.yml`、`DynamicIsland/DynamicIslandApp.swift` | `Gourd` / `com.cmeng.gourd` |
+| A1 | Release Bundle ID | `com.Ebullioscopic.Atoll`（**基线实测 `project.pbxproj:831`**；早先记的 `:907` 来自 dev HEAD） | `project.pbxproj:831`（Release）/ `:756`（Debug） | `com.cmeng.gourd`（域名根已定，后缀见 D-9） |
+| A2 | Debug Bundle ID | `com.Ebullioscopic.Atoll.dev`（**基线实测 `:756`**；早先记的 `:832` 是 Release 的 `PRODUCT_NAME` 行） | 同上 | `com.cmeng.gourd.dev` |
+| A3 | `PRODUCT_NAME` | `Atoll` | `project.pbxproj:757`（Debug）/ `:832`（Release）（T7 回写：早先记的 `833,908` 来自 dev HEAD） | `Gourd`（二进制名/路径用 ASCII，避免中文路径） |
+| A4 | `CFBundleDisplayName` | `Atoll` | `project.pbxproj:732`（Debug）/ `:807`（Release）（T7 回写：早先记的 `808,883` 来自 dev HEAD） | **`壶中天`**（用户可见名；也可先设 `Gourd`，后续走 InfoPlist.strings 本地化） |
+| A5 | **Sparkle feed URL** | `raw.githubusercontent.com/Ebullioscopic/Atoll/main/Updates/appcast.xml` | `DynamicIsland/Info.plist:20`（T7 回写：早先记的 `:21` 偏一行） | **P0 必须处理**：指向本仓库的空 appcast，或清空 + 关闭自动更新 |
+| A6 | **Sparkle EdDSA 公钥** | `q2YQaJ1umGkaIJWMGN9Isj5fx/...` | `DynamicIsland/Info.plist:22`（T7 回写：早先记的 `:23` 偏一行） | P0 置空；P5 生成我们自己的密钥对 |
+| A7 | Sparkle 下载/安装服务 | `SUEnableDownloaderService`/`SUEnableInstallerLauncherService = true` | `DynamicIsland/Info.plist:16,18` | P0 改 `false` |
+| A8 | 测试 host 路径 | `$(BUILT_PRODUCTS_DIR)/Atoll.app/Contents/MacOS/Atoll`（配套 `BUNDLE_LOADER = $(TEST_HOST)`） | `project.pbxproj:504,525`（基线；单测 target 的两处配置）、`scripts/fix_test_host.rb:9`、`scripts/add_unit_test_target.rb:38` | 同型字面量改名为 `$(BUILT_PRODUCTS_DIR)/Gourd.app/Contents/MacOS/Gourd`（T3 已落；未改用 `$(PRODUCT_NAME)` 变量，与上游写法保持同型） |
+| A9 | CI 产品名 + **日志导出筛选的消费方** | `APP_NAME: Atoll`（`release.yml:30`）、DMG 名、`Atoll Logs.zip`、`exportLogs` 里按 `subsystem == 'com.Ebullioscopic.Atoll'` 与 `contains("Atoll")` 筛选（**基线 c7305ec 实为 `DynamicIslandApp.swift:1211,1223,1229`**，docs 早先记的 1321/1347/1353 来自 dev HEAD） | `DynamicIsland/DynamicIslandApp.swift:1211,1223,1229`（T9 已改为 `com.cmeng.gourd` / `contains("Gourd")`）、`.github/workflows/release.yml`（P0 不动，见 P0-5/D-08：推送前必须先改为手动触发或删除） | `Gourd` / `com.cmeng.gourd` |
 | A10 | CI 里 entitlements 路径 | `DynamicIsland/DynamicIsland.entitlements` | `.github/workflows/ci.yml`（Build 步骤） | 保持不变即可（文件路径不含产品名，仅需确认） |
 | A11 | 应用图标 | `AppIcon` / `AppIconDev` / `AppIconAlpha/Beta/Nightly` 五套 | `Assets.xcassets/` | 替换 `AppIcon`（Release）与 `AppIconDev`（Debug）；其余可先留 |
 | ~~A13~~ | ~~Swift 模块名~~ | — | — | **不改**：加 `PRODUCT_MODULE_NAME = Atoll` 保持模块名不变（D-10）——改了会让 4 个上游单测文件的 `@testable import Atoll` 编译失败，而本地只构建 app、CI 不实跑，看不见 |
-| A12 | 日志 subsystem | `com.ebullioscopic.Atoll`（`Logger.swift:66` 等）、`com.Ebullioscopic.Atoll`（`TimerManager.swift:131` 等）、`com.atoll.DynamicIsland`（`CodexQuotaClient.swift:6`） | 见左 | 统一 `<反域名>.Lagoon` |
+| A12 | 日志 subsystem | 四种变体：`com.ebullioscopic.Atoll`（`Logger.swift:66`、`ReminderLiveActivityManager.swift:50`）、`com.Ebullioscopic.Atoll`（`TimerManager.swift:131`、`SystemTimerBridge.swift:30`、`SpotifyLoginSheet.swift:39`）、`com.atoll.DynamicIsland`（`CodexQuotaClient.swift:6`、`AntigravityUsageProvider.swift:7`）、`com.atoll.dynamicisland`（`audio/AudioTap.swift:30`） | `utils/Logger.swift:66`、`managers/TimerManager.swift:131`、`managers/SystemTimerBridge.swift:30`、`managers/ReminderLiveActivityManager.swift:50`、`components/Settings/SpotifyLoginSheet.swift:39`、`managers/LLMUsage/Quota/CodexQuotaClient.swift:6`、`managers/LLMUsage/AntigravityUsageProvider.swift:7`、`audio/AudioTap.swift:30`（T7 回写：补上 `AudioTap.swift`） | 统一 `com.cmeng.gourd`（T3/T9 已落） |
 
 > **A5/A6/A7 是 P0 里唯一有安全后果的改动**：不处理的话，Sparkle 会按照上游 feed 检查更新，并有可能把 **Atoll 的包安装到壶中天（Gourd）上**（公钥仍是上游的，签名校验会通过）。必须在第一次分发前修掉，P0 就修。
 >
@@ -168,7 +168,7 @@ git status --porcelain                             # 干净
 | Defaults 键（12 个 `extension*` / `enable*`） | `extensionAuthorizationEntries` 等 | `models/Constants.swift:1381-1394` |
 | Keychain service | `com.Ebullioscopic.Atoll.Cider` / `.SpotifyLibrary` / `.new-api` | `CiderTokenStore.swift:25` 等 |
 
-**已知不一致（记录，不在 P0 修）**：mach service 名与 kit 查找宿主用的 bundle id 写作 `com.ebullioscopic.Atoll`（小写 e），而真实 `PRODUCT_BUNDLE_IDENTIFIER` 是 `com.Ebullioscopic.Atoll`（大写 E）。上游 kit 的 `isAtollInstalled` 因此一直靠 `/Applications/Atoll.app` 兜底路径工作。我们改名后，**依赖上游 kit 的第三方 App 将无法连上 Lagoon**（见 [06-module-protocol.md](06-module-protocol.md) §9.3）。这是明确接受并记录在案的后果。
+**已知不一致（记录，不在 P0 修）**：mach service 名与 kit 查找宿主用的 bundle id 写作 `com.ebullioscopic.Atoll`（小写 e），而真实 `PRODUCT_BUNDLE_IDENTIFIER` 是 `com.Ebullioscopic.Atoll`（大写 E）。上游 kit 的 `isAtollInstalled` 因此一直靠 `/Applications/Atoll.app` 兜底路径工作。我们改名后，**依赖上游 kit 的第三方 App 将无法连上壶中天（Gourd）**（见 [06-module-protocol.md](06-module-protocol.md) §9.3）。这是明确接受并记录在案的后果。
 
 ### C. 文案相关（不影响功能，随手改）
 
@@ -405,6 +405,38 @@ bash tools/verify-upstreams.sh
 | 2026-09-27 | 依赖 | 16 条，其中 4 条 `branch = main` |
 | 2026-09-27 | `LICENSE` 与上游一致性 | 字节相同（无合并冲突） |
 | 2026-09-27 | `AtollExtensionKit` 许可 | README 声明 MIT，**仓库缺 LICENSE 文件**（见 P0-4 第 5 条） |
+| 2026-09-27 | **T7 改名后构建**（HEAD `d10362d`，干净 DerivedData `~/Library/Developer/Xcode/Gourd`） | ✅ **BUILD SUCCEEDED**（退出码 0，0 error / 249 warning），产物 `Gourd.app` 116MB（`du -sk` = 119268），`CFBundleDisplayName=壶中天`、`CFBundleIdentifier=com.cmeng.gourd.dev`、`CFBundleExecutable=Gourd`、`SUFeedURL`/`SUPublicEDKey` 均为空 |
+| 2026-09-27 | **T7 接触面断言**（`git diff --name-status c7305ec HEAD`） | ✅ PASS：A=17 / M=21 / D=6，**越界 0**；M 全部命中 P0-7 白名单或 `docs/` 豁免，D 为 5 个无关 workflow + `ReadMe.md` |
+| 2026-09-27 | **T7 依赖 pin 复现性**（删掉 `Build/` 与 SPM 解析状态后**重新解析**） | ✅ 已提交的 `Package.resolved` 被字节级复现（构建后 `git status --porcelain` 无该文件变化），`grep -c 'kind = branch' project.pbxproj` = 0 |
+
+### T7 复验：改名后的 HEAD（2026-09-27）
+
+**命令**（全局约束里的那条，DerivedData 在 `~/Library/Developer/Xcode/` 下）：
+
+```bash
+xcodebuild build -project DynamicIsland.xcodeproj -scheme DynamicIsland \
+  -destination "platform=macOS" -derivedDataPath ~/Library/Developer/Xcode/Gourd \
+  -skipMacroValidation -skipPackagePluginValidation \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+```
+
+**结果**：退出码 `0`，`** BUILD SUCCEEDED **`（0 error / 249 warning，21 个链接步骤）。为排除增量构建复用旧产物，先删掉 `DerivedData/Build` 再全量重编重链；`Gourd.app` 的主可执行文件时间戳与本次构建一致。
+
+| 项 | 实测值 |
+|---|---|
+| 产物 | `~/Library/Developer/Xcode/Gourd/Build/Products/Debug/Gourd.app` |
+| 体积 | 116 MB（`du -sk` = 119268 KB；`MacOS/Gourd` 40 KB + `Gourd.debug.dylib` 105 MB） |
+| 身份 | `CFBundleDisplayName=壶中天` / `CFBundleIdentifier=com.cmeng.gourd.dev`（Debug）/ `CFBundleExecutable=Gourd` / `LSMinimumSystemVersion=14.6` |
+| Sparkle | `SUFeedURL` 与 `SUPublicEDKey` 均为空（A5/A6 已落） |
+| B 表冻结项 | `ExtensionXPCServiceHost.swift:25` 与 `DynamicIsland.entitlements:11` 仍是 `com.ebullioscopic.Atoll.xpc`（未被误改） |
+
+**接触面断言口径（T7 更正）**：以 `git diff --name-status c7305ec HEAD` 按 `A/M/D` 分类判定——`A` 一律豁免（新增文件不算接触），`M` 须落在 P0-7 白名单或 `docs/` 内，`D` 仅豁免 5 个无关 workflow 与 `ReadMe.md`。P0-7 末尾那条用 `--name-only` + `Kernel/Runtime/Modules` 过滤的验收命令**无法表达"新增文件不算"**，会把 `Frameworks/LICENSE`、`docs/*`、`scripts/*.sh`、`upstreams.tsv` 误判为越界，已由本口径取代。
+
+**越界项**：无（0 项）。
+
+**环境记录（非仓库改动）**：
+1. `~/Library/Developer/Xcode/Gourd/SourcePackages/workspace-state.json` 是**过期的 SPM 解析状态**，会把 4 条已 pin 依赖的 `"branch": "main"` 写回 `Package.resolved`（T9 构建时发生过一次，工作区出现 `M Package.resolved`）。本次先把该 `SourcePackages` 目录整体移开（保留为 `SourcePackages.pre-T7`）再构建 → 重新解析后 `Package.resolved` 与已提交版本**字节一致**，构建前后 `git status --porcelain` 均无该文件变化。同类过期状态还有 `~/Library/Developer/Xcode/DerivedData/DynamicIsland-*/SourcePackages/workspace-state.json`（本次未走该路径，未触碰）。
+2. 本次构建全程 **Xcode.app 未运行**（`pgrep` 无匹配）。
 
 ### 构建验证结果与两个环境前置条件（2026-09-27，已定位到根因）
 
