@@ -103,7 +103,9 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 | `cloudcode-pa.googleapis.com`、`daily-cloudcode-pa.googleapis.com` | Antigravity 额度 | `managers/LLMUsage/AntigravityUsageProvider.swift:413`、`:412` | 可关：同上 |
 | `assets9.lottiefiles.com` | 空闲动画远程 JSON（自带示例） | `components/Music/LottieAnimationView.swift:29`、`components/Settings/AnimationEditorView.swift:634` | 可关：删除 / 替换该动画条目；远程 URL 由用户导入（`components/Settings/IdleAnimationsSettingsSection.swift:471` 的输入框） |
 
-**非 HTTPS 的请求端点**（ATS 收窄时必须单独处理，见 §3.4）：
+### 3.3 非 HTTPS 的请求端点
+
+（ATS 收窄时必须单独处理，见 §3.6）
 
 | 端点 | 用途 | file:line | 是否可关闭 / 关闭方式 |
 |---|---|---|---|
@@ -113,12 +115,23 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 | 局域网（组播 `224.0.0.167` + 同网段主机 HTTP） | LocalSend 设备发现与传输 | `components/Shelf/Services/LocalSendService.swift:60/94/627` | 可关：不使用局域网互传；需 `NSLocalNetworkUsageDescription`（09 §7 必办项） |
 | 入站监听（非出站）：扩展 RPC WebSocket 9020、XF 监听口 | 第三方扩展通道 / 本地回环 | `services/Extensions/ExtensionRPCServer.swift:43/100-115` | 可关：关闭第三方扩展（`enableThirdPartyExtensions`） |
 
-### 3.3 源码出现但不发起出站请求的域名
+### 3.4 动态域名来源（运行时才确定，无法用字面量穷举）
+
+收窄 ATS 时这几处要按运行时白名单处理，不能只靠本清单的字面量：
+
+| 来源 | 说明 | file:line |
+|---|---|---|
+| 媒体封面 / 动画资源 URL | 由媒体源给出（Apple Music 的 artwork 走 `mzstatic.com` 一类 CDN），App 只负责下载 | `managers/ImageService.swift:62`（`fetchImageData(from:)`）、`managers/FullScreenArtworkWindowManager.swift:1080`（`downloadRemoteVideo(from:)`） |
+| 扩展 WebView 内容 | 上游已实现域名白名单；我们只读取已声明字段（06 §9.1） | `components/Extensions/ExtensionLockScreenWidgetView.swift:239-282` |
+| 用户自定义远程资源 | 空闲动画远程 JSON、本地模型端点 | `components/Settings/IdleAnimationsSettingsSection.swift:471`、`models/Constants.swift:1213` |
+
+### 3.5 源码出现但不发起出站请求的域名
 
 | 域名 | 出现位置 | 为什么不产生请求 |
 |---|---|---|
 | `github.com`（含 `github.com/cmeng-CM/gourd`、`/th-ch/youtube-music`、`/Paxsenix0/Spotify-Canvas-API`、`/waydabber/BetterDisplay`、`/migueldeicaza/SwiftTerm`、`/ZephyrCodesStuff/rtaudio`） | `strings/constants.swift:21`、`models/UpdateChannel.swift:57`、`components/Onboarding/WelcomeView.swift:79`、`components/Onboarding/OnboardingFinishView.swift:65`、`components/Settings/SettingsView.swift:2823`、`components/Settings/SpotifyAuthSettingsSection.swift:99`、`components/Onboarding/MusicControllerSelectionView.swift:112`、`managers/BetterDisplayManager.swift`、`managers/TerminalManager.swift:4` | 文档 / 设置页链接：由默认浏览器打开（`NSWorkspace.open` 或 `Link`），App 自身不请求；`TerminalManager.swift:4` 是许可注释 |
 | `developer.spotify.com`、`aistudio.google.com`、`www.linkedin.com` | `components/Settings/SpotifyLikeButtonSettingsSection.swift:73`、`components/Settings/SettingsView.swift:7800`、`components/Onboarding/ProOnboarding.swift:61` | 同上（跳转链接） |
+| `betterdisplay.pro`、`lunar.fyi` | `components/Settings/SettingsView.swift:2287`、`components/Settings/SettingsView.swift:2295` | 设置页集成提示里的 Markdown 链接（外部屏亮度联动），点击才由浏览器请求 |
 | `accounts.google.com`、`accounts.youtube.com` | `components/Settings/SpotifyLoginSheet.swift:35` | OAuth 登录**黑名单**（`blockedOAuthHostSuffixes`），不请求 |
 | `meet.google.com`、`facetime.apple.com` | `Providers/CalendarServiceProviding.swift:325/333`、`components/Calendar/DynamicIslandCalendar.swift:1353/1355` | 日历会议链接**识别规则**；点击后交系统打开，App 不请求 |
 | `apple.com` | `components/Shelf/Services/QuickShareService.swift:67` | AirDrop 分享的占位 URL，不请求 |
@@ -131,7 +144,7 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 - `music.163.com`：09 §2 A 把 NetEase 记为歌词备用源，但**源码零命中**（`grep -rn '163\.com\|netease' --include='*.swift' DynamicIsland/` 无结果）——当前实现只有 LRCLIB 一路。将来补备用源时，同步在 `lyrics` 的 `permissions` 声明 `network:music.163.com`（06 §7.1）。
 - `open-meteo` SPM 包：09 §7 记为"声明了但未链接、零 import"的死依赖（P0 删除项），不是域名问题，此处仅留档。
 
-### 3.4 `NSAllowsArbitraryLoads = true` 现状与收窄前提
+### 3.6 `NSAllowsArbitraryLoads = true` 现状与收窄前提
 
 **现状**（`DynamicIsland/Info.plist:5-8`）：
 
