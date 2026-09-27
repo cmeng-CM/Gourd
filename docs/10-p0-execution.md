@@ -75,6 +75,8 @@
 | D-08 | `ci.yml` 重写为构建+测试+格式三件套（含 mach-services 剥离、Metal Toolchain 下载、排除 UI 测试），`release.yml` 不动 | agent |
 | D-09 | 修改标注以 `NOTICE` 总声明 + 提交信息满足，不逐文件加行内注释 | agent（合规口径，计划门确认） |
 | D-10 | 给 app target 加 `PRODUCT_MODULE_NAME = Atoll`，保持 Swift 模块名不变 | agent（技术取舍） |
+| D-11 | Sparkle 处置必须动**运行期**（`AtollUpdaterDelegate` + `UpdateChannel` 的上游 appcast 由 T9 清理）；连同测试 target bundle id、`strings/constants.swift`、`NS*UsageDescription` 一并收尾 | agent（执行 ADR-0008 已批准的要求，落点由 T2 审查发现） |
+| D-12 | 接受计划 9 个任务超出 8 个上限（一次性基座落地，拆分会让历史接入窗口重复或有依赖断裂） | agent（规模取舍，计划门呈现） |
 
 ## 接口与数据形状
 

@@ -322,6 +322,9 @@ DynamicIsland/DynamicIslandApp.swift                   (A9 日志导出筛选)
 DynamicIsland.xcodeproj/xcshareddata/xcschemes/DynamicIsland.xcscheme   (BuildableName → Gourd.app)
 DynamicIsland/audio/AudioTap.swift                     (A12 第 4 种 subsystem 变体 com.atoll.dynamicisland)
 DynamicIsland.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved   (依赖 pin)
+DynamicIsland/services/AtollUpdaterDelegate.swift      (A5 的真实落点：运行期覆盖 feedURLString)
+DynamicIsland/models/UpdateChannel.swift               (A5 的真实落点：硬编码上游 appcast 地址)
+DynamicIsland/strings/constants.swift                  (productPage 等用户可见串仍指上游)
 .github/workflows/ci.yml                     (我们的 CI)
 ```
 
