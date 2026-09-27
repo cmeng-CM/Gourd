@@ -130,6 +130,7 @@
 - `project.pbxproj` 必然被改，是未来季度同步的主要冲突面（接触白名单已将其记录在案）。
 - **Swift 模块名保持 `Atoll`**（D-10）：「模块名 ≠ 产品名」是刻意取舍。若 P1 把模块名改回 `Gourd`，必须同步改 4 个测试文件的 `@testable import Atoll`。
 - `PBXFileReference … path = Atoll.app` 三处（`:89` / `:259` / `:337`）仍在：按派发明令不手改（Xcode 会按 `PRODUCT_NAME` 重生成），`FULL_PRODUCT_NAME` / `WRAPPER_NAME` 实测均为 `Gourd.app`，构建不受影响。
+- **签名配置已去上游化（2026-09-27）**：Debug/Release 曾写死上游 Team（`9Y64TRM77N`），Release 且要求 `Developer ID Application`（Manual）——已统一为 ad-hoc（`CODE_SIGN_IDENTITY = "-"`、`CODE_SIGN_STYLE = Manual`、team 置空）；entitlements 的 `mach-services`（上游 kit XPC 名 `com.ebullioscopic.Atoll.xpc`，ad-hoc 产物会被 amfid 杀）已从仓库移除，CI 的 plutil 剥离步骤自此恒为幂等跳过。**本地打包**：`sh tools/build.sh`（`--install` 装 /Applications）；Release 首打实测 `BUILD SUCCEEDED`（产物 `com.cmeng.gourd` / 2.3.3，`Signature=adhoc`），本机 `xcodebuild test` 亦无需签名覆盖。
 - 项目目录名（D-02）：~~仍为 `~/workspace/github/lagoon`，改名连同记忆迁移留给后续~~ **已完成（2026-09-27）**：目录改名 `~/workspace/github/gourd`，agent-memory 项目目录迁移为 `gourd-1c47bd2beca69533`（键 = `sha256(绝对路径)` 前 16 位，旧目录 `lagoon-4a28976c8efbc2b5` 保留备份）。
 
 ## 实际交付

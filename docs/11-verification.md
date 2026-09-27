@@ -128,7 +128,7 @@ log show --last 6m --predicate 'process == "Gourd"'               # 0 条
 |---|---|
 | 折叠/展开的视觉与交互行为 | 展开为窗口内裁剪、合成鼠标事件触发异常位移；**需人工复核一次** |
 | 日志 subsystem 实际生效 | 观察窗口内无被持久化的 os_log 记录（debug/info 不落盘），`log show` 无法判定 |
-| 真实 CI 绿灯 | 用户要求本地验证、不推送（D-01） |
+| 真实 CI 绿灯 | CI 首跑已做（§5）：Build/Format 绿，单测在 runner 上挂起待处置 |
 | 分发链路（签名/公证/DMG/Sparkle 更新） | P5 范围 |
 | 长时间稳定性（"连续使用 7 天"） | 本次只做短时采样（>2 分钟） |
 | x86_64 / 多屏 / 合盖 | 本机 arm64 单屏；无外接显示器与合盖操作 |
@@ -146,10 +146,29 @@ log show --last 6m --predicate 'process == "Gourd"'               # 0 条
 | **性能基线（内存 <150MB、折叠态 CPU <1%）** | ✅ | 足迹 129MB / CPU 0.0–0.4%（§3.3） |
 | **不再外连上游** | ✅ | 无外部连接（§3.4）—— 本次新增证据 |
 | 刘海面板能折叠/展开 | ⚠️ **未验证** | 工具限制 + 一处待人工复核的异常（§3.6） |
-| CI 绿灯 | ⚠️ 未验证 | 用户要求本地优先（D-01） |
+| CI 绿灯 | ⚠️ 部分达成 | CI 首跑：Build / Format 绿，单测在 runner 上挂起（§5）；本机单测不受影响 |
 
 **一句话结论**：P0 的"能构建"已推进到"**测试全绿 + 运行正常 + 资源达标 + 不外连上游**"；**唯一未闭环的是折叠/展开的视觉交互**，需要你花 10 秒用真实鼠标试一下（顺带看面板有没有被移位）。
 
 ### 4.3 未推送声明
 
 本次验证全程**未推送、未建远端**：`git remote -v` 只有只读的 `atoll`。
+> 追记（2026-09-27 晚）：远端已建（`origin = cmeng-CM/Gourd`）并首推 `main`；下节为 CI 首跑结果。
+
+---
+
+## 5. CI 首跑（2026-09-27，run 36319497136）
+
+首推 `main` 触发（`release.yml` 已先摘除 push 触发，仅手动）：
+
+| Job | macos-15 | macos-26 | 判定 |
+|---|---|---|---|
+| Build | ✅ 4m53s | ✅ 3m19s | 构建链路全绿（Metal Toolchain、改名产物、ad-hoc 签名） |
+| Format & Policy | ✅ 23s | — | swift-format 计数 + Sparkle feed 断链断言 |
+| Unit Tests | ❌ 11m12s | ❌ 12m5s | `Gourd (11890) encountered an error (The test runner hung before establishing connection.)` |
+
+**单测失败定性**：TEST_HOST（Gourd.app）在 runner 上**正常启动**（日志中 BluetoothAudioManager 等管理器逐个初始化），但 360s 内测试通道未建立连接、被判定 hung——P0-8 预判的「headless runner 上 LSUIElement 宿主」风险**坐实**。日志另有 `Accessibility permission missing; prompt user to enable it`（headless 无法响应授权弹窗，疑似有管理器阻塞在授权等待；未定论）。
+
+**本机不受影响**：同日晚在签名去上游化（pbxproj 改 ad-hoc，见 10「已知限制」）后，**不带任何签名覆盖**裸跑 `xcodebuild test -only-testing:DynamicIslandTests` → `** TEST SUCCEEDED **`。
+
+**待决策**：CI 单测 job 的处置（移除 / `continue-on-error` / 调研 headless 阻塞根因）——未定前该 job 持续红。
