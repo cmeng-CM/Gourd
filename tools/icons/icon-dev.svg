@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#131838"/>
+      <stop offset="0.55" stop-color="#2B2C5E"/>
+      <stop offset="1" stop-color="#433A78"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0.5" cy="0.32" r="0.75">
+      <stop offset="0" stop-color="#8B7BD8" stop-opacity="0.28"/>
+      <stop offset="0.6" stop-color="#8B7BD8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232A5E"/>
+      <stop offset="0.6" stop-color="#3A3577"/>
+      <stop offset="1" stop-color="#564A93"/>
+    </linearGradient>
+    <radialGradient id="moonGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFE9B0" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFE9B0" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="gourdClip">
+      <path d="M 512 292 C 590 292 664 348 664 432 C 664 480 636 512 596 534 C 660 566 740 620 740 712 C 740 812 640 888 512 888 C 384 888 284 812 284 712 C 284 620 364 566 428 534 C 388 512 360 480 360 432 C 360 348 434 292 512 292 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bgGlow)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="182.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.09" stroke-width="3"/>
+
+  <g clip-path="url(#gourdClip)">
+    <rect x="264" y="272" width="496" height="636" fill="url(#sky)"/>
+    <circle cx="592" cy="408" r="130" fill="url(#moonGlow)"/>
+    <path d="M 600 344 A 66 66 0 1 0 600 472 A 80 80 0 0 1 600 344 Z" fill="#F6D78C"/>
+    <circle cx="452" cy="366" r="5" fill="#FFFFFF" opacity="0.95"/>
+    <circle cx="498" cy="322" r="4" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="428" cy="470" r="6" fill="#FFFFFF" opacity="0.9"/>
+    <circle cx="470" cy="596" r="5" fill="#FFFFFF" opacity="0.85"/>
+    <circle cx="574" cy="648" r="4" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="618" cy="560" r="5" fill="#FFFFFF" opacity="0.85"/>
+    <circle cx="380" cy="660" r="4" fill="#FFFFFF" opacity="0.7"/>
+    <path d="M 648 470 L 651.5 481.5 L 663 485 L 651.5 488.5 L 648 500 L 644.5 488.5 L 633 485 L 644.5 481.5 Z" fill="#F6D78C" opacity="0.95"/>
+    <path d="M 356 536 L 359 545 L 368 548 L 359 551 L 356 560 L 353 551 L 344 548 L 353 545 Z" fill="#F6D78C" opacity="0.9"/>
+    <path d="M 268 830 L 408 622 L 520 782 L 604 648 L 764 830 Z" fill="#191D42"/>
+    <path d="M 300 844 L 452 688 L 560 844 Z" fill="#232853"/>
+    <path d="M 268 852 Q 340 836 412 852 T 556 852 T 700 852 T 844 852" fill="none" stroke="#9DB0FF" stroke-width="6" opacity="0.4"/>
+    <path d="M 268 876 Q 340 860 412 876 T 556 876 T 700 876 T 844 876" fill="none" stroke="#9DB0FF" stroke-width="6" opacity="0.28"/>
+  </g>
+
+  <path d="M 512 292 C 590 292 664 348 664 432 C 664 480 636 512 596 534 C 660 566 740 620 740 712 C 740 812 640 888 512 888 C 384 888 284 812 284 712 C 284 620 364 566 428 534 C 388 512 360 480 360 432 C 360 348 434 292 512 292 Z"
+        fill="none" stroke="#E9C879" stroke-width="7"/>
+  <path d="M 512 292 C 512 254 532 234 566 226" fill="none" stroke="#E9C879" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- DEV 角标 -->
+  <g>
+    <circle cx="818" cy="818" r="86" fill="#30D158" stroke="#0F1115" stroke-width="8"/>
+    <text x="818" y="843" font-family="Helvetica" font-size="64" font-weight="bold" fill="#FFFFFF" text-anchor="middle">DEV</text>
+  </g>
+</svg>
