@@ -74,7 +74,7 @@
 ### T-5 锁屏归属
 
 - **结论**：16 行**全部不声明锁屏 surface**（D-12）；锁屏五面板群（音乐 / 天气 / 日历 / 提醒 / 计时器）与锁屏计时器面板维持上游现状，不归入任何模块 manifest。
-- **理由**：09 §0 原则 P4 与 ADR-0011 第 4 条均为「锁屏维持现状」，且 06 §6.1 的锁屏取值需要锁屏渲染管线先接入，本批没有该管线的消费者；加回路径是模块落地时按 06 §2.2 往 `surfaces` 追加锁屏取值。
+- **理由**：09 §0 原则 P4 与 ADR-0011 第 5 条（「锁屏维持现状」，[00-decisions.md](00-decisions.md) §ADR-0011 决策表）均为「锁屏维持现状」，且 06 §6.1 的锁屏取值需要锁屏渲染管线先接入，本批没有该管线的消费者；加回路径是模块落地时按 06 §2.2 往 `surfaces` 追加锁屏取值。
 
 ### T-6 lunar 的 tab 注入
 
@@ -148,7 +148,7 @@
 | `weather` | 位置 |
 | `mirror` | 相机 |
 | `notifications` | 完全磁盘访问（主）；辅助功能（降级方案） |
-| `controls` | 辅助功能（媒体键 / 亮度键拦截） |
+| `controls` | 辅助功能（媒体键 / 亮度键拦截）；完全磁盘访问（读 `~/Library/DoNotDisturb/DB/*` 的 Focus 只读，该路径同时是上游的 FDA 自检探针——`helpers/FullDiskAccessPermissionStore.swift:28`） |
 | `shelf` | 本地网络（LocalSend） |
 | `timer` | 通知（到点提醒的用户授权） |
 
@@ -158,5 +158,5 @@
 |---|---|---|
 | `nowplaying` | `MediaRemote.framework` / `MediaRemoteAdapter.framework` 的媒体元数据与控制 | 15 号文档 §1 第 1、2 条 |
 | `stats` | AppleSMC 温度、`IOReport.framework` 频率 | 15 号文档 §1 第 5 条（另第 6 条 CGS 私有函数属内核窗口层，不归模块） |
-| `controls` | `CoreBrightness.framework`（亮度 / 键盘背光）、`DisplayServices.framework`（亮度回退） | 15 号文档 §1 第 3、4 条 |
+| `controls` | `CoreBrightness.framework`（亮度 / 键盘背光）、`DisplayServices.framework`（亮度回退）、DoNotDisturb DB（Focus 只读） | 15 号文档 §1 第 3、4、9 条 |
 | `notifications` | 通知中心数据库（只读 SQLite） | 15 号文档 §1 第 11 条 |

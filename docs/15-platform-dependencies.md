@@ -23,7 +23,7 @@
 | `CoreBrightness.framework` | 亮度（内建屏）、键盘背光 | `Bundle(path:)` + 反射内部类名（`helpers/CoreBrightnessDisplayClient.swift:49-66`；键盘背光见 `managers/KeyboardBrightnessSensor.swift:163-167`） | 亮度控制、键盘背光失效 | 亮度退到 `DisplayServices`（下表第 4 条）→ 再退公开的 `IODisplaySetFloatParameter`；键盘背光退 IORegistry 只读；全不可用时滑杆置灰并提示使用系统亮度键 | `controls` |
 | `DisplayServices.framework` | 亮度回退路径 | `dlopen` + `dlsym`（`helpers/DisplayServicesDynamic.swift:34`；调用见 `managers/SystemMediaControllers.swift:710-711`） | 回退路径失效 | 走公开的 `IODisplaySetFloatParameter`；再失效 → 亮度控件置灰，提示使用系统键盘亮度键 | `controls` |
 | `IOReport.framework` | CPU 频率 | `dlopen` + `dlsym`（`utils/IOReportBridging.swift:31`；调用见 `utils/CPUSensorCollector.swift:43-165`） | 该指标失效（CPU 频率） | 隐藏频率行；CPU 温度仍由 AppleSMC 读（`utils/SMC.swift:171-185` 的 `IOServiceOpen`）、负载仍由 `getloadavg` / `host_processor_info` 读（09 §2 B 的其余机制不受影响） | `stats` |
-| CGS 私有 C 函数（7 个） | 专用 Space、窗口层级 | `@_silgen_name`（`private/CGSSpace.swift:72-86`；消费方 `managers/NotchSpaceManager.swift:25-32`；另 `managers/ScreenRecordingManager.swift:29-32` 的 `CGSIsScreenWatcherPresent` / `CGSRegisterNotifyProc`） | 窗口定位异常 | 不建专用 Space，窗口退回公开 `NSWindow.level` + 常规 Space；录屏检测的 CGS 通知失效 → 退到 `CGEventTap` + `killall screencapture` 既有路径；仍异常 → 相关窗口不显示（刘海主功能不受影响） | 内核窗口层（`managers/NotchSpaceManager.swift`，非模块）；视觉面见 09 §2 H |
+| CGS 私有 C 函数（09 §3.1 记 7，本处实测 10） | 专用 Space、窗口层级 | `@_silgen_name`（`private/CGSSpace.swift:72-86` 8 个符号行；消费方 `managers/NotchSpaceManager.swift:25-32`；另 `managers/ScreenRecordingManager.swift:29-32` 的 `CGSIsScreenWatcherPresent` / `CGSRegisterNotifyProc` 2 个） | 窗口定位异常 | 不建专用 Space，窗口退回公开 `NSWindow.level` + 常规 Space；录屏检测的 CGS 通知失效 → 退到 `CGEventTap` + `killall screencapture` 既有路径；仍异常 → 相关窗口不显示（刘海主功能不受影响） | 内核窗口层（`managers/NotchSpaceManager.swift`，非模块）；视觉面见 09 §2 H |
 | SkyLight 私有 API | 锁屏窗口代理 | SPM 依赖 `SkyLightWindow`（`DynamicIslandApp.swift:25`、`managers/LockScreenTimerWidgetManager.swift:24/245`、`managers/FullScreenArtworkWindowManager.swift:1237/1300/1396`） | 锁屏面板失效 | 锁屏面板维持上游现状（09 §0 原则 P4、D-12）；失效即锁屏相关面板不显示，刘海与展开面板不受影响，无需代码级降级 | 未模块化（锁屏面，维持现状） |
 | `com.apple.mobiletimerd` | 系统 Clock 计时器镜像 | 私有 plist（`managers/SystemTimerBridge.swift:74-76`）+ `log stream`（同文件 `:279`）+ AX 读 UI | 该功能失效 | 该功能按 09 §2 C 已定「不投入」；失效不影响本地 `timer` 模块（自建 `Timer` + UserNotifications 到点通知） | 未模块化（不投入）；本地计时归 `timer` |
 | DoNotDisturb DB | Focus 状态只读 | 直读 JSON（`managers/DoNotDisturbManager.swift:46`、`:323`、`:1413`；权限自检同路径见 `helpers/FullDiskAccessPermissionStore.swift:28`） | 只读失效（Focus 状态不可知） | 退到 `log stream` 监听（`managers/DoNotDisturbManager.swift:549`、`:1133`）；两路都失效 → 隐藏 Focus 指示器，不显示错误态 | `controls`（Focus 只读属系统控制面） |
@@ -50,7 +50,7 @@
 | `zip`（`/usr/bin/zip`） | 日志导出、暂存架打包 | `DynamicIslandApp.swift:1239`、`components/Shelf/Services/TemporaryFileStorageService.swift:159` | 用户触发 | 导出失败 | 提示改用 Finder 压缩（源文件已落在临时目录） |
 | `arp`（`/usr/sbin/arp`） | LocalSend 邻居 IP 探测 | `components/Shelf/Services/LocalSendService.swift:390` | 传输前一次 | 邻居探测缺失 | 退到 `NWMulticastGroup` 组播发现（同文件 `:94`），本条为补充路径 |
 | `ps`（`/bin/ps`） | 进程列表、进程识别 | `managers/StatsManager.swift:1456`、`managers/LLMUsage/AntigravityUsageProvider.swift:200` | 进程列表独立节流 2s（09 §2 B） | 进程列表缺失 | 退到 `proc_pidinfo`（09 §2 B 的进程列表主路） |
-| `pgrep`（`/usr/bin/pgrep`） | 系统进程存活探测（OSDUIHelper 等） | `managers/SystemOSDManager.swift:423/473` | 已做防抖（同文件 `:357` 注释记"否则约 19.2 万次 spawn/天"） | 探测失效 | 退到 `killall` 的返回码判定 |
+| `pgrep`（`/usr/bin/pgrep`） | 系统进程存活探测（OSDUIHelper 等） | `managers/SystemOSDManager.swift:423/473` | 已做防抖（同文件 `:357-358` 注释记"否则 8 小时睡眠内约 19.2 万次 spawn"） | 探测失效 | 退到 `killall` 的返回码判定 |
 | `corebrightnessdiag`（`/usr/libexec/corebrightnessdiag`） | 键盘背光 / 显示诊断数据 | `managers/KeyboardBrightnessSensor.swift:113`、`managers/SystemDisplayManager.swift:63` | 低频 | 背光传感器数据缺失 | IORegistry 只读（09 §2 E 的第三条路） |
 | `zsh`（`/bin/zsh`，键 `terminalShellPath`） | 岛内终端 shell | `models/Constants.swift:1152`（默认值）；`managers/TerminalManager.swift:288-291` 起 shell 进程 | 用户开启终端时 | 岛内终端不可用 | 终端外部化：`mode = external` 唤起 Ghostty（09 §5.6，默认形态），岛内终端代码保留但不作为目标形态 |
 | `/usr/bin/shortcuts`（**新增**） | 快捷指令枚举（`shortcuts list --show-identifiers`）与运行（`shortcuts run <identifier>`） | 尚未落地；机制见 09 §5.4 | **限时 30s + 禁止并发**（09 §3.2 / §5.4） | 枚举 / 执行失效 | 枚举结果回落配置缓存（09 §5.4「结果缓存进配置 + 手动刷新」）；运行失败在面板内提示原因 |
@@ -62,20 +62,25 @@
 
 ### 3.1 收录口径与实测命令
 
-口径（D-14）：**清单 = 字面量命令结果 ∪ 源码内插值字符串里的域名**。字面量正则要求 URL 紧跟在引号后，抓不到插值形态。
+口径（D-14）：**清单 = 字面量命令结果 ∪ 源码内插值域名**。三条命令按下述实测口径使用（① 已覆盖当前源码全部出站 host，②③ 为保险与无 scheme 宿主名的兜底）。
 
 ```sh
-# ① 字面量（命令结果里含 GPL 版权头的 www.gnu.org 与 plist DTD 的 www.apple.com，均非网络请求）
+# ① 字面量：以引号开头的 http(s) URL（命令结果里含 GPL 版权头的 www.gnu.org 与 plist DTD 的 www.apple.com，均非网络请求）
 grep -rn '"https\?://' --include='*.swift' DynamicIsland/
 
-# ② 含插值的并集补充（把 \( 之前的域名也取出来，例如 lrclib.net）
+# ② 放宽到「不要求前置引号」的同一并集（补 Markdown 链接 ](https://…) 等形态，并完整取出被转义的正则 host）
 grep -rno 'https\?://[A-Za-z0-9._%(){}\\-]*[A-Za-z0-9._%}\\-]' --include='*.swift' DynamicIsland/ | sort -u
 
-# ③ 无 scheme 的宿主名（黑名单 / 会议链接识别规则等，非出站请求）
+# ③ 无 scheme 的宿主名（黑名单 / 会议链接识别规则等，非出站请求；③ 的 TLD 白名单会漏 .us/.gg/.si 这类，逐条人工补）
 grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --include='*.swift' DynamicIsland/ | sort -u
 ```
 
-命令 ① 会漏掉的典型：`DynamicIsland/managers/MusicManager.swift:1525` 的 `"https://lrclib.net/api/search?track_name=\(encodedTitle)&artist_name=\(encodedArtist)"` —— URL 后面不是引号，只有命令 ② 能取到。
+**口径更正（实测）**：命令 ① **已能取到"host 字面 + 尾部插值"的 URL** —— `MusicManager.swift:1525` 的 `lrclib.net`、`AnimatedArtworkManager.swift:187` 的 `mvod.itunes.apple.com`（正则 host）、`UpdateChannel.swift:57` 的 `raw.githubusercontent.com` 都在 ① 的结果里（`"https://` 前紧邻的就是引号，插值在 URL 尾部）。① 真正会漏的是两类：
+
+1. **host 本身由插值拼出**（例如 `"https://\(host)/path"` 形态）——**当前源码 0 处**；
+2. **URL 前不是引号**的形态 —— 实测 ② 相对 ① 的增量只有 `betterdisplay.pro`、`lunar.fyi`（设置页 Markdown 链接 `](https://…)`）与正则字面量里被转义的 `mvod\.itunes\.apple\.com` 完整形态。
+
+因此并集规则（D-14）保留为**保险**：① 已覆盖当前源码的全部出站 host，② / ③ 用来兜住上述两类与无 scheme 的宿主名。
 
 ### 3.2 出站请求域名（App 自身发起）
 
@@ -89,10 +94,10 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 | `api.music.apple.com` | Apple Music 动态封面（catalog `editorialVideo`） | `managers/AnimatedArtworkManager.swift:159` | 可关：关闭动态封面（`AnimatedArtworkManager` 的启用开关） |
 | `mvod.itunes.apple.com` | 动态封面 HLS 视频流（正则匹配 m3u8） | `managers/AnimatedArtworkManager.swift:187` | 可关：同上 |
 | `api.spotify.com` | Spotify 曲目 / 曲库 API | `MediaControllers/SpotifyController.swift:431`、`managers/Spotify/SpotifyLibraryAPI.swift:27` | 可关：不用 Spotify 适配器（09 §2 A：其余 6 个适配器默认不启用） |
-| `open.spotify.com` | embed 页取曲目 / Canvas、token、登录页 | `MediaControllers/SpotifyController.swift:475`、`managers/MusicManager.swift:292`、`managers/SpotifyAuthManager.swift:37/155`、`components/Settings/SpotifyLoginSheet.swift:26` | 可关：同上 |
+| `open.spotify.com` | embed 页取曲目 / Canvas、token、登录页 | `MediaControllers/SpotifyController.swift:475`、`managers/MusicManager.swift:292`、`managers/SpotifyAuthManager.swift:37/155`、`components/Settings/SpotifyLoginSheet.swift:26`、`components/Settings/SpotifyAuthSettingsSection.swift:92/98` | 可关：同上 |
 | `accounts.spotify.com` | Spotify OAuth 授权与换 token | `managers/Spotify/SpotifyOAuthService.swift:39/40`、`components/Settings/SpotifyLoginSheet.swift:25/36` | 可关：同上（用户不登录即不发起） |
 | `spclient.wg.spotify.com` | Spotify Canvas 缓存接口 | `MediaControllers/SpotifyController.swift:576` | 可关：同上 |
-| `raw.githubusercontent.com` | ① Sparkle appcast 占位 feed；② Spotify secret 字典 | `models/UpdateChannel.swift:57`；`managers/SpotifyAuthManager.swift:36` | 可关：feed 现状已被 `services/AtollUpdaterDelegate.swift:25` 返回 `nil` 关闭；secret 字典随 Spotify 适配器停用而消失 |
+| `raw.githubusercontent.com` | ① Sparkle appcast 占位 feed；② Spotify secret 字典 | `models/UpdateChannel.swift:57`；`managers/SpotifyAuthManager.swift:36` | 可关：feed 现状已被 `services/AtollUpdaterDelegate.swift:28-29` 返回 `nil` 关闭；secret 字典随 Spotify 适配器停用而消失 |
 | `generativelanguage.googleapis.com` | AI 对话（Gemini） | `managers/ScreenAssistantManager.swift:418` | 可关：`enableScreenAssistant`（D-08 首启写 false） |
 | `api.openai.com` | AI 对话（OpenAI） | `managers/ScreenAssistantManager.swift:441` | 可关：同上 |
 | `api.groq.com` | AI 对话（Groq） | `managers/ScreenAssistantManager.swift:470` | 可关：同上 |
@@ -102,6 +107,8 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 | `cursor.com`、`api2.cursor.sh` | Cursor 额度 | `managers/LLMUsage/Quota/CursorQuotaClient.swift:41`、`:31` | 可关：同上 |
 | `cloudcode-pa.googleapis.com`、`daily-cloudcode-pa.googleapis.com` | Antigravity 额度 | `managers/LLMUsage/AntigravityUsageProvider.swift:413`、`:412` | 可关：同上 |
 | `assets9.lottiefiles.com` | 空闲动画远程 JSON（自带示例） | `components/Music/LottieAnimationView.swift:29`、`components/Settings/AnimationEditorView.swift:634` | 可关：删除 / 替换该动画条目；远程 URL 由用户导入（`components/Settings/IdleAnimationsSettingsSection.swift:471` 的输入框） |
+
+**口径说明（「是否可关闭 / 关闭方式」列）**：开关名 / 键名均为**源码实测存在**（可按同行 `file:line` 复核定义），但**默认值未逐条核对**——本列只回答"能不能关、怎么关"，不承诺当前默认状态；实施关闭动作前按 `DynamicIsland/models/Constants.swift` 的定义行复核（只有 `enableLyrics` 默认 false、`lockScreenWeatherShowsAQI` 默认 true 等少数几条在本批次抽查过）。
 
 ### 3.3 非 HTTPS 的请求端点
 
@@ -133,11 +140,12 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 | `developer.spotify.com`、`aistudio.google.com`、`www.linkedin.com` | `components/Settings/SpotifyLikeButtonSettingsSection.swift:73`、`components/Settings/SettingsView.swift:7800`、`components/Onboarding/ProOnboarding.swift:61` | 同上（跳转链接） |
 | `betterdisplay.pro`、`lunar.fyi` | `components/Settings/SettingsView.swift:2287`、`components/Settings/SettingsView.swift:2295` | 设置页集成提示里的 Markdown 链接（外部屏亮度联动），点击才由浏览器请求 |
 | `accounts.google.com`、`accounts.youtube.com` | `components/Settings/SpotifyLoginSheet.swift:35` | OAuth 登录**黑名单**（`blockedOAuthHostSuffixes`），不请求 |
-| `meet.google.com`、`facetime.apple.com` | `Providers/CalendarServiceProviding.swift:325/333`、`components/Calendar/DynamicIslandCalendar.swift:1353/1355` | 日历会议链接**识别规则**；点击后交系统打开，App 不请求 |
+| `www.spotify.com` | `components/Settings/SpotifyLoginSheet.swift:219` | WebView 登录完成判定的 host 分支（与 `open.spotify.com` 并列），判定本身不请求 |
+| `zoom.us`、`teams.microsoft.com`、`meet.google.com`、`webex.com`、`gotomeeting.com`、`bluejeans.com`、`whereby.com`、`meet.jit.si`、`discord.gg`、`discord.com`、`facetime.apple.com` | `Providers/CalendarServiceProviding.swift:320-336`（`isConferenceURL` 的 `conferenceHosts` 全表）、`components/Calendar/DynamicIslandCalendar.swift:1349-1360`（同族的 `hostIdentifiers` 映射） | 日历会议链接**识别规则**与图标映射；这些 host 不进入任何请求，点击后交系统打开 |
 | `apple.com` | `components/Shelf/Services/QuickShareService.swift:67` | AirDrop 分享的占位 URL，不请求 |
 | `example.com` | `components/Settings/IdleAnimationsSettingsSection.swift:471` | 输入框 placeholder 文案 |
 | `www.apple.com`（`/DTDs/PropertyList-1.0.dtd`） | `components/Shelf/Services/TemporaryFileStorageService.swift:250` | 生成 plist 的 DOCTYPE 声明，不请求 |
-| `www.gnu.org` | 全仓库 GPL 版权头（`grep` 命中最多的一项） | `DynamicIsland/strings/constants.swift:16`（其余同名头同款） | 许可注释，不请求 |
+| `www.gnu.org` | 全仓库 GPL 版权头（`grep` 命中最多的一项；`DynamicIsland/strings/constants.swift:16` 是其中一处，其余同名头同款） | 许可注释，不请求 |
 
 **两处口径修正**（收录时发现，逐条记录以免清单被当成"覆盖了全部规划项"）：
 
@@ -156,7 +164,7 @@ grep -rno '[a-z0-9-]\+\.[a-z0-9.-]*\.\(com\|net\|org\|sh\|io\|dev\|in\)' --inclu
 </dict>
 ```
 
-即全局关闭 ATS（上游行为）。另外两处相关事实：`SUFeedURL` / `SUPublicEDKey` 为空串且 `services/AtollUpdaterDelegate.swift:25` 返回 `nil`（更新通道运行期不解析 URL）；`NSLocalNetworkUsageDescription` 尚未声明（09 §7 必办项，P2 补——LocalSend 实际需要）。
+即全局关闭 ATS（上游行为）。另外两处相关事实：`SUFeedURL` / `SUPublicEDKey` 为空串且 `services/AtollUpdaterDelegate.swift:28-29` 返回 `nil`（更新通道运行期不解析 URL）；`NSLocalNetworkUsageDescription` 尚未声明（09 §7 必办项，P2 补——LocalSend 实际需要）。
 
 **收窄前提**（三条同时满足才可移除全局开关）：
 
