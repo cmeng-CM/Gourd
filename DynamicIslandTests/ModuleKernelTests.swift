@@ -10,8 +10,11 @@
 //  `ModuleContextFactory` 的默认值读取、首启默认值幂等。
 //  T3 接缝——S2 的 tab 计数（刘海最小宽度的输入）把注册表条目计入总数；S4 的
 //  `selectModule(_:)` 同时设 `selectedModuleID` 与 `currentView`。
+//  T4 试点模块 progress——进度计算（闰年 2 月 / 季度边界 / 年初年末 / 周起止随日历）、
+//  manifest 与 config 契约、真组合根注册后的 tab 投影与展开内容。
 //
 
+import AppKit
 import Defaults
 import XCTest
 
@@ -669,6 +672,260 @@ final class ModuleKernelTests: XCTestCase {
 
         XCTAssertEqual(coordinator.selectedModuleID, "com.cmeng.gourd.probe-alpha")
         XCTAssertEqual(coordinator.currentView, .module, "selectModule 必须把 currentView 切到 .module")
+    }
+
+    // MARK: - 试点模块 progress（T4）
+
+    /// 固定日历：不读开发机的时区 / 语言 / 周起始日，断言才可复现。
+    private func fixedGregorian(timeZone: String = "Asia/Shanghai", firstWeekday: Int = 2) throws -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: timeZone))
+        calendar.locale = Locale(identifier: "zh_CN")
+        calendar.firstWeekday = firstWeekday
+        return calendar
+    }
+
+    /// 构造注入用的固定「现在」（按给定日历的时区解释）。
+    private func instant(
+        _ year: Int, _ month: Int, _ day: Int,
+        _ hour: Int = 0, _ minute: Int = 0, _ second: Int = 0,
+        calendar: Calendar
+    ) throws -> Date {
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        components.timeZone = calendar.timeZone
+        return try XCTUnwrap(calendar.date(from: components), "构造日期失败：\(year)-\(month)-\(day)")
+    }
+
+    /// D-07 的进度计算：断言覆盖闰年 2 月、季度边界（3/31、4/1、12/31）、年初年末、
+    /// 周进度在周一 / 周日两侧——一律「注入固定 now + 固定时区日历」，结论只依赖 `Calendar` 语义。
+    func testProgressCalculation() throws {
+        let calendar = try fixedGregorian()
+
+        // 日：正午恰好一半；00:00 归零
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .day, now: try instant(2026, 3, 31, 12, calendar: calendar), calendar: calendar),
+            0.5, accuracy: 1e-9
+        )
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .day, now: try instant(2026, 3, 31, calendar: calendar), calendar: calendar),
+            0, accuracy: 1e-9
+        )
+
+        // 闰年 2 月：区间总长由 `Calendar` 定（2024 = 29 天、2023 = 28 天），不手算天数
+        let leapDayNoon = try instant(2024, 2, 29, 12, calendar: calendar)
+        XCTAssertEqual(
+            try XCTUnwrap(ProgressCalculator.interval(for: .month, now: leapDayNoon, calendar: calendar)).duration,
+            29.0 * 86_400, accuracy: 1
+        )
+        XCTAssertEqual(ProgressCalculator.progress(for: .month, now: leapDayNoon, calendar: calendar), 28.5 / 29, accuracy: 1e-9)
+        XCTAssertEqual(
+            try XCTUnwrap(ProgressCalculator.interval(for: .month, now: try instant(2023, 2, 28, 12, calendar: calendar), calendar: calendar)).duration,
+            28.0 * 86_400, accuracy: 1
+        )
+        // 跨月边界：闰日多出来的那天在 3/1 00:00 之后才计入
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .month, now: try instant(2024, 3, 1, calendar: calendar), calendar: calendar),
+            0, accuracy: 1e-9
+        )
+        // 年尺度也跟着 `Calendar` 走：闰年 366 天
+        XCTAssertEqual(
+            try XCTUnwrap(ProgressCalculator.interval(for: .year, now: try instant(2024, 6, 1, calendar: calendar), calendar: calendar)).duration,
+            366.0 * 86_400, accuracy: 1
+        )
+
+        // 季度边界 3/31：Q1 = [1/1, 4/1)，1–3 月 = 90 天；3/31 00:00 = 89/90，最后一分钟仍 < 1
+        let q1 = try XCTUnwrap(ProgressCalculator.interval(for: .quarter, now: try instant(2026, 3, 31, calendar: calendar), calendar: calendar))
+        XCTAssertEqual(q1.start, try instant(2026, 1, 1, calendar: calendar))
+        XCTAssertEqual(q1.end, try instant(2026, 4, 1, calendar: calendar))
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .quarter, now: try instant(2026, 3, 31, calendar: calendar), calendar: calendar),
+            89.0 / 90.0, accuracy: 1e-9
+        )
+        let q1LastMinute = ProgressCalculator.progress(for: .quarter, now: try instant(2026, 3, 31, 23, 59, calendar: calendar), calendar: calendar)
+        XCTAssertGreaterThan(q1LastMinute, 89.0 / 90.0)
+        XCTAssertLessThan(q1LastMinute, 1)
+
+        // 季度边界 4/1：落到 Q2 的起点（0）
+        let q2Start = try instant(2026, 4, 1, calendar: calendar)
+        let q2 = try XCTUnwrap(ProgressCalculator.interval(for: .quarter, now: q2Start, calendar: calendar))
+        XCTAssertEqual(q2.start, q2Start)
+        XCTAssertEqual(q2.end, try instant(2026, 7, 1, calendar: calendar))
+        XCTAssertEqual(ProgressCalculator.progress(for: .quarter, now: q2Start, calendar: calendar), 0, accuracy: 1e-9)
+
+        // 季度边界 12/31：Q4 = [10/1, **次年** 1/1)，跨年边界仍由 `Calendar` 给；10–12 月 = 92 天
+        let q4Mid = try instant(2026, 12, 31, 12, calendar: calendar)
+        let q4 = try XCTUnwrap(ProgressCalculator.interval(for: .quarter, now: q4Mid, calendar: calendar))
+        XCTAssertEqual(q4.start, try instant(2026, 10, 1, calendar: calendar))
+        XCTAssertEqual(q4.end, try instant(2027, 1, 1, calendar: calendar))
+        XCTAssertEqual(ProgressCalculator.progress(for: .quarter, now: q4Mid, calendar: calendar), 91.5 / 92, accuracy: 1e-9)
+
+        // 年初 / 年末：1/1 00:00 归零、12/31 23:59:59 尚未到 1、次日 00:00 已是新年
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .year, now: try instant(2026, 1, 1, calendar: calendar), calendar: calendar),
+            0, accuracy: 1e-9
+        )
+        let yearEnd = try instant(2026, 12, 31, 23, 59, 59, calendar: calendar)
+        let yearProgress = ProgressCalculator.progress(for: .year, now: yearEnd, calendar: calendar)
+        XCTAssertGreaterThan(yearProgress, 0.9999)
+        XCTAssertLessThan(yearProgress, 1)
+        XCTAssertEqual(
+            try XCTUnwrap(ProgressCalculator.interval(for: .year, now: yearEnd, calendar: calendar)).duration,
+            365.0 * 86_400, accuracy: 1
+        )
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .year, now: try instant(2027, 1, 1, calendar: calendar), calendar: calendar),
+            0, accuracy: 1e-9
+        )
+
+        // 周（周一为首日）：2026-03-29 是周日，落在 [3/23, 3/30) 的第 6.5 天
+        let mondayFirst = try fixedGregorian(firstWeekday: 2)
+        let sundayNoon = try instant(2026, 3, 29, 12, calendar: mondayFirst)
+        let mondayFirstWeek = try XCTUnwrap(ProgressCalculator.interval(for: .week, now: sundayNoon, calendar: mondayFirst))
+        XCTAssertEqual(mondayFirstWeek.start, try instant(2026, 3, 23, calendar: mondayFirst))
+        XCTAssertEqual(mondayFirstWeek.end, try instant(2026, 3, 30, calendar: mondayFirst))
+        XCTAssertEqual(ProgressCalculator.progress(for: .week, now: sundayNoon, calendar: mondayFirst), 6.5 / 7, accuracy: 1e-9)
+        // 周一 00:00 是新的周起点 → 归零，一小时后重新推进
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .week, now: try instant(2026, 3, 30, calendar: mondayFirst), calendar: mondayFirst),
+            0, accuracy: 1e-9
+        )
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .week, now: try instant(2026, 3, 30, 1, calendar: mondayFirst), calendar: mondayFirst),
+            1.0 / (7 * 24), accuracy: 1e-9
+        )
+
+        // 周（**周日**为首日）：起止随日历走，不假定周一——同一个周日（3/29）成了新周的第 0.5 天，
+        // 而在周一为首日时它已是那一周的第 6.5 天（同刻不同位，两个日历各自成立）
+        let sundayFirst = try fixedGregorian(firstWeekday: 1)
+        let sundayFirstWeek = try XCTUnwrap(
+            ProgressCalculator.interval(for: .week, now: try instant(2026, 3, 29, 12, calendar: sundayFirst), calendar: sundayFirst)
+        )
+        XCTAssertEqual(sundayFirstWeek.start, try instant(2026, 3, 29, calendar: sundayFirst))
+        XCTAssertEqual(sundayFirstWeek.end, try instant(2026, 4, 5, calendar: sundayFirst))
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .week, now: try instant(2026, 3, 29, 12, calendar: sundayFirst), calendar: sundayFirst),
+            0.5 / 7, accuracy: 1e-9
+        )
+        // 同一时刻（2026-03-30 周一 12:00）在两种日历下落在不同的周内位置：
+        // 周日起首 = 第 1.5 天，周一为首日 = 第 0.5 天
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .week, now: try instant(2026, 3, 30, 12, calendar: sundayFirst), calendar: sundayFirst),
+            1.5 / 7, accuracy: 1e-9
+        )
+        XCTAssertEqual(
+            ProgressCalculator.progress(for: .week, now: try instant(2026, 3, 30, 12, calendar: mondayFirst), calendar: mondayFirst),
+            0.5 / 7, accuracy: 1e-9
+        )
+    }
+
+    /// 行首图标的符号名必须能被系统符号表解析（否则面板上那一行只剩空白）。
+    func testProgressScopeSymbolsResolve() {
+        for scope in ProgressCalculator.Scope.allCases {
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: scope.symbolName, accessibilityDescription: nil),
+                "\(scope.rawValue) 的图标 \(scope.symbolName) 不是可解析的 SF Symbol"
+            )
+        }
+    }
+
+    /// `ProgressModule.manifest` 的契约：id / surfaces / icon / defaultEnabled / 三项 config
+    /// 的类型、取值与默认值；并回走一次 JSON 路径（与宿主读 descriptor 同一条路）。
+    func testProgressModuleManifestMatchesContract() throws {
+        let manifest = ProgressModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.progress")
+        XCTAssertEqual(manifest.shortID, "progress")
+        XCTAssertEqual(manifest.name.key, "module.progress.name")
+        XCTAssertEqual(manifest.summary?.key, "module.progress.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.pie"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.expanded])
+        XCTAssertEqual(manifest.defaultEnabled, true)
+        XCTAssertEqual(manifest.defaultPlacement?.order, 30)
+        XCTAssertNil(manifest.defaultPlacement?.slot, "slot 只在声明 compact 时有意义；progress 只声明 expanded")
+        XCTAssertTrue(manifest.permissions.isEmpty, "09 §5.3：progress 无权限")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(properties["visibleScopes"]?.type, "list")
+        XCTAssertEqual(properties["visibleScopes"]?.itemType, "string")
+        XCTAssertEqual(
+            properties["visibleScopes"]?.default,
+            ConfigValue.strings(["day", "week", "month", "quarter", "year"])
+        )
+        XCTAssertEqual(properties["style"]?.type, "enum")
+        XCTAssertEqual(properties["style"]?.values, ["ring", "bar", "text"])
+        XCTAssertEqual(properties["style"]?.default, ConfigValue.string("ring"))
+        XCTAssertEqual(properties["baseCalendar"]?.type, "enum")
+        XCTAssertEqual(properties["baseCalendar"]?.values, ["gregorian", "chinese"])
+        XCTAssertEqual(properties["baseCalendar"]?.default, ConfigValue.string("gregorian"))
+
+        // 字面量 manifest 也能走 JSON：编码 → `decode(from:)`（含 validate）→ 相等
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// T4 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 激活 →
+    /// 进 tab 投影 → 展开请求拿到 `.view`。
+    ///
+    /// 证明两件事：A3「新增模块 = 协议 + 注册一行」在本批的数组上成立；`module.progress.name`
+    /// 真的能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）。
+    /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
+    /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
+    func testKernelBootstrapRegistersProgressModuleAndServesExpandedContent() async throws {
+        // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
+        // 避免改开发机上真实的 `enableScreenAssistant`。
+        let defaults = UserDefaults.standard
+        let flagKey = Defaults.Keys.gourdFirstLaunchDefaultsApplied.name
+        let originalFlag = defaults.object(forKey: flagKey)
+        defer {
+            if let originalFlag {
+                defaults.set(originalFlag, forKey: flagKey)
+            } else {
+                defaults.removeObject(forKey: flagKey)
+            }
+        }
+        defaults.set(true, forKey: flagKey)
+
+        XCTAssertEqual(KernelBootstrap.builtinModules.count, 1, "A3：内置模块清单本批只有 progress 一行")
+        XCTAssertEqual(
+            KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
+            [ObjectIdentifier(ProgressModule.self)],
+            "builtinModules 里应只有 ProgressModule"
+        )
+        for type in KernelBootstrap.builtinModules {
+            XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
+        }
+
+        await KernelBootstrap.bootstrap()
+
+        let registry = ModuleRegistry.shared
+        let id = "com.cmeng.gourd.progress"
+        XCTAssertEqual(registry.states[id], .active)
+        XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
+
+        let entry = try XCTUnwrap(registry.tabEntries.first, "progress 应进展开面板的 tab 投影")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [id])
+        XCTAssertEqual(entry.symbolName, "chart.pie")
+        // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
+        // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
+        XCTAssertTrue(["Progress", "进度"].contains(entry.label), "tab 文案应已本地化，实到 \(entry.label)")
+
+        // 只声明了 expanded：其余 surface 一律 `.none`（不占位、不算失败）
+        guard case .view = registry.content(for: id, request: request(.expanded)) else {
+            return XCTFail("展开请求应拿到 .view")
+        }
+        guard case .none = registry.content(for: id, request: request(.compact)) else {
+            return XCTFail("compact 未声明，应返回 .none")
+        }
+        guard case .none = registry.content(for: id, request: request(.lockscreen)) else {
+            return XCTFail("lockscreen 未声明，应返回 .none")
+        }
     }
 }
 

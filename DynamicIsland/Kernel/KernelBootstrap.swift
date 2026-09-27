@@ -19,7 +19,7 @@ import os
 @MainActor
 public enum KernelBootstrap {
     /// 内置模块清单。本任务（T2）留空数组——T4 把 `ProgressModule` 加进来。
-    static let builtinModules: [any GourdModule.Type] = []
+    static let builtinModules: [any GourdModule.Type] = [ProgressModule.self]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
 
