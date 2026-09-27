@@ -1,16 +1,33 @@
 name: CI
 
+# P0 CI (three pieces): build, unit tests, format & policy checks.
+#
+# Steps below marked "upstream-verified" are copied from the Atoll baseline
+# workflow because they encode facts that are expensive to rediscover:
+#   * Metal Toolchain download with retry -- Xcode 26+ (macOS 26 runner) ships
+#     no `metal`; without this component the build fails on the macOS 26 runner.
+#   * mach-services entitlement strip -- amfid kills an ad-hoc signed app that
+#     still claims this entitlement. The key contains dots, so plutil needs an
+#     ESCAPED key path: the unescaped form silently no-ops ("No value to
+#     remove") and leaves the entitlement in place.
+#   * XCUITest is not driveable on headless GitHub-hosted runners, so only the
+#     unit test bundle is built and run.
+# All xcodebuild invocations keep DerivedData under ~/Library/Developer/Xcode
+# (never /tmp) and skip macro/package-plugin validation.
+
 on:
   push:
     branches:
       - main
-      - dev
-      - nightly
-      - alpha
-      - beta
   pull_request:
     branches:
-      - dev
+      - main
+  # Manual trigger: this repository has never executed CI, so the first green
+  # run can be requested on demand after the repository is pushed.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -47,6 +64,7 @@ jobs:
 
       - name: Download Metal Toolchain
         # The downloadable Metal Toolchain is an Xcode 26+ (macOS 26) component; older Xcode ships metal.
+        # upstream-verified
         run: |
           sudo xcodebuild -runFirstLaunch || true
           MAJOR=$(sw_vers -productVersion | cut -d. -f1)
@@ -65,13 +83,13 @@ jobs:
           fi
 
       - name: Build
-        # UI automation of the notch/accessory app is not driveable on headless
-        # GitHub-hosted runners, so CI compiles the app instead of running XCUITest.
+        # upstream-verified, plus -derivedDataPath / -skip*Validation
         run: |
           sudo DevToolsSecurity -enable
 
           # Strip mach-services entitlement (amfid kills ad-hoc app); ignore only "key absent".
-          if ! plutil_out=$(plutil -remove com.apple.security.mach-services DynamicIsland/DynamicIsland.entitlements 2>&1); then
+          # The entitlement key contains dots: plutil key paths need them escaped (\\.).
+          if ! plutil_out=$(plutil -remove 'com\.apple\.security\.mach-services' DynamicIsland/DynamicIsland.entitlements 2>&1); then
             if printf '%s' "$plutil_out" | grep -q "No value to remove"; then
               echo "mach-services entitlement already absent, continuing."
             else
@@ -84,6 +102,9 @@ jobs:
             -project DynamicIsland.xcodeproj \
             -scheme DynamicIsland \
             -destination "platform=macOS" \
+            -derivedDataPath "$HOME/Library/Developer/Xcode/Gourd-CI-build" \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
             -resultBundlePath BuildResults.xcresult \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
@@ -106,3 +127,158 @@ jobs:
           path: BuildResults.xcresult
           if-no-files-found: ignore
           retention-days: 7
+
+  test:
+    name: Unit Tests
+
+    # Skip CI-generated commits (same guard as the build job)
+    if: >-
+      !contains(github.event.head_commit.message, 'ci: update appcast') &&
+      !contains(github.event.head_commit.message, 'ci: archive changelog')
+
+    strategy:
+      matrix:
+        macos_version: [macos-15, macos-26]
+      fail-fast: false
+    runs-on: ${{ matrix.macos_version }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode Version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Download Metal Toolchain
+        # upstream-verified: the test action compiles the app (and its Metal
+        # shaders) itself, so the component is needed here too.
+        run: |
+          sudo xcodebuild -runFirstLaunch || true
+          MAJOR=$(sw_vers -productVersion | cut -d. -f1)
+          if [ "$MAJOR" -ge 26 ]; then
+            downloaded=false
+            for i in 1 2 3 4 5; do
+              if sudo xcodebuild -downloadComponent MetalToolchain; then downloaded=true; break; fi
+              sleep 10
+            done
+            if [ "$downloaded" = false ] && ! xcrun -f metal >/dev/null 2>&1; then
+              echo "::error::Metal Toolchain download failed after 5 attempts and metal is unavailable."
+              exit 1
+            fi
+          else
+            echo "macOS $MAJOR: Metal ships with Xcode, skipping download."
+          fi
+
+      - name: Run Unit Tests
+        # XCUITest (DynamicIslandUITests) is not driveable on headless
+        # GitHub-hosted runners, so only DynamicIslandTests is built and run.
+        # The unit test bundle is hosted by Gourd.app (TEST_HOST), so the app is
+        # launched on the runner: it must be ad-hoc signed and must not carry the
+        # mach-services entitlement (see the build job).
+        run: |
+          sudo DevToolsSecurity -enable
+
+          # Strip mach-services entitlement (amfid kills ad-hoc app); ignore only "key absent".
+          if ! plutil_out=$(plutil -remove 'com\.apple\.security\.mach-services' DynamicIsland/DynamicIsland.entitlements 2>&1); then
+            if printf '%s' "$plutil_out" | grep -q "No value to remove"; then
+              echo "mach-services entitlement already absent, continuing."
+            else
+              echo "::error::plutil failed to modify entitlements: $plutil_out"
+              exit 1
+            fi
+          fi
+
+          xcodebuild test \
+            -project DynamicIsland.xcodeproj \
+            -scheme DynamicIsland \
+            -destination "platform=macOS" \
+            -derivedDataPath "$HOME/Library/Developer/Xcode/Gourd-CI-test" \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            -only-testing:DynamicIslandTests \
+            -skip-testing:DynamicIslandUITests \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES
+
+      - name: Surface Failure Diagnostics
+        if: failure()
+        run: |
+          echo "===== test failure summary ====="
+          xcrun xcresulttool get test-results summary --path TestResults.xcresult 2>/dev/null \
+            || xcrun xcresulttool get --path TestResults.xcresult --format json 2>/dev/null | head -c 20000 \
+            || echo "No xcresult available."
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.macos_version }}
+          path: TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+  format:
+    name: Format & Policy
+
+    # Skip CI-generated commits (same guard as the build job)
+    if: >-
+      !contains(github.event.head_commit.message, 'ci: update appcast') &&
+      !contains(github.event.head_commit.message, 'ci: archive changelog')
+
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode Version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift Format Check (advisory in P0)
+        # `swift-format lint` without --strict prints findings and exits 0; the
+        # upstream baseline was never formatted with swift-format, so a blocking
+        # gate (--strict) cannot pass yet. P0 records the finding count and puts
+        # the full report in an artifact; the gate becomes blocking -- scoped to
+        # the new code roots DynamicIsland/{Kernel,Runtime,Modules} -- in P1.
+        run: |
+          set +e
+          xcrun swift-format lint --recursive DynamicIsland > swift-format-lint.txt 2>&1
+          status=$?
+          findings=$(grep -c 'warning:' swift-format-lint.txt || true)
+          echo "swift-format findings: ${findings} (lint exit=${status})"
+          head -200 swift-format-lint.txt
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::swift-format exited ${status}; advisory in P0, see docs/10-p0-execution.md (known limitations)"
+          fi
+
+      - name: Upload Format Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-format-lint
+          path: swift-format-lint.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Assert Sparkle feed does not point upstream
+        # docs/08 P0-9: a misconfigured SUFeedURL lets Sparkle pull an upstream
+        # (Ebullioscopic) build over this app. The feed must stay empty/ours.
+        run: |
+          FEED_URL=$(plutil -extract SUFeedURL raw DynamicIsland/Info.plist 2>/dev/null || true)
+          echo "SUFeedURL='${FEED_URL}'"
+          if printf '%s' "$FEED_URL" | grep -qi 'Ebullioscopic'; then
+            echo "::error::SUFeedURL still points at an Ebullioscopic feed: ${FEED_URL}"
+            exit 1
+          fi
+          echo "OK: SUFeedURL does not point at Ebullioscopic."
