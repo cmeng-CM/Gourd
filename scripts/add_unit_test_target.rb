@@ -29,7 +29,7 @@ test_target.build_configurations.each do |config|
   settings = config.build_settings
   settings['PRODUCT_NAME'] = 'DynamicIslandTests'
   settings['PRODUCT_MODULE_NAME'] = 'DynamicIslandTests'
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.Ebullioscopic.Atoll.DynamicIslandTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.cmeng.gourd.tests'
   settings['INFOPLIST_FILE'] = 'DynamicIslandTests/Info.plist'
   settings['SWIFT_VERSION'] = '5.0'
   settings['MACOSX_DEPLOYMENT_TARGET'] = '15.0'

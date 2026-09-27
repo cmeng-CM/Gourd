@@ -16,13 +16,16 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import Defaults
 import Sparkle
 
-/// Custom Sparkle updater delegate that dynamically returns the feed URL
-/// based on the user's selected update channel preference.
+/// Sparkle updater delegate for 壶中天 / Gourd.
+///
+/// Upstream returned the appcast URL of the selected update channel, and every
+/// channel pointed at an Atoll-hosted feed. This fork publishes no appcast of
+/// its own, so no feed URL is provided at all: with no feed to resolve, Sparkle
+/// cannot contact an upstream (or any other) update endpoint at runtime.
 class AtollUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     func feedURLString(for updater: SPUUpdater) -> String? {
-        return Defaults[.updateChannel].feedURL.absoluteString
+        return nil
     }
 }

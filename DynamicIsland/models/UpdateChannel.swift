@@ -49,8 +49,12 @@ enum UpdateChannel: String, CaseIterable, Identifiable, Codable, Defaults.Serial
         }
     }
 
+    /// Where this channel's appcast would live. 壶中天 / Gourd publishes no
+    /// appcast yet, so these are placeholder locations under this repository
+    /// and no feed is served there. The runtime never resolves this value:
+    /// `AtollUpdaterDelegate.feedURLString(for:)` returns `nil`.
     var feedURL: URL {
-        let base = "https://raw.githubusercontent.com/Ebullioscopic/Atoll/main/Updates"
+        let base = "https://raw.githubusercontent.com/cmeng-CM/gourd/main/Updates"
         switch self {
         case .stable:  return URL(string: "\(base)/appcast.xml")!
         case .beta:    return URL(string: "\(base)/appcast-beta.xml")!

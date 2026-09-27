@@ -8,11 +8,11 @@
 		<true/>
 	</dict>
 	<key>NSAppleMusicUsageDescription</key>
-	<string>Atoll uses Apple Music to fetch animated artwork for the lock screen wallpaper.</string>
+	<string>壶中天 uses Apple Music to fetch animated artwork for the lock screen wallpaper.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Atoll needs audio capture permission to display the real-time music waveform visualizer.</string>
+	<string>壶中天 needs audio capture permission to display the real-time music waveform visualizer.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Atoll needs screen recording permission to capture screenshots for the AI assistant feature.</string>
+	<string>壶中天 needs screen recording permission to capture screenshots for the AI assistant feature.</string>
 	<key>SUEnableDownloaderService</key>
 	<false/>
 	<key>SUEnableInstallerLauncherService</key>

@@ -495,7 +495,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.Ebullioscopic.Atoll.DynamicIslandTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.tests;
 				PRODUCT_MODULE_NAME = DynamicIslandTests;
 				PRODUCT_NAME = DynamicIslandTests;
 				SDKROOT = macosx;
@@ -516,7 +516,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.Ebullioscopic.Atoll.DynamicIslandTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.tests;
 				PRODUCT_MODULE_NAME = DynamicIslandTests;
 				PRODUCT_NAME = DynamicIslandTests;
 				SDKROOT = macosx;
@@ -541,7 +541,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.atoll.DynamicIslandUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.uitests;
 				PRODUCT_MODULE_NAME = DynamicIslandUITests;
 				PRODUCT_NAME = DynamicIslandUITests;
 				SDKROOT = macosx;
@@ -568,7 +568,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.atoll.DynamicIslandUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.uitests;
 				PRODUCT_MODULE_NAME = DynamicIslandUITests;
 				PRODUCT_NAME = DynamicIslandUITests;
 				SDKROOT = macosx;
