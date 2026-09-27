@@ -149,7 +149,12 @@ class BluetoothAudioManager: ObservableObject {
         //
         // Hopping to the next main-queue turn lets `shared` finish publishing
         // before any of that work runs, so the re-entry cannot happen.
-        DispatchQueue.main.async { [weak self] in
+        //
+        // Modified for Gourd (2026-09-27): IOBluetoothHostController.default() can
+        // block in dispatch_once under the XCTest host environment, freezing the
+        // main queue before the test channel connects (seen locally and on CI).
+        // The probe does not need the main thread; run it on a utility queue.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.checkInitialDevices()
         }
     }

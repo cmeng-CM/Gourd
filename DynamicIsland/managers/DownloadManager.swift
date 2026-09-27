@@ -74,26 +74,42 @@ class DownloadManager {
         isDownloading = false
         
         let path = downloadsDirectory.path
-        let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        
+        // Modified for Gourd (2026-09-27): open() on a TCC-protected folder blocks
+        // the calling thread while the consent prompt is unanswered. Open the fd
+        // and run the first scan on the monitor queue; only cheap state setup
+        // stays on main. (Also the root cause of the CI "test runner hung" failure.)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let fd = open(path, O_EVTONLY)
+            guard fd >= 0 else { return }
+            DispatchQueue.main.async {
+                self?.attachMonitor(fd: fd)
+            }
+        }
+    }
+
+    private func attachMonitor(fd: Int32) {
+        guard source == nil else {
+            close(fd)
+            return
+        }
+
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
             eventMask: [.write, .rename, .delete, .attrib],
             queue: queue
         )
-        
+
         src.setEventHandler { [weak self] in
             self?.scanDownloadsDirectory()
         }
-        
+
         src.setCancelHandler {
             close(fd)
         }
-        
+
         source = src
         src.resume()
-        
+
         scanDownloadsDirectory()
     }
     
@@ -190,7 +206,13 @@ class DownloadManager {
     
     private func requestDownloadsPermissionIfNeeded() {
         guard let downloadsDirectory else { return }
-        _ = try? FileManager.default.contentsOfDirectory(at: downloadsDirectory, includingPropertiesForKeys: nil)
+        // Modified for Gourd (2026-09-27): enumerating a TCC-protected folder
+        // synchronously blocks the main thread while the consent prompt is
+        // unanswered — seen as a launch hang locally and as the CI "test runner
+        // hung before establishing connection" failure. Probe off-main instead.
+        DispatchQueue.global(qos: .utility).async {
+            _ = try? FileManager.default.contentsOfDirectory(at: downloadsDirectory, includingPropertiesForKeys: nil)
+        }
     }
     
     private func updateDownloadingState(isActive: Bool) {
