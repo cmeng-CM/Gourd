@@ -377,7 +377,6 @@
 				B19424072CD0DB52003E5DC2 /* XCRemoteSwiftPackageReference "LottieUI" */,
 				146BC4352D366E9B0047C66A /* XCRemoteSwiftPackageReference "MacroVisionKit" */,
 				7E61181F2E24071E0050006C /* XCRemoteSwiftPackageReference "SkyLightWindow" */,
-				7E09D5962EB7B497005AF41D /* XCRemoteSwiftPackageReference "open-meteo" */,
 				7E288D102F1659EF0020C117 /* XCRemoteSwiftPackageReference "AtollExtensionKit" */,
 				7EF19C152F577040005B9929 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
@@ -903,8 +902,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sindresorhus/LaunchAtLogin-Modern";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = revision;
+				revision = a04ec1c363be3627734f6dad757d82f5d4fa8fcc;
 			};
 		};
 		14D0321B2C68F3350096E6A1 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
@@ -915,28 +914,20 @@
 				minimumVersion = 2.6.4;
 			};
 		};
-		7E09D5962EB7B497005AF41D /* XCRemoteSwiftPackageReference "open-meteo" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/open-meteo/open-meteo";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.4.16;
-			};
-		};
 		7E288D102F1659EF0020C117 /* XCRemoteSwiftPackageReference "AtollExtensionKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/Ebullioscopic/AtollExtensionKit";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = revision;
+				revision = e2d30afedbbcc259bec7eeb1bea0757e52f4ca01;
 			};
 		};
 		7E61181F2E24071E0050006C /* XCRemoteSwiftPackageReference "SkyLightWindow" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/Lakr233/SkyLightWindow";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = revision;
+				revision = 4a7e8628c85e6b2ec429b57657a556a2171a4864;
 			};
 		};
 		7EF19C152F577040005B9929 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
@@ -983,8 +974,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/jasudev/LottieUI.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = revision;
+				revision = 0cd5b54a1c8467b19c01f56395aec179087b62e2;
 			};
 		};
 		F54407082CD4A23F00C7AFD9 /* XCRemoteSwiftPackageReference "swift-collections" */ = {
