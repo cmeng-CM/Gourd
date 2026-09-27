@@ -37,7 +37,7 @@ public struct ModuleTabEntry: Identifiable, Equatable {
     public let id: String
     /// 已本地化标题（解析顺序见 `ModuleRegistry.label(for:)`）。
     public let label: String
-    /// SF Symbol 名（内置模块由 `validate()` 保证可解析）。
+    /// SF Symbol 名（生产路径不调 `validate()`，本批未校验符号可解析性，见 docs/13「已知限制」17）。
     public let symbolName: String
     /// `defaultPlacement.order`，无 placement 时 `Int.max`（排在最后）。
     public let order: Int
@@ -187,8 +187,9 @@ public final class ModuleRegistry: ObservableObject {
     /// 把内容请求转给已激活的模块。**未知 id / 未激活（disabled / failed / 尚未 bootstrap）
     /// 一律返回 `.unavailable`**——不崩、也不返回空内容，渲染侧据此显示占位与原因（06 §3.2）。
     ///
-    /// `.view` 仅限内置模块的硬边界判定属宿主侧渲染路径（T3 的 `ModuleHostView`），
-    /// 本批注册表只做「是否激活」的裁剪。
+    /// `.view` 仅限内置模块的硬边界判定（06 §3.2）**属 P4**：本批只有 `kind == builtin`
+    /// 的内置模块（`register()` 不校验 manifest，见 docs/13「已知限制」17），插件越权边界
+    /// 随 `PluginModuleAdapter` 一起实现；本批注册表只做「是否激活」的裁剪。
     public func content(for id: String, request: ContentRequest) -> ModuleContent {
         guard let instance = instances[id], states[id] == .active else {
             let reason = manifests[id] == nil ? "模块未注册：\(id)" : "模块未激活：\(id)"

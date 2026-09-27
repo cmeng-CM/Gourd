@@ -13,7 +13,7 @@
 
 **取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的三个取值（本清单只用到 `compact` / `expanded`，锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
 
-已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）——表内 progress 一行与它逐字对齐。
+已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）——表内 progress 一行的 `surfaces` / `permissions` / `config` 键名与它一致；其 `defaultPlacement` 的**当前值**见该行注与 T-1（本批 `order` 还被兼作 expanded tab 的排序键，见 [13](13-runtime-kernel.md) 已知限制 25）。
 
 ---
 
@@ -26,7 +26,7 @@
 | `com.cmeng.gourd.nowplaying` | `compact`、`expanded` | `center` / order 10 | `media:read`、`media:control`、`network:itunes.apple.com` | `playerColorTinting`、`useMusicVisualizer`、`visualizerBarCount`、`enableWaveformScrubber`（接管映射，见 T-3） | P2a 首批；依赖 15 号文档 §1 的 `MediaRemote.framework` / `MediaRemoteAdapter.framework` |
 | `com.cmeng.gourd.lyrics` | `compact`、`expanded` | `center` / order 20 | `media:read`、`events:subscribe:media.playbackChanged`、`network:lrclib.net` | `enableLyrics`、`lyricsPanelWidth`、`lyricsPanelOffset` + 歌词磁盘缓存开关（09 §2 A 的 🔧 缺陷修复） | P2a；曲目变化经 EventBus 订阅，不做模块间直接引用（06 §3.3 R4） |
 | `com.cmeng.gourd.stats` | `compact`、`expanded` | `left` / order 10 | `system:metrics` | `statsUpdateInterval`、`statsStopWhenNotchCloses`、`enableStatsFeature`（接管映射） | P2a；依赖 15 号文档 §1 的 AppleSMC（温度）/ `IOReport.framework`（频率） |
-| `com.cmeng.gourd.calendar` | `expanded` | — | `[]` | `showCalendar`、`hideCompletedReminders`、`hideAllDayEvents`（接管映射） | P2a；事件与提醒读取走 EventKit，依赖日历 / 提醒 TCC 授权 |
+| `com.cmeng.gourd.calendar` | `expanded` | — | `[]`（事件标题/地点的细粒度读取另需 `calendar:read-titles`，**待落 06 号文档 §7.1**，见 T-8 / §3） | `showCalendar`、`hideCompletedReminders`、`hideAllDayEvents`（接管映射） | P2a；事件与提醒读取走 EventKit，依赖日历 / 提醒 TCC 授权 |
 | `com.cmeng.gourd.shelf` | `expanded` | — | `files:picker`、`files:shelf`、`network:local`（**待落 06 号文档 §7.1**） | `dynamicShelf`（接管映射）+ LocalSend 传输开关（09 §2 D） | P2a；依赖本地网络 TCC（`NSLocalNetworkUsageDescription`，09 §7 必办项） |
 | `com.cmeng.gourd.timer` | `compact`、`expanded` | `right` / order 10 | `timers`、`notifications` | `enableTimerFeature`、`timerDisplayMode`、`timerPresets` + 计时器持久化与到点通知（09 §2 C 的 🔧 缺陷修复） | P2a；到点通知依赖 `notifications` capability |
 | `com.cmeng.gourd.clipboard` | `compact`、`expanded` | `right` / order 20 | `clipboard:read`、`clipboard:write` | `enableClipboardManager`、`clipboardDisplayMode` + 电池上降频（09 §2 D 的 🔧 缺陷修复） | P2a；`clipboard:read` 只给元数据（06 §7 硬性规则 2） |
@@ -35,7 +35,7 @@
 | `com.cmeng.gourd.mirror` | `expanded` | — | `[]` | `showMirror`、`mirrorShape`、`selectedCameraID`（接管映射） | P2a；依赖相机 TCC |
 | `com.cmeng.gourd.launcher` | `compact`、`expanded` | `right` / order 30 | `[]` | `pinnedApps`、`showRecents`、`iconSize`、`density`（09 §5.1） | P2b 第 4；全局热键用上游 `KeyboardShortcuts` |
 | `com.cmeng.gourd.lunar` | `compact` | `left` / order 30 | `[]` | `displayFormat`、`showFestivals`（09 §5.2） | P2b 第 1；展开区归属见 T-6 |
-| `com.cmeng.gourd.progress` | `expanded` | —（本批未声明 `compact`，D-07；折叠态落地后按 `left` / order 40 生效） | `[]` | `visibleScopes`、`style`、`baseCalendar`（09 §5.3；已落地三键） | 已落地（P1-4 提前消化 P2b 第 2） |
+| `com.cmeng.gourd.progress` | `expanded` | —（本批未声明 `compact`，D-07；当前 manifest 的 `defaultPlacement` 为 `order 30` / `slot` 缺省，该 `order` 被兼作 expanded tab 的排序键，见 T-1 与 [13](13-runtime-kernel.md) 已知限制 25；折叠态槽位落地后按 `left` / order 40 生效） | `[]` | `visibleScopes`、`style`、`baseCalendar`（09 §5.3；已落地三键） | 已落地（P1-4 提前消化 P2b 第 2） |
 | `com.cmeng.gourd.shortcuts` | `expanded`（折叠态槽位可选，见 T-1） | — | `shortcuts:run` | `pinnedShortcuts`、`showOutput`、`timeoutSeconds`（09 §5.4） | P2b 第 3；依赖 shelf 的文件输入联动（`--input-path`） |
 | `com.cmeng.gourd.notifications` | `expanded`（浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
@@ -54,7 +54,7 @@
 ### T-1 槽位分配
 
 - **结论**：`center`（主内容，独占 1）：nowplaying（order 10）、lyrics（order 20）；`left`（状态类，默认上限 3）：stats（10）、weather（20）、lunar（30）、progress（40）；`right`（动作类，默认上限 3）：timer（10）、clipboard（20）、launcher（30）。shortcuts 的折叠态槽位**默认不声明**，其落地时若声明则记 `right` / order 40。落在默认上限之外的模块（progress、shortcuts）**不进槽位但保持 active**，用户调高 `config.layout.compact.maxPerSide` 或禁用他人后自动补位。
-- **理由**：06 §6.2 已给类别语义与示例（`left` 状态类 stats / weather、`right` 动作类 timer / clipboard、`center` 独占主内容 nowplaying / lyrics），其余模块按同类别归入，超出上限的处置也是 06 §6.2 原文；progress 本批未声明 `compact`（D-07），故表中 `slot` 记 —，其分配值在折叠态落地后生效。
+- **理由**：06 §6.2 已给类别语义与示例（`left` 状态类 stats / weather、`right` 动作类 timer / clipboard、`center` 独占主内容 nowplaying / lyrics），其余模块按同类别归入，超出上限的处置也是 06 §6.2 原文；progress 本批未声明 `compact`（D-07），故表中 `slot` 记 —，其分配值在折叠态落地后生效。**注意 progress 的 `order` 有两个值不要混**：本表 `left` 行写的 **40** 是折叠态槽位的预留值；当前代码里 `defaultPlacement.order` 是 **30**，它在本批被兼作 expanded tab 的排序键（[13](13-runtime-kernel.md) 已知限制 25）——折叠态落地时必须拆字段或同步改写，不能沿用同一字段的双关语义。
 
 ### T-2 controls 的 surfaces
 

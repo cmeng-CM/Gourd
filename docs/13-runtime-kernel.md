@@ -127,6 +127,8 @@ public struct ContentRequest: Sendable {   // 06 §3.1（本批去掉事件相�
     public let sizeHint: CGSize
     public let reason: ContentRequestReason
     public let isLowPower: Bool
+    // 实现另有带默认值的 `public init`（GourdModule.swift:52-66，slot/sizeHint/isLowPower 可省）
+    // ——这是 ModuleHostView 只传 surface/phase/reason 三个参数的原因。
 }
 public enum ModuleContent {                // 06 §3.2 的本批子集
     case view(AnyView)
@@ -136,9 +138,10 @@ public enum ModuleContent {                // 06 §3.2 的本批子集
 }
 
 // ===== DynamicIsland/Kernel/ModuleContext.swift（本批实现子集，D-05）=====
-// 本批**不含** notch / permissions / events / storage / scheduler / secrets 六个面：
-// 它们需要 per-screen 的 DynamicIslandViewModel 或未定的设计（P1-2/P1-3），
-// 试点模块不需要，故按 D-05 延后——延后项与加回时的破坏面见「明确不做」与「已知限制」。
+// 本批 `ModuleContext` 只给 **moduleID + 四个句柄**（host/config/logger/ui）；
+// 其余**七个面**（notch/permissions/events/storage/scheduler/secrets/clock）延后——它们需要
+// per-screen 的 DynamicIslandViewModel 或未定的设计（P1-2/P1-3），试点模块不需要，故按 D-05 延后；
+// 延后项与加回时的破坏面见「明确不做」与「已知限制」。
 @MainActor
 public struct ModuleContext {
     public let moduleID: String
@@ -187,18 +190,22 @@ public final class ModuleRegistry: ObservableObject {
     public private(set) var manifests: [String: ModuleManifest]
     public func register(_ types: [any GourdModule.Type], enabled: @escaping (String) -> Bool)
     public func bootstrap() async                  // 实例化 + 逐个 activate；单个失败只禁用自己（06 §3 硬性规则）
-    public func deactivateAll() async
+    public func deactivateAll() async              // **回写补充**：实际语义是「停用 + 清空注册表四张表」
+                                                   // （instances/states/manifests/moduleTypes），单测靠它做用例隔离；
+                                                   // 名字只表达了前一半，P1-3 若需要"停用但保留注册"须另加接口
     public func instance(for id: String) -> (any GourdModule)?
-    public var tabEntries: [ModuleTabEntry]        // 仅 active 且 surfaces 含 .expanded，按 order 升序
+    public var tabEntries: [ModuleTabEntry]        // 仅 active 且 surfaces 含 .expanded，按 order 升序（同 order 按 id 字典序）；
+                                                   // label 的解析链：LocalizedText.key → en 表 → shortID（回写补充最后一级）
     public func content(for id: String, request: ContentRequest) -> ModuleContent
 }
 
 // ===== DynamicIsland/Kernel/KernelBootstrap.swift（组合根）=====
 @MainActor
 public enum KernelBootstrap {
-    public static func bootstrap() async           // 注册内置模块 + 首启默认值（幂等）
-    static let builtinModules: [any GourdModule.Type]     // ← 新增模块 = 往这个数组加一行
-    static func applyFirstLaunchDefaults()         // enableScreenAssistant=false，一次性
+    public static func bootstrap() async           // **回写补充**：除了注册内置模块与首启默认值，
+                                                   // 还调用 registry.bootstrap() 完成激活（否则模块永不生效）
+    static let builtinModules: [any GourdModule.Type]     // ← 新增模块 = 往这个数组加一行（当前 [ProgressModule.self]）
+    static func applyFirstLaunchDefaults()         // enableScreenAssistant=false，一次性（幂等键 gourdFirstLaunchDefaultsApplied）
 }
 ```
 
@@ -206,12 +213,12 @@ public enum KernelBootstrap {
 
 | # | 文件:位置 | 改动 |
 |---|---|---|
-| S1 | `components/Tabs/TabSelectionView.swift:65-115` 与 `:118-152` | ① 加 `@ObservedObject private var moduleRegistry = ModuleRegistry.shared`（**必须**——否则注册表变化后 tab 列表不重绘；同文件已有 `@ObservedObject private var extensionNotchExperienceManager` 的先例）；② `tabs` getter 末尾追加 `for e in ModuleRegistry.shared.tabEntries`；③ 选中判定改为 `tab.view == .module ? coordinator.selectedModuleID == tab.experienceID : coordinator.currentView == tab.view`；④ **点击路径**（`:123-128` 的 action，照 `:124-125` 对 extensionExperience 的写法同构）：`if tab.view == .module { coordinator.selectModule(tab.experienceID ?? "") }`——只设 `currentView = .module` 而不设 `selectedModuleID` 会让内容区渲染 EmptyView |
-| S2 | `sizing/matters.swift:101-135` | `enabledStandardTabCount()` 加 `ModuleRegistry.shared.tabEntries.count`，并把该函数与其调用链（`currentRecommendedMinimumNotchWidth()` `:145`、`openNotchSize` `:69`、`enforceMinimumNotchWidth()` `:152`）标 `@MainActor`（同文件 `minimalisticOpenNotchSize` `:173` 已有先例）；`DynamicIslandViewCoordinator.swift:243/248` 两个非隔离调用点用 `MainActor.assumeIsolated { }` 跳转（仓库已有 4 处同款先例）。若编译期报隔离错误，**先按此方案改调用点，不得为绕过而读写非隔离镜像** |
+| S1 | `components/Tabs/TabSelectionView.swift:65-115` 与 `:118-152` | ① 加 `@ObservedObject private var moduleRegistry = ModuleRegistry.shared`（**必须**——否则注册表变化后 tab 列表不重绘；同文件已有 `@ObservedObject private var extensionNotchExperienceManager` 的先例）；② `tabs` getter 末尾追加 `for e in ModuleRegistry.shared.tabEntries`；③ 选中判定改为 `tab.view == .module ? coordinator.selectedModuleID == tab.experienceID : coordinator.currentView == tab.view`；④ **点击路径**（`:123-128` 的 action，照 `:124-125` 对 extensionExperience 的写法同构）：`if tab.view == .module { coordinator.selectModule(tab.experienceID ?? "") }`——只设 `currentView = .module` 而不设 `selectedModuleID` 会让内容区渲染 EmptyView。**回写补充**：实到还在 `ensureValidSelection`（`:211-213`）加了同构的 module 分支（把"当前视图是 `.module`"与 `selectedModuleID` 一起校验），比原计划多 2 行 |
+| S2 | `sizing/matters.swift:101-135` | `enabledStandardTabCount()` 加 `ModuleRegistry.shared.tabEntries.count`，并把该函数与其调用链（`currentRecommendedMinimumNotchWidth()` `:145`、`openNotchSize` `:69`、`enforceMinimumNotchWidth()` `:152`）标 `@MainActor`（同文件 `minimalisticOpenNotchSize` `:173` 已有先例）。**回写更正**：原计划的"`DynamicIslandViewCoordinator.swift:243/248` 是非隔离调用点、需 `MainActor.assumeIsolated`"**前提失实**——该类的主 actor 身份来自 `@Default` 属性包装器（`Defaults` 包声明为 `@MainActor`，见 `DynamicIslandViewCoordinator.swift:140-141` 的两处 `@Default`）在 Swift 5 模式下的整类推断，两处调用点本就在隔离上下文内（全量编译零诊断，实测见工作流账本 T3 审查），故**未加** `assumeIsolated`（加了反而会把"`shared` 被非主线程首次触达"变成运行时陷阱）。**前向风险**：SE-0401 生效（Swift 6 语言模式）后包装器推断消失，该类将变为非隔离，两处调用与 `BluetoothAudioManager.swift:41` 都会成为硬错误——最小修法是给该类显式加 `@MainActor` |
 | S3 | `enums/generic.swift:73-84` | `NotchViews` 追加**无关联值** case `module`（D-02：加关联值会破坏 `tabOrder.firstIndex` 与 `.id()`） |
 | S4 | `DynamicIslandViewCoordinator.swift:103-135` | 新增 `@Published var selectedModuleID: String?`；`tabOrder` 追加 `.module`；新增 `func selectModule(_ id: String)`（设 `selectedModuleID` + `currentView = .module`） |
-| S5 | `ContentView.swift:1083-1113` | switch 加 `case .module: ModuleHostView(moduleID: coordinator.selectedModuleID)`（无选中时 `EmptyView`）；`.id(coordinator.currentView)` 改为含模块 id 的复合值，否则模块间切换不重放过渡 |
-| S6 | `DynamicIslandApp.swift:625` 附近 | `Task { await KernelBootstrap.bootstrap() }`（紧邻既有的 4 个同构 `Manager...shared.setup(...)` 调用） |
+| S5 | `ContentView.swift:1083-1113` | switch 加 `case .module: ModuleHostView(moduleID: coordinator.selectedModuleID)`（无选中时 `EmptyView`）；`.id(coordinator.currentView)` 改为含模块 id 的复合值，否则模块间切换不重放过渡。**回写补充**：实到用私有结构体 `ExpandedContentIdentity(view:moduleID:)`（`ContentView.swift:297-303`）承载这个复合值，而非计划里说的字符串拼接 |
+| S6 | `DynamicIslandApp.swift:684` | `Task { await KernelBootstrap.bootstrap() }`（紧邻既有的 4 个同构 `Manager...shared.setup(...)` 调用；该行是全仓库唯一的 `bootstrap()` 生产调用点，审查期用"删除闸门键 → 复跑 → 键回到 1"独立取证过它确实执行） |
 | S7 | `models/Constants.swift` | 追加 1 个 Key：`gourdFirstLaunchDefaultsApplied`（Bool, default false） |
 
 **新增文件与被工程纳入的方式**：`DynamicIsland/` 是 `PBXFileSystemSynchronizedRootGroup`（`project.pbxproj:117-123`），**新目录 `Kernel/`、`Modules/` 下的文件自动进入 app target，无需改 pbxproj**。但 `DynamicIslandTests/` 是**普通 PBXGroup**（`:177-188`），新测试文件必须显式登记**四处**：`PBXFileReference` + `PBXBuildFile` + group `children` + test target 的 `Sources`（参照既有 `FlyoutFrameCalculatorTests.swift` 的四条记录，`:35`/`:83`/`:180` 与 Sources 段）。本批测试全部写进**一个**新文件 `DynamicIslandTests/ModuleKernelTests.swift`，把 pbxproj 编辑压到一次；新对象 ID 用不与既有冲突的 24 位十六进制（既有 ID 形如 `C0DEFACE1234567890ABCDEF`）。
@@ -222,7 +229,7 @@ public enum KernelBootstrap {
 - **状态机实现**——本批只落归属裁定（D-04）；`NotchStateMachine` 与四态迁移单测属 P1-2
 - **`isHovering` 提升为可观测量**——D-04 认定的唯一必要上游编辑，留给 P1-2（本批没有 hover 相位的消费者）
 - **事件总线与订阅**（`GourdModule.onEvent`、`EventHandle`、13 个事件）——属 P1-3；本批协议**不含** `onEvent`，加回时需同步所有已写模块（本批只有 1 个内置模块，成本可控，见「已知限制」9）
-- **模块存储 / 调度器 / 密钥 / 权限句柄与 `NotchHandle`**——`ModuleStorage` / `ModuleScheduler` / `SecretHandle` / `PermissionHandle` / `NotchHandle`（含几何快照）属 P1-2/P1-3；本批 `ModuleContext` 只给 host/config/logger/ui 五个面
+- **模块存储 / 调度器 / 密钥 / 权限句柄与 `NotchHandle`**——`ModuleStorage` / `ModuleScheduler` / `SecretHandle` / `PermissionHandle` / `NotchHandle`（含几何快照）属 P1-2/P1-3；本批 `ModuleContext` 只给 **moduleID + 四个句柄**（host/config/logger/ui），其余**七个面**（notch/permissions/events/storage/scheduler/secrets/clock）延后
 - **视图超时保护与 `degraded` 状态**（06 §3.3 R3 / §4）——依赖 P1-2 的降级状态机，本批 `ModuleRuntimeState` 只有 disabled/activating/active/failed
 - **`swift-format` 门禁对 `{Kernel,Modules}` 转 blocking**（ci.yml 现为 advisory）——等内核目录稳定（本批之后）再做，随 P1-2 批次
 - **其余"不需要的上游功能"的默认值**——[09](09-features-and-mechanisms.md) §8.1 的口径是"`enableScreenAssistant` **等**开关"，本批只落这一项；其余随 P1-3 的 ConfigStore 统一处理
@@ -234,7 +241,30 @@ public enum KernelBootstrap {
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）
+**交付物清单**（提交范围 `d77f358..4108ca6` 共 4 个实现提交 + 文档批次；每项都有独立审查）：
+
+| # | 交付物 | 落点 |
+|---|---|---|
+| 1 | **内核类型层** | `DynamicIsland/Kernel/{ModuleTypes,ModuleManifest,GourdModule,ModuleContent,ModuleContext}.swift`（含 `ConfigValue/ConfigNode/ConfigSchema` 自定义 Codable、`ModulePermissionCatalog` 15 项与 06 §7.1 逐字一致、`ModuleManifestError` 九分支） |
+| 2 | **注册表与组合根** | `DynamicIsland/Kernel/{ModuleRegistry,ModuleContextFactory,KernelBootstrap}.swift`（失败隔离、tab 投影、首启默认值） |
+| 3 | **接缝接线** | 7 个上游文件按 S1–S7 改（`TabSelectionView` / `matters` / `generic` / `DynamicIslandViewCoordinator` / `ContentView` / `DynamicIslandApp` / `Constants`）+ `DynamicIsland/Kernel/ModuleHostView.swift` |
+| 4 | **试点模块 progress** | `DynamicIsland/Modules/{ProgressModule,ProgressCalculator}.swift` + `KernelBootstrap.builtinModules` 恰一行 + `Localizable.xcstrings` 两条 key |
+| 5 | **单元测试** | `DynamicIslandTests/ModuleKernelTests.swift`（19 → 32 用例；总数 27 → **59** 全绿） |
+| 6 | **文档** | 本文件 + [14-module-manifests.md](14-module-manifests.md)（16 行 manifest 清单 + 13 处未决口径裁定）+ [15-platform-dependencies.md](15-platform-dependencies.md)（私有 API 台账 11 条 + 子进程 17 项 + 域名清单） |
+
+**与计划的偏离及原因**：
+
+1. **S2 的 `MainActor.assumeIsolated` 未执行**——计划的前提（coordinator 的两个调用点非隔离）经实测失实，该类已由 `@Default` 包装器推断为主 actor；加 `assumeIsolated` 反而有害。已在 S2 行回写更正并记录 Swift 6 前向风险。
+2. **S1 实到多 2 行**（`ensureValidSelection` 的 module 分支）、**S5 用私有结构体** `ExpandedContentIdentity` 而非字符串拼接——都是实现期发现的必要修正，已在对应行回写。
+3. **T1 的 `validate()` 顺序注释**在审查后修正为"本批自定、未对齐 06 §10.1"（原注释声称照 §10.1）。
+4. **T5/T6 文档的 8 处精度问题**在审查后修正（含一处被实验证伪的方法论断言）。
+
+**遗留项**（交接给后续批次）：
+
+- 已知限制 15–25（三类 manifest 校验、`validate()` 顺序、register 不校验、本地化债、日志噪音、陈旧 `selectedModuleID`、progress 配置消费者缺口、单测批内契约、百分比取整、三个待落 capability、`defaultPlacement.order` 兼作 expanded tab 排序键）
+- [14-module-manifests.md](14-module-manifests.md) 的 13 处裁定（T-1…T-13）需要在 P2a/P2b 逐条落地时复核
+- **P1-2 起手项**：`NotchStateMachine`（纯逻辑 + 四态单测）、`isHovering` 提升为可观测量、模块自报高度、视图超时保护与 `degraded`、`swift-format` 门禁对 `{Kernel,Modules}` 转 blocking
+- **P1-3 起手项**：`EventHandle`（含 `onEvent` 加回，破坏面见已知限制 9）、`ModuleStorage`/`ModuleScheduler`/`SecretHandle`/`PermissionHandle`/`NotchHandle`、完整 `ConfigStore(JSON)` 与 UserDefaults 覆盖值迁移（已知限制 12）、06 §7.1 补三个 capability
 
 ## 已知限制
 
@@ -247,11 +277,22 @@ public enum KernelBootstrap {
 7. **模块内容视图的 `.id()` 过渡**：S5 若不把模块 id 并入 `.id()`，两个模块间切换不会重放过渡动画。
 8. **CI 单测仍不可用**（advisory，见 [11](11-verification.md) §5）：本批所有单测以本地 `xcodebuild test` 为准。
 9. **协议的加回有破坏面**：本批的 `GourdModule` 不含 `onEvent`、`ModuleContent.descriptor` 不带 payload——P1-3（事件）与 P4（插件）加回时必须同步所有已写模块与 `ModuleHostView` 的 switch；本批只有 1 个内置模块，代价可控，但**后续批次应尽早补齐，不宜堆积**。
-10. **引导流程会覆盖 D-08 的默认值**：`ProfileSelectionView.swift:214` 在用户选 developer profile 时会把 `enableScreenAssistant` 写回 `true`。本批不动引导（避免扩大上游改动面），因此「首启关闭」在用户走完引导选开发者档后可能失效——需在 P1-3 的 ConfigStore 里统一口径，或由用户在设置页确认一次。
+10. **引导流程会覆盖 D-08 的默认值**：`ProfileSelectionView.swift:214` 在用户选 developer profile 时会把 `enableScreenAssistant` 写回 `true`。本批不动引导（避免扩大上游改动面），因此「首启关闭」在用户走完引导选开发者档后可能失效——需在 P1-3 的 ConfigStore 里统一口径，或由用户在设置页确认一次。**另需注意本版本的「首启默认值」对既有安装同样生效**：闸门键 `gourdFirstLaunchDefaultsApplied` 是本批新引入的（默认 `false`），所以**升级后首次运行也会写入** `enableScreenAssistant = false`，即会覆盖老用户此前的显式开启。若日后要区分「真正全新安装」，可复用仓内已有的 `@AppStorage("firstLaunch")`（`DynamicIslandViewCoordinator.swift:135`，默认 `true`）；**本批不改行为**，只记录。
 11. **`ModuleRuntimeState` 无 `degraded`**：与 06 §4 的状态机相比缺降级态与运行期超时计数（见「明确不做」），本批的失败隔离只覆盖 `activate()` 抛错。
 12. **配置覆盖值的临时落点**：本批的 `ConfigHandle.set` 写 `UserDefaults(suiteName: "com.cmeng.gourd.module.<shortID>")`，而 P1-3 的 `ConfigStore` 定为「JSON + schemaVersion + 迁移链」（[07](07-config-and-events.md) §2）。本批**没有用户可见的配置入口**（只有 manifest 默认值会被读取），因此这次迁移在 P1-3 一并做，届时需写迁移：UserDefaults 覆盖值 → config.json。
 13. **`config` 子集与 06 §5 的类型差异**（同名字段换型是漂移起点，故记在此）：`ConfigNode.values` 是 `[String]?`，而 06 §5.3 的 enum 取 `[{value,title,icon?}]`；`itemType` 未收在 06 的 `string|integer|appPicker` 内；`ConfigSchema` 无 `required`，也不做 06 §5.1 的「未知关键字 → `E_INVALID_SCHEMA`」校验。P1-3 落地完整 ConfigStore 时必须一并升级并同步已写模块（本批只有 progress）。
 14. **刷新粒度是粗粒度**：progress 模块用 `TimelineView(.periodic(from: .now, by: 60))` 统一按 60s 重算，未按 [09](09-features-and-mechanisms.md) §5.3 的字面要求区分粒度（日 1 分钟、周/月/季/年 1 小时），也**未监听 `NSSystemClockDidChange`**——系统的时钟/时区变更最多 60s 内被感知，超过 60s 的时钟跳变会在下一个周期校正。
+15. **manifest 校验是子集，三类校验未实现**（[06](06-module-protocol.md) §10.1/§2.2/§7.1 有规定而本批未做）：① 未知字段 → `E_UNKNOWN_FIELD`（拼错的字段会被静默接受，与 06 §10.2 末句"静默跳过坏字段等于把拼错的声明变成看起来申请了但没生效"的口径相抵）；② `version` 的严格 semver；③ `permissions` 的**参数形态**（`network:<host>` 的小写域名/禁 IP/禁端口规则、`events:subscribe:<event>` 的事件名存在性）——本批只做白名单集合校验，词表 15 项与 06 §7.1 逐字一致。三者的加回批次：②③ 随 P1-3 的完整 ConfigStore/权限门控，① 至少要在有第二个内置模块之前。
+16. **`validate()` 的校验顺序是本批自定**，未逐字对齐 06 §10.1（实际顺序：`manifestVersion → id → 保留前缀 → kind → icon → name/summary → surfaces → apiVersion → permissions`）。差异只影响**多错并存时报出哪一个**，不影响任一单项判定。
+17. **`ModuleRegistry.register()` 不调用 `validate()`**：内置模块的 manifest 是代码字面量，正确性由单测（`validate()` 用例 + 往返 + 符号表三条）与审查期独立探针兜住。加第二个内置模块前建议补一条 dev-only 断言。
+18. **本地化债**：本批只加了 `module.progress.name` / `module.progress.summary` 两条 key；`ModuleHostView` 的 `.descriptor` 与 `.unavailable` 分支文案**未本地化**（后者用 `Text(String)` 非本地化初始化器）。P3 的双语批次一并处理。
+19. **日志噪音**：`ModuleRegistry.content(for:)` 对未知/非 `active` 模块每次调用记一条 warning，而 `ModuleHostView.body` 每次重算都会调它——选中 `.module` 且模块非 active 时会按渲染频率刷日志。
+20. **`selectedModuleID` 在切走 `.module` 后不清空**：当前无功能影响（所有读取处都带 `currentView == .module` 前置），但展开内容的复合身份会携带陈旧模块 id；后续统一清理。
+21. **progress 的配置项有两个缺口**：`baseCalendar` 已声明**无消费者**；`style` / `visibleScopes` 的坏值回落分支无测试覆盖。本批没有用户可见的配置入口，故无用户影响；P1-3 落配置入口时必须接上，否则会出现「有控件、无效果」。
+22. **单测里 `builtinModules.count == 1` 是批内契约**：加第二个内置模块时该断言会红，需放宽为 `contains`。同一用例里还有一条 `ObjectIdentifier` 逐项相等断言（`ModuleKernelTests.swift:896-900`，断言数组恰为 `[ProgressModule.self]`），加第二个模块时**同样会红**，需一并放宽。
+23. **百分比取整的临景观感**：`Int((progress*100).rounded())` 在区间末段会显示 `100%`（如 12-31 23:59:30 的年进度）。
+24. **三个新 capability 待落 [06](06-module-protocol.md) §7.1**：`notifications:read`（读通知中心）、`network:local`（LocalSend 局域网）、`calendar:read-titles`（07 §3.5 已引用但 06 §7.1 缺表）——已在 [14-module-manifests.md](14-module-manifests.md) 相应行标注。
+25. **`defaultPlacement.order` 本批兼作 expanded tab 的确定性排序键**（对 06 §6.2 的语义扩展）：06 §2.2/§6.2 规定 `defaultPlacement` 仅当 `surfaces` 含 `compact` 时有意义、否则忽略，而 progress 本批未声明 `compact`（D-07），实现仍用 `manifest.defaultPlacement?.order ?? Int.max` 给 `tabEntries` 排序（`ModuleRegistry.swift:165`）。理由：本批没有 compact 消费者，而 tab 列表需要确定性顺序（同 `order` 再按 id 字典序）。代价：一个字段承载双关语义（"compact 槽位的插入序"与"expanded tab 排序键"）。**约束**：compact 槽位在 P2 落地时**必须**拆字段或明确写下双语义，否则同一个 `order` 会被两套布局逻辑读走；在此期间 progress 的 `slot` 恒为 nil（`Placement(slot: nil, order: 30)`，与 [14](14-module-manifests.md) 的 T-1 给折叠态预留的 `left` / order 40 不是同一个值）。
 
 ## 验收标准
 
@@ -272,7 +313,7 @@ public enum KernelBootstrap {
 | D-02 | `NotchViews` 新增**无关联值** case `module`，模块选择走 `coordinator.selectedModuleID` | agent | 关联值会破坏 `tabOrder.firstIndex` 与 `.id()`（限制 1） |
 | D-03 | `ModuleRegistry` 仿写 `ExtensionNotchExperienceManager` 的形态（不继承） | agent | 上游已有同构先例，避免发明新接缝类型；继承会把扩展线协议身份绑进来 |
 | D-04 | 状态机归属 = **包装/观测**，替换留 P2+；本批只落裁定 | agent | A/B 对照表（改动面、失败模式、收益时点）；P1 结束时新语义无消费者 |
-| D-05 | `ModuleContext` 本批只实现四个面 + moduleID（`host` / `config`(简化) / `logger` / `ui`）；`notch`/事件/存储/调度/密钥/权限延后 P1-2/P1-3 | agent | 试点模块（progress）不需要它们；先落最小可用面，避免设计未定的句柄被提前固化（延后面见「明确不做」、加回成本见「已知限制」9） |
+| D-05 | `ModuleContext` 本批只实现四个面 + moduleID（`host` / `config`(简化) / `logger` / `ui`）；其余七个面（`notch`/`permissions`/`events`/`storage`/`scheduler`/`secrets`/`clock`）延后 P1-2/P1-3 | agent | 试点模块（progress）不需要它们；先落最小可用面，避免设计未定的句柄被提前固化（延后面见「明确不做」、加回成本见「已知限制」9） |
 | D-06 | `ModuleContent.descriptor` 本批只解析不渲染（渲染路径显示 unavailable 文案） | agent | descriptor 渲染对应上游扩展管线，属 P4 插件层 |
 | D-07 | 试点模块选 `progress`，`surfaces: ["expanded"]`，`defaultEnabled: true` | agent（承接 ADR-0012 用户已批准的新增 6 项） | 零私有 API、零依赖、成本最低（[09](09-features-and-mechanisms.md) §5.3）；compact 槽位本批不做故不声明 |
 | D-08 | 首启写入 `enableScreenAssistant=false`（一次性、幂等） | 用户 | [09](09-features-and-mechanisms.md) §8.1 已拍板「不需要的上游功能用上游开关默认值表达」；该功能上游默认 `true` 且入口隐蔽（⌘⇧A 悬浮面板，不在刘海 tab 里） |
@@ -281,4 +322,8 @@ public enum KernelBootstrap {
 | D-11 | 内置模块 id 与本地化 key 沿用 06 §2.2/§2.3：`com.cmeng.gourd.<shortID>`、`module.<shortID>.name` | 用户（[09](09-features-and-mechanisms.md) §8.3 已定命名）+ agent | 逐字沿用已定契约 |
 | D-12 | 本批不声明 `lockscreen` surface | 用户 | ADR-0011 第 4 条「锁屏维持现状」 |
 | D-13 | 本批的范围边界与实现面裁剪，由 agent 依调研证据裁定：① 不做折叠态槽位（D-01）② 不做状态机实现（D-04）③ 不声明锁屏（D-12）④ `ModuleContext` 只做四面 + moduleID（D-05）⑤ `ModuleContent.descriptor` 不带 payload（D-06）⑥ 试点模块默认启用（D-07）⑦ 13 处未决口径的逐项结论（D-09）⑧ 首启默认值只落一项（D-08 范围）。用户在本会话明确授权「两道门不需要审阅，直接执行」 | 用户 | 用户授权自主执行；每条裁定的证据落在本文件「备选与取舍」「已知限制」，无不可逆改动（后续批次可回退），且**加回路径已逐条写明**（「明确不做」与「已知限制」9/10/11/12） |
-| D-14 | 平台依赖台账与 ATS 域名清单的收录口径：私有 API 11 项逐条带降级路径；子进程含新增 `/usr/bin/shortcuts`；域名清单 = `grep -rn '"https\?://'` 结果**并集**源码内插值域名（如 `MusicManager.swift:1525` 的 `lrclib.net`），每条指向 file:line | agent | 实测：正则要求 URL 后紧跟引号，漏掉插值字符串里的域名；把「清单 = 命令结果 ∪ 插值域名」写死可避免这份台账天生不全 |
+| D-14 | 平台依赖台账与 ATS 域名清单的收录口径：私有 API 11 项逐条带降级路径；子进程含新增 `/usr/bin/shortcuts`；域名清单 = `grep -rn '"https\?://'` 的结果，**并集 host 本身由插值拼出的形态**（当前源码 0 处，作为保险规则保留），每条指向 file:line | agent | **审查期实测更正了初稿的说法**：`grep` 已能取到"host 字面、尾部插值"的 URL（如 `MusicManager.swift:1525` 的 lrclib）；真正的盲区只有 host 由插值拼出——明写规则可避免下次误判（记录在 [15-platform-dependencies.md](15-platform-dependencies.md) §3.1） |
+| D-15 | `ModuleRegistry.register()` 不调用 `validate()`（内置 manifest 是代码字面量，正确性靠单测与审查期独立探针） | agent | 编译期同仓库的字面量再加一层运行期校验收益低；代价与「加第二个内置模块前补 dev-only 断言」记在已知限制 17 |
+| D-16 | `deactivateAll()` 的语义定为「停用 + 清空注册表四张表」 | agent | 单测需要用例级隔离（`manifests`/`states` 是 `private(set)`）；名字只表达了前一半，已写进接口注释与已知限制；P1-3 若需要「停用但保留注册」须另加接口 |
+| D-17 | progress 的刷新定为 `TimelineView(.periodic(from: .now, by: 60))`，取代 [09](09-features-and-mechanisms.md) §5.3 的分级刷新 | agent | 60s 对日进度足够，且免掉内核侧 tick 事件（属 P1-3）；时钟/时区变更的感知延迟与代价见已知限制 14 |
+| D-18 | 三个新 capability（`notifications:read` / `network:local` / `calendar:read-titles`）本批只在 [14](14-module-manifests.md) 里标注「待落 06 §7.1」，**不改 06 号文档** | agent | 本批的执行约束是"只动白名单文件"；白名单的正式增补随 P1-3 / P2c（通知模块开工前必须落）。标注落点逐项写明：`notifications:read` / `network:local` 在各自 manifest 行的 `permissions` 格；`calendar:read-titles` 在 calendar 行的 `permissions` 格注与 T-8 / §3 待落清单——它是 07 §3.5 事件订阅裁剪项引出的缺口，**不是 calendar 行本批的声明项**（该行 `permissions` 仍是 `[]`） |

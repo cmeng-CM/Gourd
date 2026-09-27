@@ -48,8 +48,9 @@ public enum NotchPhase: String, Codable, Sendable, CaseIterable {
 }
 
 /// 06 §3.1：这一次 `content(for:)` 是被什么触发的。
-/// 本批只有 `initial` / `redraw` 会被真实产生（`event` / `tick` / `configChanged`
-/// 依赖 P1-3 的事件总线与配置存储）。
+/// 本批只有 `initial` 会被真实产生（唯一生产点 `ModuleHostView.swift:35`）；`redraw` 虽在
+/// 枚举里、但宿主当前与 `initial` 走同一条同步取内容路径，`event` / `tick` / `configChanged`
+/// 依赖 P1-3 的事件总线与配置存储。
 public enum ContentRequestReason: String, Codable, Sendable {
     case initial
     case event

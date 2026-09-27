@@ -11,7 +11,9 @@ import SwiftUI
 /// 模块对某次内容请求的回答。
 ///
 /// - `.view`：仅内置模块（`kind == builtin`）可用；`kind != builtin` 的模块返回它会
-///   被宿主断言失败并降级为 `.unavailable`（06 §3.2 的硬边界，宿主侧判定属 T3）；
+///   被宿主断言失败并降级为 `.unavailable`（06 §3.2 的硬边界）。该判定**属 P4**：
+///   本批只有 `kind == builtin` 的内置模块（`register()` 不校验 manifest，见
+///   docs/13「已知限制」17），插件越权边界随 `PluginModuleAdapter` 一起实现；
 /// - `.descriptor`：本批无关联值、不渲染（D-06，P4 加回 payload 时需同步所有已写模块
 ///   与 `ModuleHostView` 的 switch，见 docs/13「已知限制」9）；
 /// - `.unavailable(reason:)`：优雅降级——显示占位与原因，**不算失败**；
