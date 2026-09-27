@@ -105,7 +105,7 @@ class DynamicIslandViewCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var hoverOpenSuppressedUntil: Date = .distantPast
     
-    private static let tabOrder: [NotchViews] = [.home, .shelf, .timer, .stats, .llmUsage, .colorPicker, .notes, .clipboard, .terminal, .extensionExperience]
+    private static let tabOrder: [NotchViews] = [.home, .shelf, .timer, .stats, .llmUsage, .colorPicker, .notes, .clipboard, .terminal, .extensionExperience, .module]
     
     /// Direction of the most recent tab switch (true = forward/right, false = backward/left)
     @Published var tabSwitchForward: Bool = true
@@ -127,6 +127,9 @@ class DynamicIslandViewCoordinator: ObservableObject {
     @Published var statsSecondRowExpansion: CGFloat = 1
     @Published var notesLayoutState: NotesLayoutState = .list
     @Published var selectedExtensionExperienceID: String?
+    /// 当前选中的模块 id（P1 接缝 S4）。与 `currentView == .module` 配合使用：
+    /// `NotchViews` 不能带关联值（D-02），「哪个模块」只能存在这一层。
+    @Published var selectedModuleID: String?
     
     
     @AppStorage("firstLaunch") var firstLaunch: Bool = true
@@ -457,6 +460,15 @@ class DynamicIslandViewCoordinator: ObservableObject {
     
     func showEmpty() {
         currentView = .home
+    }
+
+    /// 选中某个模块并切到模块视图（P1 接缝 S4）。
+    ///
+    /// 必须**同时**设 `selectedModuleID` 与 `currentView`：只设后者会让 `ModuleHostView`
+    /// 拿不到模块 id 而渲染 EmptyView（docs/13 S1 ④ 的失败模式）。
+    func selectModule(_ id: String) {
+        selectedModuleID = id
+        currentView = .module
     }
     
     // MARK: - Clipboard Management

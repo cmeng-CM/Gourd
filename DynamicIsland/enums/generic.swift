@@ -81,6 +81,10 @@ public enum NotchViews {
     case clipboard
     case terminal
     case extensionExperience
+    /// 模块内核的展开面板视图（P1 接缝 S3，D-02）。**无关联值**：带关联值会破坏
+    /// `DynamicIslandViewCoordinator.tabOrder.firstIndex(of:)` 与展开内容 `.id()` 的比较与哈希；
+    /// 「当前是哪个模块」收在 `DynamicIslandViewCoordinator.selectedModuleID`（接缝 S4）。
+    case module
 }
 
 enum NotesLayoutState: Equatable {

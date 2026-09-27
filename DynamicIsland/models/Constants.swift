@@ -1441,5 +1441,12 @@ extension Defaults.Keys {
         let fallback = MusicAuxiliaryControl.alternative(excluding: current)
         Defaults[.musicAuxRightControl] = fallback
     }
+
+    // MARK: Module Kernel (P1)
+
+    /// 首启默认值的闸门（接缝 S7）：`KernelBootstrap.applyFirstLaunchDefaults()` 落完
+    /// `enableScreenAssistant = false` 后置 true，之后永不再覆盖用户手动改回的值。
+    static let gourdFirstLaunchDefaultsApplied = Key<Bool>("gourdFirstLaunchDefaultsApplied", default: false)
+
     static let showSongMetadataInClosedNotch = Key<Bool>("showSongMetadataInClosedNotch", default: false)
 }

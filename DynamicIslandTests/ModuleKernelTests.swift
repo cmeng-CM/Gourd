@@ -8,8 +8,11 @@
 //  （JSON 路径），与宿主读 descriptor 同一条路。
 //  T2 注册表与组合根——注册幂等、activate 抛错隔离、启用门、tab 投影、content 降级、
 //  `ModuleContextFactory` 的默认值读取、首启默认值幂等。
+//  T3 接缝——S2 的 tab 计数（刘海最小宽度的输入）把注册表条目计入总数；S4 的
+//  `selectModule(_:)` 同时设 `selectedModuleID` 与 `currentView`。
 //
 
+import Defaults
 import XCTest
 
 @testable import Gourd
@@ -578,7 +581,9 @@ final class ModuleKernelTests: XCTestCase {
     /// 首启默认值**一次性、幂等**：闸门键为真后不再覆盖用户手动改回的值。
     func testFirstLaunchDefaultsIdempotent() {
         let defaults = UserDefaults.standard
-        let flagKey = KernelBootstrap.firstLaunchDefaultsFlagKey
+        // 闸门键（接缝 S7）定义在 `Constants.swift` 的 `Defaults.Keys` 里：用例取 Key 名做
+        // `UserDefaults` 原值快照/还原，不再有第二处字面量。
+        let flagKey = Defaults.Keys.gourdFirstLaunchDefaultsApplied.name
         // TEST_HOST = Gourd.app：这里改的是开发者机器上真实的 app defaults，用例改过的键全部还原
         let originalFlag = defaults.object(forKey: flagKey)
         let originalScreenAssistant = defaults.object(forKey: "enableScreenAssistant")
@@ -607,6 +612,63 @@ final class ModuleKernelTests: XCTestCase {
         defaults.set(true, forKey: "enableScreenAssistant")
         KernelBootstrap.applyFirstLaunchDefaults()
         XCTAssertTrue(defaults.bool(forKey: "enableScreenAssistant"), "已应用过 → 第二次调用必须原样返回")
+    }
+
+    // MARK: - 接缝（T3）
+
+    /// 接缝 S2：`enabledStandardTabCount()`（刘海最小宽度的输入）必须把注册表 tab 计入总数。
+    ///
+    /// 断言用**增量**而非绝对值：上游那 6 个标准 tab 由开发机上的真实 Defaults 决定，
+    /// 只有增量能把「注册表条目被计入」与「Default 开关恰好这样」分开。注册表为空时该数
+    /// 必须回到基线——否则 S2 读的就不是 `tabEntries`（清空后应当归零）。
+    func testEnabledStandardTabCountIncludesActiveModuleEntries() async {
+        let baseline = enabledStandardTabCount()
+
+        registerProbes([
+            AlphaProbeModule.self,     // active + 声明 .expanded → 计入
+            GammaProbeModule.self,     // active + 声明 .expanded → 计入
+            DeltaProbeModule.self,     // active + 声明 .expanded → 计入
+            BetaProbeModule.self,      // activate 抛错 → failed，不计入
+            CompactProbeModule.self,   // 只声明 .compact，不计入
+            OptInProbeModule.self,     // defaultEnabled=false → disabled，不计入
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let entries = ModuleRegistry.shared.tabEntries
+        XCTAssertEqual(entries.count, 3, "投影只含 active 且声明 .expanded 的模块")
+        XCTAssertEqual(
+            enabledStandardTabCount(),
+            baseline + entries.count,
+            "S2 必须把注册表条目计入总数（恰好多 N，而不是只多了一个词）"
+        )
+
+        // 反向：注册表清空 → 回到基线（S2 的增量只来自 tabEntries）
+        await ModuleRegistry.shared.deactivateAll()
+        XCTAssertEqual(enabledStandardTabCount(), baseline, "注册表清空后必须回到基线")
+    }
+
+    /// 接缝 S4：`selectModule(_:)` 必须**同时**设 `selectedModuleID` 与 `currentView = .module`。
+    ///
+    /// 两个都要：只设 `currentView` 会让内容区拿不到模块 id 而渲染 EmptyView（S1 ④ 的失败模式）；
+    /// 只设 id 则 tab 选中态（`isSelected` 比 id）与内容区不同步。
+    func testSelectModuleSetsSelectedIDAndView() {
+        let coordinator = DynamicIslandViewCoordinator.shared
+        let originalID = coordinator.selectedModuleID
+        let originalView = coordinator.currentView
+        // 上游 `currentView.didSet` 在极简模式下会把非 `.home` 的选中强制回 `.home`；
+        // 用例把该开关压到 false 再断言，结束还原原值（只影响本用例窗口期）。
+        let originalMinimalistic = Defaults[.enableMinimalisticUI]
+        defer {
+            Defaults[.enableMinimalisticUI] = originalMinimalistic
+            coordinator.selectedModuleID = originalID
+            coordinator.currentView = originalView
+        }
+        Defaults[.enableMinimalisticUI] = false
+
+        coordinator.selectModule("com.cmeng.gourd.probe-alpha")
+
+        XCTAssertEqual(coordinator.selectedModuleID, "com.cmeng.gourd.probe-alpha")
+        XCTAssertEqual(coordinator.currentView, .module, "selectModule 必须把 currentView 切到 .module")
     }
 }
 

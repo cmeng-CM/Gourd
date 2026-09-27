@@ -21,10 +21,6 @@ public enum KernelBootstrap {
     /// 内置模块清单。本任务（T2）留空数组——T4 把 `ProgressModule` 加进来。
     static let builtinModules: [any GourdModule.Type] = []
 
-    /// 闸门键：首启默认值是否已落过（**一次性**）。T2 先用作字面键，
-    /// T3 落进 `Constants.swift` 的 `Defaults.Keys`（docs/13 接缝 S7）后本常量随之退役。
-    static let firstLaunchDefaultsFlagKey = "gourdFirstLaunchDefaultsApplied"
-
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
 
     /// 注册内置模块 + 落首启默认值 + 激活。幂等，可在启动流程里安全重复调用。
@@ -41,18 +37,17 @@ public enum KernelBootstrap {
     /// 首启默认值：把不需要的上游功能用**默认值**表达，不改上游源码（09 §8.1 / D-08）。
     ///
     /// 本批只有一条：`enableScreenAssistant = false`（上游默认 `true`，入口隐蔽——⌘⇧A 悬浮面板，
-    /// 不在刘海 tab 里）。**一次性、幂等**：以 `firstLaunchDefaultsFlagKey` 为闸门，
-    /// 用户之后手动改回 `true` 不会被再覆盖。
+    /// 不在刘海 tab 里）。**一次性、幂等**：以 `Defaults.Keys.gourdFirstLaunchDefaultsApplied`
+    /// 为闸门（接缝 S7），用户之后手动改回 `true` 不会被再覆盖。
     ///
     /// 已知限制（docs/13「已知限制」10）：引导流程选 developer 档时 `ProfileSelectionView`
     /// 会把该项写回 `true`，本批不动引导，口径留给 P1-3 的 ConfigStore。
     static func applyFirstLaunchDefaults() {
-        // T3 迁移：闸门键改用 `Constants.swift` 的 `Defaults.Keys.gourdFirstLaunchDefaultsApplied`（S7）。
-        let standard = UserDefaults.standard
-        guard !standard.bool(forKey: firstLaunchDefaultsFlagKey) else { return }
+        // 闸门键在 `Constants.swift` 的 `Defaults.Keys`（S7）：读写都走同一份定义，无第二处字面量。
+        guard !Defaults[.gourdFirstLaunchDefaultsApplied] else { return }
 
         Defaults[.enableScreenAssistant] = false
-        standard.set(true, forKey: firstLaunchDefaultsFlagKey)
-        log.info("已落首启默认值：enableScreenAssistant = false，闸门 \(Self.firstLaunchDefaultsFlagKey, privacy: .public) = true")
+        Defaults[.gourdFirstLaunchDefaultsApplied] = true
+        log.info("已落首启默认值：enableScreenAssistant = false，闸门 \(Defaults.Keys.gourdFirstLaunchDefaultsApplied.name, privacy: .public) = true")
     }
 }

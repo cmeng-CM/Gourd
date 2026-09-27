@@ -66,6 +66,7 @@ func sideLyricsRequiredNotchWidth() -> CGFloat {
         + SideLyricsLayout.combinedInset
 }
 
+@MainActor
 var openNotchSize: CGSize {
     let storedWidth = Defaults[.openNotchWidth]
     let minWidth = currentRecommendedMinimumNotchWidth()
@@ -98,6 +99,10 @@ func maxAllowedNotchWidth() -> CGFloat {
 
 /// Counts the number of currently enabled standard notch tabs.
 /// Mirrors the tab-building logic in ``TabSelectionView``.
+///
+/// `@MainActor`：模块条数取自 `ModuleRegistry.shared.tabEntries`，注册表是主 actor 隔离的单例
+/// （docs/13 接缝 S2 的连锁——本函数与它的调用链一并标主 actor，而不是复制一份非隔离快照）。
+@MainActor
 func enabledStandardTabCount() -> Int {
     var count = 0
 
@@ -131,6 +136,10 @@ func enabledStandardTabCount() -> Int {
         count += 1
     }
 
+    // Module kernel tabs（接缝 S2）：追加段的镜像 = `ModuleRegistry.tabEntries`（仅 active 且
+    // `surfaces` 含 `.expanded`，已按 order 排好）。不同步这段，刘海最小宽度会比实际 tab 少算。
+    count += ModuleRegistry.shared.tabEntries.count
+
     return count
 }
 
@@ -142,6 +151,7 @@ func recommendedMinimumNotchWidth(forTabCount count: Int) -> CGFloat {
 }
 
 /// Returns the recommended minimum notch width for the current tab configuration.
+@MainActor
 func currentRecommendedMinimumNotchWidth() -> CGFloat {
     recommendedMinimumNotchWidth(forTabCount: enabledStandardTabCount())
 }
@@ -149,6 +159,7 @@ func currentRecommendedMinimumNotchWidth() -> CGFloat {
 /// Enforces the minimum notch width based on current tab count.
 /// Also clamps to screen width so the notch never exceeds the display.
 /// Only adjusts when not in minimalistic mode.
+@MainActor
 func enforceMinimumNotchWidth() {
     guard !Defaults[.enableMinimalisticUI] else { return }
     let minWidth = currentRecommendedMinimumNotchWidth()

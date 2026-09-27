@@ -290,6 +290,18 @@ struct ContentView: View {
             )
         }
     }
+
+    /// 展开内容的过渡身份（接缝 S5）：`NotchViews.module` 无关联值（D-02），
+    /// 所以「哪个模块」要单独并进来——只 `.id(currentView)` 的话，两个模块之间切换
+    /// 身份不变、过渡不重放（docs/13 已知限制 7）。
+    private struct ExpandedContentIdentity: Hashable {
+        let view: NotchViews
+        let moduleID: String?
+    }
+
+    private var expandedContentIdentity: ExpandedContentIdentity {
+        ExpandedContentIdentity(view: coordinator.currentView, moduleID: coordinator.selectedModuleID)
+    }
     
     private var standardMediaControlsActive: Bool {
         showStandardMediaControls && !enableMinimalisticUI
@@ -1108,9 +1120,13 @@ struct ContentView: View {
                                 } else {
                                     NotchHomeView(albumArtNamespace: albumArtNamespace)
                                 }
+                            case .module:
+                                // 模块内核（接缝 S5）：当前选中的模块由 coordinator 持有，
+                                // 未选中（selectedModuleID == nil）时 ModuleHostView 渲染 EmptyView。
+                                ModuleHostView(moduleID: coordinator.selectedModuleID)
                           }
                       }
-                      .id(coordinator.currentView)
+                      .id(expandedContentIdentity)
                       .transition(tabSwitchTransition)
                   }
               }

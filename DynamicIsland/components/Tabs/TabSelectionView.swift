@@ -46,6 +46,9 @@ struct TabModel: Identifiable {
 struct TabSelectionView: View {
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
     @ObservedObject private var extensionNotchExperienceManager = ExtensionNotchExperienceManager.shared
+    /// 模块注册表（接缝 S1）：**必须观察**——否则注册表变化后 tab 列表不重绘
+    /// （与同文件 `extensionNotchExperienceManager` 同理；注册表空时本视图与改动前一致）。
+    @ObservedObject private var moduleRegistry = ModuleRegistry.shared
     @StateObject private var quickShareService = QuickShareService.shared
     @Default(.quickShareProvider) private var quickShareProvider
     @State private var showQuickSharePopover = false
@@ -111,6 +114,14 @@ struct TabSelectionView: View {
                 )
             }
         }
+
+        // 模块内核 tab（接缝 S1）：注册表投影，`experienceID` 复用为模块 id（`TabModel` 的 id
+        // 由 experienceID 派生，`ForEach` 零改）。只含 active 且声明 `.expanded` 的模块。
+        for entry in ModuleRegistry.shared.tabEntries {
+            tabsArray.append(
+                TabModel(label: entry.label, icon: entry.symbolName, view: .module, experienceID: entry.id)
+            )
+        }
         return tabsArray
     }
     var body: some View {
@@ -123,6 +134,11 @@ struct TabSelectionView: View {
                 TabButton(label: tab.label, icon: tab.icon, selected: isSelected) {
                     if tab.view == .extensionExperience {
                         coordinator.selectedExtensionExperienceID = tab.experienceID
+                    }
+                    if tab.view == .module {
+                        // 模块 tab：必须走 selectModule（同时设 selectedModuleID + currentView），
+                        // 只设 currentView = .module 会让内容区渲染 EmptyView（接缝 S1 ④）。
+                        coordinator.selectModule(tab.experienceID ?? "")
                     }
                     coordinator.currentView = tab.view
                 }
@@ -171,6 +187,12 @@ struct TabSelectionView: View {
             return coordinator.currentView == .extensionExperience
                 && coordinator.selectedExtensionExperienceID == tab.experienceID
         }
+        // 模块 tab 与扩展 tab 同理：`currentView` 只表达「在模块视图」，还要比对模块 id
+        // 才能区分同一个 `.module` 下的多个 tab（接缝 S1 ③）。
+        if tab.view == .module {
+            return coordinator.currentView == .module
+                && coordinator.selectedModuleID == tab.experienceID
+        }
         return coordinator.currentView == tab.view
     }
 
@@ -184,6 +206,10 @@ struct TabSelectionView: View {
             coordinator.selectedExtensionExperienceID = first.experienceID
         } else {
             coordinator.selectedExtensionExperienceID = nil
+        }
+        // 模块 tab 落到首位时（其余 tab 全关）与扩展 tab 同构：不带上模块 id 就会渲染 EmptyView
+        if first.view == .module {
+            coordinator.selectedModuleID = first.experienceID
         }
         coordinator.currentView = first.view
     }

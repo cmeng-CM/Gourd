@@ -678,6 +678,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup Lunar integration
         LunarManager.shared.configure(coordinator: coordinator)
         
+        // Setup 模块内核（P1 接缝 S6）：落首启默认值 + 注册内置模块 + 逐个 activate。
+        // 与上面一族 `Manager...shared.setup/configure(coordinator:)` 同构；
+        // 用 Task 是因为 bootstrap 是 async，且不阻塞启动流程（注册表空时是一次空跑）。
+        Task { await KernelBootstrap.bootstrap() }
+        
         // Setup ScreenRecording Manager
         if Defaults[.enableScreenRecordingDetection] && !AppRuntimeEnvironment.isUITesting {
             ScreenRecordingManager.shared.startMonitoring()
