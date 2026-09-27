@@ -36,7 +36,7 @@ private enum SpotifyLoginConstants {
     static let googleSignInRedirectURL = URL(string: "https://accounts.spotify.com/en/login")!
 }
 
-private let spotifyLoginLogger = os.Logger(subsystem: "com.Ebullioscopic.Atoll", category: "SpotifyLogin")
+private let spotifyLoginLogger = os.Logger(subsystem: "com.cmeng.gourd", category: "SpotifyLogin")
 
 struct SpotifyLoginSheet: View {
     @Environment(\.dismiss) private var dismiss

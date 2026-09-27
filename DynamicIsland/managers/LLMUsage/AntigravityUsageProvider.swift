@@ -4,7 +4,7 @@ import os
 struct AntigravityUsageProvider: UsageProvider {
     let id: ProviderID = .antigravity
     let session: URLSession
-    private static let log = os.Logger(subsystem: "com.atoll.DynamicIsland", category: "AntigravityUsage")
+    private static let log = os.Logger(subsystem: "com.cmeng.gourd", category: "AntigravityUsage")
 
     init(session: URLSession = URLSession(configuration: .ephemeral)) {
         self.session = session

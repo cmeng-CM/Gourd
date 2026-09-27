@@ -27,7 +27,7 @@ import os
 final class SystemTimerBridge: ObservableObject {
     static let shared = SystemTimerBridge()
 
-    private let logger = os.Logger(subsystem: "com.Ebullioscopic.Atoll", category: "SystemTimerBridge")
+    private let logger = os.Logger(subsystem: "com.cmeng.gourd", category: "SystemTimerBridge")
 
     // Cached so layout reads (allowsManualInteraction) don't enumerate running apps.
     @Published private(set) var canControlClockTimer = false
