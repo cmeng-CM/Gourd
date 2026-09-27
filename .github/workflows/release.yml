@@ -1,14 +1,9 @@
 name: Release
 
+# Modified for Gourd (2026-09-27): removed push triggers. This is upstream's
+# sign/notarize/DMG pipeline (APP_NAME: Atoll, upstream TEAM_ID) — it must not
+# run automatically on our pushes; manual dispatch only.
 on:
-  push:
-    branches:
-      - nightly
-      - alpha
-      - beta
-      - main
-
-  # Allow manual trigger for testing
   workflow_dispatch:
     inputs:
       dry_run:
