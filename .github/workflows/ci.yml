@@ -205,7 +205,28 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES &
+
+          # Modified for Gourd (2026-09-27): on a "test runner hung" failure the
+          # host process is torn down before any post-failure step can inspect it.
+          # Sample the TEST_HOST main thread every 45s while it lives, so the
+          # blocking stack lands in this step's log.
+          (
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              sleep 45
+              HOST_PID=$(pgrep -f 'Gourd.app/Contents/MacOS/Gourd' | head -1)
+              if [ -n "$HOST_PID" ]; then
+                echo "===== TEST_HOST sample (pid=${HOST_PID}, probe ${i}) ====="
+                sample "$HOST_PID" 2 2>&1 | sed -n '1,70p'
+              fi
+            done
+          ) &
+          SAMPLER_PID=$!
+
+          TEST_EXIT=0
+          wait %1 || TEST_EXIT=$?
+          kill "$SAMPLER_PID" 2>/dev/null || true
+          exit "$TEST_EXIT"
 
       - name: Surface Failure Diagnostics
         if: failure()
