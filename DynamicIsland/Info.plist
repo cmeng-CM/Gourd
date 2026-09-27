@@ -14,13 +14,13 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Atoll needs screen recording permission to capture screenshots for the AI assistant feature.</string>
 	<key>SUEnableDownloaderService</key>
-	<true/>
+	<false/>
 	<key>SUEnableInstallerLauncherService</key>
-	<true/>
+	<false/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/Ebullioscopic/Atoll/main/Updates/appcast.xml</string>
+	<string></string>
 	<key>SUPublicEDKey</key>
-	<string>q2YQaJ1umGkaIJWMGN9Isj5fx/YlUtxnzHEBqFtfZcg=</string>
+	<string></string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict/>

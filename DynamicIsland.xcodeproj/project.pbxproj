@@ -501,7 +501,7 @@
 				PRODUCT_NAME = DynamicIslandTests;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Atoll.app/Contents/MacOS/Atoll";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gourd.app/Contents/MacOS/Gourd";
 			};
 			name = Debug;
 		};
@@ -522,7 +522,7 @@
 				PRODUCT_NAME = DynamicIslandTests;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Atoll.app/Contents/MacOS/Atoll";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gourd.app/Contents/MacOS/Gourd";
 			};
 			name = Release;
 		};
@@ -729,7 +729,7 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DynamicIsland/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Atoll;
+				INFOPLIST_KEY_CFBundleDisplayName = "壶中天";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_MetalCaptureEnabled = YES;
@@ -753,8 +753,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 2.3.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.Ebullioscopic.Atoll.dev;
-				PRODUCT_NAME = Atoll;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.dev;
+				PRODUCT_MODULE_NAME = Atoll;
+				PRODUCT_NAME = Gourd;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -804,7 +805,7 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DynamicIsland/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Atoll;
+				INFOPLIST_KEY_CFBundleDisplayName = "壶中天";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_MetalCaptureEnabled = YES;
@@ -828,8 +829,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 2.3.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.Ebullioscopic.Atoll;
-				PRODUCT_NAME = Atoll;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd;
+				PRODUCT_MODULE_NAME = Atoll;
+				PRODUCT_NAME = Gourd;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
