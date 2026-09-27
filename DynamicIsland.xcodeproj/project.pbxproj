@@ -704,7 +704,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = DynamicIsland/DynamicIsland.entitlements;
-				CODE_SIGN_IDENTITY = "-";
+				// Modified for Gourd (2026-09-27): stable local identity (tools/setup-signing.sh) — TCC grants survive rebuilds
+				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1196;
@@ -778,7 +779,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = DynamicIsland/DynamicIsland.entitlements;
-				CODE_SIGN_IDENTITY = "-";
+				// Modified for Gourd (2026-09-27): stable local identity (tools/setup-signing.sh) — TCC grants survive rebuilds
+				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1196;
