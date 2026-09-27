@@ -1,0 +1,41 @@
+MediaRemoteAdapter — BSD 3-Clause License
+=========================================
+
+上游项目: ungive/mediaremote-adapter — https://github.com/ungive/mediaremote-adapter
+适用产物: 本目录内的 MediaRemoteAdapter.framework，以及配套脚本 mediaremote-adapter.pl
+          （脚本头部已含「Copyright (c) 2025 Jonas van den Berg / BSD 3-Clause License」声明，
+            但未附三条款全文；Frameworks/MediaRemoteAdapter.framework 是与本目录 framework
+            逐字节相同的重复副本，两处均被 FRAMEWORK_SEARCH_PATHS 指向，按决策 D-07 双双保留）
+内容来源: 上游仓库 LICENSE（master 分支，2026-09-27 抓取），逐字复制
+补齐说明: 上游二进制目录内未附任何许可文件；本文件由壶中天（Gourd）在 P0 合规补齐时新增，
+          登记见仓库根目录 NOTICE §五。为满足 BSD-3「二进制分发时复现版权声明与许可全文」的要求。
+
+
+BSD 3-Clause License
+
+Copyright (c) 2025, Jonas van den Berg and contributors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

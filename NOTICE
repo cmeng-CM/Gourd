@@ -1,3 +1,22 @@
+壶中天（Gourd）— 第三方组件与来源声明（NOTICE）
+=====================================
+
+本文件由两部分组成：① 壶中天（Gourd）的 fork 声明与第三方组件登记表（下文主体）；
+② 上游 Atoll 原有的 boring.notch 署名声明（原样保留，不得移除或修改）。
+
+
+壶中天（Gourd）是基于 Atoll 的修改版本（fork）
+----------------------------------------------
+  上游仓库: https://github.com/Ebullioscopic/Atoll
+  许可: GNU General Public License v3.0（本仓库以 GPL-3.0 分发，LICENSE 为 GPL-3.0 全文）
+  基线: tag v2.3.3-beta.3 / commit c7305ec
+  修改说明: 本仓库应用工程 fork 自 Atoll，保留上游全部功能文件，扩展通道线协议名一律冻结不改；
+            改动范围以 git 历史与本工作流各任务的提交信息为准（口径见 ADR 决策 D-09），不逐文件加行内注释。
+
+
+上游 Atoll 的 boring.notch 署名声明（原样保留）
+-----------------------------------------------
+
 Atoll (DynamicIsland) - NOTICE
 
 This product includes software derived from the boring.notch project,
@@ -5,3 +24,100 @@ modified and adapted for Atoll (DynamicIsland). The boring.notch project
 is licensed under the GNU General Public License v3.0.
 
 See the LICENSE file for the full GPL v3 text.
+
+
+本项目以 GPL-3.0 分发。以下列出本项目的代码基座、已引进或将引进的第三方组件，
+及其许可与义务。每次实际引入代码时，必须在本文件中登记对应的文件/模块与修改情况。
+
+格式：组件 | 仓库 | 许可 | 用途 | 引入状态 | 是否修改
+
+
+一、代码基座（fork）
+--------------------
+Atoll
+  仓库: https://github.com/Ebullioscopic/Atoll
+  许可: GNU General Public License v3.0
+  用途: 本项目应用工程 fork 自 Atoll，包括刘海窗口、状态机、扩展宿主等基础实现
+  引入状态: 已导入仓库（基线 tag v2.3.3-beta.3；基线 commit 见本文开头的 fork 声明），应用工程将在 P0 阶段改名并接入
+  修改: 引入后将修改模块组织与配置体系；修改标注采用仓库级声明 + 提交信息（见 §四.3 与 ADR 决策 D-09），不逐文件加行内注释
+
+TheBoredTeam/boring.notch
+  仓库: https://github.com/TheBoredTeam/boring.notch
+  许可: GNU General Public License v3.0
+  用途: 功能对照实现；计划引入媒体控制适配器（MediaControllers）、手势与 HUD 相关实现
+  引入状态: 已拉取（commit d58240c），尚未引入代码
+  修改: 待定
+
+
+二、计划引入的组件（按许可证分组）
+----------------------------------
+MIT License
+  Lakr233/NotchDrop            https://github.com/Lakr233/NotchDrop           文件暂存与 AirDrop
+  MuQY1818/OpenYoink           https://github.com/MuQY1818/OpenYoink          拖拽暂存形态
+  mrkai77/DynamicNotchKit      https://github.com/mrkai77/DynamicNotchKit     刘海窗口与几何（SPM 依赖备选）
+  exelban/stats                https://github.com/exelban/stats               系统监控指标
+  jacklandrin/OnlySwitch       https://github.com/jacklandrin/OnlySwitch      快捷开关
+  p0deje/Maccy                 https://github.com/p0deje/Maccy                剪贴板历史
+  newmarcel/KeepingYouAwake    https://github.com/newmarcel/KeepingYouAwake   防休眠
+  MonitorControl/MonitorControl https://github.com/MonitorControl/MonitorControl 外接显示器亮度/音量（可选）
+  swiftbar/SwiftBar            https://github.com/swiftbar/SwiftBar           脚本化状态条（可选）
+  sindresorhus/KeyboardShortcuts https://github.com/sindresorhus/KeyboardShortcuts 全局快捷键（SPM 依赖）
+  wxtsky/CodeIsland            https://github.com/wxtsky/CodeIsland           AI agent 状态面板（可选）
+
+Apache License 2.0
+  farouqaldori/vibe-notch      https://github.com/farouqaldori/vibe-notch     通知形态参考（可选）
+
+Mozilla Public License 2.0（文件级 copyleft：相关文件需保持 MPL-2.0）
+  ddddxxx/LyricsX              https://github.com/ddddxxx/LyricsX             歌词渲染与同步算法
+
+GNU GPL v3.0（并入后整体按 GPL-3.0 分发）
+  Yudaotor/lyrimuse            https://github.com/Yudaotor/lyrimuse           逐字歌词同步、国内音乐源
+  RoversX/LaunchNext           https://github.com/RoversX/LaunchNext          启动台数据与交互参考
+
+
+三、明确禁止引入（仅可阅读其文档与思路）
+----------------------------------------
+  shobhit99/SuperIsland        https://github.com/shobhit99/SuperIsland        仓库无 LICENSE 文件，默认保留所有权利
+  sk-ruban/notchi              https://github.com/sk-ruban/notchi             AGPL-3.0，除非全项目接受 AGPL
+
+
+四、义务提醒
+------------
+1. 分发任何二进制（DMG / Homebrew cask / Sparkle 更新包）时，必须同时提供完整可编译源码。
+2. 必须保留所有上游版权声明与许可文本，不得移除或修改。
+3. 修改标注：以本文件的总声明（本仓库为 Atoll 的修改版本，基线见本文开头的 fork 声明）+ 提交信息作为修改记录，不逐文件加行内注释（口径见 docs/08 与 ADR 决策 D-09）。
+4. 本文件需随每次代码引入同步更新；发布前执行一次人工核对（见 docs/03-license-matrix.md 第 4 节）。
+
+
+五、已引入的第三方组件登记（P0 落地）
+--------------------------------------
+以下两项随 Atoll 基线（tag v2.3.3-beta.3）一并进入本仓库，在此补登记。
+
+
+AtollExtensionKit
+  仓库: https://github.com/Ebullioscopic/AtollExtensionKit
+  许可: ⚠️ README 声明 MIT，但仓库缺 LICENSE 文件（实测 2026-09-27：checkout 内无
+        LICENSE / LICENSE.md / LICENSE.txt / COPYING），待上游补
+  用途: 上游内容描述符与 XPC 协议定义（内容推送的 wire 契约）
+  引入状态: 已引入（SPM 依赖，revision 已 pin 为 e2d30afedbbcc259bec7eeb1bea0757e52f4ca01）
+  修改: 未修改（依赖方式引入，不复制其代码）
+  义务: 首次分发二进制前必须解决许可问题——向上游提 issue/PR 补 LICENSE 文件；
+        若上游不补，则按 wire 语义自实现类型（见 docs/06-module-protocol.md §9、docs/03-license-matrix.md §2）
+
+
+ungive/mediaremote-adapter
+  仓库: https://github.com/ungive/mediaremote-adapter
+  许可: BSD 3-Clause（版权行: Copyright (c) 2025 Jonas van den Berg，见配套 perl 脚本头声明）
+  用途: 系统级媒体元数据与播放控制（经私有 MediaRemote.framework）
+  引入状态: 已引入（vendored 二进制与脚本，随上游基线自带）
+  落点:
+    Frameworks/MediaRemoteAdapter.framework                       （fat: x86_64 + arm64 + arm64e）
+    mediaremote-adapter/MediaRemoteAdapter.framework              （与上一份逐字节相同的重复副本，按 D-07 保留不删）
+    mediaremote-adapter/mediaremote-adapter.pl                    （脚本头已含版权行与许可名）
+    Contents/Helpers/NowPlayingTestClient                         （已知限制: 仅 arm64）
+  许可文件: 上游二进制目录内未附任何许可文件（上游不合规）；本仓库在 P0 补齐合规时新增
+        Frameworks/LICENSE 与 mediaremote-adapter/LICENSE（BSD 3-Clause 全文 + 版权行），
+        以满足 BSD-3 对二进制分发「复现版权声明与许可全文」的要求
+  修改: 未修改（仅新增许可文件，二进制与脚本内容一字未动）
+  已知限制: Contents/Helpers/NowPlayingTestClient 仅 arm64，与 framework 的三架构不一致，
+        x86_64 上不可用（本机为 arm64，暂不影响；见 docs/08 P0-6 与 D-07）
