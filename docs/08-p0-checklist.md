@@ -208,7 +208,7 @@ grep -rn "com.ebullioscopic.Atoll.xpc" DynamicIsland/services DynamicIsland/Dyna
 2. 提交 `Package.resolved`，并在 `tools/verify-upstreams.sh` 里加一条：`Package.resolved` 与该清单一致（防 CI 静默漂移）。
 3. `upstreams.tsv` 增加一目（`AtollExtensionKit`，`mode = dependency`，用途"上游内容描述符与 XPC 协议定义"）。
 4. `NOTICE` 登记该依赖。
-5. **许可缺口（已实测，须记录并推进）**：该仓库 README 挂了 MIT 徽章并指向 `LICENSE`，但**仓库里没有 LICENSE 文件**（checkout 内无 `LICENSE` / `LICENSE.md` / `LICENSE.txt` / `COPYING`）。处置：在 [03-license-matrix.md](03-license-matrix.md) 登记为"⚠️ 有条件使用：待上游补文件"；**首次分发二进制前必须解决**（向上游提 issue/PR 补 LICENSE，或改按 wire 语义自实现类型）。P0 本身不阻塞（P0 不分发），但必须现在登记，避免 P5 才发现。
+5. **许可事实（终审更正，2026-09-27）**：上游 `main` 已于 `29656205`（2026-03-19，"Update LICENSE"）加入 **LGPL-3.0** 全文（`gh api repos/.../license` 报 `spdx_id = LGPL-3.0`，README 徽章同步由 MIT 改为 LGPL-3.0）。⚠️ 但我们 pin 的 revision `e2d30afe…`（2026-03-16）**早于该 commit，其 tree 内确实没有 LICENSE 文件**——即「我们手上的副本无许可文本」，不是「上游缺许可」，原记的「待上游补文件」已过时。处置：① 首次分发二进制前**抬 pin** 到 ≥ `29656205`，届时须履行 **LGPL-3.0 §4 的组合工作义务**；② 抬 pin 属**另行决策**（改依赖 revision，需重跑构建与 pin 一致性校验）；③ 备选是按 wire 语义自实现类型。登记以 [03-license-matrix.md](03-license-matrix.md) §2 与 `NOTICE` §五 为准。P0 本身不阻塞（P0 不分发），但必须现在登记，避免 P5 才发现。
 
 **为什么不 fork AtollExtensionKit**：ADR-0003「能当依赖就不 fork」。我们只需**读得懂**它的类型（[06-module-protocol.md](06-module-protocol.md) §9），不需要改它。真正需要改的时刻是 P4（那时我们自己定义 `ContentDescriptor` 并做映射），届时再决定 fork 或自建。
 
@@ -329,7 +329,9 @@ DynamicIsland/strings/constants.swift                  (productPage 等用户可
 .github/workflows/ci.yml                     (我们的 CI)
 ```
 
-**验收**：`git diff --name-only c7305ec HEAD | grep -v '^DynamicIsland/Kernel\|^DynamicIsland/Runtime\|^DynamicIsland/Modules' | wc -l` —— 结果应只包含白名单内的文件。
+**验收**（**终审统一到 T7 的新口径**，旧命令见下条注）：以 `git diff --name-status c7305ec HEAD` 按 `A/M/D` 分类判定——`A`（新增文件）一律豁免；`M`（修改）须落在本白名单内（外加 T1 的冲突处置文件 `README.md` / `NOTICE` / `.gitignore`，以及 `docs/` 下文件）；`D`（删除）仅豁免 5 个无关 workflow 与 `ReadMe.md`。越界项应为 0。
+
+> 早先本条写的是 `git diff --name-only c7305ec HEAD | grep -v '^DynamicIsland/Kernel\|^DynamicIsland/Runtime\|^DynamicIsland/Modules' | wc -l`——该命令**无法表达「新增文件不算接触」**，会把 `Frameworks/LICENSE`、`docs/*`、`tools/*.sh`、`upstreams.tsv` 全部误判为越界（且 `Kernel`/`Runtime`/`Modules` 三个目录本次尚未创建），已由上一段口径取代，不要再按旧命令判定。实测记录见「实测记录」节的 T7 复验（A=17 / M=21 / D=6，越界 0）。
 
 ---
 
@@ -405,7 +407,7 @@ bash tools/verify-upstreams.sh
 | 2026-09-27 | 上游漂移量 | `v2.3.3-beta.3 → dev HEAD` = 155 文件 / +44051 −21595 |
 | 2026-09-27 | 依赖 | 16 条，其中 4 条 `branch = main` |
 | 2026-09-27 | `LICENSE` 与上游一致性 | 字节相同（无合并冲突） |
-| 2026-09-27 | `AtollExtensionKit` 许可 | README 声明 MIT，**仓库缺 LICENSE 文件**（见 P0-4 第 5 条） |
+| 2026-09-27 | `AtollExtensionKit` 许可 | **LGPL-3.0**（上游 `29656205` 已加入 LICENSE；我们 pin 的 `e2d30af` 早于它、该 revision 无 LICENSE 文件）——见 P0-4 第 5 条与 `NOTICE` §五 |
 | 2026-09-27 | **T7 改名后构建**（HEAD `d10362d`，干净 DerivedData `~/Library/Developer/Xcode/Gourd`） | ✅ **BUILD SUCCEEDED**（退出码 0，0 error / 249 warning），产物 `Gourd.app` 116MB（`du -sk` = 119268），`CFBundleDisplayName=壶中天`、`CFBundleIdentifier=com.cmeng.gourd.dev`、`CFBundleExecutable=Gourd`、`SUFeedURL`/`SUPublicEDKey` 均为空 |
 | 2026-09-27 | **T7 接触面断言**（`git diff --name-status c7305ec HEAD`） | ✅ PASS：A=17 / M=21 / D=6，**越界 0**；M 全部命中 P0-7 白名单或 `docs/` 豁免，D 为 5 个无关 workflow + `ReadMe.md` |
 | 2026-09-27 | **T7 依赖 pin 复现性**（删掉 `Build/` 与 SPM 解析状态后**重新解析**） | ✅ 已提交的 `Package.resolved` 被字节级复现（构建后 `git status --porcelain` 无该文件变化），`grep -c 'kind = branch' project.pbxproj` = 0 |

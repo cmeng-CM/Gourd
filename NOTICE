@@ -96,13 +96,20 @@ GNU GPL v3.0（并入后整体按 GPL-3.0 分发）
 
 AtollExtensionKit
   仓库: https://github.com/Ebullioscopic/AtollExtensionKit
-  许可: ⚠️ README 声明 MIT，但仓库缺 LICENSE 文件（实测 2026-09-27：checkout 内无
-        LICENSE / LICENSE.md / LICENSE.txt / COPYING），待上游补
+  许可: **LGPL-3.0**（上游当前事实：仓库已含 LICENSE 全文，`gh api repos/.../license` 报
+        `spdx_id = LGPL-3.0`；该文件由上游 `29656205`（2026-03-19，"Update LICENSE"）加入，
+        LICENSE +165 行 / README +2 -2，即上游已把徽章从 MIT 改为 LGPL-3.0）
+        ⚠️ 但我们 pin 的 revision `e2d30afe…`（2026-03-16）**早于该 commit，其 tree 内确实没有
+        LICENSE 文件**（实测该 revision 根目录只有 Package.swift / Sources / Tests / Samples /
+        README.md 等）——即「我们手上的这份副本没有许可文本」，不是「上游没有许可」
   用途: 上游内容描述符与 XPC 协议定义（内容推送的 wire 契约）
   引入状态: 已引入（SPM 依赖，revision 已 pin 为 e2d30afedbbcc259bec7eeb1bea0757e52f4ca01）
   修改: 未修改（依赖方式引入，不复制其代码）
-  义务: 首次分发二进制前必须解决许可问题——向上游提 issue/PR 补 LICENSE 文件；
-        若上游不补，则按 wire 语义自实现类型（见 docs/06-module-protocol.md §9、docs/03-license-matrix.md §2）
+  义务: ① 首次分发二进制前，把 pin 抬到 ≥ `29656205`（含 LGPL-3.0 LICENSE 的 revision）；
+        届时须履行 **LGPL-3.0 §4 的组合工作义务**（用户须能用修改后的 LGPL 部分重新链接本组合）
+        ② 抬 pin 属**另行决策**（会改依赖 revision，需重跑构建与 pin 一致性校验）
+        ③ 若抬 pin 引出 API 变化而不愿承担，备选是按 wire 语义自实现类型
+        （见 docs/06-module-protocol.md §9、docs/03-license-matrix.md §2）
 
 
 ungive/mediaremote-adapter

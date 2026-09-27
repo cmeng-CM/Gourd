@@ -56,7 +56,7 @@ git -C ~/workspace/github/NotchDrop reset --hard FETCH_HEAD
 
 - 引进某段实现前，先记录当时的 commit hash 到 `NOTICE`，以便日后追溯与对比。
 
-**依赖（SPM）**：直接改 `Package.swift` 的版本号，锁定 minor 版本区间（如 `from: "1.4.0"`），不要用分支依赖。
+**依赖（SPM）**：本仓库根目录**没有 `Package.swift`**——应用工程的依赖声明落在 `DynamicIsland.xcodeproj/project.pbxproj` 的 `XCRemoteSwiftPackageReference`，解析结果落在 `DynamicIsland.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`（两者都已 committed）。规则：**不用分支依赖**，用 `kind = revision` + `revision = <sha>` 钉住已解析版本（P0 已把 4 条 `branch = main` 全部改为 revision）；改完必须提交 `Package.resolved`，并跑 `bash tools/verify-upstreams.sh` 校验「登记的 dependency 行 ↔ pin 的 revision」一致。注意传递依赖钉不住：`lottie-spm` 由 LottieUI 的 manifest 以 `branch: main` 声明，只能靠 committed `Package.resolved` 锁定（见 [10-p0-execution.md](10-p0-execution.md) 的已知限制）。
 
 ## 3. 与上游的关系原则
 

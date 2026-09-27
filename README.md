@@ -10,7 +10,7 @@
 
 ## 一句话现状
 
-**当前只有设计与清单，没有应用代码。** 上游仓库已拉取到 `/Users/cm/workspace/github/`，本目录用于后续实现。
+**应用工程已进仓库：Atoll 基线 `v2.3.3-beta.3`（`c7305ec`）的历史已接入 `main`，改名与基座落地（P0）已完成**——`xcodebuild build` 产出 `Gourd.app`（`PRODUCT_NAME=Gourd`、Bundle ID `com.cmeng.gourd`，Debug 为 `com.cmeng.gourd.dev`）、合规与 CI 配置就位、上游功能零删减。本机构建命令见 [docs/10](docs/10-p0-execution.md)；尚未做的是 P1 起的模块化与业务实现（`docs/02-roadmap.md`）。仓库**无远端、CI 从未实跑**（见 docs/10「已知限制」）。
 
 ## 关键决策（详见 [docs/00-decisions.md](docs/00-decisions.md)）
 
@@ -38,8 +38,9 @@
 ├── Atoll/                 ← 基座（fork 源，已拉取，含完整历史）
 ├── boring.notch/          ← 功能对照实现（GPL，可合并）
 ├── NotchDrop/ OpenYoink/ DynamicNotchKit/ ...   ← 功能来源（MIT/Apache/MPL）
-└── lagoon/                ← 本项目仓库（应用名 壶中天 / Gourd；目录名将在 P0 改为 gourd）
-    ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射
+└── lagoon/                ← 本项目仓库（应用名 壶中天 / Gourd；目录名改 `gourd` 已推迟，见 docs/10 D-02）
+    ├── DynamicIsland.xcodeproj/   ← 应用工程（Bundle ID com.cmeng.gourd；上游文件名保留不改）
+    ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射、P0 执行方案
     ├── tools/             ← 本仓库自身的工具：上游同步与校验脚本
     ├── scripts/           ← 上游自带的构建辅助 ruby 脚本（随基线引入，不改）
     ├── upstreams.tsv      ← 机器可读的上游清单（用途 + 许可 + 使用方式）
@@ -73,6 +74,7 @@ bash tools/sync-upstreams.sh
 | [docs/07-config-and-events.md](docs/07-config-and-events.md) | **配置模型与事件契约（字段级）**：config.json 结构与迁移链、密钥走 Keychain、事件信封与投递/背压语义、首批 13 个事件的 payload |
 | [docs/08-p0-checklist.md](docs/08-p0-checklist.md) | **P0 工程改造清单**：基线冻结、git 结构、改名清单（含刻意冻结项）、依赖治理、CI、合规、上游接触白名单、可执行验收命令 |
 | [docs/09-features-and-mechanisms.md](docs/09-features-and-mechanisms.md) | **功能清单与实现机制（范围已定稿）**：40+ 功能的实现机制 × 动作（保留接管 / 保留不投入 / 新增），6 项新增功能的详细设计、私有 API 与子进程代价清单、待讨论项 |
+| [docs/10-p0-execution.md](docs/10-p0-execution.md) | **P0 执行方案与回写**：设计文档（方案五节 + 接口与数据形状 / 已知限制 / 实际交付 / 决策摘要 D-01…D-12）——「P0 到底改了什么」的长期记录 |
 
 > 上游事实校正（三条）：① Atoll 的默认分支是 `dev` 而非 `main`；其"扩展系统"是**内容推送 API + 授权模型 + 声明式渲染管线**，**没有**插件包格式、descriptor.json、apiVersion 协商与看门狗——这部分要从零自建（[docs/06](docs/06-module-protocol.md) §0 与 ADR-0006）。② **上游已实现了约 40 个用户可见功能**，P2 的主体工作是接管、包装与模块化，而非从零写（[docs/09](docs/09-features-and-mechanisms.md)）。③ **范围已定稿**（ADR-0011 + ADR-0012）：**上游功能一个不删**（不需要的用"默认不启用"表达）；**按需新增 6 项**——快捷启动、农历、日/周/月/季/年进度、系统 Shortcuts 上岛、通知上岛、终端可配置为 Ghostty。新增部分全部做成独立模块，不改上游文件。
 
