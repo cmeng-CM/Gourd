@@ -2,10 +2,12 @@
 //  ModuleKernelTests.swift
 //  Gourd 模块内核 · 类型层单测（P1 批次 / T1）
 //
-//  覆盖 docs/13-runtime-kernel.md §接口与数据形状 的本批类型层：
-//  manifest 校验（每个 ModuleManifestError 分支至少一例）、取值词汇表、
-//  权限白名单常量表、config 子集解析、协议可一致性。
-//  构造一律走 `ModuleManifest.decode(from:)`（JSON 路径），与宿主读 descriptor 同一条路。
+//  覆盖 docs/13-runtime-kernel.md §接口与数据形状：
+//  T1 类型层——manifest 校验（每个 ModuleManifestError 分支至少一例）、取值词汇表、
+//  权限白名单常量表、config 子集解析、协议可一致性；构造一律走 `ModuleManifest.decode(from:)`
+//  （JSON 路径），与宿主读 descriptor 同一条路。
+//  T2 注册表与组合根——注册幂等、activate 抛错隔离、启用门、tab 投影、content 降级、
+//  `ModuleContextFactory` 的默认值读取、首启默认值幂等。
 //
 
 import XCTest
@@ -14,6 +16,18 @@ import XCTest
 
 @MainActor
 final class ModuleKernelTests: XCTestCase {
+
+    /// 注册表是 `shared` 单例：用例之间必须清空，否则前一个用例注册的模块会污染后一个的
+    /// `manifests` / `states`（`deactivateAll()` 停用实例并清空 instances / states / manifests / moduleTypes）。
+    override func setUp() async throws {
+        try await super.setUp()
+        await ModuleRegistry.shared.deactivateAll()
+    }
+
+    override func tearDown() async throws {
+        await ModuleRegistry.shared.deactivateAll()
+        try await super.tearDown()
+    }
 
     // MARK: - 夹具
 
@@ -355,6 +369,245 @@ final class ModuleKernelTests: XCTestCase {
         context.ui.requestRedraw()
         XCTAssertEqual(ui.redrawCount, 1)
     }
+
+    // MARK: - 注册表与组合根（T2）
+
+    /// 组合根的启用门**逐字复刻**：`manifests[id]?.defaultEnabled ?? false`（06 §2.2 缺省 false）。
+    private func registerProbes(_ types: [any GourdModule.Type]) {
+        ModuleRegistry.shared.register(types, enabled: { ModuleRegistry.shared.manifests[$0]?.defaultEnabled ?? false })
+    }
+
+    private func request(_ surface: Surface = .expanded) -> ContentRequest {
+        ContentRequest(surface: surface, phase: .expanded, reason: .initial)
+    }
+
+    private func assertUnavailable(
+        _ content: ModuleContent,
+        contains id: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case .unavailable(let reason) = content else {
+            return XCTFail("期望 .unavailable，实到 \(content)", file: file, line: line)
+        }
+        XCTAssertTrue(reason.contains(id), "降级原因应带上模块 id，实到 \(reason)", file: file, line: line)
+    }
+
+    /// 同 id 重复注册被忽略：manifest 只留一份，bootstrap 后实例是**先注册**的那个类型（不被覆盖）。
+    func testRegisterIgnoresDuplicateID() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([AlphaProbeModule.self, AlphaImpostorModule.self])
+
+        XCTAssertEqual(registry.manifests.count, 1, "同 id 重复注册应被忽略")
+        XCTAssertNotNil(registry.manifests["com.cmeng.gourd.probe-alpha"])
+
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states.count, 1)
+        XCTAssertTrue(
+            registry.instance(for: "com.cmeng.gourd.probe-alpha") is AlphaProbeModule,
+            "后注册的同 id 模块不得覆盖先注册者"
+        )
+    }
+
+    /// 一个模块 `activate()` 抛错只禁用它自己：其余模块照常激活——含 id 排在它**之后**的模块，
+    /// 证明 `bootstrap()` 没有提前返回；`.failed` 是终态，不重试。
+    func testRegistryIsolatesFailingModule() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([AlphaProbeModule.self, BetaProbeModule.self, GammaProbeModule.self])
+
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-alpha"], .active)
+        // beta 的 id 在 gamma 之前：它抛错后 gamma 仍 active = 循环走完了
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-gamma"], .active)
+        XCTAssertNil(registry.instance(for: "com.cmeng.gourd.probe-beta"), "失败的模块不留实例")
+
+        guard case .failed(let reason)? = registry.states["com.cmeng.gourd.probe-beta"] else {
+            return XCTFail("期望 .failed，实到 \(String(describing: registry.states["com.cmeng.gourd.probe-beta"]))")
+        }
+        XCTAssertFalse(reason.isEmpty)
+
+        // 再 bootstrap 一次：失败的模块不重试、已激活的模块不重复激活
+        await registry.bootstrap()
+        guard case .failed? = registry.states["com.cmeng.gourd.probe-beta"] else {
+            return XCTFail("失败的模块不得被重试")
+        }
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-gamma"], .active)
+    }
+
+    /// `defaultEnabled = false` 的模块：不实例化、状态为 `.disabled`、不进 `tabEntries`。
+    func testDisabledModuleIsNotActivated() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([AlphaProbeModule.self, OptInProbeModule.self])
+
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-alpha"], .active)
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-optin"], .disabled)
+        XCTAssertNil(registry.instance(for: "com.cmeng.gourd.probe-optin"), "未启用的模块不实例化")
+        XCTAssertEqual(registry.tabEntries.map(\.id), ["com.cmeng.gourd.probe-alpha"])
+    }
+
+    /// tab 投影 = 只含 `active` 且声明 `.expanded` 的模块，按 `order` 升序、同 `order` 按 id 字典序；
+    /// `label` 走 key → `en` 表 → `shortID` 的解析顺序。
+    func testTabEntriesReflectRegistryProjection() async {
+        let registry = ModuleRegistry.shared
+        // 注册顺序与 tab 顺序**故意不一致**：排序不能是注册顺序
+        registerProbes([
+            DeltaProbeModule.self,
+            GammaProbeModule.self,
+            OptInProbeModule.self,
+            CompactProbeModule.self,
+            BetaProbeModule.self,
+            AlphaProbeModule.self,
+        ])
+
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.tabEntries.map(\.id), [
+            "com.cmeng.gourd.probe-alpha",   // order 10，与 gamma 同序 → id 字典序在前
+            "com.cmeng.gourd.probe-gamma",   // order 10
+            "com.cmeng.gourd.probe-delta",   // 无 defaultPlacement → Int.max
+        ])
+        XCTAssertEqual(registry.tabEntries.map(\.order), [10, 10, Int.max])
+        XCTAssertEqual(registry.tabEntries.map(\.symbolName), Array(repeating: "square", count: 3))
+        // key 形态在 Localizable 里查不到 → 回退 shortID；locale 表形态 → 取 en 文案
+        XCTAssertEqual(registry.tabEntries.map(\.label), ["probe-alpha", "Gamma Probe", "probe-delta"])
+
+        // 被过滤的三类：failed（beta）/ disabled（optin）/ 只声明 .compact（compact）
+        for id in ["com.cmeng.gourd.probe-beta", "com.cmeng.gourd.probe-optin", "com.cmeng.gourd.probe-compact"] {
+            XCTAssertFalse(registry.tabEntries.contains { $0.id == id }, "\(id) 不应进 tab 列表")
+        }
+        XCTAssertEqual(registry.states.count, 6, "六个模块都被判定过（active / failed / disabled）")
+    }
+
+    /// `content(for:request:)` 转发已激活模块；未知 id 与未激活模块（disabled / failed / 未 bootstrap）
+    /// 一律 `.unavailable`（不崩、不返回空内容）。
+    func testContentUnavailableForInactiveModule() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([AlphaProbeModule.self, BetaProbeModule.self, OptInProbeModule.self])
+
+        // 已注册但尚未 bootstrap（无状态、无实例）→ unavailable
+        assertUnavailable(registry.content(for: "com.cmeng.gourd.probe-alpha", request: request()), contains: "com.cmeng.gourd.probe-alpha")
+
+        await registry.bootstrap()
+
+        // 已激活：转发到实例（夹具返回 `.none`，与注册表的降级 `.unavailable` 可区分）
+        guard case .none = registry.content(for: "com.cmeng.gourd.probe-alpha", request: request()) else {
+            return XCTFail("期望转发给实例并返回 .none")
+        }
+        XCTAssertEqual(registry.states["com.cmeng.gourd.probe-alpha"], .active)
+
+        assertUnavailable(registry.content(for: "com.cmeng.gourd.probe-optin", request: request()), contains: "com.cmeng.gourd.probe-optin")
+        assertUnavailable(registry.content(for: "com.cmeng.gourd.probe-beta", request: request()), contains: "com.cmeng.gourd.probe-beta")
+        // 未知 id：返回 unavailable 而不是崩溃
+        assertUnavailable(registry.content(for: "com.cmeng.gourd.probe-ghost", request: request()), contains: "com.cmeng.gourd.probe-ghost")
+    }
+
+    /// `ModuleContextFactory`：host 从宿主取、config 读 manifest 默认值（含 `number` 节点整数默认值的
+    /// int→Double 互认）、覆盖值落模块专属 suite、`requestRedraw` 转发注入闭包。
+    func testModuleContextConfigReadsManifestDefault() throws {
+        let suiteName = "com.cmeng.gourd.module.probe-config"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)      // 前置：清掉上次运行留下的覆盖值
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let manifest = try ModuleManifest.decode(from: Data(#"""
+        {
+          "manifestVersion": 1,
+          "id": "com.cmeng.gourd.probe-config",
+          "name": {"key": "module.probe-config.name"},
+          "icon": {"type": "symbol", "name": "square"},
+          "version": "1.0.0",
+          "apiVersion": "1.0",
+          "kind": "builtin",
+          "surfaces": ["expanded"],
+          "config": {
+            "type": "object",
+            "properties": {
+              "scale": {"type": "number", "default": 2},
+              "ratio": {"type": "number", "default": 1.5},
+              "refreshMinutes": {"type": "integer", "default": 1},
+              "style": {"type": "enum", "default": "ring", "values": ["ring", "bar"]},
+              "showSeconds": {"type": "boolean", "default": false},
+              "visibleScopes": {"type": "list", "itemType": "string", "default": ["day", "week"]}
+            }
+          }
+        }
+        """#.utf8))
+
+        let probe = RedrawProbe()
+        let context = ModuleContextFactory.make(manifest: manifest, redraw: { probe.count += 1 })
+
+        XCTAssertEqual(context.moduleID, "com.cmeng.gourd.probe-config")
+        XCTAssertEqual(context.host.apiVersion, "1.0")
+        XCTAssertEqual(context.host.appVersion, Bundle.main.releaseVersionNumber ?? "0")
+        XCTAssertEqual(context.host.macOSVersion, ModuleContextFactory.macOSVersion)
+
+        // manifest 默认值（本批唯一默认值来源）
+        XCTAssertEqual(context.config.get("refreshMinutes", as: Int.self), 1)
+        XCTAssertEqual(context.config.get("style", as: String.self), "ring")
+        XCTAssertEqual(context.config.get("showSeconds", as: Bool.self), false)
+        XCTAssertEqual(context.config.get("visibleScopes", as: [String].self), ["day", "week"])
+        XCTAssertEqual(context.config.get("ratio", as: Double.self), 1.5)
+        // `{"type":"number","default":2}` 的裸值落成 `.int(2)`：`get(_:as: Double.self)` 必须互认，
+        // 否则 `number` 型的整数默认值会静默返回 nil
+        XCTAssertEqual(context.config.get("scale", as: Double.self), 2.0)
+        // schema 之外的键读不到（不崩）
+        XCTAssertNil(context.config.get("undeclared", as: String.self))
+
+        // 覆盖值：落模块专属 suite、优先于默认值；未声明的键不落盘
+        XCTAssertTrue(context.config.set("refreshMinutes", to: 30))
+        XCTAssertEqual(context.config.get("refreshMinutes", as: Int.self), 30)
+        let readBack = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        XCTAssertNotNil(readBack.data(forKey: "refreshMinutes"), "覆盖值应落在 com.cmeng.gourd.module.<shortID>")
+        XCTAssertFalse(context.config.set("undeclared", to: 1))
+        XCTAssertNil(readBack.object(forKey: "undeclared"))
+
+        // 覆盖值清掉后回到 manifest 默认值
+        readBack.removeObject(forKey: "refreshMinutes")
+        XCTAssertEqual(context.config.get("refreshMinutes", as: Int.self), 1)
+
+        // UIHandle：转发注入闭包、isLowPower 恒 false
+        XCTAssertFalse(context.ui.isLowPower)
+        context.ui.requestRedraw()
+        context.ui.requestRedraw()
+        XCTAssertEqual(probe.count, 2)
+    }
+
+    /// 首启默认值**一次性、幂等**：闸门键为真后不再覆盖用户手动改回的值。
+    func testFirstLaunchDefaultsIdempotent() {
+        let defaults = UserDefaults.standard
+        let flagKey = KernelBootstrap.firstLaunchDefaultsFlagKey
+        // TEST_HOST = Gourd.app：这里改的是开发者机器上真实的 app defaults，用例改过的键全部还原
+        let originalFlag = defaults.object(forKey: flagKey)
+        let originalScreenAssistant = defaults.object(forKey: "enableScreenAssistant")
+        defer {
+            if let originalFlag {
+                defaults.set(originalFlag, forKey: flagKey)
+            } else {
+                defaults.removeObject(forKey: flagKey)
+            }
+            if let originalScreenAssistant {
+                defaults.set(originalScreenAssistant, forKey: "enableScreenAssistant")
+            } else {
+                defaults.removeObject(forKey: "enableScreenAssistant")
+            }
+        }
+
+        // 前置：模拟「从未首启」+ 上游默认值 true
+        defaults.removeObject(forKey: flagKey)
+        defaults.set(true, forKey: "enableScreenAssistant")
+
+        KernelBootstrap.applyFirstLaunchDefaults()
+        XCTAssertFalse(defaults.bool(forKey: "enableScreenAssistant"), "首启应关掉 enableScreenAssistant")
+        XCTAssertTrue(defaults.bool(forKey: flagKey), "首启应落闸门键")
+
+        // 用户随后手动打开 → 第二次调用不得再覆盖（幂等）
+        defaults.set(true, forKey: "enableScreenAssistant")
+        KernelBootstrap.applyFirstLaunchDefaults()
+        XCTAssertTrue(defaults.bool(forKey: "enableScreenAssistant"), "已应用过 → 第二次调用必须原样返回")
+    }
 }
 
 // MARK: - 假体
@@ -402,5 +655,102 @@ private final class StubModule: GourdModule {
 
     func content(for request: ContentRequest) -> ModuleContent {
         .unavailable(reason: "stub 未实现内容")
+    }
+}
+
+// MARK: - T2 假模块（注册表夹具）
+
+/// 假模块的 manifest 工厂：**字面量构造**，不走 `ModuleManifest.decode(from:)`
+/// （T1 的口径：`kind == builtin` 时顶层出现 `entry` 会被判 `unexpectedEntry`，夹具因此不碰该键）。
+private enum RegistryFixture {
+    static func manifest(
+        shortID: String,
+        surfaces: [Surface] = [.expanded],
+        order: Int? = nil,
+        name: LocalizedText? = nil,
+        defaultEnabled: Bool = true
+    ) -> ModuleManifest {
+        ModuleManifest(
+            manifestVersion: 1,
+            id: "com.cmeng.gourd.\(shortID)",
+            name: name ?? LocalizedText(key: "module.\(shortID).name"),
+            summary: nil,
+            icon: IconSpec(type: "symbol", name: "square"),
+            version: "1.0.0",
+            apiVersion: HostInfo.currentAPIVersion,
+            kind: "builtin",
+            surfaces: surfaces,
+            defaultPlacement: order.map { Placement(slot: .center, order: $0) },
+            defaultEnabled: defaultEnabled,
+            permissions: [],
+            config: nil
+        )
+    }
+}
+
+/// 记录 `requestRedraw` 的转发次数（T2 的 `UIHandle` 实现体是文件私有的，只能从注入闭包侧观测）。
+private final class RedrawProbe {
+    var count = 0
+}
+
+/// 假模块基线：`activate()` 不抛错、`content(for:)` 返回 `.none`。
+/// manifest 由子类覆写 `class var` 提供（`GourdModule` 的 `static var manifest` 可由 `class var` 满足），
+/// 六个夹具因此共享同一份 `init(context:)` / `deactivate()`。
+@MainActor
+private class ProbeModule: GourdModule {
+    class var manifest: ModuleManifest { RegistryFixture.manifest(shortID: "probe") }
+
+    required init(context: ModuleContext) {}
+
+    func activate() async throws {}
+
+    func deactivate() async {}
+
+    /// 与注册表对未激活模块返回的 `.unavailable` 区分开：激活的模块转发到这里。
+    func content(for request: ContentRequest) -> ModuleContent { .none }
+}
+
+/// order 10 + 声明 `.expanded`
+private final class AlphaProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest { RegistryFixture.manifest(shortID: "probe-alpha", order: 10) }
+}
+
+/// 与 `AlphaProbeModule` **同 id**：验证重复注册被忽略（而不是覆盖）
+private final class AlphaImpostorModule: ProbeModule {
+    override class var manifest: ModuleManifest { RegistryFixture.manifest(shortID: "probe-alpha", order: 10) }
+}
+
+/// `activate()` 必抛错
+private final class BetaProbeModule: ProbeModule {
+    struct ActivationFailure: Error {}
+
+    override class var manifest: ModuleManifest { RegistryFixture.manifest(shortID: "probe-beta", order: 5) }
+
+    override func activate() async throws { throw ActivationFailure() }
+}
+
+/// order 10（与 alpha 同序 → 比 id 字典序）+ name 用 locale 表形态
+private final class GammaProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest {
+        RegistryFixture.manifest(shortID: "probe-gamma", order: 10, name: LocalizedText(table: ["en": "Gamma Probe"]))
+    }
+}
+
+/// 无 `defaultPlacement`（order = `Int.max`）
+private final class DeltaProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest { RegistryFixture.manifest(shortID: "probe-delta") }
+}
+
+/// 只声明 `.compact`：即使激活也不进展开面板
+private final class CompactProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest {
+        RegistryFixture.manifest(shortID: "probe-compact", surfaces: [.compact], order: 1)
+    }
+}
+
+/// `defaultEnabled = false`
+private final class OptInProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest {
+        RegistryFixture.manifest(shortID: "probe-optin", order: 2, defaultEnabled: false)
     }
 }
