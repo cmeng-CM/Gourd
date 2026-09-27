@@ -326,8 +326,13 @@ public extension ModuleManifest {
         return manifest
     }
 
-    /// 校验顺序照 06 §10.1（短路，报第一个错）。本批跳过的步：4（未知字段）、11（路径安全，
-    /// 无 `path` 字段）、13（`minHostVersion`）、14（全局 id 唯一，属 `ModuleRegistry`）。
+    /// 校验短路：命中第一个错就抛，不做收集。本批的步序是**自定的**，**未逐字对齐** 06 §10.1——
+    /// 06 的顺序是 id → kind → surfaces → permissions → icon → apiVersion，本批实际是
+    /// manifestVersion → id → 保留前缀 → kind → icon → name/summary → surfaces → apiVersion → permissions
+    /// （icon 提到 surfaces/permissions 之前，且 manifestVersion 排在最前；`entry` 探测在 `decode(from:)` 里、更早）。
+    /// 该差异只影响**多个错并存时报出哪一个**，不影响任一单项的判定结果。
+    /// 本批跳过的 06 §10.1 步骤：4（未知字段）、11（路径安全，无 `path` 字段）、13（`minHostVersion`）、
+    /// 14（全局 id 唯一，属 `ModuleRegistry`）。
     func validate() throws {
         // 1. manifestVersion == 1
         guard manifestVersion == Self.supportedManifestVersion else {
