@@ -66,3 +66,4 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 | **上游定价远程拉取砍除** | `ModelPricingManager` 不再拉上游 feature 分支 raw URL；bundle 内 `pricing.json` 兜底既有 |
 | **壶中天图标** | `AppIcon`（Release）/ `AppIconDev`（Debug，绿色 DEV 角标）十档全换 + 新 `GourdLogo` imageset（菜单/引导页用）；上游 `logo/logo2/ebullioscopic/LinkedIn` imageset 删除；SVG 源存 `tools/icons/` |
 | **启动期主线程阻塞修复 ×2** | ① `DownloadManager`：init 在主线程同步枚举 TCC 保护的 `~/Downloads`，授权弹窗未响应即死锁（本地冷启 + CI headless 双杀）② `BluetoothAudioManager`：`IOBluetoothHostController.default()` 在 XCTest 宿主下 dispatch_once 卡死主队列。两处均已改为后台队列探测；本地单测恢复 **27/27**。**CI "test runner hung" 高度疑似同根因**，推送后观察 |
+| **稳定签名身份 + 本地打包闭环** | ① 自签 10 年期证书 **`Gourd Local`**（`tools/setup-signing.sh`，pw 用户域信任；身份写入 pbxproj app target）——修复「ad-hoc 每次构建都变哈希 → TCC 授权反复弹」：**装一次、授一次，升级不再弹**；② `sh tools/build.sh` 支持 `--install` / `--dmg`（拖拽安装式 DMG 出到 `dist/`，`*.dmg` 已 ignore）——**打包全在本机完成，不依赖 GitHub**（`release.yml` 早已摘 push 触发、仅手动；其内容是上游签名/公证流程，本项目不采用） |

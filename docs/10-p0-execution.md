@@ -130,7 +130,8 @@
 - `project.pbxproj` 必然被改，是未来季度同步的主要冲突面（接触白名单已将其记录在案）。
 - **Swift 模块名保持 `Atoll`**（D-10）：「模块名 ≠ 产品名」是刻意取舍。若 P1 把模块名改回 `Gourd`，必须同步改 4 个测试文件的 `@testable import Atoll`。
 - `PBXFileReference … path = Atoll.app` 三处（`:89` / `:259` / `:337`）仍在：按派发明令不手改（Xcode 会按 `PRODUCT_NAME` 重生成），`FULL_PRODUCT_NAME` / `WRAPPER_NAME` 实测均为 `Gourd.app`，构建不受影响。
-- **签名配置已去上游化（2026-09-27）**：Debug/Release 曾写死上游 Team（`9Y64TRM77N`），Release 且要求 `Developer ID Application`（Manual）——已统一为 ad-hoc（`CODE_SIGN_IDENTITY = "-"`、`CODE_SIGN_STYLE = Manual`、team 置空）；entitlements 的 `mach-services`（上游 kit XPC 名 `com.ebullioscopic.Atoll.xpc`，ad-hoc 产物会被 amfid 杀）已从仓库移除，CI 的 plutil 剥离步骤自此恒为幂等跳过。**本地打包**：`sh tools/build.sh`（`--install` 装 /Applications）；Release 首打实测 `BUILD SUCCEEDED`（产物 `com.cmeng.gourd` / 2.3.3，`Signature=adhoc`），本机 `xcodebuild test` 亦无需签名覆盖。
+- **签名配置已去上游化（2026-09-27）**：Debug/Release 曾写死上游 Team（`9Y64TRM77N`），Release 且要求 `Developer ID Application`（Manual）——已统一为 ad-hoc（`CODE_SIGN_STYLE = Manual`、team 置空）；entitlements 的 `mach-services`（上游 kit XPC 名 `com.ebullioscopic.Atoll.xpc`，ad-hoc 产物会被 amfid 杀）已从仓库移除，CI 的 plutil 剥离步骤自此恒为幂等跳过。**本地打包**：`sh tools/build.sh`（`--install` 装 /Applications，`--dmg` 出拖拽安装式 DMG 到 `dist/`）；Release 首打实测 `BUILD SUCCEEDED`（产物 `com.cmeng.gourd` / 2.3.3），本机 `xcodebuild test` 亦无需签名覆盖。
+  > **稳定签名身份升级（同日稍后）**：ad-hoc 没有稳定身份——系统按每次构建产物的哈希认应用，**每次重新构建 TCC 授权全部作废、重新弹窗**（用户实测反馈）。已改用自签 10 年期证书 **`Gourd Local`**（`tools/setup-signing.sh` 一次性生成 + 用户域信任；身份写在 pbxproj 的 `CODE_SIGN_IDENTITY`，只作用于 app target，SPM 依赖包不受影响），TCC 按「证书 + Bundle ID」记忆：**装一次、逐个授权后，后续所有构建/升级不再弹授权**。CI 侧不变（仍覆盖 `CODE_SIGN_IDENTITY="-"`，runner 不装该证书）。打包全流程本机完成，不依赖 GitHub。
 - 项目目录名（D-02）：~~仍为 `~/workspace/github/lagoon`，改名连同记忆迁移留给后续~~ **已完成（2026-09-27）**：目录改名 `~/workspace/github/gourd`，agent-memory 项目目录迁移为 `gourd-1c47bd2beca69533`（键 = `sha256(绝对路径)` 前 16 位，旧目录 `lagoon-4a28976c8efbc2b5` 保留备份）。
 
 ## 实际交付
