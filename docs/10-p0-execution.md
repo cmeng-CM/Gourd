@@ -9,7 +9,7 @@
 
 ## 背景与目标
 
-**问题现状**：`~/workspace/github/lagoon` 目前**只有文档与脚本，零提交、无远端、无 CI**；应用工程尚未引入。不改的话，后面每一步（模块化、插件、分发）都没有落脚点。
+**问题现状**：`~/workspace/github/lagoon`（已于 2026-09-27 改名 `~/workspace/github/gourd`）当时**只有文档与脚本，零提交、无远端、无 CI**；应用工程尚未引入。不改的话，后面每一步（模块化、插件、分发）都没有落脚点。
 
 **承接来源**（本方案继承、不重述）：
 
@@ -24,8 +24,8 @@
 
 **本次增量**（docs/08 未定的部分，也是本文件存在的理由）：
 
-1. **远端与 CI 的边界**：GitHub 账号为 `cmeng-CM`，仓库 `cmeng-CM/gourd` **尚不存在**。建仓与推送属外部动作，本次只落 **CI 配置文件 + 本地等价验证**，实跑 CI 待你授权后单独进行。
-2. **项目目录名不改**（`~/workspace/github/lagoon` → `gourd`）：agent-memory 的项目键与工作区路径绑定，直接 `mv` 会让既有跨会话记忆失联。已记入 [08](08-p0-checklist.md) P0-2 作为后续步骤。
+1. **远端与 CI 的边界**：GitHub 账号为 `cmeng-CM`，仓库 `cmeng-CM/gourd` **尚不存在**。建仓与推送属外部动作，本次只落 **CI 配置文件 + 本地等价验证**，实跑 CI 待你授权后单独进行。（追记 2026-09-27：远端已建为 `cmeng-CM/Gourd` 并首推 `main`，CI 首跑随推送触发）
+2. **项目目录名不改**（`~/workspace/github/lagoon` → `gourd`）：agent-memory 的项目键与工作区路径绑定，直接 `mv` 会让既有跨会话记忆失联。已记入 [08](08-p0-checklist.md) P0-2 作为后续步骤。（追记 2026-09-27：该决策已反转——目录已改名 `gourd`，agent-memory 项目目录同步迁移，见「已知限制」末条）
 3. **五个无关 workflow 的处置范围**、**图标策略**（docs/08 D-11 / D-12 只给了建议）。
 4. **验证命令与"不验证的部分"**：明确写出本次接受的风险。
 
@@ -130,7 +130,7 @@
 - `project.pbxproj` 必然被改，是未来季度同步的主要冲突面（接触白名单已将其记录在案）。
 - **Swift 模块名保持 `Atoll`**（D-10）：「模块名 ≠ 产品名」是刻意取舍。若 P1 把模块名改回 `Gourd`，必须同步改 4 个测试文件的 `@testable import Atoll`。
 - `PBXFileReference … path = Atoll.app` 三处（`:89` / `:259` / `:337`）仍在：按派发明令不手改（Xcode 会按 `PRODUCT_NAME` 重生成），`FULL_PRODUCT_NAME` / `WRAPPER_NAME` 实测均为 `Gourd.app`，构建不受影响。
-- 项目目录名仍为 `~/workspace/github/lagoon`（D-02）：agent-memory 项目键与工作区路径绑定，改名连同记忆迁移留给后续。
+- 项目目录名（D-02）：~~仍为 `~/workspace/github/lagoon`，改名连同记忆迁移留给后续~~ **已完成（2026-09-27）**：目录改名 `~/workspace/github/gourd`，agent-memory 项目目录迁移为 `gourd-1c47bd2beca69533`（键 = `sha256(绝对路径)` 前 16 位，旧目录 `lagoon-4a28976c8efbc2b5` 保留备份）。
 
 ## 实际交付
 

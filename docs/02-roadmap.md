@@ -8,7 +8,7 @@
 
 > **详细可执行清单见 [08-p0-checklist.md](08-p0-checklist.md)**（基线冻结 / git 结构 / 改名清单 / 依赖治理 / CI / 合规 / 验收命令）。
 
-- [ ] 在 `~/workspace/github/lagoon/` 初始化工程（本目录先把文档与脚本放好，应用工程下一阶段引入）
+- [ ] 在 `~/workspace/github/gourd/` 初始化工程（本目录先把文档与脚本放好，应用工程下一阶段引入；目录原名 lagoon，2026-09-27 改名）
 - [x] 确认 Xcode / macOS SDK 版本（Atoll 要求 macOS 14+；boring.notch 编译需 macOS 15.6+ 与 Xcode 26+）
       → 实测：Xcode 27.0 / Swift 6.4 / SDK 27.0 / macOS 27.0，app target 部署目标 14.6，工具链显著高于要求
 - [ ] 从 `Atoll` 拉出 `Gourd` 应用工程：保留 GPL 头与版权声明，改 Bundle ID / 应用名 / 图标

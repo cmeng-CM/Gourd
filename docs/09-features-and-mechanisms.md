@@ -420,4 +420,4 @@
 | 修改标注 | `// Modified for Gourd (YYYY-MM-DD)` |
 | 文档 | `docs/` 全部 + README + NOTICE 已同步 |
 
-**唯一未执行**：项目目录仍叫 `~/workspace/github/lagoon`（**有意保留**）——agent-memory 的项目键与工作区路径绑定，直接 `mv` 会让既有跨会话记忆失联。已列入 P0 步骤（[08](08-p0-checklist.md) P0-2），改名时先迁移/备份 `~/.zcode/cli/memories/projects/lagoon-*` 再改。
+**改名已执行（2026-09-27）**：项目目录已改为 `~/workspace/github/gourd`；agent-memory 项目目录同步迁移为 `gourd-1c47bd2beca69533`（键 = `sha256(绝对路径)` 前 16 位；旧目录 `lagoon-4a28976c8efbc2b5` 保留备份）。教训：不要在会话进行中改名会话所在目录（shell cwd 指向已删除路径 → `spawn /bin/zsh ENOENT`）——先建软链或换新会话再改。

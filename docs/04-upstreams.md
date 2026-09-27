@@ -34,7 +34,7 @@
 > 本项目基线锁定为 `v2.3.3-beta.3`（`c7305ec`，2026-08-20），选型依据见 [00-decisions.md](00-decisions.md) ADR-0009。
 
 ```bash
-cd ~/workspace/github/lagoon        # 应用工程目录（P0 建立后）
+cd ~/workspace/github/gourd         # 应用工程目录（2026-09-27 由 lagoon 改名）
 git remote add atoll https://github.com/Ebullioscopic/Atoll.git   # 远程名用 atoll，避免与 fork 关系混淆
 git fetch atoll --tags
 # 在一个独立分支上试合并，验证通过再进主干

@@ -38,7 +38,7 @@
 ├── Atoll/                 ← 基座（fork 源，已拉取，含完整历史）
 ├── boring.notch/          ← 功能对照实现（GPL，可合并）
 ├── NotchDrop/ OpenYoink/ DynamicNotchKit/ ...   ← 功能来源（MIT/Apache/MPL）
-└── lagoon/                ← 本项目仓库（应用名 壶中天 / Gourd；目录名改 `gourd` 已推迟，见 docs/10 D-02）
+└── gourd/                 ← 本项目仓库（应用名 壶中天 / Gourd；目录已于 2026-09-27 由 lagoon 改名）
     ├── DynamicIsland.xcodeproj/   ← 应用工程（Bundle ID com.cmeng.gourd；上游文件名保留不改）
     ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射、P0 执行方案
     ├── tools/             ← 本仓库自身的工具：上游同步与校验脚本

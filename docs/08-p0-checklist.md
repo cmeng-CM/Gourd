@@ -71,7 +71,7 @@ git worktree list                                                    # 基线检
 ### 步骤
 
 ```bash
-cd ~/workspace/github/lagoon
+cd ~/workspace/github/gourd
 
 # 1) 先把现有文档与工具提交成 L0，并打 tag（下一步 merge 要用到它的 sha）
 git add -A && git commit -m "docs: 决策/架构/路线图/许可证矩阵/上游清单/协议设计"
@@ -342,7 +342,7 @@ DynamicIsland/strings/constants.swift                  (productPage 等用户可
 cd ~/workspace/github/Atoll && git rev-parse --short v2.3.3-beta.3    # c7305ec
 
 # 2) 工作区干净、历史完整
-cd ~/workspace/github/lagoon
+cd ~/workspace/github/gourd
 git status --porcelain                                                 # 空
 git merge-base main c7305ec                                            # c7305ec
 
