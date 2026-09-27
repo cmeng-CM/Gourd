@@ -20,7 +20,7 @@ import Foundation
 import Network
 import Defaults
 
-/// WebSocket server for Atoll RPC.
+/// WebSocket server for Gourd RPC.
 /// Uses Apple's Network.framework (`NWListener`) — no external dependencies.
 /// Listens on localhost:9020 for JSON-RPC 2.0 requests over WebSocket.
 ///
@@ -52,7 +52,7 @@ final class ExtensionRPCServer {
     private var connections: [UUID: RPCClientConnection] = [:]
     private var shelfSubscribers: Set<String> = [] // bundleIdentifiers subscribed to shelf events
     private let port: UInt16 = ExtensionRPCServer.rpcPort
-    private let queue = DispatchQueue(label: "com.ebullioscopic.Atoll.rpc.server", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.cmeng.gourd.rpc.server", qos: .userInitiated)
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -251,7 +251,7 @@ final class ExtensionRPCServer {
     private func handleListenerState(_ state: NWListener.State, host: NWEndpoint.Host) {
         switch state {
         case .ready:
-            Logger.log("Started Atoll RPC WebSocket server on \(host):\(port)", category: .extensions)
+            Logger.log("Started Gourd RPC WebSocket server on \(host):\(port)", category: .extensions)
         case .failed(let error):
             Logger.log(
                 "RPC server on \(host) failed: \(error.localizedDescription)",

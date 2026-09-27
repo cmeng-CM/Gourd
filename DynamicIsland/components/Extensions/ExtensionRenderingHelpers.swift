@@ -313,7 +313,7 @@ struct ExtensionLottieView: View {
 
 private final class ExtensionLottieCache {
     static let shared = ExtensionLottieCache()
-    private let queue = DispatchQueue(label: "com.atoll.extension-lottie-cache")
+    private let queue = DispatchQueue(label: "com.cmeng.gourd.extension-lottie-cache")
     private var cache: [String: URL] = [:]
 
     func url(for data: Data) -> URL? {

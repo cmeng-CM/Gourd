@@ -67,7 +67,7 @@ class LockScreenPanelManager {
         }
 
         NotificationCenter.default.post(
-            name: .atollLockScreenPanelFrameDidChange,
+            name: .gourdLockScreenPanelFrameDidChange,
             object: self,
             userInfo: userInfo
         )
@@ -381,5 +381,5 @@ class LockScreenPanelManager {
 }
 
 extension Notification.Name {
-    static let atollLockScreenPanelFrameDidChange = Notification.Name("atollLockScreenPanelFrameDidChange")
+    static let gourdLockScreenPanelFrameDidChange = Notification.Name("gourdLockScreenPanelFrameDidChange")
 }

@@ -19,7 +19,7 @@
 import Defaults
 import Security
 import XCTest
-@testable import Atoll
+@testable import Gourd
 
 /// Exercises the seams the Spotify refactor introduced: the token store,
 /// the HTTP client, and the auth session are all injectable, so the OAuth

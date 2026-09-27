@@ -39,7 +39,7 @@ struct CodexQuotaClient {
         var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
         request.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Atoll", forHTTPHeaderField: "User-Agent")
+        request.setValue("Gourd", forHTTPHeaderField: "User-Agent")
         if let accountId = creds.accountId, !accountId.isEmpty {
             request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         }

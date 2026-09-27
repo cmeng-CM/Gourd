@@ -18,7 +18,7 @@
 
 import Foundation
 
-/// Bridges extension payload updates between Atoll processes (main app, helpers, XPC services).
+/// Bridges extension payload updates between Gourd processes (main app, helpers, XPC services).
 /// Stores the latest snapshot on disk and delivers change notifications through DistributedNotificationCenter.
 final class ExtensionEventBridge {
     static let shared = ExtensionEventBridge()
@@ -27,7 +27,7 @@ final class ExtensionEventBridge {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let processIdentifier = ProcessInfo.processInfo.processIdentifier
-    private let ioQueue = DispatchQueue(label: "com.ebullioscopic.Atoll.extensions.bridge", qos: .utility)
+    private let ioQueue = DispatchQueue(label: "com.cmeng.gourd.extensions.bridge", qos: .utility)
 
     private init() {}
 

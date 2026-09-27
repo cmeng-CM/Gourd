@@ -19,7 +19,7 @@
 import Network
 import XCTest
 
-@testable import Atoll
+@testable import Gourd
 
 /// The peer check that keeps the extension RPC server local.
 ///
@@ -93,7 +93,7 @@ final class ExtensionRPCServerTests: XCTestCase {
     /// something this server should be answering.
     func testAServiceEndpointIsRefused() {
         let service = NWEndpoint.service(
-            name: "Atoll", type: "_atoll._tcp", domain: "local", interface: nil
+            name: "Gourd", type: "_gourd._tcp", domain: "local", interface: nil
         )
         XCTAssertFalse(ExtensionRPCServer.isLoopback(service))
     }

@@ -19,6 +19,5 @@
 import Foundation
 
 let productPage = URL(string: "https://github.com/cmeng-CM/gourd")!
-let sponsorPage = URL(string: "https://www.buymeacoffee.com/kryoscopic")!
 
 

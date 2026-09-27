@@ -35,7 +35,7 @@ struct Bookmark: Sendable, Equatable, Codable {
             throw NSError(domain: "Bookmark", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid file URL or file does not exist at \(url.path)"])
         }
         do {
-            // Atoll is not sandboxed (ENABLE_APP_SANDBOX = NO), so it already has
+            // Gourd is not sandboxed (ENABLE_APP_SANDBOX = NO), so it already has
             // full file access and cannot create security-scoped bookmarks:
             // `.withSecurityScope` requires the App Sandbox entitlement and throws
             // on macOS 26 (Tahoe), which silently dropped every shelf drop (#461/#646).

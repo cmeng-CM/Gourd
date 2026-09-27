@@ -30,7 +30,7 @@ enum AppleNotesSyncError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .automationDenied:
-            return String(localized: "Allow Atoll to control Notes in System Settings → Privacy & Security → Automation.")
+            return String(localized: "Allow Gourd to control Notes in System Settings → Privacy & Security → Automation.")
         case .scriptFailed(let message):
             return message
         }
@@ -53,7 +53,7 @@ final class AppleNotesSyncManager: ObservableObject {
     @Published private(set) var isSyncing = false
     @Published private(set) var lastError: String?
 
-    private static let syncFolderName = "Atoll"
+    private static let syncFolderName = "壶中天"
     private static let fieldSeparator = "\u{241F}"
     private static let recordSeparator = "\u{241E}"
     private static let atollTagPattern = #"<!--atoll:id=([0-9A-Fa-f-]{36})-->"#

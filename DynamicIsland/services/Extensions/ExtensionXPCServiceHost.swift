@@ -20,7 +20,7 @@ import AppKit
 import Foundation
 import AtollExtensionKit
 
-/// Shared constants for the Atoll extension XPC service.
+/// Shared constants for the Gourd extension XPC service.
 enum ExtensionXPCServiceConstants {
     static let machServiceName = "com.ebullioscopic.Atoll.xpc"
 }
@@ -48,7 +48,7 @@ final class ExtensionXPCServiceHost: NSObject, NSXPCListenerDelegate {
         // In UI testing environments (like CI), the mach-services entitlement might be stripped
         // to bypass amfid ad-hoc signing crashes. Starting the listener without the entitlement crashes the app.
         if AppRuntimeEnvironment.isUITesting {
-            Logger.log("Bypassing Atoll XPC listener for UI testing", category: .extensions)
+            Logger.log("Bypassing Gourd XPC listener for UI testing", category: .extensions)
             return
         }
 
@@ -57,14 +57,14 @@ final class ExtensionXPCServiceHost: NSObject, NSXPCListenerDelegate {
         self.listener = listener
         listener.resume()
 
-        Logger.log("Started Atoll XPC listener", category: .extensions)
+        Logger.log("Started Gourd XPC listener", category: .extensions)
     }
 
     func stop() {
         listener?.invalidate()
         listener = nil
         clientContexts.removeAll()
-        Logger.log("Stopped Atoll XPC listener", category: .extensions)
+        Logger.log("Stopped Gourd XPC listener", category: .extensions)
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {

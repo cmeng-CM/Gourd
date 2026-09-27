@@ -274,7 +274,7 @@ final class FullScreenArtworkWindowManager: ObservableObject {
     }()
     private let backupPlistURL: URL = {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_wallpaper_backup.plist")
+            .appendingPathComponent("gourd_wallpaper_backup.plist")
     }()
     private let aerialManifestURL: URL = {
         FileManager.default.homeDirectoryForCurrentUser
@@ -291,15 +291,15 @@ final class FullScreenArtworkWindowManager: ObservableObject {
     private let customLiveWallpaperAssetID = "6D6834A4-2F0F-479A-B053-7D4DC5CB8EB7"
     private let liveWallpaperManifestBackupURL: URL = {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_aerial_manifest_backup.json")
+            .appendingPathComponent("gourd_aerial_manifest_backup.json")
     }()
     private let liveWallpaperVideoBackupURL: URL = {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_aerial_video_backup.mov")
+            .appendingPathComponent("gourd_aerial_video_backup.mov")
     }()
     private let liveWallpaperThumbnailBackupURL: URL = {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_aerial_thumbnail_backup.png")
+            .appendingPathComponent("gourd_aerial_thumbnail_backup.png")
     }()
     private var artworkFileURL: URL?
     private var cachedArtworkPNG: URL?
@@ -634,7 +634,7 @@ final class FullScreenArtworkWindowManager: ObservableObject {
 
     private func observePanelFrameChanges() {
         panelFrameChangeObserver = NotificationCenter.default.addObserver(
-            forName: .atollLockScreenPanelFrameDidChange,
+            forName: .gourdLockScreenPanelFrameDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -780,7 +780,7 @@ final class FullScreenArtworkWindowManager: ObservableObject {
     private func artworkCacheFileURL(for fingerprint: String) -> URL {
         let normalizedFingerprint = normalizedFingerprintComponent(fingerprint)
         return FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_artwork_wallpaper_\(normalizedFingerprint).png")
+            .appendingPathComponent("gourd_artwork_wallpaper_\(normalizedFingerprint).png")
     }
 
     private func blurredArtworkCacheFileURL(for fingerprint: String, pixelSize: CGSize) -> URL {
@@ -788,7 +788,7 @@ final class FullScreenArtworkWindowManager: ObservableObject {
         let width = Int(pixelSize.width.rounded())
         let height = Int(pixelSize.height.rounded())
         return FileManager.default.temporaryDirectory
-            .appendingPathComponent("atoll_artwork_wallpaper_blurred_\(normalizedFingerprint)_\(width)x\(height).png")
+            .appendingPathComponent("gourd_artwork_wallpaper_blurred_\(normalizedFingerprint)_\(width)x\(height).png")
     }
 
     private func normalizedFingerprintComponent(_ fingerprint: String) -> String {
@@ -951,7 +951,7 @@ final class FullScreenArtworkWindowManager: ObservableObject {
             let prepared = await Self.prepareCustomLiveWallpaperAsset(
                 from: videoURL,
                 assetID: assetID,
-                displayName: displayName.isEmpty ? "Atoll Canvas" : displayName,
+                displayName: displayName.isEmpty ? "Gourd Canvas" : displayName,
                 manifestURL: manifestURL,
                 videosDirectoryURL: videosDirectoryURL,
                 thumbnailsDirectoryURL: thumbnailsDirectoryURL,

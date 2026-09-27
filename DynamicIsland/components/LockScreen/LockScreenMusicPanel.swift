@@ -196,7 +196,7 @@ struct LockScreenMusicPanel: View {
             parallaxResumeWorkItem = nil
             isParallaxSuspended = false
         }
-        .onReceive(NotificationCenter.default.publisher(for: .atollArtworkWallpaperDismissed)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .gourdArtworkWallpaperDismissed)) { _ in
             withAnimation(.easeInOut(duration: 0.28)) {
                 isArtworkFullscreen = false
             }
@@ -487,7 +487,7 @@ struct LockScreenMusicPanel: View {
         FullScreenArtworkWindowManager.shared.onDismiss = {
             Task { @MainActor in
                 withAnimation(.easeInOut(duration: 0.28)) {
-                    NotificationCenter.default.post(name: .atollArtworkWallpaperDismissed, object: nil)
+                    NotificationCenter.default.post(name: .gourdArtworkWallpaperDismissed, object: nil)
                 }
             }
         }
@@ -1646,5 +1646,5 @@ final class RightClickNSView: NSView {
 }
 
 extension Notification.Name {
-    static let atollArtworkWallpaperDismissed = Notification.Name("atollArtworkWallpaperDismissed")
+    static let gourdArtworkWallpaperDismissed = Notification.Name("gourdArtworkWallpaperDismissed")
 }

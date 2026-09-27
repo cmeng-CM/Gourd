@@ -17,7 +17,7 @@
  */
 
 import XCTest
-@testable import Atoll
+@testable import Gourd
 
 final class JSONLUsageParserTests: XCTestCase {
 

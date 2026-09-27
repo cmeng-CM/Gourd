@@ -365,7 +365,7 @@ struct AnimationEditorView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Expand notch to follow animation width")
                                     .fontWeight(.medium)
-                                Text("Enable when scaling beyond 30x20px so the Atoll opens gracefully.")
+                                Text("Enable when scaling beyond 30x20px so the notch opens gracefully.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

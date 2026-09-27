@@ -56,13 +56,9 @@ class ModelPricingManager: ObservableObject {
     
     @Published private(set) var pricingData: ModelPricingData?
     
-    private let remoteURL = URL(string: "https://raw.githubusercontent.com/Ebullioscopic/Atoll/feat/dynamic-pricing-workflow/DynamicIsland/managers/LLMUsage/pricing.json")!
     
     private init() {
         loadInitialPricing()
-        Task {
-            await fetchRemotePricing()
-        }
     }
     
     /// Loads initial pricing from local bundle fallback
@@ -86,31 +82,6 @@ class ModelPricingManager: ObservableObject {
                     print("❌ ModelPricingManager: Failed to load bundled pricing (flat): \(error)")
                 }
             }
-        }
-    }
-    
-    /// Asynchronously fetches dynamic pricing from GitHub
-    func fetchRemotePricing() async {
-        let configuration = URLSessionConfiguration.default
-        configuration.requestCachePolicy = .useProtocolCachePolicy
-        let session = URLSession(configuration: configuration)
-        
-        do {
-            let (data, response) = try await session.data(from: remoteURL)
-            
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                print("⚠️ ModelPricingManager: Remote fetch returned non-200 status")
-                return
-            }
-            
-            let decoded = try JSONDecoder().decode(ModelPricingData.self, from: data)
-            
-            await MainActor.run {
-                self.pricingData = decoded
-                print("✅ ModelPricingManager: Successfully updated pricing from remote")
-            }
-        } catch {
-            print("⚠️ ModelPricingManager: Failed to fetch remote pricing (using local/cached): \(error)")
         }
     }
     

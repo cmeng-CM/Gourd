@@ -46,7 +46,7 @@ class StatusBarMenu: NSMenu {
         
         // Set the menu bar icon
         if let button = statusItem.button {
-            button.image = NSImage(named: "logo")
+            button.image = NSImage(named: "GourdLogo")
         }
         
         // Set up the menu

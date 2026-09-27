@@ -173,11 +173,11 @@ class SystemOSDManager {
     ///
     /// `enableSystemHUD()` restarts the helper on a detached background `Task`,
     /// which never runs to completion when the process is already terminating —
-    /// so a SIGSTOP-frozen OSDUIHelper stays frozen after Atoll quits, breaking
-    /// every native OSD Atoll does not replace (keyboard backlight,
+    /// so a SIGSTOP-frozen OSDUIHelper stays frozen after Gourd quits, breaking
+    /// every native OSD Gourd does not replace (keyboard backlight,
     /// external-display brightness, …) and leaving a stuck HUD on screen. This
     /// sends SIGCONT inline and blocks until it lands, guaranteeing the helper
-    /// is resumed before Atoll exits. Idempotent; safe to call from a
+    /// is resumed before Gourd exits. Idempotent; safe to call from a
     /// termination handler.
     public static func resumeOSDUIHelperForTermination() {
         suppressionState.withLock { state in
@@ -252,7 +252,7 @@ class SystemOSDManager {
             guard isCurrentTransition(generation, active: true) else { return }
             suspendOSDUIHelper()
 
-            // If the user disabled Atoll's HUD replacement while SIGSTOP was in
+            // If the user disabled Gourd's HUD replacement while SIGSTOP was in
             // flight, undo that stale suppression immediately. The current
             // restoration transition will still perform its clean restart.
             guard isCurrentTransition(generation, active: true) else {

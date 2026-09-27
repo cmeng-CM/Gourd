@@ -146,7 +146,7 @@ class LockScreenManager: ObservableObject {
         LockScreenWeatherManager.shared.showWeatherWidget()
         LockScreenTimerWidgetManager.shared.handleLockStateChange(isLocked: true)
         
-        // THEN trigger lock icon in Atoll (only if enabled in settings)
+        // THEN trigger lock icon in Gourd (only if enabled in settings)
         if Defaults[.enableLockScreenLiveActivity] {
             print("[\(timestamp())] LockScreenManager: 🔴 Starting lock icon live activity")
             coordinator.toggleExpandingView(status: true, type: .lockScreen)

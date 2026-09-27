@@ -34,7 +34,7 @@ test_target.build_configurations.each do |config|
   settings['SWIFT_VERSION'] = '5.0'
   settings['MACOSX_DEPLOYMENT_TARGET'] = '15.0'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
-  # Load into the app so @testable import Atoll resolves against the app module.
+  # Load into the app so @testable import Gourd resolves against the app module.
   settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Gourd.app/Contents/MacOS/Gourd'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
   settings['LD_RUNPATH_SEARCH_PATHS'] =

@@ -116,7 +116,7 @@ class AudioTap: NSObject {
     private var updateTimer: Timer?
     
     // Serial queue to prevent race conditions
-    private let audioQueue = DispatchQueue(label: "com.atoll.audiotap", qos: .userInitiated)
+    private let audioQueue = DispatchQueue(label: "com.cmeng.gourd.audiotap", qos: .userInitiated)
     
     // Debounce restart requests
     private var pendingRestartWorkItem: DispatchWorkItem?
@@ -237,7 +237,7 @@ class AudioTap: NSObject {
         // Create the Aggregate Device (a "virtual microphone" that we can route the tap into)
         let tapList = [[kAudioSubTapUIDKey: tapUID]]
         let aggregateDict: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Atoll_Virtual_Tap",
+            kAudioAggregateDeviceNameKey: "Gourd_Virtual_Tap",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,  // Hides it from the user's sound settings
             kAudioAggregateDeviceTapListKey: tapList,

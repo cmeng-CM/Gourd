@@ -67,7 +67,7 @@ enum ExtensionValidationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .featureDisabled:
-            return "Extensions feature is currently disabled in Atoll."
+            return "Extensions feature is currently disabled in Gourd."
         case .unauthorized:
             return "Your app is not authorized to post this content."
         case .invalidDescriptor(let reason):
@@ -75,7 +75,7 @@ enum ExtensionValidationError: LocalizedError, Equatable {
         case .rateLimited:
             return "Too many requests in a short period. Please slow down."
         case .exceedsCapacity:
-            return "Atoll reached its limit for simultaneous extension content."
+            return "Gourd reached its limit for simultaneous extension content."
         case .duplicateIdentifier:
             return "An item with the same identifier already exists."
         case .unsupportedContent:

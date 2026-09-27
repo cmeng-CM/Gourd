@@ -27,7 +27,7 @@ final class ExtensionAuthorizationManager: ObservableObject {
     @Published private(set) var entries: [ExtensionAuthorizationEntry]
     @Published private(set) var rateLimitRecords: [ExtensionRateLimitRecord]
 
-    private let persistenceQueue = DispatchQueue(label: "com.atoll.extensions.authorization", qos: .utility)
+    private let persistenceQueue = DispatchQueue(label: "com.cmeng.gourd.extensions.authorization", qos: .utility)
 
     private init() {
         self.entries = Defaults[.extensionAuthorizationEntries]
