@@ -30,6 +30,7 @@
 
 import AppKit
 import Combine
+import Defaults
 import SwiftUI
 import os
 
@@ -38,17 +39,18 @@ import os
 /// ① `acceptsFirstMouse`：面板不是 key window 时，**第一次点击**也要落到视图上——浮层上的 ×
 ///    必须「点一下就生效」（通知到达时 Gourd 通常不是前台应用）。口径同上游
 ///    `FirstMouseHostingView`（`DynamicIslandApp.swift`，刘海面板的 contentView 也用它）。
-/// ② `layout()` 回调：每次 SwiftUI 为内容跑完布局，把 `fittingSize`（内容的理想尺寸）回报宿主，
-///    窗口尺寸就靠它自适应（见 D-23 的坑 ②）。
-private final class HUDSizingHostingView<Content: View>: NSHostingView<Content> {
-    /// 内容理想尺寸变化时的回调（在布局过程中调用，接收方自行安排到下一拍再改窗口）。
-    var onContentSizeChange: ((CGSize) -> Void)?
+/// ② `layout()` 回调：每次 SwiftUI 为内容跑完布局通知宿主，宿主借此做**幂等收尾**
+///    （按固定尺寸校正窗口 + 显隐纠正 + 重新贴顶，见 `ModuleHUDWindowHost.contentDidLayout`）。
+///    **尺寸不再取自 `fittingSize`**（2026-09-28 起窗口是固定尺寸，见 `contentSize(scale:)`）。
+private final class HUDHostingView<Content: View>: NSHostingView<Content> {
+    /// 内容跑完一次布局时的回调（在布局过程中调用，接收方自行安排到下一拍再动窗口）。
+    var onContentLayout: (() -> Void)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func layout() {
         super.layout()
-        onContentSizeChange?(fittingSize)
+        onContentLayout?()
     }
 }
 
@@ -125,15 +127,20 @@ enum HUDVisibilityStateMachine {
     }
 }
 
-/// 浮层窗口宿主：把 `ModuleRegistry.activeHUD` 渲染进一个**独立的自适应窗口**。
+/// 浮层窗口宿主：把 `ModuleRegistry.activeHUD` 渲染进一个**独立的固定尺寸窗口**。
 ///
-/// 三条形态约束（对应 2026-09-28 的两条用户反馈）：
-/// ① **按内容自适应**：窗口尺寸 = `NSHostingView.fittingSize`（内容布局后重算），不再受
-///    刘海 / 菜单栏尺寸裁剪——内置屏「被遮盖、下半截被裁」由此消除；
+/// 四条形态约束（对应 2026-09-28 的三条用户反馈）：
+/// ① **固定尺寸**（用户反馈「尺寸不固定，要固定个初始大小」）：窗口内容尺寸 = `contentSize(scale:)`
+///    = 320 × 64 再乘用户倍率（`notificationHUDScale`，默认 1.3），**不随内容变化**——
+///    先后两条通知内容长短不同也不再宽窄跳动；超长内容在卡片内截断（分工见下方 ④）；
 /// ② **跟随鼠标屏**：水平居中于鼠标所在屏、垂直贴在该屏可用顶边下方 `topGap`——外接屏
 ///    「太小、看不到」由此消除（不再依赖关闭态那把位置让给谁）；
 /// ③ **不与岛内容同层**：窗口是独立的一格（`level = .screenSaver`），既不与关闭态优先级链
-///    抢位置，也不再要求 hide-until-hover 豁免（D-22 的旧豁免随之删除）。
+///    抢位置，也不再要求 hide-until-hover 豁免（D-22 的旧豁免随之删除）；
+/// ④ **超长内容的分工**：浮层只显示「最新的一条」，两行内截断（`NotificationHUDView` 的
+///    `lineLimit` + `truncationMode`）；**完整正文的位置是展开面板的通知列表**——
+///    浮层是"刚发生了什么"的瞬时提示，不是阅读入口（一次多条新通知只在第二行末尾追加
+///    「等 N 条」的计数，同样不展开）。
 ///
 /// **显隐是状态机**（2026-09-28 修「内置屏偶发只显示第一条」）：三处入口
 /// （`present` / 内容布局回调 / 淡出完成）都只做一件事——把当前状态喂给
@@ -152,17 +159,41 @@ public final class ModuleHUDWindowHost {
     static let fadeInDuration: TimeInterval = 0.15
     static let fadeOutDuration: TimeInterval = 0.2
 
-    /// 量不出内容尺寸时的兜底尺寸（pt）：只在 `fittingSize` 给出 0×0 / NaN 时用，
-    /// 目的是「窗口别缩成 0×0 导致再也救不回来」，不是正常路径的尺寸。
-    static let fallbackContentSize = CGSize(width: 240, height: 48)
+    /// 浮层卡片的**固定尺寸基准**（pt，倍率 1.0 时）：宽 320 / 高 64。
+    ///
+    /// **为什么固定**（2026-09-28 用户反馈「尺寸不固定」）：内容是「App 名 + 标题 · 正文」两行，
+    /// 长短不一时按内容自适应的窗口会宽窄跳动；固定后观感是「同一张卡片换字」，
+    /// 超长内容在卡片内截断（完整正文看展开面板列表，见类型文档 ④）。
+    ///
+    /// `nonisolated`：尺寸口径是**跨 actor 的纯数据**——模块侧的卡片（`NotificationHUDCardLayout`）
+    /// 在视图构造期读它，不能要求先跳主 actor。
+    nonisolated static let cardBaseSize = CGSize(width: 320, height: 64)
+
+    /// 倍率的可用区间（与设置滑块的 0.8…2.0 同源）。**单一来源在这里**：窗口尺寸是内核定的，
+    /// 模块侧的 `NotificationHUDCardLayout.scaleRange` 是本值的别名（避免两处各写一份漂移）。
+    nonisolated static let hudScaleRange: ClosedRange<Double> = 0.8...2.0
+
+    /// **纯函数**：浮层窗口 / 卡片的内容尺寸 = 基准尺寸 × 夹取后的倍率。
+    ///
+    /// - 倍率**夹取**到 `hudScaleRange`：用户直接改 UserDefaults 写了个离谱值时也有确定尺寸
+    ///   （同 `ttl` 的夹取口径），不会把窗口设成 0 宽或整屏宽；
+    /// - 保留两位小数：避开 `320 × 1.3 = 416.00000000000006` 这类浮点尾巴，
+    ///   单测的等值断言与日志里的尺寸比较才有意义。
+    nonisolated static func contentSize(scale: Double) -> CGSize {
+        let s = CGFloat(min(max(scale, hudScaleRange.lowerBound), hudScaleRange.upperBound))
+        return CGSize(width: round2(cardBaseSize.width * s), height: round2(cardBaseSize.height * s))
+    }
+
+    /// 保留两位小数（口径同上）。
+    nonisolated private static func round2(_ value: CGFloat) -> CGFloat {
+        (value * 100).rounded() / 100
+    }
 
     /// 窗口 / 内容的持有者。**复用同一个窗口**：浮层是瞬时条目，反复创建窗口会闪。
     private var panel: NSWindow?
-    private var hostingView: HUDSizingHostingView<AnyView>?
+    private var hostingView: HUDHostingView<AnyView>?
     /// 对 `ModuleRegistry.$activeHUD` 的订阅（`start()` 挂一次，幂等）。
     private var subscription: AnyCancellable?
-    /// 最近一次量到的**可用**内容尺寸（布局回调写、present 时读）。
-    private var contentSize: CGSize?
     /// 显示代数：淡出完成后据此判断「这期间有没有新浮层接手」——有则不做 `orderOut`
     ///（否则「A 淡出中、B 到达」会让 A 的收尾把 B 一起藏掉）。
     private var generation = 0
@@ -198,8 +229,8 @@ public final class ModuleHUDWindowHost {
         generation += 1
         guard let panel = ensurePanel() else { return }
 
-        // ① 尺寸：已知尺寸（上一条浮层量到的）先摆好；尺寸没变时窗口不会跳。
-        if let contentSize { applyContentSize(contentSize, to: panel) }
+        // ① 尺寸：**固定尺寸**（320 × 64 × 倍率）先摆好——先后两条通知的内容长短不同也不跳。
+        applyContentSize(to: panel)
         // ② 显隐：**每次 present 都按当前状态重算一遍动作**（幂等），不是「只有不可见时才处理」。
         //    这一步保证「present 返回后窗口一定在台上且不透明」——坏状态在这里被纠正，
         //    不依赖 `fadeIn` 的前置判断，也不依赖上一次 present 做过什么。
@@ -207,14 +238,14 @@ public final class ModuleHUDWindowHost {
             HUDVisibilityStateMachine.presentActions(isVisible: panel.isVisible, alpha: panel.alphaValue),
             to: panel
         )
-        // ③ 逼一次布局：`layout()` 回调随即把**新内容**的理想尺寸回报上来（并再 reconcile 一次）。
+        // ③ 逼一次布局：让**新内容**立刻排进固定尺寸的窗口（布局回调还会再做一次幂等收尾）。
         hostingView?.needsLayout = true
         hostingView?.layoutSubtreeIfNeeded()
 
         // 几何日志：窗口要等布局回调（还有它之后的尺寸应用）才会摆好，所以延后一拍再记真值——
         // 核对窗口落点看这一行（`screencapture` 的窗口几何也可用 CGWindowList 交叉验证）。
-        // **记的是窗口的实际内容尺寸与 alpha**（不是缓存值）：这条日志是「同一屏连发多条通知，
-        // 尺寸 / 可见性是否一致」的实测证据。
+        // **记的是窗口的实际内容尺寸与 alpha**（不是算出来的常量）：这条日志是「同一屏连发多条
+        // 通知，尺寸 / 可见性是否一致」的实测证据，因此必须是真实读回来的值。
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
             guard let self, self.generation == generation, let panel = self.panel, panel.isVisible else { return }
@@ -257,19 +288,16 @@ public final class ModuleHUDWindowHost {
         }
     }
 
-    /// 内容尺寸变化（`HUDSizingHostingView.layout()` 回调）→ 改窗口尺寸 + 可见性纠正 + 重新贴顶。
+    /// 内容布局回调（`HUDHostingView.layout()`）→ 幂等收尾：**按固定尺寸校正窗口** + 显隐纠正 +
+    /// 重新贴顶。
     ///
     /// 回调发生在**布局过程中**，所以把动作挪到下一拍：在布局里改窗口尺寸会与这一次布局打架。
-    /// 尺寸没变时**只省掉 `setContentSize`**（`layout()` 每次布局都会回调，不设这道闸会变成
-    /// 「布局 → 改尺寸 → 再布局」的死循环）——但**可见性纠正照走**：窗口被收起 / alpha 停在 0
-    /// 这类坏状态正是靠这里被观测到并纠正（早退只该省尺寸，不该省显隐）。
-    private func contentSizeChanged(_ size: CGSize) {
-        let sanitized = Self.sanitizedContentSize(size, fallback: contentSize ?? Self.fallbackContentSize)
-        let resized = sanitized != contentSize
-        contentSize = sanitized
+    /// 尺寸已是固定常量，这里主要是「窗口若被系统或别处改动过就拉回来」的兜底；
+    /// **显隐纠正照走**：窗口被收起 / alpha 停在 0 这类坏状态也靠这里被观测到并纠正。
+    private func contentDidLayout() {
         Task { @MainActor [weak self] in
             guard let self, let panel = self.panel else { return }
-            if resized { self.applyContentSize(sanitized, to: panel) }
+            self.applyContentSize(to: panel)
             guard ModuleRegistry.shared.activeHUD != nil else { return }
             self.apply(
                 HUDVisibilityStateMachine.presentActions(isVisible: panel.isVisible, alpha: panel.alphaValue),
@@ -278,9 +306,13 @@ public final class ModuleHUDWindowHost {
         }
     }
 
-    /// 按尺寸摆窗口（**只改尺寸，不摆位置**：位置由 `.reposition` 动作统一负责，两条路径
-    /// 因此不会各摆一半）。左上角不动，位置随后由 `.reposition` 按新尺寸重算。
-    private func applyContentSize(_ size: CGSize, to panel: NSWindow) {
+    /// 按**固定尺寸**摆窗口（窗口尺寸的唯一来源：`contentSize(scale:)` 读当前倍率算出）。
+    ///
+    /// `panel.contentLayoutRect.size != size` 的闸门是必需的：`layout()` 回调 → 改尺寸 →
+    /// 再布局 → 再回调，没有它就成了死循环。**只改尺寸，不摆位置**：位置由 `.reposition`
+    /// 动作统一负责，两条路径因此不会各摆一半。
+    private func applyContentSize(to panel: NSWindow) {
+        let size = Self.contentSize(scale: Defaults[.notificationHUDScale])
         if panel.contentLayoutRect.size != size { panel.setContentSize(size) }
     }
 
@@ -320,11 +352,11 @@ public final class ModuleHUDWindowHost {
         if let panel { return panel }
 
         // 内容 = 内核的浮层根视图（它自己观察注册表 → 浮层更替时重渲）。
-        let hosting = HUDSizingHostingView(
+        let hosting = HUDHostingView(
             rootView: AnyView(ModuleHUDView().environment(\.colorScheme, .dark))
         )
-        hosting.onContentSizeChange = { [weak self] size in
-            self?.contentSizeChanged(size)
+        hosting.onContentLayout = { [weak self] in
+            self?.contentDidLayout()
         }
 
         let panel = NSPanel(
@@ -350,19 +382,6 @@ public final class ModuleHUDWindowHost {
         self.panel = panel
         self.hostingView = hosting
         return panel
-    }
-
-    /// 尺寸消毒：`fittingSize` 还没量出来时（首帧 / 内容为空）给一个兜底，避免把窗口设成 0×0
-    /// 或者 NaN（那会让窗口消失且后续 setContentSize 也救不回来）。
-    static func sanitizedContentSize(_ fittingSize: CGSize, fallback: CGSize) -> CGSize {
-        let usable = fittingSize.width.isFinite && fittingSize.height.isFinite
-            && fittingSize.width > 1 && fittingSize.height > 1
-        guard usable else {
-            let fallbackUsable = fallback.width.isFinite && fallback.height.isFinite
-                && fallback.width > 1 && fallback.height > 1
-            return fallbackUsable ? fallback : fallbackContentSize
-        }
-        return fittingSize
     }
 
     // MARK: - 放置（几何是纯函数：单测直接钉，`NSScreen` 只用来喂入参）
@@ -401,8 +420,8 @@ public final class ModuleHUDWindowHost {
 
     /// 窗口原点（AppKit 坐标，左下角）：**水平居中于该屏** + **顶端贴在该屏可用顶边下方 `topGap`**。
     ///
-    /// 注意是**按顶对齐**而不是按中心对齐：浮层的高度随内容变（一条 / 两行），若按中心对齐，
-    /// 内容变高时会同时向下长——贴顶才是「挂在菜单栏下方」的观感。
+    /// 注意是**按顶对齐**而不是按中心对齐：浮层尺寸虽已固定，贴顶仍是「挂在菜单栏下方」的观感
+    /// （改倍率时卡片向下长，而不是上下各长一半）。
     static func origin(windowSize: CGSize, screenFrame: CGRect, topInset: CGFloat, topGap: CGFloat) -> CGPoint {
         let x = screenFrame.midX - windowSize.width / 2
         let y = screenFrame.maxY - topInset - topGap - windowSize.height

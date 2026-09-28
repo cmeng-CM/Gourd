@@ -81005,6 +81005,22 @@
         }
       }
     },
+    "module.notifications.moreCount" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "and %d more"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等 %d 条"
+          }
+        }
+      }
+    },
     "module.notifications.name" : {
       "localizations" : {
         "en" : {

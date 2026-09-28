@@ -1493,38 +1493,15 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(origin.x, screenFrame.midX - 200, "居中按该屏而不是主屏")
     }
 
-    /// **菜单栏高度缺失时不产生负内边**（`visibleFrame` 与屏顶一样高的极端值）：
-    /// 内边兜底 0，窗口仍然贴顶；尺寸消毒不会把窗口设成 0×0 或 NaN。
+    /// **菜单栏高度缺失时不产生负内边**（`visibleFrame` 与屏顶一样高的极端值）：内边兜底 0，
+    /// 窗口仍然贴顶。（`sanitizedContentSize` / 0×0 兜底那条链在改固定尺寸时已删除——
+    /// 固定尺寸永远是有限的正数，不需要消毒；尺寸口径见
+    /// `testHUDWindowFixedContentSizeScalesAndClamps`。）
     func testHUDWindowPlacementAndSizeGuards() {
         XCTAssertEqual(
             ModuleHUDWindowHost.topInset(safeAreaTop: 0, frameMaxY: 1000, visibleFrameMaxY: 1000),
             0,
             "量不出菜单栏高度时兜底 0（不能是负数）"
-        )
-
-        XCTAssertEqual(
-            ModuleHUDWindowHost.sanitizedContentSize(
-                CGSize(width: 0, height: 0),
-                fallback: CGSize(width: 1, height: 1)
-            ),
-            ModuleHUDWindowHost.fallbackContentSize,
-            "首帧量不出内容尺寸时给可用的兜底尺寸（常量而不是字面量，避免两处漂移）"
-        )
-        XCTAssertEqual(
-            ModuleHUDWindowHost.sanitizedContentSize(
-                CGSize(width: CGFloat.nan, height: CGFloat.infinity),
-                fallback: CGSize(width: 340, height: 60)
-            ),
-            CGSize(width: 340, height: 60),
-            "非有限值时回落到上一次的尺寸"
-        )
-        XCTAssertEqual(
-            ModuleHUDWindowHost.sanitizedContentSize(
-                CGSize(width: 360, height: 70),
-                fallback: CGSize(width: 1, height: 1)
-            ),
-            CGSize(width: 360, height: 70),
-            "正常量到的尺寸原样使用"
         )
     }
 
@@ -1987,6 +1964,8 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.clearAll",
             "module.notifications.dismiss",
             "module.notifications.closeSystemNotification",
+            // 一次取数多条新通知时，浮层第二行末尾的计数后缀（浮层仍只展示最新一条）
+            "module.notifications.moreCount",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
@@ -2055,6 +2034,42 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// **超长内容策略**（2026-09-28 用户：「消息内容过多考虑下怎么显示」）：
+    /// ① 正文里的换行**先压成空格**（浮层第二行只有 2 行预算，换行会白白吃掉一行）；
+    /// ② 一次取数多条新通知只在末尾追加「等 N 条」计数后缀（浮层仍只展示最新一条）。
+    func testNotificationHUDDetailFlattensNewlinesAndCountsExtraNotifications() {
+        // ① 换行 / 制表符 / `\r\n` → 空格，连续空白折成一个，首尾去净
+        XCTAssertEqual(
+            NotificationText.hudDetail(title: "构建", body: "第一行\n第二行", showsBody: true),
+            "构建 · 第一行 第二行"
+        )
+        XCTAssertEqual(
+            NotificationText.hudDetail(title: "构建", body: "第一行\r\n\r\n第二行\t末尾  ", showsBody: true),
+            "构建 · 第一行 第二行 末尾",
+            "`\\r\\n` 与连续空白都归一成单个空格"
+        )
+        XCTAssertEqual(NotificationText.singleLine("\n  \n"), "", "全是空白 → 空串（不占第二行的预算）")
+        XCTAssertEqual(NotificationText.singleLine("原样"), "原样")
+
+        // ② 计数后缀：> 0 才追加，用的是本地化文案（`and %d more` / `等 %d 条`）
+        let more = NotificationText.localized("module.notifications.moreCount")
+        XCTAssertNotEqual(more, "module.notifications.moreCount", "计数文案没解析出来")
+        XCTAssertEqual(
+            NotificationText.hudDetail(title: "构建", body: "全部通过", showsBody: true, moreCount: 0),
+            "构建 · 全部通过",
+            "0 条不追加后缀"
+        )
+        let withMore = NotificationText.hudDetail(title: "构建", body: "全部通过", showsBody: true, moreCount: 3)
+        XCTAssertTrue(withMore.hasPrefix("构建 · 全部通过"), "后缀追加在末尾，内容不动：\(withMore)")
+        XCTAssertNotEqual(withMore, "构建 · 全部通过")
+        XCTAssertTrue(withMore.contains("3"), "后缀要带上「还有几条」：\(withMore)")
+        XCTAssertEqual(withMore, "构建 · 全部通过 " + String(format: more, 3))
+        // 关掉正文时后缀照旧（「还有几条」与正文显示与否无关）
+        let hidden = NotificationText.hudDetail(title: "构建", body: "全部通过", showsBody: false, moreCount: 2)
+        XCTAssertEqual(hidden, NotificationText.localized("module.notifications.newNotification") + " "
+            + String(format: more, 2))
+    }
+
     /// 键本身的口径：`showBodyInHUD` 的**声明默认值是 true**（用户 2026-09-28 要求默认显示正文，
     /// 覆盖设计稿原口径的 false）——断言读 `defaultValue` 而不是当前生效值，
     /// 不受开发机上真实 UserDefaults 影响。
@@ -2068,78 +2083,129 @@ final class ModuleKernelTests: XCTestCase {
 
     // MARK: - 通知浮层卡片的尺寸口径（D-23）
 
-    /// **倍率越大、每一项都越大**：字号 / 图标 / 内边距 / 卡片最大宽度随倍率单调增，
+    /// **固定尺寸**（2026-09-28 用户：「尺寸不固定，要固定个初始大小」）：卡片 = **320 × 64 × 倍率**，
+    /// 且**与窗口用同一个来源**（`ModuleHUDWindowHost.contentSize(scale:)`）——两处各写一份常量
+    /// 就会出现「窗口 416pt、卡片 300pt」的错位。
+    func testHUDWindowFixedContentSizeScalesAndClamps() {
+        // 基准档（倍率 1.0）= 320 × 64
+        XCTAssertEqual(ModuleHUDWindowHost.contentSize(scale: 1.0), CGSize(width: 320, height: 64))
+        // 默认档（1.3）：320 × 1.3 = 416，64 × 1.3 = 83.2（保留两位小数，避开浮点尾巴）
+        XCTAssertEqual(ModuleHUDWindowHost.contentSize(scale: 1.3), CGSize(width: 416, height: 83.2))
+        XCTAssertEqual(ModuleHUDWindowHost.contentSize(scale: 2.0), CGSize(width: 640, height: 128))
+
+        // 越界值夹取到区间端点（用户直接改 UserDefaults 写了个离谱值时也要有确定尺寸）
+        XCTAssertEqual(ModuleHUDWindowHost.contentSize(scale: 5.0), ModuleHUDWindowHost.contentSize(scale: 2.0))
+        XCTAssertEqual(ModuleHUDWindowHost.contentSize(scale: 0.1), ModuleHUDWindowHost.contentSize(scale: 0.8))
+        XCTAssertEqual(ModuleHUDWindowHost.hudScaleRange, 0.8...2.0, "与设置滑块 0.8…2.0 同源")
+
+        // 卡片与窗口同一来源（模块侧 metrics 的 cardSize 必须就是这一组常量）
+        XCTAssertEqual(NotificationHUDCardLayout.metrics(scale: 1.3).cardSize, ModuleHUDWindowHost.contentSize(scale: 1.3))
+        XCTAssertEqual(NotificationHUDCardLayout.scaleRange, ModuleHUDWindowHost.hudScaleRange)
+    }
+
+    /// **倍率越大、每一项都越大**：字号 / 图标 / 内边距 / 卡片尺寸随倍率单调增，
     /// 且默认值 1.3 明显大于改造前的口径（这就是用户要的「调大一些」）。
     func testNotificationHUDCardMetricsScaleWithSetting() {
-        let small = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: true)
-        let scaled = NotificationHUDCardLayout.metrics(scale: 1.3, isNotchScreen: true)
-        let large = NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: true)
+        let small = NotificationHUDCardLayout.metrics(scale: 1.0)
+        let scaled = NotificationHUDCardLayout.metrics(scale: 1.3)
+        let large = NotificationHUDCardLayout.metrics(scale: 2.0)
 
         XCTAssertLessThan(small.titleSize, scaled.titleSize)
         XCTAssertLessThan(scaled.titleSize, large.titleSize)
         XCTAssertLessThan(small.bodySize, scaled.bodySize)
         XCTAssertLessThan(small.iconSize, scaled.iconSize)
         XCTAssertLessThan(small.padding, scaled.padding)
-        XCTAssertLessThan(small.cardMaxWidth, scaled.cardMaxWidth)
+        XCTAssertLessThan(small.cardSize.width, scaled.cardSize.width)
+        XCTAssertLessThan(small.cardSize.height, scaled.cardSize.height)
 
         // 1.3 倍 = 基准 × 1.3（保留两位小数，避开浮点尾巴）
         XCTAssertEqual(scaled.titleSize, 15.6, accuracy: 0.001)
         XCTAssertEqual(scaled.bodySize, 14.3, accuracy: 0.001)
         XCTAssertEqual(scaled.iconSize, 18.2, accuracy: 0.001)
         XCTAssertEqual(scaled.padding, 13, accuracy: 0.001)
-        // 卡片最大宽度：320 × 1.3 = 416（未到 480 的上限）
-        XCTAssertEqual(scaled.cardMaxWidth, 416, accuracy: 0.001)
+        // 卡片尺寸 = 320 × 64 × 1.3（固定常量，不再按内容 / 屏幕分档）
+        XCTAssertEqual(scaled.cardSize, CGSize(width: 416, height: 83.2))
     }
 
     /// **边界一：下限 0.8**——每一项按 0.8 缩放，字体仍可读（标题 ≥ 9pt），文字列不会被压到 0。
     func testNotificationHUDCardMetricsAtLowerBound() {
-        let metrics = NotificationHUDCardLayout.metrics(scale: 0.8, isNotchScreen: true)
+        let metrics = NotificationHUDCardLayout.metrics(scale: 0.8)
         XCTAssertEqual(metrics.titleSize, 9.6, accuracy: 0.001)
         XCTAssertEqual(metrics.bodySize, 8.8, accuracy: 0.001)
         XCTAssertEqual(metrics.iconSize, 11.2, accuracy: 0.001)
         XCTAssertGreaterThan(metrics.titleSize, 8, "0.8 倍下标题仍要能读")
         XCTAssertGreaterThan(metrics.textMaxWidth, 0, "文字列宽度不得归零")
+        XCTAssertEqual(metrics.cardSize, CGSize(width: 256, height: 51.2))
     }
 
-    /// **边界二：上限 2.0**——字号翻倍，但卡片最大宽度被绝对上限（480pt）夹住：
-    /// 2.0 倍时 320 × 2 = 640 > 480，取 480（再宽就该改布局而不是继续放大）。
+    /// **边界二：上限 2.0**——字号翻倍、卡片也翻倍（640 × 128）；
+    /// 卡片尺寸不再有「绝对上限」：固定尺寸下它就是常量 × 倍率，倍率本身已被夹到 2.0。
     func testNotificationHUDCardMetricsAtUpperBound() {
-        let metrics = NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: true)
+        let metrics = NotificationHUDCardLayout.metrics(scale: 2.0)
         XCTAssertEqual(metrics.titleSize, 24, accuracy: 0.001)
         XCTAssertEqual(metrics.bodySize, 22, accuracy: 0.001)
         XCTAssertEqual(metrics.iconSize, 28, accuracy: 0.001)
-        XCTAssertEqual(metrics.cardMaxWidth, NotificationHUDCardLayout.cardMaxWidthCeiling, accuracy: 0.001)
-        // 文字列 = 卡片最大宽度 −（两侧内边距 + 图标 + 两个间距 + ×）
-        XCTAssertLessThan(metrics.textMaxWidth, metrics.cardMaxWidth)
-        XCTAssertGreaterThan(metrics.textMaxWidth, 300, "上限档下文字列仍要足够宽")
+        XCTAssertEqual(metrics.cardSize, CGSize(width: 640, height: 128))
+        // 文字列 = 卡片宽度 −（两侧内边距 + 图标 + 两个间距 + × 及其余量）
+        XCTAssertLessThan(metrics.textMaxWidth, metrics.cardSize.width)
+        XCTAssertGreaterThan(metrics.textMaxWidth, 500, "上限档下文字列仍要足够宽")
+        // 间距 / × / 点击余量都按同一倍率缩放：改任一项都不会让内容比卡片宽（固定尺寸下就是右侧被裁）
+        XCTAssertEqual(metrics.lineSpacing, 4, accuracy: 0.001)
+        XCTAssertEqual(metrics.closeSize, 22, accuracy: 0.001)
     }
 
     /// **越界值夹取到区间端点**：用户直接改 UserDefaults 写了个离谱值（0.2 / 5.0）时，
     /// 呈现必须是确定的（同 `ttl` 的夹取口径），而不是崩或缩成一条。
     func testNotificationHUDCardMetricsClampsOutOfRangeScale() {
         XCTAssertEqual(
-            NotificationHUDCardLayout.metrics(scale: 0.2, isNotchScreen: false),
-            NotificationHUDCardLayout.metrics(scale: 0.8, isNotchScreen: false),
+            NotificationHUDCardLayout.metrics(scale: 0.2),
+            NotificationHUDCardLayout.metrics(scale: 0.8),
             "低于下限按 0.8 算"
         )
         XCTAssertEqual(
-            NotificationHUDCardLayout.metrics(scale: 5.0, isNotchScreen: false),
-            NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: false),
+            NotificationHUDCardLayout.metrics(scale: 5.0),
+            NotificationHUDCardLayout.metrics(scale: 2.0),
             "高于上限按 2.0 算"
         )
     }
 
-    /// **非刘海屏的卡片基准更宽**（`isNotchScreen` 的唯一作用）：外接屏没有菜单栏两侧的视觉约束，
-    /// 给到 360 基准（用户反馈「外接屏太小」的落点）；刘海屏收窄到 320，避免卡片横跨整条菜单栏。
-    func testNotificationHUDCardMetricsDiffersByNotchScreen() {
-        let notched = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: true)
-        let plain = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: false)
-        XCTAssertEqual(notched.cardMaxWidth, 320, accuracy: 0.001)
-        XCTAssertEqual(plain.cardMaxWidth, 360, accuracy: 0.001)
-        XCTAssertGreaterThan(plain.textMaxWidth, notched.textMaxWidth)
-        // 除宽度外的尺寸两档一致（只有基准宽度分档）
-        XCTAssertEqual(notched.titleSize, plain.titleSize, accuracy: 0.001)
-        XCTAssertEqual(notched.padding, plain.padding, accuracy: 0.001)
+    /// **固定尺寸与内容无关**（用户：「外接屏可以显示，但尺寸不固定」）：`metrics` 只吃倍率——
+    /// 卡片没有「按内容」「按刘海 / 非刘海屏」的第二条输入，内容再长也不改尺寸
+    /// （超长内容按 `lineLimit` 在卡片内截断，见 `hudDetail` 的用例）。
+    func testNotificationHUDCardMetricsDependOnScaleOnly() {
+        let scaleOne = NotificationHUDCardLayout.metrics(scale: 1.0)
+        XCTAssertEqual(scaleOne.cardSize, CGSize(width: 320, height: 64), "同一倍率只有一个尺寸")
+        // 文字列宽度是「卡片宽度 − 其它元素」的确定值：不同倍率下按同一条算式缩放
+        let ratio = scaleOne.textMaxWidth / scaleOne.cardSize.width
+        let largeRatio = NotificationHUDCardLayout.metrics(scale: 2.0).textMaxWidth
+            / NotificationHUDCardLayout.metrics(scale: 2.0).cardSize.width
+        XCTAssertEqual(ratio, largeRatio, accuracy: 0.01, "文字列占比不随倍率变（同一套算式）")
+    }
+
+    /// **高度预算够「标题 + 正文 2 行」**（实测踩到的坑，钉住它）：固定高度 64 × 倍率，
+    /// 上下内边距若与左右同档（10 × 倍率 = 13pt），正文会被挤成 **1 行 + `…`**——
+    /// 长正文通知因此丢掉了「最多 2 行」的呈现。所以垂直内边距单列一档（5 × 倍率）。
+    ///
+    /// 估算口径：系统字体的行高按 **1.3 × 字号**算（保守偏大）；要求
+    /// `标题 + 行间距 + 2 × 正文 ≤ 卡片高度 − 上下内边距`。
+    func testNotificationHUDCardHeightFitsTitleAndTwoBodyLines() {
+        for scale in [0.8, 1.0, 1.3, 2.0] {
+            let metrics = NotificationHUDCardLayout.metrics(scale: scale)
+            let contentHeight = metrics.cardSize.height - metrics.verticalPadding * 2
+            let needed = metrics.titleSize * 1.3 + metrics.lineSpacing + metrics.bodySize * 1.3 * 2
+            XCTAssertLessThanOrEqual(needed, contentHeight, "倍率 \(scale)：高度预算不够 2 行正文（会被挤成 1 行 + …）")
+            XCTAssertLessThan(metrics.verticalPadding, metrics.padding, "垂直内边距必须比水平小一档")
+        }
+
+        // 反证：上下内边距与左右同档时预算不够（这就是修复前的形态）
+        let defaultMetrics = NotificationHUDCardLayout.metrics(scale: 1.3)
+        let uniformPaddingBudget = defaultMetrics.cardSize.height - defaultMetrics.padding * 2
+        let needed = defaultMetrics.titleSize * 1.3 + defaultMetrics.lineSpacing + defaultMetrics.bodySize * 1.3 * 2
+        XCTAssertGreaterThan(
+            needed,
+            uniformPaddingBudget,
+            "同档内边距下确实装不下（记录的实测根因：\(needed) > \(uniformPaddingBudget)）"
+        )
     }
 
     /// 键本身的口径：`notificationHUDScale` 的**声明默认值是 1.3**（2026-09-28 用户要求

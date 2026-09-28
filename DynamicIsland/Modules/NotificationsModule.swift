@@ -65,7 +65,10 @@
 //    近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
 //    + 一行能力边界说明；
 //  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，4s 后自动消失
-//    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条）。
+//    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条，其余在第二行末尾以
+//    「等 N 条」计数交代）。**固定尺寸**（320 × 64 × 用户倍率，内核 `ModuleHUDWindowHost` 定窗口、
+//    本文件的 `NotificationHUDCardLayout` 定卡片，同一来源）：内容长短不跳；超长内容两行内截断，
+//    完整正文看展开面板列表（口径见 `NotificationHUDView` 的「超长内容策略」）。
 //    **两条来源**：AX 横幅（实时，× 可真关）/ DB 增量（降级，× 只从岛上隐藏）；
 //    × 走 `.highPriorityGesture`（同一层上压过祖先的 `openNotch()` 普通手势，见
 //    `NotificationHUDView` 的手势优先级说明），点掉后调 `UIHandle.dismissTransient()` **立刻**撤浮层
@@ -81,7 +84,8 @@
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
 //  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss` /
-//  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）。
+//  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）/
+//  `.moreCount`（一次多条新通知时浮层第二行末尾的计数后缀，`and %d more` / `等 %d 条`）。
 //
 
 import AppKit
@@ -126,7 +130,10 @@ final class NotificationStore: ObservableObject {
     /// 浮层出口（**模块在 `init` 里注入**）：store 只把「这次新增里最新的那一条」交出去，
     /// 视图与 ttl 属模块的 UI 决策——store 因此不认识 `UIHandle`，也不依赖 SwiftUI 视图，
     /// 基线/增量这套逻辑仍可单测。
-    var presentHUD: ((NotificationItem) -> Void)?
+    ///
+    /// 第二个入参是**除这一条之外还有几条新通知**（0 = 没有）：一次取数多条时浮层只展示最新
+    /// 一条，其余几条由模块在第二行末尾以「等 N 条」交代（09 §5.5：不刷屏）。
+    var presentHUD: ((NotificationItem, Int) -> Void)?
 
     /// 双通道去重台账（AX + DB）：同指纹 10s 内只弹一次浮层，并短期保留 AX 的真关闭句柄。
     /// **纯逻辑**（时间由调用方注入）——判定规则全在 `NotificationBannerLedger` 里，可单测。
@@ -322,7 +329,8 @@ final class NotificationStore: ObservableObject {
             // 去重（**AX 优先**）：AX 通道刚为同一条通知弹过浮层时，这条晚到约 5s 的 DB 记录
             // 在 10s 窗口内不再弹浮层——但仍进列表与未读计数（列表归 DB 通道管）。
             if shouldPresentDatabaseItem(resolved) {
-                presentHUD?(resolved)
+                // 除展示的这条之外还有几条：浮层第二行末尾以「等 N 条」交代（不逐条排队弹）。
+                presentHUD?(resolved, max(newItems.count - 1, 0))
             } else {
                 log.info("浮层跳过（10s 内已有同指纹的 AX 浮层）：rec_id=\(resolved.id)")
             }
@@ -553,10 +561,11 @@ final class NotificationsModule: GourdModule {
         self.context = context
         let store = NotificationStore(logger: context.logger)
         self.store = store
-        // 浮层出口：store 只交「最新一条新增」，视图（含 `showBodyInHUD` 的读值）与 ttl 在这里定。
-        store.presentHUD = { [weak self] item in
+        // 浮层出口：store 只交「最新一条新增 + 还有几条」，视图（含 `showBodyInHUD` 的读值）
+        // 与 ttl 在这里定。
+        store.presentHUD = { [weak self] item, moreCount in
             guard let self else { return }
-            self.presentNotificationHUD(for: item)
+            self.presentNotificationHUD(for: item, moreCount: moreCount)
         }
     }
 
@@ -640,11 +649,14 @@ final class NotificationsModule: GourdModule {
     ///
     /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
     /// 浮层只活 `hudTTL` 秒，不需要为它维护一条「设置改了要重渲」的观察链。
-    private func presentNotificationHUD(for item: NotificationItem) {
+    /// `moreCount` 直接用 store 给的「同批还有几条」（0 = 单条到达）。
+    private func presentNotificationHUD(for item: NotificationItem, moreCount: Int) {
         let showsBody = Defaults[.showBodyInHUD]
         let handle = store.closeHandle(for: item)
         let ui = context.ui
-        context.logger.info("弹通知浮层（DB）：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")")
+        context.logger.info(
+            "弹通知浮层（DB）：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")，同批另有 \(moreCount) 条"
+        )
         context.ui.presentTransient(
             view: AnyView(
                 NotificationHUDView(
@@ -652,6 +664,7 @@ final class NotificationsModule: GourdModule {
                     title: item.title,
                     bodyText: item.body,
                     showsBody: showsBody,
+                    moreCount: moreCount,
                     closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
                         // ① **内核侧撤浮层（先做）**：注册表里那一条被清掉 → 浮层窗口淡出
@@ -673,6 +686,7 @@ final class NotificationsModule: GourdModule {
     ///
     /// × 的口径：有句柄 → 真关掉系统通知；没有 → 仅从岛上隐藏（内核侧撤掉浮层后浮层窗口
     /// 当场淡出，两条路都是「点完立刻看不见」）。
+    /// `moreCount` 恒为 0：AX 通道是「一条横幅一次回调」，不存在一批多条。
     private func presentBannerHUD(_ event: BannerEvent) {
         let showsBody = Defaults[.showBodyInHUD]
         let ui = context.ui
@@ -686,6 +700,7 @@ final class NotificationsModule: GourdModule {
                     title: event.title,
                     bodyText: event.body,
                     showsBody: showsBody,
+                    moreCount: 0,
                     closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
                         // 与 DB 路径同口径：内核侧撤浮层在前（窗口随即淡出），真关闭在后。
@@ -943,63 +958,68 @@ private struct NotificationRow: View {
 
 /// 浮层卡片的尺寸口径（**纯函数**，单测直接钉边界）。
 ///
-/// 为什么需要它：浮层改由内核的独立窗口渲染（D-23）之后，尺寸不再由刘海宽度决定，
-/// 而是由「用户设置的倍率 `notificationHUDScale`（默认 1.3）+ 卡片自己的上界」决定——
+/// 为什么需要它：浮层由内核的独立窗口渲染（D-23），尺寸不再由刘海宽度决定，而是
+/// 「**固定基准 320 × 64** × 用户设置的倍率 `notificationHUDScale`（默认 1.3）」——
 /// 把这条算式从视图里抽出来，边界（0.8 / 2.0）才有地方钉住。
 ///
-/// 取值口径：
+/// 取值口径（2026-09-28 改「固定尺寸」后的口径）：
 /// - **倍率夹取**到 0.8…2.0（用户直接改 UserDefaults 写了个离谱值时也有确定呈现）；
-/// - 所有尺寸 = 基准值 × 倍率，**保留两位小数**（避免 0.8 × 12 = 9.600000000000001 这类
-///   浮点尾巴，也让 `Equatable` 与单测的等值断言有意义）；
-/// - 卡片总宽 = `textMaxWidth` + 图标 + 两个间距 + × + 两侧内边距，其中 `textMaxWidth` 由
-///   「卡片最大宽度 − 其它元素」反推（不是独立常量），因此改任一项都不会撑破卡片；
-/// - **`cardMaxWidth` 有绝对上限** `cardMaxWidthCeiling`：倍率 2.0 时卡片已经接近半屏宽，
-///   再宽就该改布局而不是继续放大。
+/// - **卡片尺寸 = 窗口尺寸**，同一个来源 `ModuleHUDWindowHost.contentSize(scale:)`
+///   （内核定窗口、模块定卡片，两处引用同一个函数才不会出现「窗口 416pt、卡片 300pt」的错位）；
+/// - 字号 / 图标 / 内外边距 / 圆角 = 基准值 × 倍率，**保留两位小数**
+///   （避免 0.8 × 12 = 9.600000000000001 这类浮点尾巴，也让 `Equatable` 与单测的等值断言有意义）；
+/// - `textMaxWidth` 由「卡片宽度 − 其它元素」反推（不是独立常量），因此改任一项都不会撑破卡片；
+///   **超长内容**按 `lineLimit(2)` + `.truncationMode(.tail)` 在卡片内截断——浮层只负责
+///   「刚发生了什么」，完整正文看展开面板的列表（分工见 `NotificationHUDView` 的类型文档）。
 enum NotificationHUDCardLayout {
     /// 倍率的可用区间（与设置滑块 `Slider(value:in: 0.8...2.0)` 同源）。
-    static let scaleRange: ClosedRange<Double> = 0.8...2.0
+    /// **单一来源在内核**（`ModuleHUDWindowHost.hudScaleRange`）：窗口是内核按它设的，
+    /// 卡片只是跟着算，这里给模块侧留一个可读的别名。
+    static let scaleRange: ClosedRange<Double> = ModuleHUDWindowHost.hudScaleRange
 
-    /// 基准值（倍率 = 1.0 时的一档；都按「独立窗口里的浮层」重新定过，不再是刘海尺寸）。
+    /// 基准值（倍率 = 1.0 时的一档；都按「独立窗口里的浮层」定过，不再是刘海尺寸）。
     private enum Base {
         static let icon: CGFloat = 14
         static let title: CGFloat = 12
         static let body: CGFloat = 11
         static let close: CGFloat = 11
+        /// × 按钮自身的点击余量（图标四周各 2pt，见 `closeButton(size:)` 的 `.padding(2)`）：
+        /// 算文字列可用宽度时要把它扣掉，否则内容会比卡片宽出几 pt（固定尺寸下就是右侧被裁）。
+        static let closePadding: CGFloat = 2
+        /// **水平**内边距（卡片背景与内容之间）。
         static let padding: CGFloat = 10
+        /// **垂直**内边距：比水平小一档。固定高度（64 × 倍率）要装「标题 + 正文最多 2 行」，
+        /// 上下各 10pt（倍率 1.3 时 13pt）会把正文挤成 1 行（实测：长正文只显示一行 + `…`，
+        /// 第二行被高度预算吃掉）；5pt（1.3 时 6.5pt）留出的余量刚好够两行。
+        static let paddingVertical: CGFloat = 5
         static let iconSpacing: CGFloat = 8
         static let lineSpacing: CGFloat = 2
         static let cornerRadius: CGFloat = 10
-        /// 卡片最大宽度的基准：刘海屏收窄一档（浮层挂在刘海正下方，太宽会横跨整条菜单栏），
-        /// 非刘海屏给到 360pt（用户 2026-09-28 反馈「外接屏太小」的落点）。
-        static let cardMaxWidthNotched: CGFloat = 320
-        static let cardMaxWidthPlain: CGFloat = 360
-        /// 文字列的下限宽度：任何倍率下都要能放下一行几个字，否则卡片会缩成一条。
-        static let textMinWidth: CGFloat = 160
     }
-
-    /// 卡片最大宽度的绝对上限（pt，倍率乘完再夹）。
-    static let cardMaxWidthCeiling: CGFloat = 480
 
     struct Metrics: Equatable {
         let iconSize: CGFloat
         let titleSize: CGFloat
         let bodySize: CGFloat
         let closeSize: CGFloat
-        /// 卡片四周的内边距（卡片背景与内容之间）。
+        /// 卡片左右的内边距（卡片背景与内容之间）。
         let padding: CGFloat
+        /// 卡片上下的内边距（比左右小一档，见 `Base.paddingVertical`）。
+        let verticalPadding: CGFloat
         /// 图标与文字列之间的间距。
         let iconSpacing: CGFloat
         /// 文字列两行之间的间距。
         let lineSpacing: CGFloat
-        /// 文字列的最大宽度：超出即按 `lineLimit(2)` 截断。
+        /// 文字列的可用宽度 = 卡片宽度 −（两侧内边距 + 图标 + 两个间距 + × 及其余量）。
+        /// 固定尺寸下它是**确定值**：超出的部分按 `lineLimit(2)` 截断。
         let textMaxWidth: CGFloat
-        /// 卡片整体最大宽度（含内边距）。
-        let cardMaxWidth: CGFloat
+        /// 卡片（= 窗口内容）的**固定尺寸**，来自 `ModuleHUDWindowHost.contentSize(scale:)`。
+        let cardSize: CGSize
         let cornerRadius: CGFloat
     }
 
-    /// 给定倍率与「是否刘海屏」→ 卡片尺寸。`isNotchScreen` 只影响卡片最大宽度的基准档。
-    static func metrics(scale: Double, isNotchScreen: Bool) -> Metrics {
+    /// 给定倍率 → 卡片尺寸（固定，与内容无关）。
+    static func metrics(scale: Double) -> Metrics {
         let s = CGFloat(min(max(scale, scaleRange.lowerBound), scaleRange.upperBound))
 
         let icon = round2(Base.icon * s)
@@ -1007,15 +1027,16 @@ enum NotificationHUDCardLayout {
         let body = round2(Base.body * s)
         let close = round2(Base.close * s)
         let padding = round2(Base.padding * s)
+        let verticalPadding = round2(Base.paddingVertical * s)
         let iconSpacing = round2(Base.iconSpacing * s)
         let lineSpacing = round2(Base.lineSpacing * s)
         let cornerRadius = round2(Base.cornerRadius * s)
+        let closePadding = round2(Base.closePadding * s)
 
-        let baseCardMax = isNotchScreen ? Base.cardMaxWidthNotched : Base.cardMaxWidthPlain
-        let cardMaxWidth = round2(min(baseCardMax * s, cardMaxWidthCeiling))
+        let cardSize = ModuleHUDWindowHost.contentSize(scale: scale)
         let textMaxWidth = max(
-            round2(cardMaxWidth - (padding * 2 + icon + iconSpacing * 2 + close)),
-            Base.textMinWidth
+            round2(cardSize.width - (padding * 2 + icon + iconSpacing * 2 + close + closePadding * 2)),
+            0
         )
 
         return Metrics(
@@ -1024,10 +1045,11 @@ enum NotificationHUDCardLayout {
             bodySize: body,
             closeSize: close,
             padding: padding,
+            verticalPadding: verticalPadding,
             iconSpacing: iconSpacing,
             lineSpacing: lineSpacing,
             textMaxWidth: textMaxWidth,
-            cardMaxWidth: cardMaxWidth,
+            cardSize: cardSize,
             cornerRadius: cornerRadius
         )
     }
@@ -1051,10 +1073,21 @@ enum NotificationHUDCardLayout {
 ///（`.white` / `.white.opacity(...)`）并自带深色圆角底 —— 不用 `.primary` / `.secondary`
 ///（那会随系统外观变成深色字，浮在浅色壁纸上就看不见了）。
 ///
-/// 尺寸：字号 / 图标 / 内外边距 / 卡片最大宽度**全部**来自
-/// `NotificationHUDCardLayout.metrics(scale:isNotchScreen:)`（用户设置 `notificationHUDScale`，
-/// 默认 1.3）。**不再有「必须塞进 189pt 刘海」这一条**——那是关闭态链内渲染时期的约束
-/// （`presentNotificationHUD` 的旧注释与 docs/13 已知限制 27 都已回写）。
+/// 尺寸：**固定**（= 窗口尺寸，`NotificationHUDCardLayout.metrics(scale:)` 的 `cardSize`，
+/// 基准 320 × 64 × 倍率 `notificationHUDScale`，默认 1.3）。固定尺寸带来两个分工：
+///
+/// ## 超长内容策略（2026-09-28 用户：「消息内容过多考虑下怎么显示」）
+/// - **第一行**：App 名（粗体、1 行、`.truncationMode(.middle)`）——App 名常带后缀，中间截断
+///   比尾部截断更能保留辨识度；
+/// - **第二行**：`标题 · 正文`（标题 / 正文里的换行**先替换成空格**，见
+///   `NotificationText.hudDetail`），**最多 2 行**、`.truncationMode(.tail)`；
+/// - **一次取数多条新通知**：浮层只展示**最新一条**（09 §5.5：避免刷屏），其余的在第二行末尾
+///   以计数后缀交代（`module.notifications.moreCount` =「等 N 条」/「and N more」）——
+///   计数是「还有几条」的可靠交代，比逐条排队弹更不打扰；
+/// - **完整正文的位置是展开面板的通知列表**（`NotificationsModuleView` 的 `NotificationRow`：
+///   App 名 + 相对时间 + 标题 + 正文最多 2 行 + 每行可点开 App）。浮层是「刚发生了什么」的
+///   瞬时提示（4s 后自动消失），**不是阅读入口**——两行装不下的内容在这里截断，
+///   用户要看全文就展开面板（这也是「截断」不会丢信息的前提）。
 ///
 /// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空，并配合 `UIHandle.dismissTransient()`
 /// 把浮层从内核撤掉（内核撤 → 浮层窗口淡出，所以是本视图与窗口一起消失，不只是这一格变空）。
@@ -1070,6 +1103,8 @@ private struct NotificationHUDView: View {
     let bodyText: String
     /// `Defaults[.showBodyInHUD]`（在模块侧取一次快照）。
     let showsBody: Bool
+    /// 这次取数里**除展示的这条之外**还有几条新通知（0 = 没有）。> 0 时第二行末尾追加「等 N 条」。
+    let moreCount: Int
     /// × 的提示文案 key：有真关闭句柄时是「关闭系统通知」，否则是「关闭（仅从岛上移除）」。
     let closeHelpKey: String
     /// 点击 ×：真关闭（有句柄时）——**「仅从岛上隐藏」由本视图的 `isHidden` 自己完成**。
@@ -1091,11 +1126,9 @@ private struct NotificationHUDView: View {
         }
     }
 
-    /// 当前这一档尺寸。`isNotchScreen` 按**内核窗口宿主的取屏规则**（鼠标所在屏）判定：
-    /// 浮层窗口正是落在那一块屏上，两者由同一条规则保证一致。判错也只是卡片最大宽度差
-    /// 一档（320 vs 360 基准），不影响可读性。
+    /// 当前这一档尺寸（含**固定卡片尺寸** `cardSize`：内核窗口与卡片共用同一个来源）。
     private var metrics: NotificationHUDCardLayout.Metrics {
-        NotificationHUDCardLayout.metrics(scale: scale, isNotchScreen: Self.isNotchScreenUnderMouse)
+        NotificationHUDCardLayout.metrics(scale: scale)
     }
 
     private var content: some View {
@@ -1106,25 +1139,34 @@ private struct NotificationHUDView: View {
                 .foregroundStyle(.white)
 
             VStack(alignment: .leading, spacing: card.lineSpacing) {
+                // 第一行：App 名（粗体、1 行、**中间截断**）。
                 Text(appName)
                     .font(.system(size: card.titleSize, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(.middle)
 
+                // 第二行：`标题 · 正文`（+ 多条时的计数后缀），**最多 2 行、尾部截断**。
+                // 完整正文看展开面板列表（见类型文档的「超长内容策略」）。
+                // `.fixedSize(horizontal: false, vertical: true)`：与列表行同口径——不让父级把
+                // 两行文字挤成一行（实测过：固定高度下不给它，长正文只显示 1 行 + `…`）。
                 Text(secondLine)
                     .font(.system(size: card.bodySize))
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(2)
                     .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            // 文字列的上界由卡片最大宽度反推（见 `NotificationHUDCardLayout`）：超出的部分
-            // 按 `lineLimit` 截断，× 永远留在卡片内。
+            // 文字列吃掉图标与 × 之间的剩余宽度（`textMaxWidth` 是它的上界）：固定卡片下
+            // 「剩余宽度」就是设计值，超长内容在这里换行 / 截断，× 因此永远留在卡片内。
             .frame(maxWidth: card.textMaxWidth, alignment: .leading)
 
             closeButton(size: card.closeSize)
         }
-        .padding(card.padding)
+        .padding(.horizontal, card.padding)
+        .padding(.vertical, card.verticalPadding)
+        // **固定尺寸**：卡片与内核窗口用同一个来源（`cardSize`），内容多少都不跳动。
+        .frame(width: card.cardSize.width, height: card.cardSize.height, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: card.cornerRadius, style: .continuous)
                 .fill(.black.opacity(0.82))
@@ -1133,13 +1175,6 @@ private struct NotificationHUDView: View {
                         .stroke(.white.opacity(0.12), lineWidth: 1)
                 )
         )
-    }
-
-    /// 浮层当前落在的屏是否带刘海：**与 `ModuleHUDWindowHost.targetScreen()` 同一条规则**
-    /// （鼠标所在屏 → 主屏），因此两者指向同一块屏。
-    private static var isNotchScreenUnderMouse: Bool {
-        let screen = ModuleHUDWindowHost.targetScreen()
-        return (screen?.safeAreaInsets.top ?? 0) > 0
     }
 
     /// × ：**先本地隐藏（立刻生效）+ 内核撤浮层（窗口随之淡出），再交给上层做真关闭**——
@@ -1171,9 +1206,9 @@ private struct NotificationHUDView: View {
         onClose()
     }
 
-    /// 第二行：`showBodyInHUD` 为真时是「标题 + 正文」，否则是「新通知」这一行文案。
+    /// 第二行：`showBodyInHUD` 为真时是「标题 · 正文（+ 多条计数后缀）」，否则是「新通知」。
     private var secondLine: String {
-        NotificationText.hudDetail(title: title, body: bodyText, showsBody: showsBody)
+        NotificationText.hudDetail(title: title, body: bodyText, showsBody: showsBody, moreCount: moreCount)
     }
 }
 
@@ -1297,15 +1332,38 @@ enum NotificationText {
     ///
     /// - `showsBody == true`（**默认**）：`标题 · 正文`，逐段去首尾空白、空段忽略；
     /// - `showsBody == false`：只给「新通知」（正文不进浮层，但展开列表照旧显示全文）；
-    /// - 两边都空（plist 缺 `titl` / `body`）时同样给「新通知」，不留一行空白。
-    static func hudDetail(title: String, body: String, showsBody: Bool) -> String {
+    /// - 两边都空（plist 缺 `titl` / `body`）时同样给「新通知」，不留一行空白；
+    /// - **`moreCount > 0`** 时在末尾追加 `module.notifications.moreCount` 的计数后缀
+    ///   （「等 N 条」/「and N more」）：一次取数进来多条时浮层只展示最新一条，
+    ///   其余几条靠这个后缀交代（见 `NotificationHUDView` 的「超长内容策略」）；
+    /// - **段内换行先压成空格**：通知正文常带换行（多行摘要 / 列表），浮层第二行只有 2 行的
+    ///   预算，换行会白白吃掉一行且截断位置不可控；压成空格后由 `.lineLimit(2)` +
+    ///   `.truncationMode(.tail)` 统一截断（完整正文看展开面板列表）。
+    static func hudDetail(title: String, body: String, showsBody: Bool, moreCount: Int = 0) -> String {
         let newNotification = localized("module.notifications.newNotification")
-        guard showsBody else { return newNotification }
+        let suffix = moreCount > 0
+            ? " " + String(format: localized("module.notifications.moreCount"), moreCount)
+            : ""
+        guard showsBody else {
+            // 关掉正文时同样带计数后缀：「还有几条」与正文显示与否无关
+            return newNotification + suffix
+        }
         let text = [title, body]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { singleLine($0) }
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
-        return text.isEmpty ? newNotification : text
+        return (text.isEmpty ? newNotification : text) + suffix
+    }
+
+    /// 把任意多行文本压成**一行**：换行 / 制表符 → 空格，连续空白折成一个，首尾去净。
+    ///
+    /// 纯函数（口径见 `hudDetail`）：`.lineLimit(2)` 的预算要留给「真的两行文字」，
+    /// 不该被正文里的换行符占掉；顺带把 `\r\n`、全角空格之外的连续空白也归一。
+    static func singleLine(_ text: String) -> String {
+        text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     /// 按字数截断（错误串可能很长：SQLite 的 errmsg 会带上整条 SQL）。
