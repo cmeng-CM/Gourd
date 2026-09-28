@@ -28,4 +28,14 @@ enum AppRuntimeEnvironment {
         return false
         #endif
     }()
+
+    /// `true` whenever this process is a test host — the unit-test host included
+    /// (XCTest injects `XCTestConfigurationFilePath` and loads `XCTestCase` into the
+    /// app process). Modified for Gourd (2026-09-28): the permission-request paths
+    /// check this so a `xcodebuild test` run never raises a system consent prompt
+    /// and never leaves a TCC entry behind for the Debug bundle id.
+    static let isRunningTests: Bool = {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return true }
+        return NSClassFromString("XCTestCase") != nil
+    }()
 }

@@ -191,6 +191,17 @@
 
 **两个硬依赖**：辅助功能（不给则媒体键/亮度键/部分功能不可用）、完全磁盘访问（不给则通知上岛不可用——这是本轮新增的依赖）。另有 `disable-library-validation` entitlement（为加载 adhoc 签名的 vendored framework），决定了不能上架（ADR-0001 已排除上架，一致）。
 
+**授权提示策略（2026-09-28 起，已落地）**：启动路径上的授权提示改为**每次安装最多申请一次**，不再"每次启动都问"——
+
+| 提示 | 闸门 | 落点 |
+|---|---|---|
+| 辅助功能（媒体键拦截） | `didPromptAccessibilityOnce` | `managers/MediaKeyInterceptor.swift` |
+| 定位（锁屏天气） | `didPromptLocationOnce` | `managers/LockScreenWeatherManager.swift` |
+
+两条闸门都持久化在 UserDefaults（随 Bundle ID 保留，重装/升级不重置），且测试宿主（XCTest，含单测宿主）**一律不弹**（`helpers/AppRuntimeEnvironment.isRunningTests`）；下载目录探测同样在测试宿主下跳过。用户后续仍可主动授予：菜单「请求辅助功能权限／打开系统设置」，或系统设置 › 隐私与安全性 › 定位服务。
+
+> **为什么要这样改**：上游的实现是"只要授权状态仍是未决定（或未授权）就每次启动都弹"（`didRequestAccessibilityPrompt` 是内存变量；定位侧只看 `.notDetermined`）。用户关掉弹窗后下次启动还会被问；叠加签名身份变更（ad-hoc → 自签证书）时系统会重新询问，表现为"授权永远授不完"。签名侧的处理见 [10-p0-execution.md](10-p0-execution.md)。
+
 ---
 
 ## 4. 不做的事

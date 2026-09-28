@@ -1102,8 +1102,17 @@ private final class LockScreenWeatherLocationProvider: NSObject, CLLocationManag
     }
 
     func prepareAuthorization() {
+        // Modified for Gourd (2026-09-28): same consent policy as the media-key
+        // interceptor — ask at most once per install, and never from a test host.
+        // Upstream re-asked on every launch for as long as the status stayed
+        // `.notDetermined` (a dismissed prompt kept coming back), and the unit-test
+        // host raised the prompt too. Users can still grant later via
+        // 系统设置 › 隐私与安全性 › 定位服务.
+        if AppRuntimeEnvironment.isUITesting || AppRuntimeEnvironment.isRunningTests { return }
+        guard !Defaults[.didPromptLocationOnce] else { return }
         let status = CLLocationManager.authorizationStatus()
         if status == .notDetermined {
+            Defaults[.didPromptLocationOnce] = true
             manager.requestWhenInUseAuthorization()
         }
     }

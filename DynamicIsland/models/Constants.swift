@@ -1448,5 +1448,16 @@ extension Defaults.Keys {
     /// `enableScreenAssistant = false` 后置 true，之后永不再覆盖用户手动改回的值。
     static let gourdFirstLaunchDefaultsApplied = Key<Bool>("gourdFirstLaunchDefaultsApplied", default: false)
 
+    // MARK: Permission prompts
+
+    /// 辅助功能授权的"只申请一次"闸门（2026-09-28）：媒体键拦截在启动时最多弹一次系统提示，
+    /// 之后不再打扰；用户仍可通过菜单「请求辅助功能权限 / 打开系统设置」主动授予。
+    /// 该键随 Bundle ID 存于 UserDefaults，重装/升级后保留。
+    static let didPromptAccessibilityOnce = Key<Bool>("didPromptAccessibilityOnce", default: false)
+
+    /// 定位授权的"只申请一次"闸门（2026-09-28）：锁屏天气在启动时最多弹一次定位提示。
+    /// 上游行为是"只要状态仍为未决定就每次启动都问"——关掉弹窗后会反复打扰。
+    static let didPromptLocationOnce = Key<Bool>("didPromptLocationOnce", default: false)
+
     static let showSongMetadataInClosedNotch = Key<Bool>("showSongMetadataInClosedNotch", default: false)
 }

@@ -206,6 +206,10 @@ class DownloadManager {
     
     private func requestDownloadsPermissionIfNeeded() {
         guard let downloadsDirectory else { return }
+        // Modified for Gourd (2026-09-28): a test host must not touch a TCC-protected
+        // folder — that raises the Files-and-Folders consent prompt and leaves an
+        // entry behind for the Debug bundle id.
+        guard !AppRuntimeEnvironment.isRunningTests else { return }
         // Modified for Gourd (2026-09-27): enumerating a TCC-protected folder
         // synchronously blocks the main thread while the consent prompt is
         // unanswered — seen as a launch hang locally and as the CI "test runner

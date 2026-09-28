@@ -23,6 +23,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import Defaults
 #if canImport(ApplicationServices)
 import ApplicationServices
 #endif
@@ -322,6 +323,19 @@ extension MediaKeyInterceptor {
     private func requestAccessibilityPermissionIfNeeded() {
         guard !AXIsProcessTrusted(), !didRequestAccessibilityPrompt else { return }
         if AppRuntimeEnvironment.isUITesting { return }
+        // Modified for Gourd (2026-09-28): the upstream guard only suppressed the prompt
+        // inside a test *session*, so a `xcodebuild test` run still raised the system
+        // consent prompt and left a TCC entry for the Debug bundle id — and because
+        // `didRequestAccessibilityPrompt` lived in memory, a normal launch asked again on
+        // every start whenever the user had not granted it. Consent is now requested
+        // at most once per install (persisted flag); afterwards the menu items
+        // 「请求辅助功能权限」/「打开系统设置」 remain the explicit ways to grant it.
+        if AppRuntimeEnvironment.isRunningTests {
+            NSLog("ℹ️ [MediaKeyInterceptor] 跳过辅助功能提示（测试运行中）")
+            return
+        }
+        guard !Defaults[.didPromptAccessibilityOnce] else { return }
+        Defaults[.didPromptAccessibilityOnce] = true
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options: CFDictionary = [promptKey: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
