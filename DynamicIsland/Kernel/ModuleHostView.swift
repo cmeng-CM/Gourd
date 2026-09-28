@@ -20,10 +20,42 @@ struct ModuleHostView: View {
 
     @ObservedObject private var registry = ModuleRegistry.shared
 
+    /// 上游视图就是这么拿 vm 的（ContentView 根部 `.environmentObject(vm)`）。
+    @EnvironmentObject var vm: DynamicIslandViewModel
+
+    /// 滚动抑制令牌（补于 2026-09-28）。
+    ///
+    /// 原因：面板装了全局 `scrollWheel` 监听（`extensions/PanGesture.swift` 的本地/全局
+    /// monitor → `ContentView.handleCloseScrollGesture`），向下滚动被判定为「收起面板」
+    /// 手势。模块内容（通知 / 待办等列表）原本没有占用抑制令牌，于是用户在模块列表里
+    /// 滚动时，面板一边按收起动画模糊一边继续滚动——表现为「列表一滑面板就收起」
+    /// 与「滑动过程中看不清列表」两个症状。
+    ///
+    /// 上游每个自带滚动区的视图都用同一套令牌规避（`NotchNotesView`、`NotchClipboardView`、
+    /// `NotchTerminalView`、`NotchHomeView`、`RulerTimerPicker` 都是悬停时
+    /// `vm.setScrollGestureSuppression(true, token:)`）：令牌非空 →
+    /// `vm.isScrollGestureActive == true` → `handleCloseScrollGesture` 的守卫直接 return。
+    /// 本视图是**模块内容的统一宿主**，在这里占令牌即可一次覆盖所有模块列表，
+    /// 无需逐个模块改造。
+    ///
+    /// 注意：`ModuleCompactSlotView`（折叠态槽位）不加——折叠态的展开手势不检查该令牌。
+    @State private var suppressionToken = UUID()
+    @State private var isSuppressing = false
+
     var body: some View {
         if let moduleID {
             content(for: moduleID)
+                .onHover { updateSuppression(for: $0) }
+                // 切走 tab 或面板收起时本视图被销毁，`onHover` 不会再补发一次 false，
+                // 必须显式释放令牌，否则抑制状态悬空、面板之后再也收不起来。
+                .onDisappear { updateSuppression(for: false) }
         }
+    }
+
+    private func updateSuppression(for hovering: Bool) {
+        guard hovering != isSuppressing else { return }
+        isSuppressing = hovering
+        vm.setScrollGestureSuppression(hovering, token: suppressionToken)
     }
 
     /// 本批的内容请求是「展开面板 + 已展开」的定值：
