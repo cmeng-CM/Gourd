@@ -891,6 +891,10 @@ extension Defaults.Keys {
     static let nonNotchHeight = Key<CGFloat>("nonNotchHeight", default: 32)
     static let notchHeight = Key<CGFloat>("notchHeight", default: 32)
     static let openNotchWidth = Key<CGFloat>("openNotchWidth", default: 640)
+    // Modified for Gourd (2026-09-28): 展开面板高度可配置（原先在 openNotchSize 里硬编码 200）。
+    // 与 openNotchWidth 一样只作用于标准（非极简）展开态：极简模式用 minimalisticOpenNotchSize 的固有基准
+    // （420x180，动态岛模式 340x144），不读这个键。
+    static let openNotchHeight = Key<CGFloat>("openNotchHeight", default: 200)
     static let closedNotchWidth = Key<CGFloat>("closedNotchWidth", default: 150)
     static let customizePhysicalNotchWidth = Key<Bool>("customizePhysicalNotchWidth", default: false)
         //static let openLastTabByDefault = Key<Bool>("openLastTabByDefault", default: false)

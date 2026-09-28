@@ -72,7 +72,8 @@ var openNotchSize: CGSize {
     let minWidth = currentRecommendedMinimumNotchWidth()
     let maxWidth = maxAllowedNotchWidth()
     let width = min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)
-    return .init(width: width, height: 200)
+    let height = min(max(Defaults[.openNotchHeight], 120), 400)
+    return .init(width: width, height: height)
 }
 
 /// Maximum notch width based on the current screen's point width.

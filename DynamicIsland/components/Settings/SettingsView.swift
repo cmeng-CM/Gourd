@@ -824,6 +824,7 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .appearance, title: "Corner radius scaling", keywords: ["corner radius", "shape"], highlightID: SettingsTab.appearance.highlightID(for: "Corner radius scaling")),
             SettingsSearchEntry(tab: .appearance, title: "Use simpler close animation", keywords: ["close animation", "notch"], highlightID: SettingsTab.appearance.highlightID(for: "Use simpler close animation")),
             SettingsSearchEntry(tab: .appearance, title: "Notch Width", keywords: ["expanded notch", "width", "resize"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch width")),
+            SettingsSearchEntry(tab: .appearance, title: "Expanded notch height", keywords: ["expanded height", "open notch", "height", "panel size"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch height")),
             SettingsSearchEntry(tab: .appearance, title: "Enable colored spectrograms", keywords: ["spectrogram", "audio"], highlightID: SettingsTab.appearance.highlightID(for: "Enable colored spectrograms")),
             SettingsSearchEntry(tab: .appearance, title: "Enable blur effect behind album art", keywords: ["blur", "album art"], highlightID: SettingsTab.appearance.highlightID(for: "Enable blur effect behind album art")),
             SettingsSearchEntry(tab: .appearance, title: "Slider color", keywords: ["slider", "accent"], highlightID: SettingsTab.appearance.highlightID(for: "Slider color")),
@@ -4274,6 +4275,7 @@ struct Appearance: View {
     @Default(.customAppIcons) private var customAppIcons
     @Default(.selectedAppIconID) private var selectedAppIconID
     @Default(.openNotchWidth) var openNotchWidth
+    @Default(.openNotchHeight) var openNotchHeight
     @Default(.closedNotchWidth) var closedNotchWidth
     @Default(.customizePhysicalNotchWidth) var customizePhysicalNotchWidth
     @Default(.nonNotchHeight) var nonNotchHeight
@@ -5082,6 +5084,37 @@ struct Appearance: View {
                     NotificationCenter.default.post(name: Notification.Name.notchHeightChanged, object: nil)
                 }
             }
+
+            Divider().padding(.vertical, 4)
+
+            let expandedHeightRange = Double(120)...400
+            let expandedHeightBinding = Binding<Double>(
+                get: { Double(openNotchHeight) },
+                set: { newValue in
+                    let clamped = min(max(newValue, expandedHeightRange.lowerBound), expandedHeightRange.upperBound)
+                    let value = CGFloat(clamped)
+                    if openNotchHeight != value {
+                        openNotchHeight = value
+                    }
+                }
+            )
+
+            Slider(
+                value: expandedHeightBinding,
+                in: expandedHeightRange,
+                step: 5
+            ) {
+                HStack {
+                    Text("Expanded notch height")
+                    Spacer()
+                    Text("\(Int(openNotchHeight)) px")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .onChange(of: openNotchHeight) {
+                NotificationCenter.default.post(name: Notification.Name.notchHeightChanged, object: nil)
+            }
+            .settingsHighlight(id: highlightID("Expanded notch height"))
         } header: {
             Text("Notch Height")
         }
