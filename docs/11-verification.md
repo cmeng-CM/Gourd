@@ -159,6 +159,9 @@ log show --last 6m --predicate 'process == "Gourd"'               # 0 条
 
 ## 5. CI 首跑（2026-09-27，run 36319497136）
 
+> **后续状态（2026-09-28）：仓库的 GitHub Actions 已关闭**（`actions/permissions` → `enabled: false`，用户要求）。理由：本机就是 Mac，打包与验证全在当地做（`sh tools/build.sh` + `xcodebuild test`），远端 CI 只是重复劳动且单测 job 在 runner 上不可用。**门禁 = 本地**：改动合并前跑 `xcodebuild test -only-testing:DynamicIslandTests`（当时 88 项）与 `sh tools/build.sh`。若日后要恢复 CI，只需在仓库设置里重新启用 Actions（工作流文件仍在，未删）。
+
+
 首推 `main` 触发（`release.yml` 已先摘除 push 触发，仅手动）：
 
 | Job | macos-15 | macos-26 | 判定 |

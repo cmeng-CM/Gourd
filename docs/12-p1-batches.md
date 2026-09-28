@@ -17,7 +17,7 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 - [ ] **私有 API 台账**：把 [09](09-features-and-mechanisms.md) §3.1 的 11 项走查成"用途 + 降级路径"台账（落 `docs/`）。
 - [ ] **ATS 对外域名清单**（[09](09-features-and-mechanisms.md) §8.2）：lrclib.net、music.163.com、open-meteo、raw.githubusercontent.com…（维持全局 ATS 现状，清单为将来收窄留依据）。
-- [ ] **CI 单测 job 复跑确认**：本批已定位并修复启动期主线程阻塞（见下「本批已完成」），疑似即 CI "test runner hung" 根因；推后看 CI，若仍红再按 runner 差异（WindowServer/TCC）单独处理。
+- [x] ~~**CI 单测 job 复跑确认**~~ → **CI 已关闭（2026-09-28，用户要求）**：GitHub Actions 停用，打包与验证全在本地（`sh tools/build.sh` + `xcodebuild test`）。原 runner 侧挂起结论见 [11](11-verification.md) §5；工作流文件保留未删，日后可一键恢复。
 - [ ] **待用户拍板**：`AtollExtensionKit` 抬 pin 换 LGPL-3.0 的许可决策（阻塞的是 P4/P5 分发合规，不阻塞 P1 开发）。
 
 **验收**：三份设计补进 [06](06-module-protocol.md)（或新文档）；manifest 清单逐项过审。
