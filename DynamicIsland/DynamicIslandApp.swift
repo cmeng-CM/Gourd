@@ -682,6 +682,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 与上面一族 `Manager...shared.setup/configure(coordinator:)` 同构；
         // 用 Task 是因为 bootstrap 是 async，且不阻塞启动流程（注册表空时是一次空跑）。
         Task { await KernelBootstrap.bootstrap() }
+
+        // Setup 模块浮层窗口宿主（D-23）：瞬时浮层不再渲染在关闭态链里，改由内核的独立窗口
+        // 承载（按内容自适应 + 跟随鼠标屏 + 不被刘海裁剪，见 `Kernel/ModuleHUDWindow.swift`）。
+        // 与相邻的 ScreenRecording / Privacy 一族同口径：UI 测试下不挂——浮层窗口是全局层
+        //（level = .screenSaver），不该在 UI 测试的界面栈里多出一层。
+        if !AppRuntimeEnvironment.isUITesting {
+            ModuleHUDWindowHost.shared.start()
+        }
         
         // Setup ScreenRecording Manager
         if Defaults[.enableScreenRecordingDetection] && !AppRuntimeEnvironment.isUITesting {

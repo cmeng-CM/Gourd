@@ -27,9 +27,10 @@
 //  P2d 瞬时浮层——`presentHUD` 的覆盖语义与身份更替、`ttl` 夹取到 1…15s、
 //  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
 //  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）、
-//  **主动撤浮层**（`dismissHUD(id:)` 的 id 判据与 `UIHandle.dismissTransient()` 的归属判定）。
+//  **主动撤浮层**（`dismissHUD(id:)` 的 id 判据与 `UIHandle.dismissTransient()` 的归属判定）、
+//  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
-//  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值。
+//  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
 //
 
 import AppKit
@@ -1391,9 +1392,9 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertFalse(shouldSuppressHoverOpen(activeHUD: nil), "显式 nil 同样放行（判据形状）")
     }
 
-    // MARK: - 非刘海屏 hide-until-hover 与模块浮层
+    // MARK: - 非刘海屏 hide-until-hover
 
-    /// **基础为真**：非刘海屏 + 关闭态 + 设置开启 + 没有任何瞬时提示 → 隐藏（挪出屏幕）。
+    /// **基础为真**：非刘海屏 + 关闭态 + 设置开启 + 没有上游瞬时提示 → 隐藏（挪出屏幕）。
     /// 这条是 hide-until-hover 的原有语义，改判据不得把它改掉。
     func testHideClosedContentUntilHoverBaseline() {
         XCTAssertTrue(
@@ -1401,10 +1402,9 @@ final class ModuleKernelTests: XCTestCase {
                 hideSetting: true,
                 isNonNotch: true,
                 isClosed: true,
-                hasSneakPeek: false,
-                hasModuleHUD: false
+                hasSneakPeek: false
             ),
-            "非刘海屏关闭态且无任何瞬时提示时必须隐藏"
+            "非刘海屏关闭态且无瞬时提示时必须隐藏"
         )
     }
 
@@ -1416,44 +1416,112 @@ final class ModuleKernelTests: XCTestCase {
                 hideSetting: true,
                 isNonNotch: true,
                 isClosed: true,
-                hasSneakPeek: true,
-                hasModuleHUD: false
+                hasSneakPeek: true
             ),
             "上游瞬时提示在场时必须强制显示"
         )
     }
 
-    /// **模块浮层在场 → 不隐藏**（2026-09-28 修的根因）：外接（非刘海）屏上收到通知时，
-    /// 浮层必须和 sneakPeek 同口径豁免 hide-until-hover——否则关闭态内容（含浮层）
-    /// 被整体挪出屏幕，模块弹了浮层、日志也有，用户却什么都看不到。
-    /// 判据同时**读真值**（注册表 `activeHUD`）验证接缝，避免纯函数与调用点脱节。
-    func testHideClosedContentUntilHoverRevealedByModuleHUD() {
+    /// **模块浮层不再是豁免项**（2026-09-28，D-23）：浮层改由内核的独立窗口渲染
+    ///（`Kernel/ModuleHUDWindow.swift`），不再占用关闭态那一格——判据回到「只认上游 sneakPeek」，
+    /// 并且**即使注册表里有浮层也照常隐藏关闭态内容**（两条路径互不干扰：浮层窗口自己会出现在
+    /// 鼠标所在屏，关不关关闭态内容都不影响它）。
+    /// 判据同时**读真值**（注册表 `activeHUD`）验证接缝：注册表状态不再影响本判据的取值。
+    func testHideClosedContentUntilHoverIgnoresModuleHUD() {
         let registry = ModuleRegistry.shared
         XCTAssertNil(registry.activeHUD, "前置：setUp 的 deactivateAll 应已清掉浮层")
+
         registry.presentHUD(moduleID: "com.cmeng.gourd.hud-probe", view: AnyView(Text("HUD")), ttl: 4)
         defer { registry.clearHUD() }
+        XCTAssertNotNil(registry.activeHUD, "前置：浮层确实在台前")
 
-        XCTAssertFalse(
-            shouldHideClosedContentUntilHover(
-                hideSetting: true,
-                isNonNotch: true,
-                isClosed: true,
-                hasSneakPeek: false,
-                hasModuleHUD: registry.activeHUD != nil
-            ),
-            "模块浮层在场时必须强制显示（外接屏通知看不到的根因）"
-        )
-
-        registry.clearHUD()
         XCTAssertTrue(
             shouldHideClosedContentUntilHover(
                 hideSetting: true,
                 isNonNotch: true,
                 isClosed: true,
-                hasSneakPeek: false,
-                hasModuleHUD: registry.activeHUD != nil
+                hasSneakPeek: false
             ),
-            "浮层撤掉后回到隐藏（豁免随浮层生命周期自动解除）"
+            "浮层在台前时关闭态内容照常隐藏（浮层走独立窗口，不再需要豁免）"
+        )
+    }
+
+    // MARK: - 浮层窗口宿主的放置几何（D-23）
+
+    /// **内置屏（有刘海）**：顶部内边取刘海高度（实测 32pt），窗口顶端贴在其下方 `topGap`，
+    /// 水平居中于该屏。这条钉住「浮层不再压在刘海底下、下半截被裁」。
+    func testHUDWindowPlacementOnNotchedScreen() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let inset = ModuleHUDWindowHost.topInset(
+            safeAreaTop: 32,          // 刘海高度优先于菜单栏高度
+            frameMaxY: screenFrame.maxY,
+            visibleFrameMaxY: screenFrame.maxY - 24
+        )
+        XCTAssertEqual(inset, 32, "有刘海时必须避让刘海高度")
+
+        let origin = ModuleHUDWindowHost.origin(
+            windowSize: CGSize(width: 400, height: 66),
+            screenFrame: screenFrame,
+            topInset: inset,
+            topGap: ModuleHUDWindowHost.topGap
+        )
+        XCTAssertEqual(origin.y, screenFrame.maxY - 32 - ModuleHUDWindowHost.topGap - 66, "顶端贴齐可用顶边下方")
+        XCTAssertEqual(origin.x, screenFrame.midX - 200, "水平居中于该屏")
+    }
+
+    /// **外接屏（无刘海）**：顶部内边取菜单栏高度（屏顶与 `visibleFrame` 顶之差，实测 24pt）——
+    /// 不避开会被菜单栏盖住上半行。
+    func testHUDWindowPlacementOnNonNotchScreen() {
+        let screenFrame = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let inset = ModuleHUDWindowHost.topInset(
+            safeAreaTop: 0,
+            frameMaxY: screenFrame.maxY,
+            visibleFrameMaxY: screenFrame.maxY - 25
+        )
+        XCTAssertEqual(inset, 25, "无刘海时必须避让菜单栏高度")
+
+        let origin = ModuleHUDWindowHost.origin(
+            windowSize: CGSize(width: 400, height: 66),
+            screenFrame: screenFrame,
+            topInset: inset,
+            topGap: ModuleHUDWindowHost.topGap
+        )
+        XCTAssertEqual(origin.y, screenFrame.maxY - 25 - ModuleHUDWindowHost.topGap - 66)
+        XCTAssertEqual(origin.x, screenFrame.midX - 200, "居中按该屏而不是主屏")
+    }
+
+    /// **菜单栏高度缺失时不产生负内边**（`visibleFrame` 与屏顶一样高的极端值）：
+    /// 内边兜底 0，窗口仍然贴顶；尺寸消毒不会把窗口设成 0×0 或 NaN。
+    func testHUDWindowPlacementAndSizeGuards() {
+        XCTAssertEqual(
+            ModuleHUDWindowHost.topInset(safeAreaTop: 0, frameMaxY: 1000, visibleFrameMaxY: 1000),
+            0,
+            "量不出菜单栏高度时兜底 0（不能是负数）"
+        )
+
+        XCTAssertEqual(
+            ModuleHUDWindowHost.sanitizedContentSize(
+                CGSize(width: 0, height: 0),
+                fallback: CGSize(width: 1, height: 1)
+            ),
+            ModuleHUDWindowHost.fallbackContentSize,
+            "首帧量不出内容尺寸时给可用的兜底尺寸（常量而不是字面量，避免两处漂移）"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.sanitizedContentSize(
+                CGSize(width: CGFloat.nan, height: CGFloat.infinity),
+                fallback: CGSize(width: 340, height: 60)
+            ),
+            CGSize(width: 340, height: 60),
+            "非有限值时回落到上一次的尺寸"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.sanitizedContentSize(
+                CGSize(width: 360, height: 70),
+                fallback: CGSize(width: 1, height: 1)
+            ),
+            CGSize(width: 360, height: 70),
+            "正常量到的尺寸原样使用"
         )
     }
 
@@ -1915,135 +1983,6 @@ final class ModuleKernelTests: XCTestCase {
             Defaults.Keys.showBodyInHUD.defaultValue,
             "默认必须是 true（用户口径）；设计稿原口径的 false 已被覆盖"
         )
-    }
-
-    /// **新记录筛选**是纯函数（实时化的核心判据）：`id > 基线`、**按 id 升序**、**按 id 去重**。
-    ///
-    /// 它与 SQL 侧的 `WHERE rec_id > ? ORDER BY rec_id ASC` 是同一口径——单测钉住它，
-    /// 就不必为了验证「哪些算新增」去读真实的系统通知库（那既慢又要完全磁盘访问）。
-    func testNotificationNewRecordsFilterSortAndDeduplicate() {
-        // 空集：没有输入就没有输出（事件驱动下"文件变了但没有新记录"是常态，不能崩）
-        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 10).isEmpty)
-        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 0).isEmpty)
-
-        // 全部 ≤ 基线：旧记录一条都不算新增（含**恰好等于基线**的那条——判据是 `>` 不是 `>=`）
-        XCTAssertTrue(
-            NotificationStore.newRecords(
-                in: [notificationItem(3), notificationItem(9), notificationItem(10)],
-                above: 10
-            ).isEmpty
-        )
-
-        // 乱序输入 → 输出按 id 升序（调用方按到达顺序累加，`hudCandidate` 取 `.last` = 最新）
-        XCTAssertEqual(
-            NotificationStore.newRecords(
-                in: [notificationItem(15), notificationItem(11), notificationItem(18), notificationItem(13)],
-                above: 10
-            ).map(\.id),
-            [11, 13, 15, 18]
-        )
-
-        // 重复 id（同一批里重复投递 / 事件重放）只算一条：不过滤会让未读数虚高
-        XCTAssertEqual(
-            NotificationStore.newRecords(
-                in: [notificationItem(11), notificationItem(12), notificationItem(11), notificationItem(12)],
-                above: 10
-            ).map(\.id),
-            [11, 12]
-        )
-
-        // 重复 + 乱序 + 基线的混合：一条不多、一条不少、顺序稳定
-        XCTAssertEqual(
-            NotificationStore.newRecords(
-                in: [
-                    notificationItem(10), notificationItem(12), notificationItem(11),
-                    notificationItem(2), notificationItem(12), notificationItem(11),
-                ],
-                above: 10
-            ).map(\.id),
-            [11, 12]
-        )
-
-        // 基线 0（空库 / 首次取数）：全部都是新增，整段升序
-        XCTAssertEqual(
-            NotificationStore.newRecords(in: [notificationItem(2), notificationItem(1)], above: 0).map(\.id),
-            [1, 2]
-        )
-        // 负基线（理论上的回退）不改变判据
-        XCTAssertEqual(NotificationStore.newRecords(in: [notificationItem(1)], above: -5).map(\.id), [1])
-    }
-
-    /// 浮层候选与新记录筛选是同一口径（`hudCandidate` = 升序结果的 `.last`）：
-    /// 去重不会让「最新那一条」变成别人，`>` 基线也不会漏掉紧邻基线的第一条。
-    func testNotificationHUDCandidateMatchesNewRecordsOrdering() {
-        let newItems = [notificationItem(12), notificationItem(11), notificationItem(12)]
-        XCTAssertEqual(NotificationStore.newRecords(in: newItems, above: 10).last?.id, 12)
-        XCTAssertEqual(NotificationStore.hudCandidate(in: newItems, above: 10)?.id, 12)
-        // 只有一条晚于基线时，浮层就是那一条（实时性验收里最常见的形态）
-        XCTAssertEqual(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(11)], above: 10)?.id, 11)
-        XCTAssertNil(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(10)], above: 10))
-    }
-
-    /// 事件驱动 / 兜底轮询的两个常量口径：兜底是 **60s**（原来 30s 轮询的替代），
-    /// 不能再回到「亚秒轮询」——实时性由文件事件负责（09 §5.5）。
-    func testNotificationFallbackPollIntervalIsCoarse() {
-        XCTAssertEqual(NotificationStore.fallbackPollInterval, 60, "兜底轮询是 60s；实时性靠文件事件")
-    }
-
-    /// 「关闭 / 清除」的过滤是**纯函数**：`fetchRecent` / `fetchNew` 返回前按 id 滤掉已关闭的条目。
-    ///
-    /// 这是只读原则在代码上的落点：**过滤只发生在我们这一侧**，函数既不排序也不去重，
-    /// 更不触碰任何库状态——关闭只是「岛上不再显示这一条」。
-    func testNotificationDismissedFilterIsPure() {
-        let items = [notificationItem(11), notificationItem(12), notificationItem(13)]
-
-        // 没有已关闭条目（热路径）：原样返回，且**同一个数组实例**
-        let untouched = NotificationCenterReader.visible(in: items, excluding: [])
-        XCTAssertEqual(untouched.map(\.id), [11, 12, 13])
-
-        // 空输入：空输出（不给下游留 nil/崩溃路径）
-        XCTAssertTrue(NotificationCenterReader.visible(in: [], excluding: [11, 12]).isEmpty)
-
-        // 滤掉命中项，保持输入顺序（不排序、不去重）
-        XCTAssertEqual(
-            NotificationCenterReader.visible(in: items, excluding: [12]).map(\.id),
-            [11, 13]
-        )
-        // 关闭集合里有「不在这一批里」的 id：不影响结果（跨批次的关闭状态）
-        XCTAssertEqual(
-            NotificationCenterReader.visible(in: items, excluding: [1, 99, 1000]).map(\.id),
-            [11, 12, 13]
-        )
-        // 全部关闭 → 空列表（面板显示「暂无通知」，不是错误）
-        XCTAssertTrue(NotificationCenterReader.visible(in: items, excluding: [11, 12, 13]).isEmpty)
-    }
-
-    /// 已关闭集合的**落盘裁剪**是纯函数：只保留最近 `limit` 个（尾部 = 最近关闭的）并去重。
-    /// 上限存在的意义是「用一年后 UserDefaults 里不该堆几万个 id」。
-    func testNotificationDismissedTrimmingKeepsMostRecent() {
-        XCTAssertEqual(NotificationStore.dismissedLimit, 500, "上限口径：保留最近 500 个")
-
-        // 未超上限：原样（保序）
-        XCTAssertEqual(NotificationStore.trimmed([3, 1, 2], limit: 5), [3, 1, 2])
-        // 恰好等于上限：不裁剪
-        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 3), [1, 2, 3])
-        // 超上限：只留**最近** limit 个（尾部），最旧的被丢掉
-        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3, 4, 5], limit: 3), [3, 4, 5])
-        // 重复 id 去重（重复只算一次关闭）
-        XCTAssertEqual(NotificationStore.trimmed([7, 7, 8, 8, 9], limit: 10), [7, 8, 9])
-        // 去重后再裁剪：`[5,5,6,6,7,7]` 去重成 3 个，limit 2 → 留最近两个
-        XCTAssertEqual(NotificationStore.trimmed([5, 5, 6, 6, 7, 7], limit: 2), [6, 7])
-        // 边界：空输入、limit 0（丢弃一切）、limit 1
-        XCTAssertTrue(NotificationStore.trimmed([], limit: 10).isEmpty)
-        XCTAssertTrue(NotificationStore.trimmed([1, 2, 3], limit: 0).isEmpty)
-        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 1), [3])
-    }
-
-    /// `dismissedNotificationIDs` 键本身的口径：键名与类型（`[Int]`）固定，默认空。
-    /// 断言读 `defaultValue` 而不是当前生效值——不受开发机上真实 UserDefaults 影响。
-    func testDismissedNotificationIDsKeyShape() {
-        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.name, "dismissedNotificationIDs")
-        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.defaultValue, [], "默认没有已关闭条目")
     }
 
     // MARK: - AX 横幅通道（P2e：实时 + 真关闭）

@@ -51,21 +51,21 @@ func shouldSuppressHoverOpen(activeHUD: ModuleHUD?) -> Bool {
 /// 非刘海屏「不悬停就隐藏」的判据：关闭态内容是否该被整体挪出屏幕。
 ///
 /// 上游的形态是「非刘海屏 + 关闭态 + 设置开启 + **当前没有上游瞬时提示**（sneakPeek：
-/// 音量 / 亮度 / 音乐…）」才隐藏；本判据把**模块瞬时浮层**（`activeHUD`，如通知）也
-/// 补进豁免项：浮层与 sneakPeek 同为「必须立刻被看见」的瞬时反馈，若只豁免上游那一路，
-/// 通知到达时关闭态内容会被 `ContentView` 的 hide-until-hover 偏移整块挪出屏幕——模块
-/// 弹了浮层、日志也有，用户却什么都看不到（2026-09-28 定位）。
+/// 音量 / 亮度 / 音乐…）」才隐藏。
 ///
-/// 抽成纯函数是为了可测：入参都是纯值，调用点从视图状态 / 注册表取值后传进来，
+/// **模块瞬时浮层（如通知）不再是豁免项**（2026-09-28，D-23）：浮层改由内核的独立窗口
+/// 承载（`Kernel/ModuleHUDWindow.swift`），压根不在关闭态这条链里——关闭态内容照常隐藏，
+/// 浮层窗口自己出现在鼠标所在屏。此前的 `hasModuleHUD` 豁免（D-22 的补丁）随之删除。
+///
+/// 抽成纯函数是为了可测：入参都是纯值，调用点从视图状态取值后传进来，
 /// 判据本身不读单例、不碰视图状态。
 func shouldHideClosedContentUntilHover(
     hideSetting: Bool,
     isNonNotch: Bool,
     isClosed: Bool,
-    hasSneakPeek: Bool,
-    hasModuleHUD: Bool
+    hasSneakPeek: Bool
 ) -> Bool {
-    hideSetting && isNonNotch && isClosed && !hasSneakPeek && !hasModuleHUD
+    hideSetting && isNonNotch && isClosed && !hasSneakPeek
 }
 
 @MainActor
@@ -89,10 +89,10 @@ struct ContentView: View {
     @ObservedObject var localSendService = LocalSendService.shared
     @State private var downloadManager = DownloadManager.shared
     @ObservedObject var shelfState = ShelfStateViewModel.shared
-    /// 模块注册表。**必须观察**（与 S1 给 `TabSelectionView` 加的同一行同源）：关闭态链里
-    /// 瞬时浮层的判据读的是注册表，不观察它 `presentHUD` / `clearHUD` 就不会让这条链重算
-    ///（`ModuleHUDView` 自己观察注册表只能重绘它自己，救不了「判据在父视图里」这一层）。
-    @ObservedObject private var moduleRegistry = ModuleRegistry.shared
+    // 注：本视图**不再观察** `ModuleRegistry`（D-23）：模块瞬时浮层由内核的独立窗口渲染
+    //（`Kernel/ModuleHUDWindow.swift`），关闭态链里既没有浮层分支、判据也不再读注册表。
+    // 仍然读注册表的两处是 hover 抑制（`shouldSuppressHoverOpen(activeHUD:)`），
+    // 它们在 mouseDown 回调 / 延时任务里取值，不需要视图观察。
     
     @Default(.enableStatsFeature) var enableStatsFeature
     @Default(.showCpuGraph) var showCpuGraph
@@ -458,18 +458,16 @@ struct ContentView: View {
 
     /// Whether the notch/island should hide off-screen when closed on a non-notch display.
     /// Temporarily reveals the notch when a sneakPeek HUD (volume, brightness, music, etc.) is active.
+    ///
+    /// Modified for Gourd (2026-09-28, D-23)：模块瞬时浮层（如通知）**不再是**这里的豁免项——
+    /// 它已由内核的独立窗口渲染（`Kernel/ModuleHUDWindow.swift`），不在关闭态链里，
+    /// 所以外接屏上「关闭态照常隐藏 + 浮层窗口自己出现」两件事互不干扰。
     private var shouldHideUntilHover: Bool {
         shouldHideClosedContentUntilHover(
             hideSetting: hideNonNotchUntilHover,
             isNonNotch: isNonNotchScreen,
             isClosed: vm.notchState == .closed,
-            hasSneakPeek: isSneakPeekVisibleOnCurrentScreen,
-            // Modified for Gourd (2026-09-28)：模块瞬时浮层（如通知）在非刘海屏上也要强制显示，
-            // 与上游对 isSneakPeekVisibleOnCurrentScreen 的处理保持一致——否则通知到达时
-            // 内容被 hide-until-hover 偏移挪出屏幕，用户什么都看不到。
-            // 读本视图**观察**到的注册表（同一个对象）而不是 `ModuleRegistry.shared`：
-            // 只有被观察时浮层弹出 / 到期才会让本判据重算（见 D-22 的实测约束）。
-            hasModuleHUD: moduleRegistry.activeHUD != nil
+            hasSneakPeek: isSneakPeekVisibleOnCurrentScreen
         )
     }
 
@@ -1001,18 +999,6 @@ struct ContentView: View {
                       } else if vm.notchState == .closed && capsLockManager.isCapsLockActive && Defaults[.enableCapsLockIndicator] && !vm.hideOnClosed && !lockScreenManager.isLocked {
                           InlineHUD(type: .constant(.capsLock), value: .constant(1.0), icon: .constant(""), hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(AnyTransition.move(edge: .trailing).combined(with: .opacity))
-                      } else if vm.notchState == .closed && !vm.hideOnClosed && moduleRegistry.activeHUD != nil {
-                          // 模块的**瞬时浮层**（D-22 / 09 §5.5 呈现 ①）：插在 OSD 类分支
-                          // （音量 / 亮度 / 大小写锁…）**之后**、音乐 / 计时器 / 提醒等 live activity
-                          // **之前**的取舍——系统级反馈是用户**刚按下的键**，必须压过通知；
-                          // 而通知是"刚发生的事"，要盖过常态驻留的 live activity（否则放着音乐时
-                          // 通知永远看不见）。两者都不叠加：与既有各分支共用这一条链，故浮层显示
-                          // 期间被它盖住的活动自动让位、浮层到期即恢复。
-                          // 判据读的是本视图**观察**到的注册表（`moduleRegistry`）而不是
-                          // `ModuleRegistry.shared`——同一个对象，但只有前者能在浮层弹出/到期时
-                          // 让这条链重算（实测：不观察时 `presentHUD` 有日志、分支却永不取到）。
-                          ModuleHUDView()
-                              .transition(.opacity.animation(.smooth(duration: 0.2)))
                       } else if canShowMusicDuringExpansion && musicPairingEligible {
                           MusicLiveActivity(secondary: musicSecondary)
                               .id("closed-music-live-activity")
