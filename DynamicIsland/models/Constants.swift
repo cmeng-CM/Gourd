@@ -1463,6 +1463,16 @@ extension Defaults.Keys {
     /// 未开（见 docs/14 的 notifications 行），用户在设置页直接改这一项。
     static let showBodyInHUD = Key<Bool>("showBodyInHUD", default: true)
 
+    /// 已关闭（**仅从岛上移除**）的通知 `rec_id` 集合，有序、最近关闭的在后。
+    ///
+    /// 为什么必须落盘：关闭只是「本地隐藏」——系统通知中心里的那一条仍然在（只读原则，
+    /// 见 `docs/09-features-and-mechanisms.md` §5.5），库里的记录也不会消失；不记住 id 的话，
+    /// 下一次取数（文件事件 / 兜底轮询 / 重新激活）就又会把它读回列表。
+    ///
+    /// 写入时**裁剪到最近 500 个**（`NotificationStore.dismissedLimit` + `trimmed(_:limit:)`）：
+    /// UserDefaults 不该被一个只增不减的 id 列表撑大。
+    static let dismissedNotificationIDs = Key<[Int]>("dismissedNotificationIDs", default: [])
+
     // MARK: Permission prompts
 
     /// 辅助功能授权的"只申请一次"闸门（2026-09-28）：媒体键拦截在启动时最多弹一次系统提示，

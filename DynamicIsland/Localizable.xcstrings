@@ -81170,13 +81170,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Read-only: cannot dismiss or reply; private schema may break after system updates."
+            "value" : "Read-only: dismissing only hides an item on the island; Notification Center keeps it. Private schema may break after updates."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只读：不能关闭或回复通知；schema 私有，系统改版后可能失效。"
+            "value" : "只读：关闭只在岛上隐藏，系统通知中心里的条目仍在；schema 私有，系统改版后可能失效。"
           }
         }
       }
@@ -81193,6 +81193,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新通知"
+          }
+        }
+      }
+    },
+    "module.notifications.clearAll" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear all"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部清除"
+          }
+        }
+      }
+    },
+    "module.notifications.dismiss" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
           }
         }
       }

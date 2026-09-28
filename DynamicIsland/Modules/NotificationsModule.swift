@@ -14,7 +14,11 @@
 //  - **严禁**为了触发提示去读其它受保护路径（本机实测：通知库自身被拒即可判定）。
 //
 //  ## 能力边界（09 §5.5「必须接受」，UI 上有一行 footer 明示）
-//  ① **只能读**：不能关闭、回复、操作真实通知（那需要 AX 或私有 API，属降级方案）；
+//  ① **只能读**：不能回复、不能在系统通知中心里操作真实通知（那需要 AX 或私有 API，属降级方案）。
+//     **岛上能做的只有「关闭 / 清除」= 仅从岛上移除**（本地隐藏 + `dismissedNotificationIDs` 持久化）：
+//     系统通知中心里的条目**不由本应用增删**（只读原则，见 `NotificationCenterReader` 头注释），
+//     库里的记录也一条不动；若要连系统通知一起清掉，需走设计稿的 AX 降级路径
+//     （`AXPress` 关掉真实通知，**尚未实现**）；
 //  ② 需要完全磁盘访问；③ schema 私有、系统改版可能失效；
 //  ④ 内容敏感：浮层**默认显示正文**（`showBodyInHUD` 默认 true——**用户 2026-09-28 口径，
 //    覆盖设计稿原口径的 false**）；不想要正文的用户在设置页（Live Activities → Notifications）
@@ -24,23 +28,31 @@
 //  **文件事件驱动（主路径）+ 60s 兜底轮询（第二道闸门）**——2026-09-28 把原来的 30s 轮询换掉：
 //  - 主路径：`NotificationCenterReader.startWatching` 监听 `db` / `db-wal` 的写入事件，
 //    事件到齐（去抖 0.3s）后立刻按 `record.rec_id > 基线` 取增量 → 有新记录就弹浮层。
-//    **这就是「实时」**：用户造一条通知，浮层在 1 秒内出现（原先最坏要等 30s）；
+//    **这就是「实时」**（本机实测：库里落盘 → 浮层 0.303s）；
 //  - 兜底：每 60s 仍按 `rec_id > 基线` 取一次（**不过 mtime 闸门**）——事件可能漏报
 //    （`O_EVTONLY` 被 TCC 拒绝、`db-wal` 被 checkpoint 清掉后重建的空档里没有 source 可挂）；
 //  - **不做 1s 全表扫**（该库可能很大）：两条路径都只做 `rec_id > 基线` 的索引查询。
+//  **链路前端有一段不由本应用控制的延迟**（实测记录见 09 §5.5）：usernoted 把通知**批量落盘**——
+//  `osascript display notification` 到 `db-wal` 出现该记录实测 5.0～5.1s（退出本应用后单测也得
+//  5.10s，故与本应用无关）。所以「造一条通知 → 岛上出现」端到端约 5.3s，其中 0.3s 是我们的管道；
+//  原先的 30s 轮询口径下最坏要等 30s+，且 mtime 闸门看错文件（只看主库）时**永远不会**触发。
 //  **首次 `activate()` 建基线**（`refreshAll()` 把基线推到当前 `MAX(rec_id)`）：激活前就在库里的
 //  通知不算「新增」，因此不会为旧通知弹浮层、也不会一装上就冒出几十条未读。
 //
 //  ## 配置
 //  `config: nil`——模块侧仍不读 manifest 配置（`appsFilter` / `maxItems` / `pollIntervalSeconds`
-//  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。唯一的呈现开关
-//  `showBodyInHUD` 是**宿主设置**（`Defaults.Keys.showBodyInHUD`，默认 true）。
-//  09 §5.5 里**尚未做**的部分：按 App 分组、ax 降级路径、`appsFilter` 黑白名单。
+//  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。呈现开关
+//  `showBodyInHUD` 是**宿主设置**（`Defaults.Keys.showBodyInHUD`，默认 true）；
+//  已关闭集合 `dismissedNotificationIDs` 也是宿主设置键（由本模块读写，上限 500）。
+//  09 §5.5 里**尚未做**的部分：按 App 分组、ax 降级路径（含「连系统通知一起清除」）、
+//  `appsFilter` 黑白名单。
 //
 //  ## 本批形态
-//  - 展开面板：标题行（模块名 + 状态 + 刷新按钮）+ 可滚动通知列表 + 一行能力边界说明；
+//  - 展开面板：标题行（模块名 + 状态 + **清除**（列表非空时）+ 刷新）+ 可滚动通知列表
+//    （点击左侧内容 → 打开对应 App；行右侧 `xmark.circle.fill` → **关闭这一条，仅从岛上移除**）
+//    + 一行能力边界说明；
 //  - 折叠态**瞬时浮层**：新通知到达时 `bell.badge` + App 显示名 + 标题/正文，4s 后自动消失
-//    （内核 `ModuleRegistry.presentHUD`；一次轮询多条新通知只弹最新一条）；
+//    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条）；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
@@ -51,7 +63,7 @@
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
-//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification`。
+//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss`。
 //
 
 import AppKit
@@ -68,6 +80,12 @@ final class NotificationStore: ObservableObject {
     /// 兜底轮询间隔（秒）。**60s，不是 1s**——实时性由文件事件保证（见文件头「增量策略」），
     /// 这条轮询只用来兜「事件漏报」。
     static let fallbackPollInterval: TimeInterval = 60
+    /// 已关闭 id 的持久化上限：**只保留最近 500 个**（写入 `Defaults` 前裁剪）。
+    /// 500 远超列表上限（40）×10，日常使用永远够；限制的是「用一年以后 UserDefaults 里
+    /// 堆了几万个 id」这种只增不减的增长。
+    ///
+    /// `nonisolated`：`trimmed(_:limit:)` 是纯函数、不碰主 actor 状态，默认参数要能引用它。
+    nonisolated static let dismissedLimit = 500
 
     /// 最新通知（新的在前），最多 `maxItems` 条。
     @Published private(set) var items: [NotificationItem] = []
@@ -77,6 +95,9 @@ final class NotificationStore: ObservableObject {
     @Published private(set) var unseenCount = 0
     /// 最近一次成功取数的时刻（只进日志与状态行，不改变呈现）。
     @Published private(set) var lastRefreshedAt: Date?
+    /// 已关闭（**仅从岛上移除**）的 `rec_id` 集合。系统通知中心里的那一条仍在——
+    /// 本应用**只读**通知库，不增删其中的任何条目（09 §5.5 只读原则）。
+    @Published private(set) var dismissedRecordIDs: Set<Int64> = []
 
     /// 最近一次失败的可读原因（= `state` 的 `.failure` 载荷；UI 截断显示）。
     var failureReason: String? {
@@ -127,12 +148,23 @@ final class NotificationStore: ObservableObject {
     private var pendingIncrementalRefresh = false
     /// 事件监听的取消闭包（`reader.startWatching` 的返回值；由本 store 持有）。
     private var watchCancel: (() -> Void)?
+    /// 已关闭 id 的**有序**序列（最近关闭的在后）——`Defaults` 里存的就是它。
+    /// 与 `dismissedRecordIDs` 同源，两处只在 `persistDismissed()` 里一起写。
+    private var dismissedOrder: [Int64] = []
     /// bundleIdentifier → App 本地化显示名（含「解析不到」的空串缓存，避免每次轮询重查）。
     private var appNameCache: [String: String] = [:]
 
     init(logger: ModuleLogger, reader: NotificationCenterReader = NotificationCenterReader()) {
         self.log = logger
         self.reader = reader
+        // 启动时装载「已关闭」：不装载的话，之前关掉的条目会在下一次取数时又回到列表里。
+        // 装载时顺手裁剪（旧版本可能留下超长的列表），裁剪过就立刻写回。
+        // 类型在**落盘边界**转一次：`Defaults` 键是 `[Int]`（键的口径见 Constants），
+        // 内存里一律用 `Int64`（`rec_id` 的类型）。
+        let stored: [Int64] = Defaults[.dismissedNotificationIDs].map { Int64($0) }
+        dismissedOrder = Self.trimmed(stored, limit: Self.dismissedLimit)
+        dismissedRecordIDs = Set(dismissedOrder)
+        if dismissedOrder.count != stored.count { persistDismissed() }
     }
 
     // MARK: 探针
@@ -200,7 +232,10 @@ final class NotificationStore: ObservableObject {
 
         let reader = self.reader
         let limit = Self.maxItems
-        let fetched = await Task.detached(priority: .utility) { reader.fetchRecent(limit: limit) }.value
+        let dismissed = dismissedRecordIDs  // 快照：跨 await 后读到的是同一份
+        let fetched = await Task.detached(priority: .utility) {
+            reader.fetchRecent(limit: limit, dismissing: dismissed)
+        }.value
 
         apply(fetched, from: reader)
         log.info("全量刷新：\(fetched.count) 条，判定 \(String(describing: reader.lastState))")
@@ -241,8 +276,9 @@ final class NotificationStore: ObservableObject {
         let reader = self.reader
         let limit = Self.maxItems
         let baseline = baselineRecordID
+        let dismissed = dismissedRecordIDs  // 快照：跨 await 后读到的是同一份
         let newItems = await Task.detached(priority: .utility) {
-            reader.fetchNew(after: baseline, limit: limit)
+            reader.fetchNew(after: baseline, limit: limit, dismissing: dismissed)
         }.value
 
         lastModificationDate = reader.modificationDate
@@ -251,7 +287,9 @@ final class NotificationStore: ObservableObject {
         guard !newItems.isEmpty else { return }
 
         unseenCount += newItems.count
-        let fetched = await Task.detached(priority: .utility) { reader.fetchRecent(limit: limit) }.value
+        let fetched = await Task.detached(priority: .utility) {
+            reader.fetchRecent(limit: limit, dismissing: dismissed)
+        }.value
         apply(fetched, from: reader)
         log.info("\(reason)：新增 \(newItems.count) 条通知，最新 rec_id=\(newItems.map(\.id).max() ?? -1)（未读累计 \(unseenCount)）")
 
@@ -266,6 +304,57 @@ final class NotificationStore: ObservableObject {
     func markPanelOpened() {
         guard unseenCount != 0 else { return }
         unseenCount = 0
+    }
+
+    // MARK: 关闭 / 清除（**仅从岛上移除**）
+
+    /// 关闭一条：立即从列表里去掉 + 记进「已关闭」集合 + 落盘。
+    ///
+    /// **只从岛上移除**——系统通知中心里的那一条仍在，库里的记录也仍在（只读原则：
+    /// 本应用不增删系统通知，见文件头「能力边界」）。幂等（重复关同一条不重复记账）。
+    func dismiss(_ item: NotificationItem) {
+        guard !dismissedRecordIDs.contains(item.id) else {
+            items.removeAll { $0.id == item.id }  // 已在集合里（例如上一次运行关过）：只保证列表里没有
+            return
+        }
+        dismissedOrder.append(item.id)
+        dismissedRecordIDs.insert(item.id)
+        items.removeAll { $0.id == item.id }
+        persistDismissed()
+        log.info("关闭通知 rec_id=\(item.id)，仅从岛上移除（系统通知中心不动）")
+    }
+
+    /// 一键清除：把**当前列表**里的条目全部标记为已关闭（等价于逐条关闭，一次落盘一次日志）。
+    func dismissAll() {
+        guard !items.isEmpty else { return }
+        let ids = items.map(\.id)
+        dismissedOrder.append(contentsOf: ids.filter { !dismissedRecordIDs.contains($0) })
+        dismissedRecordIDs.formUnion(ids)
+        let count = ids.count
+        items = []
+        persistDismissed()
+        log.info("清除全部 \(count) 条，仅从岛上移除（系统通知中心不动）")
+    }
+
+    /// 落盘（**写入时裁剪**到最近 `dismissedLimit` 个）+ 同步内存集合。
+    ///
+    /// 两处状态（有序序列 / 集合）只在这里一起写，避免「集合里有、序列里没有」的错位。
+    private func persistDismissed() {
+        dismissedOrder = Self.trimmed(dismissedOrder, limit: Self.dismissedLimit)
+        dismissedRecordIDs = Set(dismissedOrder)
+        // 落盘边界转回 `[Int]`（键的类型；`rec_id` 实际远小于 Int.max）
+        Defaults[.dismissedNotificationIDs] = dismissedOrder.map(Int.init)
+    }
+
+    /// **纯函数**：把已关闭 id 序列裁剪到**最近** `limit` 个（保留尾部，最近关闭的在尾部），
+    /// 并去掉重复 id（保序：重复只留第一次出现的位置……末尾的重复会顶掉更早的那次）。
+    ///
+    /// 单测钉住边界：不超过上限时原样、超限只留最近 N 个、重复 id 去重、`limit <= 0` 给空。
+    static func trimmed(_ ids: [Int64], limit: Int = dismissedLimit) -> [Int64] {
+        guard limit > 0 else { return [] }
+        var seen: Set<Int64> = []
+        let deduped = ids.filter { seen.insert($0).inserted }
+        return deduped.count > limit ? Array(deduped.suffix(limit)) : deduped
     }
 
     /// 打开一条通知对应的 App（**公开 API**：取 bundleIdentifier → `NSWorkspace.openApplication(at:)`）。
@@ -472,7 +561,8 @@ private struct NotificationsModuleView: View {
         }
     }
 
-    /// 标题行：模块名 + 状态（「最近 N 条」/「需要完全磁盘访问」/ 错误原因截断）+ 刷新按钮。
+    /// 标题行：模块名 + 状态（「最近 N 条」/「需要完全磁盘访问」/ 错误原因截断）
+    /// + 「清除」（列表非空时才出现，一键把当前列表全部关闭）+ 刷新按钮。
     private var header: some View {
         HStack(spacing: 6) {
             Text(LocalizedStringKey("module.notifications.name"))
@@ -486,6 +576,24 @@ private struct NotificationsModuleView: View {
                 .truncationMode(.tail)
 
             Spacer(minLength: 4)
+
+            // 一键清除：只在有内容时出现（空列表上放一颗无效按钮只会让人以为坏了）。
+            // **只把当前列表标记为已关闭**，系统通知中心里的条目一条都不动。
+            if !store.items.isEmpty {
+                Button {
+                    store.dismissAll()
+                } label: {
+                    Text(LocalizedStringKey("module.notifications.clearAll"))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(.white.opacity(0.12)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(NotificationText.localized("module.notifications.clearAll"))
+            }
 
             Button {
                 Task { await store.refreshAll() }
@@ -557,14 +665,37 @@ private struct NotificationListView: View {
     }
 }
 
-/// 列表的一行：`App 名（粗体）· 相对时间` + 标题 + 正文（最多 2 行）。
+/// 列表的一行：`App 名（粗体）· 相对时间` + 标题 + 正文（最多 2 行）+ 右侧「关闭」按钮。
+///
+/// **两个手势刻意不重叠**：点击区（打开 App）只盖左侧内容列，关闭按钮在它右侧、自己的 frame 里。
+/// 这样两个动作天然互不干扰——不需要靠「谁的手势优先级高」这种版本相关的规则。
+/// （常见写法是在整行上挂 `.onTapGesture`、按钮叠在里面，那样点按钮时点击区仍可能吃到触摸。）
 private struct NotificationRow: View {
     let item: NotificationItem
     @ObservedObject var store: NotificationStore
 
+    /// 整行 hover（背景高亮 + 关闭按钮提亮）。
     @State private var isHovered = false
+    /// 关闭按钮自身的 hover（鼠标停在按钮上 → 直接到 `.white`）。
+    @State private var isDismissHovered = false
 
     var body: some View {
+        HStack(alignment: .top, spacing: 4) {
+            content
+            dismissButton
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(isHovered ? 0.08 : 0))
+        )
+        .onHover { isHovered = $0 }
+    }
+
+    /// 左侧内容 = 「打开对应 App」的点击区。
+    private var content: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Text(item.displayName)
@@ -603,16 +734,26 @@ private struct NotificationRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(isHovered ? 0.08 : 0))
-        )
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
         .onTapGesture { store.openApp(for: item) }
+    }
+
+    /// 关闭按钮：**只从岛上移除这一条**（系统通知中心不动，见文件头「能力边界」）。
+    /// 常态 `.white.opacity(0.6)`，鼠标进入（行内或按钮上）提亮到 `.white`。
+    private var dismissButton: some View {
+        Button {
+            store.dismiss(item)
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(isHovered || isDismissHovered ? 1 : 0.6))
+                .padding(3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isDismissHovered = $0 }
+        .help(NotificationText.localized("module.notifications.dismiss"))
     }
 }
 

@@ -1683,6 +1683,8 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.daysAgo",
             "module.notifications.readOnlyNote",
             "module.notifications.newNotification",
+            "module.notifications.clearAll",
+            "module.notifications.dismiss",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
@@ -1833,6 +1835,62 @@ final class ModuleKernelTests: XCTestCase {
     /// 不能再回到「亚秒轮询」——实时性由文件事件负责（09 §5.5）。
     func testNotificationFallbackPollIntervalIsCoarse() {
         XCTAssertEqual(NotificationStore.fallbackPollInterval, 60, "兜底轮询是 60s；实时性靠文件事件")
+    }
+
+    /// 「关闭 / 清除」的过滤是**纯函数**：`fetchRecent` / `fetchNew` 返回前按 id 滤掉已关闭的条目。
+    ///
+    /// 这是只读原则在代码上的落点：**过滤只发生在我们这一侧**，函数既不排序也不去重，
+    /// 更不触碰任何库状态——关闭只是「岛上不再显示这一条」。
+    func testNotificationDismissedFilterIsPure() {
+        let items = [notificationItem(11), notificationItem(12), notificationItem(13)]
+
+        // 没有已关闭条目（热路径）：原样返回，且**同一个数组实例**
+        let untouched = NotificationCenterReader.visible(in: items, excluding: [])
+        XCTAssertEqual(untouched.map(\.id), [11, 12, 13])
+
+        // 空输入：空输出（不给下游留 nil/崩溃路径）
+        XCTAssertTrue(NotificationCenterReader.visible(in: [], excluding: [11, 12]).isEmpty)
+
+        // 滤掉命中项，保持输入顺序（不排序、不去重）
+        XCTAssertEqual(
+            NotificationCenterReader.visible(in: items, excluding: [12]).map(\.id),
+            [11, 13]
+        )
+        // 关闭集合里有「不在这一批里」的 id：不影响结果（跨批次的关闭状态）
+        XCTAssertEqual(
+            NotificationCenterReader.visible(in: items, excluding: [1, 99, 1000]).map(\.id),
+            [11, 12, 13]
+        )
+        // 全部关闭 → 空列表（面板显示「暂无通知」，不是错误）
+        XCTAssertTrue(NotificationCenterReader.visible(in: items, excluding: [11, 12, 13]).isEmpty)
+    }
+
+    /// 已关闭集合的**落盘裁剪**是纯函数：只保留最近 `limit` 个（尾部 = 最近关闭的）并去重。
+    /// 上限存在的意义是「用一年后 UserDefaults 里不该堆几万个 id」。
+    func testNotificationDismissedTrimmingKeepsMostRecent() {
+        XCTAssertEqual(NotificationStore.dismissedLimit, 500, "上限口径：保留最近 500 个")
+
+        // 未超上限：原样（保序）
+        XCTAssertEqual(NotificationStore.trimmed([3, 1, 2], limit: 5), [3, 1, 2])
+        // 恰好等于上限：不裁剪
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 3), [1, 2, 3])
+        // 超上限：只留**最近** limit 个（尾部），最旧的被丢掉
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3, 4, 5], limit: 3), [3, 4, 5])
+        // 重复 id 去重（重复只算一次关闭）
+        XCTAssertEqual(NotificationStore.trimmed([7, 7, 8, 8, 9], limit: 10), [7, 8, 9])
+        // 去重后再裁剪：`[5,5,6,6,7,7]` 去重成 3 个，limit 2 → 留最近两个
+        XCTAssertEqual(NotificationStore.trimmed([5, 5, 6, 6, 7, 7], limit: 2), [6, 7])
+        // 边界：空输入、limit 0（丢弃一切）、limit 1
+        XCTAssertTrue(NotificationStore.trimmed([], limit: 10).isEmpty)
+        XCTAssertTrue(NotificationStore.trimmed([1, 2, 3], limit: 0).isEmpty)
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 1), [3])
+    }
+
+    /// `dismissedNotificationIDs` 键本身的口径：键名与类型（`[Int]`）固定，默认空。
+    /// 断言读 `defaultValue` 而不是当前生效值——不受开发机上真实 UserDefaults 影响。
+    func testDismissedNotificationIDsKeyShape() {
+        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.name, "dismissedNotificationIDs")
+        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.defaultValue, [], "默认没有已关闭条目")
     }
 
     /// 构造一条通知夹具（只关心 id 的用例用它）。

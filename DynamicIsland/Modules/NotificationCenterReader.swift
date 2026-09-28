@@ -7,7 +7,8 @@
 //
 //  **三条硬性规则**（09 §5.5）：
 //  1. **只读**：一律 `SQLITE_OPEN_READONLY` 打开，绝不写该库（连 VACUUM / WAL 都不碰）；
-//     也不写任何临时文件到该目录；
+//     也不写任何临时文件到该目录。**「关闭 / 清除」只发生在模块侧的呈现上**
+//     （`fetchRecent(limit:dismissing:)` 按 id 滤掉），系统通知中心里的条目不由本应用增删；
 //  2. **增量**：按 `record` 表的单调自增 id 取新增 + **文件事件触发**（`startWatching`，2026-09-28
 //     把 30s 轮询换成了事件驱动——`db`/`db-wal` 一有写入就取数，浮层因此是实时的；mtime 只作
 //     兜底轮询的廉价闸门），不做 1s 全表扫（该库可能很大）；
@@ -261,13 +262,28 @@ final class NotificationCenterReader: @unchecked Sendable {
     /// 最新 `limit` 条通知（按 id 降序取、返回时仍是降序 = 新的在前）。
     ///
     /// **任何失败都返回空数组**，原因记进 `lastState`（UI 显示、不抛错）。
-    func fetchRecent(limit: Int) -> [NotificationItem] {
-        fetch(after: nil, limit: limit)
+    ///
+    /// `dismissing` = 已关闭（**仅从岛上移除**）的记录 id，由模块侧从 `Defaults` 装载后传入：
+    /// 返回前滤掉它们，库里一条都不动（只读原则）。它们仍占 SQL 的 LIMIT 名额，所以这里
+    /// **多取 `dismissing.count` 行**再截断——否则关掉 3 条后列表就凭空少 3 条。
+    func fetchRecent(limit: Int, dismissing dismissed: Set<Int64> = []) -> [NotificationItem] {
+        fetch(after: nil, limit: limit, dismissing: dismissed)
     }
 
     /// 增量：`rec_id > recordID` 的通知，按 id **升序**（调用方按到达顺序累加计数）。
-    func fetchNew(after recordID: Int64, limit: Int) -> [NotificationItem] {
-        fetch(after: recordID, limit: limit)
+    /// `dismissing` 同 `fetchRecent`（已关闭的那条不再计未读、不再弹浮层）。
+    func fetchNew(after recordID: Int64, limit: Int, dismissing dismissed: Set<Int64> = []) -> [NotificationItem] {
+        fetch(after: recordID, limit: limit, dismissing: dismissed)
+    }
+
+    /// **纯函数**：滤掉已关闭（仅从岛上移除）的条目。
+    ///
+    /// - 不改输入、不去重、不排序（只做过滤，其余口径由调用方保持）；
+    /// - `dismissed` 为空时原样返回（热路径零成本）；
+    /// - 「关闭」只影响本模块的呈现：系统通知中心里的那条仍在，库里的记录也仍在。
+    static func visible(in items: [NotificationItem], excluding dismissed: Set<Int64>) -> [NotificationItem] {
+        guard !dismissed.isEmpty else { return items }
+        return items.filter { !dismissed.contains($0.id) }
     }
 
     // MARK: 探针
@@ -374,7 +390,7 @@ final class NotificationCenterReader: @unchecked Sendable {
 
     // MARK: 增量读取的实现
 
-    private func fetch(after recordID: Int64?, limit: Int) -> [NotificationItem] {
+    private func fetch(after recordID: Int64?, limit: Int, dismissing dismissed: Set<Int64> = []) -> [NotificationItem] {
         guard limit > 0 else { return [] }
         var db: OpaquePointer?
         guard sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
@@ -410,12 +426,15 @@ final class NotificationCenterReader: @unchecked Sendable {
         }
         defer { sqlite3_finalize(statement) }
 
+        // 已关闭的条目仍会占 LIMIT 名额（SQL 侧不认识「关闭」），所以「最近 N 条」这条路
+        // 按 `limit + 已关闭条数` 多取几行，过滤后再截断到 limit；上限仍是 200（与旧口径一致）。
+        let rowLimit = recordID == nil ? limit + dismissed.count : limit
         var index: Int32 = 1
         if let recordID {
             sqlite3_bind_int64(statement, index, recordID)
             index += 1
         }
-        sqlite3_bind_int(statement, index, Int32(min(limit, 200)))
+        sqlite3_bind_int(statement, index, Int32(min(rowLimit, 200)))
 
         var items: [NotificationItem] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -435,7 +454,10 @@ final class NotificationCenterReader: @unchecked Sendable {
         }
 
         lastState = .ok
-        return items
+        let visible = Self.visible(in: items, excluding: dismissed)
+        // 降序（最近）：截前 limit 条；升序（增量）：截**最新** limit 条（宁可丢最旧的，
+        // 也不能丢最新那条——浮层候选取的就是它）。
+        return recordID == nil ? Array(visible.prefix(limit)) : Array(visible.suffix(limit))
     }
 
     /// `app` 表 → bundle id 到显示名的映射。表 / 列名都是私有的，全部按候选名 try；
