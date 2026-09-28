@@ -34,6 +34,20 @@ import AppKit
 import UIKit
 #endif
 
+/// 模块浮层（如通知）显示期间是否抑制「悬浮即展开面板」。
+///
+/// 关闭态有两条会抢跑「点浮层上按钮」这一下的路径，都读本判据：
+/// ① `startHoverClickMonitor()` 装的 `mouseDown` 监听器（回调里直接 `openNotch()`）；
+/// ② `handleHover` 的延时展开任务（`minimumHoverDuration` 后 `openNotch()`）。
+/// 浮层是**瞬时**交互（通知 ttl 4s）：这期间用户的点击意图明确是操作浮层本身（× 或打开 App），
+/// 而不是展开面板。ttl 到期浮层被内核清掉 → `activeHUD` 回到 nil → 本判据自动放行
+/// （延时任务唤醒时浮层已消失则照旧展开，不重新计时）。
+///
+/// 抽成纯函数是为了可测：判据只依赖「当前有没有浮层」这一个入参，不读单例、不碰视图状态。
+func shouldSuppressHoverOpen(activeHUD: ModuleHUD?) -> Bool {
+    activeHUD != nil
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -2048,6 +2062,10 @@ struct ContentView: View {
                 guard !lockScreenManager.isLocked else { return }
                 guard vm.notchState == .closed else { return }
                 guard !self.coordinator.isHoverOpenSuppressed else { return }
+                // Modified for Gourd (2026-09-28)：模块浮层（如通知）显示期间抑制「悬浮即展开」，
+                // 否则 mouseDown 会抢走浮层上按钮的点击（浮层只有 4s，点击意图明确是操作浮层本身）。
+                // 判据放在回调**内部**而不是「不装监听器」：装/卸与 hover 状态耦合，内部判断无生命周期问题。
+                guard !shouldSuppressHoverOpen(activeHUD: ModuleRegistry.shared.activeHUD) else { return }
                 guard self.isHovering else { return }
                 guard !self.handleClosedMusicWaveformTapIfNeeded() else { return }
                 if Defaults[.enableHaptics] {
@@ -2171,6 +2189,11 @@ struct ContentView: View {
                           self.isHovering,
                           !self.isSneakPeekVisibleOnCurrentScreen,
                           !self.coordinator.isHoverOpenSuppressed else { return }
+
+                    // Modified for Gourd (2026-09-28)：模块浮层（如通知）显示期间抑制「悬浮即展开」，
+                    // 否则 mouseDown 会抢走浮层上按钮的点击（浮层只有 4s，点击意图明确是操作浮层本身）。
+                    // 延时到点后浮层若已消失（ttl 走完）则照旧展开——这是刻意的，不重新计时。
+                    guard !shouldSuppressHoverOpen(activeHUD: ModuleRegistry.shared.activeHUD) else { return }
 
                     if shouldFocusTimerTab {
                         withAnimation(.smooth) {

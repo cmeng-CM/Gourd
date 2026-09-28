@@ -1361,6 +1361,36 @@ final class ModuleKernelTests: XCTestCase {
         registry.clearHUD()
     }
 
+    // MARK: - 浮层期间的悬浮展开抑制
+
+    /// **有浮层 → 抑制**：浮层在台前时，两条抢跑路径（`startHoverClickMonitor` 的 `mouseDown`
+    /// 回调、`handleHover` 的延时展开任务）都必须在 `openNotch()` 前被这条判据挡住——
+    /// 否则点浮层上 × / 打开 App 的那一下会被 mouseDown 先吃走，面板被打开、浮层被盖掉。
+    func testHoverOpenSuppressedWhileHUDIsPresent() {
+        let registry = ModuleRegistry.shared
+        XCTAssertNil(registry.activeHUD, "前置：setUp 的 deactivateAll 应已清掉浮层")
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.hud-probe", view: AnyView(Text("HUD")), ttl: 4)
+        XCTAssertNotNil(registry.activeHUD)
+        XCTAssertTrue(
+            shouldSuppressHoverOpen(activeHUD: registry.activeHUD),
+            "浮层存活的 ttl 内必须抑制悬浮展开"
+        )
+
+        registry.clearHUD()
+    }
+
+    /// **无浮层 → 放行**：判据是「当前有没有浮层」而不是「曾经弹过浮层」——
+    /// ttl 到期（内核清）或 × 主动撤（`dismissHUD`）后 `activeHUD` 回到 nil，悬浮展开照旧。
+    func testHoverOpenAllowedWithoutHUD() {
+        XCTAssertNil(ModuleRegistry.shared.activeHUD)
+        XCTAssertFalse(
+            shouldSuppressHoverOpen(activeHUD: ModuleRegistry.shared.activeHUD),
+            "无浮层时必须放行悬浮展开"
+        )
+        XCTAssertFalse(shouldSuppressHoverOpen(activeHUD: nil), "显式 nil 同样放行（判据形状）")
+    }
+
     // MARK: - 待办模块 todos（T5）
 
     /// 构造一条待办（id 兼作标题，便于按 id 断言顺序）。
