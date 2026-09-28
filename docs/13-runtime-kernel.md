@@ -225,7 +225,7 @@ public enum KernelBootstrap {
 
 ## 明确不做
 
-- **折叠态槽位渲染**（左/中/右三槽）——需重构 `ContentView.swift:1219-1312` 的 HStack，推 P2
+- **折叠态槽位渲染**——**只做中央槽位**（2026-09-27 落地：D-19 / 已知限制 26）；左/右图标槽位与 06 §6.2 的三槽布局（含每侧上限）仍需重构 `ContentView.swift:1219-1312` 的 HStack，仍推 P2
 - **状态机实现**——本批只落归属裁定（D-04）；`NotchStateMachine` 与四态迁移单测属 P1-2
 - **`isHovering` 提升为可观测量**——D-04 认定的唯一必要上游编辑，留给 P1-2（本批没有 hover 相位的消费者）
 - **事件总线与订阅**（`GourdModule.onEvent`、`EventHandle`、13 个事件）——属 P1-3；本批协议**不含** `onEvent`，加回时需同步所有已写模块（本批只有 1 个内置模块，成本可控，见「已知限制」9）
@@ -285,14 +285,16 @@ public enum KernelBootstrap {
 15. **manifest 校验是子集，三类校验未实现**（[06](06-module-protocol.md) §10.1/§2.2/§7.1 有规定而本批未做）：① 未知字段 → `E_UNKNOWN_FIELD`（拼错的字段会被静默接受，与 06 §10.2 末句"静默跳过坏字段等于把拼错的声明变成看起来申请了但没生效"的口径相抵）；② `version` 的严格 semver；③ `permissions` 的**参数形态**（`network:<host>` 的小写域名/禁 IP/禁端口规则、`events:subscribe:<event>` 的事件名存在性）——本批只做白名单集合校验，词表 15 项与 06 §7.1 逐字一致。三者的加回批次：②③ 随 P1-3 的完整 ConfigStore/权限门控，① 至少要在有第二个内置模块之前。
 16. **`validate()` 的校验顺序是本批自定**，未逐字对齐 06 §10.1（实际顺序：`manifestVersion → id → 保留前缀 → kind → icon → name/summary → surfaces → apiVersion → permissions`）。差异只影响**多错并存时报出哪一个**，不影响任一单项判定。
 17. **`ModuleRegistry.register()` 不调用 `validate()`**：内置模块的 manifest 是代码字面量，正确性由单测（`validate()` 用例 + 往返 + 符号表三条）与审查期独立探针兜住。加第二个内置模块前建议补一条 dev-only 断言。
-18. **本地化债**：本批只加了 `module.progress.name` / `module.progress.summary` 两条 key；`ModuleHostView` 的 `.descriptor` 与 `.unavailable` 分支文案**未本地化**（后者用 `Text(String)` 非本地化初始化器）。P3 的双语批次一并处理。
+18. **本地化债**：本批只加了 `module.progress.name` / `module.progress.summary` 两条 key；`ModuleHostView` 的 `.descriptor` 与 `.unavailable` 分支文案**未本地化**（后者用 `Text(String)` 非本地化初始化器）。P3 的双语批次一并处理。（2026-09-27 补充：进度模块重做时加了 9 条 key——`module.progress.scope.<scope>` / `.remaining` / `.unit.<day|hour|minute>`；`ModuleCompactSlotView` 的两条降级文案仍**未本地化**，属同一笔债。）
 19. **日志噪音**：`ModuleRegistry.content(for:)` 对未知/非 `active` 模块每次调用记一条 warning，而 `ModuleHostView.body` 每次重算都会调它——选中 `.module` 且模块非 active 时会按渲染频率刷日志。
 20. **`selectedModuleID` 在切走 `.module` 后不清空**：当前无功能影响（所有读取处都带 `currentView == .module` 前置），但展开内容的复合身份会携带陈旧模块 id；后续统一清理。
 21. **progress 的配置项有两个缺口**：`baseCalendar` 已声明**无消费者**；`style` / `visibleScopes` 的坏值回落分支无测试覆盖。本批没有用户可见的配置入口，故无用户影响；P1-3 落配置入口时必须接上，否则会出现「有控件、无效果」。
 22. **单测里 `builtinModules.count == 1` 是批内契约**：加第二个内置模块时该断言会红，需放宽为 `contains`。同一用例里还有一条 `ObjectIdentifier` 逐项相等断言（`ModuleKernelTests.swift:896-900`，断言数组恰为 `[ProgressModule.self]`），加第二个模块时**同样会红**，需一并放宽。
 23. **百分比取整的临景观感**：`Int((progress*100).rounded())` 在区间末段会显示 `100%`（如 12-31 23:59:30 的年进度）。
 24. **三个新 capability 待落 [06](06-module-protocol.md) §7.1**：`notifications:read`（读通知中心）、`network:local`（LocalSend 局域网）、`calendar:read-titles`（07 §3.5 已引用但 06 §7.1 缺表）——已在 [14-module-manifests.md](14-module-manifests.md) 相应行标注。
-25. **`defaultPlacement.order` 本批兼作 expanded tab 的确定性排序键**（对 06 §6.2 的语义扩展）：06 §2.2/§6.2 规定 `defaultPlacement` 仅当 `surfaces` 含 `compact` 时有意义、否则忽略，而 progress 本批未声明 `compact`（D-07），实现仍用 `manifest.defaultPlacement?.order ?? Int.max` 给 `tabEntries` 排序（`ModuleRegistry.swift:165`）。理由：本批没有 compact 消费者，而 tab 列表需要确定性顺序（同 `order` 再按 id 字典序）。代价：一个字段承载双关语义（"compact 槽位的插入序"与"expanded tab 排序键"）。**约束**：compact 槽位在 P2 落地时**必须**拆字段或明确写下双语义，否则同一个 `order` 会被两套布局逻辑读走；在此期间 progress 的 `slot` 恒为 nil（`Placement(slot: nil, order: 30)`，与 [14](14-module-manifests.md) 的 T-1 给折叠态预留的 `left` / order 40 不是同一个值）。
+25. **`defaultPlacement.order` 本批兼作 expanded tab 的确定性排序键**（对 06 §6.2 的语义扩展）：06 §2.2/§6.2 规定 `defaultPlacement` 仅当 `surfaces` 含 `compact` 时有意义、否则忽略，而 progress 本批未声明 `compact`（D-07），实现仍用 `manifest.defaultPlacement?.order ?? Int.max` 给 `tabEntries` 排序（`ModuleRegistry.swift:165`）。理由：本批没有 compact 消费者，而 tab 列表需要确定性顺序（同 `order` 再按 id 字典序）。代价：一个字段承载双关语义（"compact 槽位的插入序"与"expanded tab 排序键"）。**约束**：compact 槽位在 P2 落地时**必须**拆字段或明确写下双语义，否则同一个 `order` 会被两套布局逻辑读走；在此期间 progress 的 `slot` 恒为 nil（`Placement(slot: nil, order: 30)`，与 [14](14-module-manifests.md) 的 T-1 给折叠态预留的 `left` / order 40 不是同一个值）。**落地回写（2026-09-27）**：中央槽位走「明确写下双语义」这条路——`order` 同时是 expanded tab 与折叠态槽位候选的排序键，两处共用同一个比较器 `(order, id)`（`ModuleRegistry.swift` 的 `tabEntries` / `compactEntries`），`slot` 只记归属（progress 现为 `center`）；左/右槽位与三槽布局仍延后，若届时同一 `order` 要表达两套布局顺序，仍须拆字段。
+
+26. **折叠态中央槽位与 live activity 共用一条优先级链**：槽位是在 `ContentView` 关闭态的 `if/else if` 链里插的**低优先**分支（D-19 的落地方式，分支位置在 `showNotHumanFace` 人脸动画之前），因此**只在其它 live activity 都没占用关闭态时**显示——音乐 / 计时器 / 提醒 / 录屏 / 下载 / LocalSend / 专注 / 锁屏 / 隐私 / Shelf / 扩展载荷任意一个出现，槽位就自动让位（不叠加、不缩窄）。这是「不改 HStack 结构」的代价；真并存（左侧图标 + 中央模块 + 右侧图标）仍要等三槽布局。
 
 ## 验收标准
 
@@ -327,3 +329,4 @@ public enum KernelBootstrap {
 | D-16 | `deactivateAll()` 的语义定为「停用 + 清空注册表四张表」 | agent | 单测需要用例级隔离（`manifests`/`states` 是 `private(set)`）；名字只表达了前一半，已写进接口注释与已知限制；P1-3 若需要「停用但保留注册」须另加接口 |
 | D-17 | progress 的刷新定为 `TimelineView(.periodic(from: .now, by: 60))`，取代 [09](09-features-and-mechanisms.md) §5.3 的分级刷新 | agent | 60s 对日进度足够，且免掉内核侧 tick 事件（属 P1-3）；时钟/时区变更的感知延迟与代价见已知限制 14 |
 | D-18 | 三个新 capability（`notifications:read` / `network:local` / `calendar:read-titles`）本批只在 [14](14-module-manifests.md) 里标注「待落 06 §7.1」，**不改 06 号文档** | agent | 本批的执行约束是"只动白名单文件"；白名单的正式增补随 P1-3 / P2c（通知模块开工前必须落）。标注落点逐项写明：`notifications:read` / `network:local` 在各自 manifest 行的 `permissions` 格；`calendar:read-titles` 在 calendar 行的 `permissions` 格注与 T-8 / §3 待落清单——它是 07 §3.5 事件订阅裁剪项引出的缺口，**不是 calendar 行本批的声明项**（该行 `permissions` 仍是 `[]`） |
+| D-19 | 折叠态**中央槽位**用「在 `ContentView` 关闭态优先级链里插一个**低优先**分支」落地（`ModuleRegistry.compactEntries` / `compactSlotContent()` + `ModuleCompactSlotView`），不改 HStack 结构 | 用户（方案定稿）+ agent（落点） | 三槽布局（左/中/右 + 每侧上限）要重构 `ContentView.swift:1219-1312` 的 HStack——这正是 D-01 / D-13 ① 当初不做折叠态槽位的理由；插分支是**零结构改动**的等价落地，成本低且可回退。代价写在已知限制 26（槽位与 live activity 共用优先级链，只在无其它活动时显示）。**左/右图标槽位与三槽布局仍延后**（见「明确不做」）；`order` 的双语义按已知限制 25 的「明确写下」分支处理 |

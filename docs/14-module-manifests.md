@@ -35,7 +35,7 @@
 | `com.cmeng.gourd.mirror` | `expanded` | — | `[]` | `showMirror`、`mirrorShape`、`selectedCameraID`（接管映射） | P2a；依赖相机 TCC |
 | `com.cmeng.gourd.launcher` | `compact`、`expanded` | `right` / order 30 | `[]` | `pinnedApps`、`showRecents`、`iconSize`、`density`（09 §5.1） | P2b 第 4；全局热键用上游 `KeyboardShortcuts` |
 | `com.cmeng.gourd.lunar` | `compact` | `left` / order 30 | `[]` | `displayFormat`、`showFestivals`（09 §5.2） | P2b 第 1；展开区归属见 T-6 |
-| `com.cmeng.gourd.progress` | `expanded` | —（本批未声明 `compact`，D-07；当前 manifest 的 `defaultPlacement` 为 `order 30` / `slot` 缺省，该 `order` 被兼作 expanded tab 的排序键，见 T-1 与 [13](13-runtime-kernel.md) 已知限制 25；折叠态槽位落地后按 `left` / order 40 生效） | `[]` | `visibleScopes`、`style`、`baseCalendar`（09 §5.3；已落地三键） | 已落地（P1-4 提前消化 P2b 第 2） |
+| `com.cmeng.gourd.progress` | `compact`、`expanded`（折叠态形态 = **中央槽位常驻百分比**；展开态 = **剩余量清单**——一行一个尺度：图标 + 标签 + 细进度条 + 剩余量 + 百分比，行悬停显示起止时刻） | `center` / order 30（2026-09-27 落地：`slot` 记 `center`，`order` 同时是 expanded tab 与 compact 槽位候选的排序键，双语义已按 [13](13-runtime-kernel.md) 已知限制 25 的「明确写下」分支处理，见 D-19；与 T-1 早期给折叠态预留的 `left` / order 40 不同——本版**只做中央槽位**，左/右槽位仍推 P2） | `[]` | `visibleScopes`（默认 `day` + `year`）、`style`、`baseCalendar`（09 §5.3；已落地三键） | 已落地（P1-4 提前消化 P2b 第 2）；折叠态中央槽位 2026-09-27 落地 |
 | `com.cmeng.gourd.shortcuts` | `expanded`（折叠态槽位可选，见 T-1） | — | `shortcuts:run` | `pinnedShortcuts`、`showOutput`、`timeoutSeconds`（09 §5.4） | P2b 第 3；依赖 shelf 的文件输入联动（`--input-path`） |
 | `com.cmeng.gourd.notifications` | `expanded`（浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
@@ -53,8 +53,8 @@
 
 ### T-1 槽位分配
 
-- **结论**：`center`（主内容，独占 1）：nowplaying（order 10）、lyrics（order 20）；`left`（状态类，默认上限 3）：stats（10）、weather（20）、lunar（30）、progress（40）；`right`（动作类，默认上限 3）：timer（10）、clipboard（20）、launcher（30）。shortcuts 的折叠态槽位**默认不声明**，其落地时若声明则记 `right` / order 40。落在默认上限之外的模块（progress、shortcuts）**不进槽位但保持 active**，用户调高 `config.layout.compact.maxPerSide` 或禁用他人后自动补位。
-- **理由**：06 §6.2 已给类别语义与示例（`left` 状态类 stats / weather、`right` 动作类 timer / clipboard、`center` 独占主内容 nowplaying / lyrics），其余模块按同类别归入，超出上限的处置也是 06 §6.2 原文；progress 本批未声明 `compact`（D-07），故表中 `slot` 记 —，其分配值在折叠态落地后生效。**注意 progress 的 `order` 有两个值不要混**：本表 `left` 行写的 **40** 是折叠态槽位的预留值；当前代码里 `defaultPlacement.order` 是 **30**，它在本批被兼作 expanded tab 的排序键（[13](13-runtime-kernel.md) 已知限制 25）——折叠态落地时必须拆字段或同步改写，不能沿用同一字段的双关语义。
+- **结论**：`center`（主内容，独占 1）：nowplaying（order 10）、lyrics（order 20）；`left`（状态类，默认上限 3）：stats（10）、weather（20）、lunar（30）、progress（40）；`right`（动作类，默认上限 3）：timer（10）、clipboard（20）、launcher（30）。shortcuts 的折叠态槽位**默认不声明**，其落地时若声明则记 `right` / order 40。落在默认上限之外的模块（progress、shortcuts）**不进槽位但保持 active**，用户调高 `config.layout.compact.maxPerSide` 或禁用他人后自动补位。（**2026-09-27 回写**：中央槽位先行落地——progress 以 `slot: center` / order 30 常驻居中，本表 `left` / order 40 的分配与每侧上限仍是三槽布局落地时的口径，见 [13](13-runtime-kernel.md) D-19 与「明确不做」。）
+- **理由**：06 §6.2 已给类别语义与示例（`left` 状态类 stats / weather、`right` 动作类 timer / clipboard、`center` 独占主内容 nowplaying / lyrics），其余模块按同类别归入，超出上限的处置也是 06 §6.2 原文；progress 本批未声明 `compact`（D-07），故表中 `slot` 记 —，其分配值在折叠态落地后生效。**注意 progress 的 `order` 有两个值不要混**：本表 `left` 行写的 **40** 是折叠态槽位的预留值；当前代码里 `defaultPlacement.order` 是 **30**，它在本批被兼作 expanded tab 的排序键（[13](13-runtime-kernel.md) 已知限制 25）——折叠态落地时必须拆字段或同步改写，不能沿用同一字段的双关语义。（**已处理**：中央槽位落地时按「明确写下双语义」分支处理，`order` 仍同时供两处排序，见 [13](13-runtime-kernel.md) 已知限制 25 的落地回写。）
 
 ### T-2 controls 的 surfaces
 

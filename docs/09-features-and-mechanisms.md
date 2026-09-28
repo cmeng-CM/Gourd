@@ -265,7 +265,7 @@
 |---|---|
 | 算法 | `Calendar.current.dateInterval(of:for:)` 取区间（`.day` / `.weekOfYear` / `.month` / `.year`），`elapsed / total` 得比例；季度自定义（Q1 = 1–3 月）。**不手算天数**，交给 `Calendar` 处理闰年/跨年/时区 |
 | 刷新 | 不需要定时器：按当前粒度的自然推进节奏刷新（日进度 1 分钟、周/月/季/年 1 小时），且只在槽位可见时刷新 |
-| 呈现 | 折叠态槽位：可配置显示哪几个（如"日 + 年"），形态为环形进度或百分比文本；展开面板一页详细视图（多环 + 数字） |
+| 呈现 | **折叠态 = 中央槽位**常驻「最关心的一个尺度」的百分比（尺度图标 + 数值；取 `visibleScopes` 首项，默认「今天」）；**展开态 = 剩余量清单**（一行一个尺度：图标 + 标签 + 细进度条 + **剩余量** + 百分比，行悬停补该尺度的起止时刻）。默认只显示 **日 + 年**，可配 `visibleScopes`（2026-09-27 定稿，取代原稿的「折叠态环形进度或百分比文本 / 展开面板多环 + 数字」） |
 | 边界 | 用户改系统时间 / 时区切换 → 用 `Calendar.autoupdatingCurrent` + 监听 `NSSystemClockDidChange` |
 | 配置 | `visibleScopes`（多选：day/week/month/quarter/year）、`style`（ring/bar/text）、`baseCalendar`（公历/农历周？默认公历） |
 | 权限 | **无** |
