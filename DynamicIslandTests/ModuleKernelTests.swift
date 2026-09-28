@@ -1762,6 +1762,79 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// **新记录筛选**是纯函数（实时化的核心判据）：`id > 基线`、**按 id 升序**、**按 id 去重**。
+    ///
+    /// 它与 SQL 侧的 `WHERE rec_id > ? ORDER BY rec_id ASC` 是同一口径——单测钉住它，
+    /// 就不必为了验证「哪些算新增」去读真实的系统通知库（那既慢又要完全磁盘访问）。
+    func testNotificationNewRecordsFilterSortAndDeduplicate() {
+        // 空集：没有输入就没有输出（事件驱动下"文件变了但没有新记录"是常态，不能崩）
+        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 10).isEmpty)
+        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 0).isEmpty)
+
+        // 全部 ≤ 基线：旧记录一条都不算新增（含**恰好等于基线**的那条——判据是 `>` 不是 `>=`）
+        XCTAssertTrue(
+            NotificationStore.newRecords(
+                in: [notificationItem(3), notificationItem(9), notificationItem(10)],
+                above: 10
+            ).isEmpty
+        )
+
+        // 乱序输入 → 输出按 id 升序（调用方按到达顺序累加，`hudCandidate` 取 `.last` = 最新）
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [notificationItem(15), notificationItem(11), notificationItem(18), notificationItem(13)],
+                above: 10
+            ).map(\.id),
+            [11, 13, 15, 18]
+        )
+
+        // 重复 id（同一批里重复投递 / 事件重放）只算一条：不过滤会让未读数虚高
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [notificationItem(11), notificationItem(12), notificationItem(11), notificationItem(12)],
+                above: 10
+            ).map(\.id),
+            [11, 12]
+        )
+
+        // 重复 + 乱序 + 基线的混合：一条不多、一条不少、顺序稳定
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [
+                    notificationItem(10), notificationItem(12), notificationItem(11),
+                    notificationItem(2), notificationItem(12), notificationItem(11),
+                ],
+                above: 10
+            ).map(\.id),
+            [11, 12]
+        )
+
+        // 基线 0（空库 / 首次取数）：全部都是新增，整段升序
+        XCTAssertEqual(
+            NotificationStore.newRecords(in: [notificationItem(2), notificationItem(1)], above: 0).map(\.id),
+            [1, 2]
+        )
+        // 负基线（理论上的回退）不改变判据
+        XCTAssertEqual(NotificationStore.newRecords(in: [notificationItem(1)], above: -5).map(\.id), [1])
+    }
+
+    /// 浮层候选与新记录筛选是同一口径（`hudCandidate` = 升序结果的 `.last`）：
+    /// 去重不会让「最新那一条」变成别人，`>` 基线也不会漏掉紧邻基线的第一条。
+    func testNotificationHUDCandidateMatchesNewRecordsOrdering() {
+        let newItems = [notificationItem(12), notificationItem(11), notificationItem(12)]
+        XCTAssertEqual(NotificationStore.newRecords(in: newItems, above: 10).last?.id, 12)
+        XCTAssertEqual(NotificationStore.hudCandidate(in: newItems, above: 10)?.id, 12)
+        // 只有一条晚于基线时，浮层就是那一条（实时性验收里最常见的形态）
+        XCTAssertEqual(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(11)], above: 10)?.id, 11)
+        XCTAssertNil(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(10)], above: 10))
+    }
+
+    /// 事件驱动 / 兜底轮询的两个常量口径：兜底是 **60s**（原来 30s 轮询的替代），
+    /// 不能再回到「亚秒轮询」——实时性由文件事件负责（09 §5.5）。
+    func testNotificationFallbackPollIntervalIsCoarse() {
+        XCTAssertEqual(NotificationStore.fallbackPollInterval, 60, "兜底轮询是 60s；实时性靠文件事件")
+    }
+
     /// 构造一条通知夹具（只关心 id 的用例用它）。
     private func notificationItem(_ id: Int64, title: String = "", body: String = "") -> NotificationItem {
         NotificationItem(

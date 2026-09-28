@@ -8,8 +8,9 @@
 //  **三条硬性规则**（09 §5.5）：
 //  1. **只读**：一律 `SQLITE_OPEN_READONLY` 打开，绝不写该库（连 VACUUM / WAL 都不碰）；
 //     也不写任何临时文件到该目录；
-//  2. **增量**：按 `record` 表的单调自增 id 取新增 + **文件 mtime 变化触发**，
-//     不做 1s 全表扫（该库可能很大）；
+//  2. **增量**：按 `record` 表的单调自增 id 取新增 + **文件事件触发**（`startWatching`，2026-09-28
+//     把 30s 轮询换成了事件驱动——`db`/`db-wal` 一有写入就取数，浮层因此是实时的；mtime 只作
+//     兜底轮询的廉价闸门），不做 1s 全表扫（该库可能很大）；
 //  3. **防御式解码**：`record.data` 是二进制 plist，键名与 schema 都是私有的——
 //     逐键 try，取不到给空并记录缺失键名，**任何 schema 差异都不得崩或抛错**。
 //
@@ -23,6 +24,7 @@
 //
 
 import Foundation
+import OSLog
 import SQLite3
 
 // MARK: - 数据形状
@@ -235,6 +237,23 @@ final class NotificationCenterReader: @unchecked Sendable {
         [databasePath, databasePath + "-wal"]
             .compactMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.modificationDate] as? Date }
             .max()
+    }
+
+    // MARK: 文件事件监听（实时化的主路径）
+
+    /// 监听 `db` 与 `db-wal` 的**写入事件**；事件到来后**去抖 ~0.3s** 再回调
+    /// （一条通知会写多行 / 两个文件，事件成串到来，不去抖会把同一批取好几遍）。
+    ///
+    /// 返回值是**取消闭包**，同时也是监听器的生命周期持有者——闭包被调用一次或释放后，监听即停
+    /// （`deactivate()` 侧只需要把它存下来、必要时调一次）。
+    ///
+    /// 监听**不读库内容、不申请任何权限**：`open(path, O_EVTONLY)` 只订阅 vnode 事件。
+    /// 该 `open` 被 TCC 拒绝时只是「这个文件挂不上 source」——调用方仍有兜底轮询，
+    /// 事件驱动是**加速**而不是唯一取数路径，因此这里不抛错、也不改判定。
+    func startWatching(onChange: @escaping () -> Void) -> () -> Void {
+        let watcher = NotificationDatabaseWatcher(databasePath: databasePath, onChange: onChange)
+        watcher.start()
+        return { watcher.stop() }
     }
 
     // MARK: 读取列表
@@ -762,5 +781,182 @@ final class NotificationCenterReader: @unchecked Sendable {
     private static func describe(_ error: Error) -> String {
         let nsError = error as NSError
         return "\(nsError.domain) \(nsError.code): \(nsError.localizedDescription)"
+    }
+}
+
+// MARK: - 文件事件监听器
+
+/// 通知库文件的事件监听器：**`db` 与 `db-wal` 各一个 `DispatchSource`**。
+///
+/// 为什么必须两个都挂（2026-09-28 实测）：该库是 **WAL 模式**——新通知只写 `db-wal`，
+/// 主库 `db` 的 mtime 纹丝不动（同 `modificationDate` 的校正口径）。只挂主库 = 等于没挂。
+///
+/// 三条实现约束：
+/// 1. **每个事件后重新对账**（`reconcileNow`）：`db-wal` 会被 checkpoint 清掉、被 rename 换掉，
+///    那时旧 fd 已经失效（新文件写它收不到事件），必须摘掉；文件重新出现时再补挂。
+///    只在启动时挂一次会永久丢掉 `db-wal`；
+/// 2. **去抖**（不去抖就是「一次通知触发一串取数」）：事件里记一个 pending 令牌，
+///    `Task.sleep(300ms)` 醒来后比对令牌——期间来过新事件就让这次回调作废。
+///    刻意不用 `Timer`：堆叠的 Timer 会在密集写入下同时点火，正是要避免的情形；
+/// 3. **回调在 watcher 自己的串行队列上**：调用方负责跳回自己的 actor（模块侧跳主 actor）。
+///
+/// `O_EVTONLY` 的 `open` 被 TCC 拒绝时（`EPERM`）不致命：该文件挂不上 source，兜底轮询仍在跑。
+final class NotificationDatabaseWatcher: @unchecked Sendable {
+    /// 去抖窗口：0.3s 够让「一次通知写多行 + 写两个文件」的成串事件收成一次回调，
+    /// 又远小于人眼能察觉的延迟（用户的验收口径是 < 3s，实测 < 1s）。
+    static let debounceInterval: Duration = .milliseconds(300)
+
+    /// 监听的文件（顺序固定：主库在前、WAL 在后，日志口径稳定）。
+    private let paths: [String]
+    /// 事件处理与 source 管理都在这一条串行队列上（不占主线程）。
+    private let queue = DispatchQueue(label: "com.cmeng.gourd.notifications.db-watcher")
+    /// 保护 `sources` / `pendingToken` / `isStopped`（跨队列访问：stop 可能在任意线程被调）。
+    private let lock = NSLock()
+    private var sources: [String: DispatchSourceFileSystemObject] = [:]
+    /// 去抖令牌：每次事件自增，睡醒后令牌不等 = 期间又有事件，本次回调作废。
+    private var pendingToken = 0
+    private var isStopped = false
+    private let onChange: () -> Void
+
+    /// 监听器的诊断日志。**刻意不走宿主 `Logger`**：那条路径受设置里的 `logLevel` 闸门控制
+    ///（默认 `.none` = 全静默），而「source 挂上没有、事件来没来」是实时性唯一的现场证据——
+    /// 一律直出到统一日志（`log stream --info --predicate 'subsystem BEGINSWITH "com.cmeng.gourd"'`）。
+    private static let logger = os.Logger(
+        subsystem: "com.cmeng.gourd.module.notifications",
+        category: "watcher"
+    )
+
+    init(databasePath: String, onChange: @escaping () -> Void) {
+        self.paths = [databasePath, databasePath + "-wal"]
+        self.onChange = onChange
+    }
+
+    deinit { stop() }
+
+    /// 起监听（异步对账一次：只为**已存在**的文件挂 source）。
+    func start() {
+        queue.async { [self] in
+            Self.logger.info("监听开始，目标 \(self.paths.map { ($0 as NSString).lastPathComponent }.joined(separator: " + "), privacy: .public)")
+            reconcileNow()
+        }
+    }
+
+    /// 停监听并取消全部 source（幂等；`cancel` 的清理闭包负责关掉 fd）。
+    func stop() {
+        lock.lock()
+        isStopped = true
+        pendingToken += 1  // 让在飞的去抖任务失效
+        let live = Array(sources.values)
+        sources.removeAll()
+        lock.unlock()
+        live.forEach { $0.cancel() }
+    }
+
+    /// 与文件系统对账：给新出现的文件补挂 source，把已消失的文件摘掉。
+    ///
+    /// 公开给「兜底轮询」顺带调用是可选的（模块当前不调）：事件路径自己每次都会对账。
+    func reconcile() {
+        queue.async { [self] in reconcileNow() }
+    }
+
+    // MARK: 内部（全部在 `queue` 上）
+
+    private func reconcileNow() {
+        let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        for path in existing where currentSource(for: path) == nil {
+            attach(path)
+        }
+        for (path, source) in currentSources() where !existing.contains(path) {
+            // delete / rename 之后旧 fd 只对已被 unlink 的 inode 有效：留着只会空转，
+            // 等文件重新出现（下一次 reconcileNow）再补挂。
+            removeSource(for: path)
+            source.cancel()
+            Self.logger.info("摘掉 source（文件已消失）：\((path as NSString).lastPathComponent, privacy: .public)")
+        }
+    }
+
+    private func attach(_ path: String) {
+        let name = (path as NSString).lastPathComponent
+        let descriptor = open(path, O_EVTONLY)
+        guard descriptor >= 0 else {
+            // TCC 拒绝（EPERM）或其它 open 失败：不致命，兜底轮询仍在（见类型注释）。
+            Self.logger.warning(
+                "open(O_EVTONLY) 失败，\(name, privacy: .public) 没有 source，errno \(errno, privacy: .public)"
+            )
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .extend, .attrib, .delete, .rename],
+            queue: queue
+        )
+        source.setEventHandler { [weak self] in self?.handleEvent(name) }
+        source.setCancelHandler { close(descriptor) }
+
+        lock.lock()
+        if isStopped {
+            lock.unlock()
+            source.cancel()
+            source.resume()  // 已挂起的 source 要 resume 才会派发 cancel 事件（= 关掉 fd）
+            return
+        }
+        sources[path] = source
+        lock.unlock()
+        source.resume()
+        Self.logger.info("已挂 source：\(name, privacy: .public)（fd \(descriptor, privacy: .public)）")
+    }
+
+    private func handleEvent(_ name: String) {
+        Self.logger.debug("文件事件：\(name, privacy: .public)")
+        // ① 先对账：`.delete` / `.rename` 之后文件可能已经换了一个（checkpoint 清 db-wal、
+        //    库被原子替换），同一批事件里就要把旧的摘掉、新的补上。
+        reconcileNow()
+        // ② 再去抖回调：一次写入会来一串事件，只让最后那次回调生效。
+        scheduleCallback()
+    }
+
+    private func scheduleCallback() {
+        lock.lock()
+        guard !isStopped else {
+            lock.unlock()
+            return
+        }
+        pendingToken += 1
+        let token = pendingToken
+        lock.unlock()
+
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.debounceInterval)
+            guard let self else { return }
+            guard self.consumeDebounceToken(token) else { return }  // 期间又有事件：交给那一次
+            Self.logger.info("去抖窗口结束，回调取数")
+            self.onChange()
+        }
+    }
+
+    /// 去抖令牌是否仍是「最后那一个」（同步方法：`NSLock` 不能在 async 上下文里直接 lock/unlock——
+    /// 那是 Swift 6 的编译错误，这里包一层同步壳子）。
+    private func consumeDebounceToken(_ token: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !isStopped && pendingToken == token
+    }
+
+    private func currentSource(for path: String) -> DispatchSourceFileSystemObject? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sources[path]
+    }
+
+    private func currentSources() -> [String: DispatchSourceFileSystemObject] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sources
+    }
+
+    private func removeSource(for path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        sources[path] = nil
     }
 }

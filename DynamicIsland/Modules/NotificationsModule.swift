@@ -21,8 +21,13 @@
 //    关掉该项即可，关掉后浮层第二行只留「新通知」。
 //
 //  ## 增量策略（09 §5.5）
-//  30s 轮询（`activate()` 起一个 Task，`deactivate()` 取消）→ **先看库文件 mtime**，没变直接返回；
-//  变了才按 `record.rec_id > 基线` 取新增。**不做 1s 全表扫**（该库可能很大）。
+//  **文件事件驱动（主路径）+ 60s 兜底轮询（第二道闸门）**——2026-09-28 把原来的 30s 轮询换掉：
+//  - 主路径：`NotificationCenterReader.startWatching` 监听 `db` / `db-wal` 的写入事件，
+//    事件到齐（去抖 0.3s）后立刻按 `record.rec_id > 基线` 取增量 → 有新记录就弹浮层。
+//    **这就是「实时」**：用户造一条通知，浮层在 1 秒内出现（原先最坏要等 30s）；
+//  - 兜底：每 60s 仍按 `rec_id > 基线` 取一次（**不过 mtime 闸门**）——事件可能漏报
+//    （`O_EVTONLY` 被 TCC 拒绝、`db-wal` 被 checkpoint 清掉后重建的空档里没有 source 可挂）；
+//  - **不做 1s 全表扫**（该库可能很大）：两条路径都只做 `rec_id > 基线` 的索引查询。
 //  **首次 `activate()` 建基线**（`refreshAll()` 把基线推到当前 `MAX(rec_id)`）：激活前就在库里的
 //  通知不算「新增」，因此不会为旧通知弹浮层、也不会一装上就冒出几十条未读。
 //
@@ -60,8 +65,9 @@ import SwiftUI
 final class NotificationStore: ObservableObject {
     /// 列表条数上限（本批是常量：第一版不读配置，见文件头）。
     static let maxItems = 40
-    /// 轮询间隔（秒）。**30s，不是 1s**——增量另靠 mtime 闸门（09 §5.5）。
-    static let pollInterval: TimeInterval = 30
+    /// 兜底轮询间隔（秒）。**60s，不是 1s**——实时性由文件事件保证（见文件头「增量策略」），
+    /// 这条轮询只用来兜「事件漏报」。
+    static let fallbackPollInterval: TimeInterval = 60
 
     /// 最新通知（新的在前），最多 `maxItems` 条。
     @Published private(set) var items: [NotificationItem] = []
@@ -83,26 +89,44 @@ final class NotificationStore: ObservableObject {
     /// 基线/增量这套逻辑仍可单测。
     var presentHUD: ((NotificationItem) -> Void)?
 
-    /// 一次轮询的浮层候选：**只取 `id > baseline` 里 id 最大的那个**。
+    /// 一次取数的浮层候选：**只取 `id > baseline` 里 id 最大的那个**。
     ///
-    /// - 基线之外的一律不算（激活前就存在的通知、被 mtime 闸门漏过的旧记录都不会弹浮层）；
+    /// - 基线之外的一律不算（激活前就存在的通知、以及被 `refreshAll` 推进基线时一起算进「已见」的
+    ///   旧记录，都不会弹浮层）；
     /// - 多条新通知只弹**最新一条**（09 §5.5：避免刷屏），其余只进未读计数。
     ///
-    /// **纯函数**（生产路径与单测共用）：单测直接喂「基线 + 新记录集合」，不必起轮询。
+    /// **纯函数**（生产路径与单测共用）：单测直接喂「基线 + 新记录集合」，不必起监听或轮询。
     static func hudCandidate(in items: [NotificationItem], above baseline: Int64) -> NotificationItem? {
-        items
-            .filter { $0.id > baseline }
-            .max { $0.id < $1.id }
+        newRecords(in: items, above: baseline).last
+    }
+
+    /// **纯函数**：给定基线 `rec_id` 与一批记录 → 只返回 `id > 基线` 的，**按 id 升序**去重。
+    ///
+    /// 口径与 SQL 侧的 `WHERE rec_id > ? ORDER BY rec_id ASC` 严格一致（这是单测钉住它的理由：
+    /// SQL 那条路需要真实库，这条不需要）：
+    /// - 等于基线的不算新增（`>` 而不是 `>=`）；
+    /// - **去重按 id**：同一批里重复出现的同一条只算一条（重复计数会让未读数虚高）；
+    /// - 升序：调用方按到达顺序处理（`hudCandidate` 取 `.last` = 最新那一条）。
+    static func newRecords(in items: [NotificationItem], above baseline: Int64) -> [NotificationItem] {
+        var seen: Set<Int64> = []
+        return items
+            .filter { $0.id > baseline && seen.insert($0.id).inserted }
+            .sorted { $0.id < $1.id }
     }
 
     private let reader: NotificationCenterReader
     private let log: ModuleLogger
     /// 增量基线：已见过的最大 `rec_id`（09 §5.5 的「按单调 id 取新增」）。
     private var baselineRecordID: Int64 = 0
-    /// 上次看到的库文件 mtime（mtime 未变 = 库没写过，连增量查询都不做）。
+    /// 上次看到的库文件 mtime（**只用于日志与「库真的不在」的判定**，不再是取数闸门：
+    /// 事件驱动下闸门只会帮倒忙——事件说变了、mtime 还没落地时它会挡住取数）。
     private var lastModificationDate: Date?
     /// 串行闸：探针 / 全量 / 增量共用同一把（都是主线程状态，重入会写乱基线）。
     private var isFetching = false
+    /// 取数期间到来的文件事件（**丢事件比慢更糟**：记下来，取完立刻补一次增量）。
+    private var pendingIncrementalRefresh = false
+    /// 事件监听的取消闭包（`reader.startWatching` 的返回值；由本 store 持有）。
+    private var watchCancel: (() -> Void)?
     /// bundleIdentifier → App 本地化显示名（含「解析不到」的空串缓存，避免每次轮询重查）。
     private var appNameCache: [String: String] = [:]
 
@@ -125,6 +149,48 @@ final class NotificationStore: ObservableObject {
 
     // MARK: 取数
 
+    /// 起文件事件监听（**实时化的主路径**）：`db` / `db-wal` 一有写入，去抖 0.3s 后立刻取增量。
+    ///
+    /// 幂等（已在监听时直接返回）；watcher 的回调在它自己的串行队列上，这里跳回主 actor
+    /// （store 的 `@Published` 只能在主线程写）。
+    func startWatching() {
+        guard watchCancel == nil else { return }
+        let reader = self.reader
+        watchCancel = reader.startWatching { [weak self] in
+            Task { @MainActor in
+                await self?.handleDatabaseChange()
+            }
+        }
+        log.info("已起通知库文件事件监听（db + db-wal）")
+    }
+
+    /// 停监听（`deactivate()` 调；取消闭包同时释放 watcher）。
+    func stopWatching() {
+        watchCancel?()
+        watchCancel = nil
+    }
+
+    /// **事件驱动的取数**（主路径）：库文件刚被写过 → 立刻取增量 → 有新记录就弹浮层。
+    ///
+    /// 正在取数时（面板刷新 / 兜底轮询撞上）**不丢事件**：记一个待办，取完立刻补一次
+    /// （丢了就等于这条通知永远不弹浮层——兜底轮询只补列表、不会补浮层）。
+    func handleDatabaseChange() async {
+        if isFetching {
+            pendingIncrementalRefresh = true
+            return
+        }
+        await refreshIncremental(reason: "文件事件")
+        await drainPendingIncrementalRefresh()
+    }
+
+    /// 取数收尾：若取数期间又来过文件事件，补一次增量（见 `pendingIncrementalRefresh`）。
+    private func drainPendingIncrementalRefresh() async {
+        while pendingIncrementalRefresh {
+            pendingIncrementalRefresh = false
+            await refreshIncremental(reason: "文件事件（取数期间排队）")
+        }
+    }
+
     /// 全量刷新：最新 `maxItems` 条进列表，并把增量基线推到 `MAX(rec_id)`
     /// （**既有通知不算「新增」**——否则一装上就冒出几十条未读）。
     func refreshAll() async {
@@ -138,9 +204,15 @@ final class NotificationStore: ObservableObject {
 
         apply(fetched, from: reader)
         log.info("全量刷新：\(fetched.count) 条，判定 \(String(describing: reader.lastState))")
+        await drainPendingIncrementalRefresh()
     }
 
-    /// 30s 轮询一次：**先过 mtime 闸门**，库没变就什么都不做（09 §5.5：不要全表扫）。
+    /// 兜底轮询一次（60s）。**刻意不过 mtime 闸门**：它要救的正是「文件事件漏报」，
+    /// 而闸门（mtime 没变就不取）会让它跟着一起漏——一分钟一次 `rec_id > 基线` 的索引查询，
+    /// 成本可以忽略，换来的是「事件全挂也不丢通知」。
+    ///
+    /// 唯一保留的判定是「库文件元数据完全读不到」（stat 都不行 = 库真的不在）：
+    /// 那时只更新面板判定，不进增量。
     func pollOnce() async {
         guard !isFetching else { return }
         let reader = self.reader
@@ -152,12 +224,16 @@ final class NotificationStore: ObservableObject {
             state = .failure("库文件不可访问：\(reader.databasePath)")
             return
         }
-        if let lastModificationDate, mtime <= lastModificationDate { return }
-        await refreshIncremental()
+        lastModificationDate = mtime
+        await refreshIncremental(reason: "兜底轮询")
+        await drainPendingIncrementalRefresh()
     }
 
     /// 增量：取 `rec_id > 基线` 的新通知；有新条目才累加未读数并刷新列表。
-    private func refreshIncremental() async {
+    ///
+    /// 两条路径共用（文件事件 / 兜底轮询），`reason` 只进日志——**实时性的证据就是这两行日志的
+    /// 时间差**（见 docs/09 §5.5 的实测记录）。
+    private func refreshIncremental(reason: String) async {
         guard !isFetching else { return }
         isFetching = true
         defer { isFetching = false }
@@ -177,7 +253,7 @@ final class NotificationStore: ObservableObject {
         unseenCount += newItems.count
         let fetched = await Task.detached(priority: .utility) { reader.fetchRecent(limit: limit) }.value
         apply(fetched, from: reader)
-        log.info("新增 \(newItems.count) 条通知（未读累计 \(unseenCount)）")
+        log.info("\(reason)：新增 \(newItems.count) 条通知，最新 rec_id=\(newItems.map(\.id).max() ?? -1)（未读累计 \(unseenCount)）")
 
         // 浮层：只弹**最新一条**，且必须严格晚于**本次取数前的基线**（`hudCandidate` 的判据）。
         // 用取数前的 `baseline` 而不是刚更新的 `baselineRecordID`——后者已经把新条目算进去了。
@@ -302,40 +378,49 @@ final class NotificationsModule: GourdModule {
         }
     }
 
-    /// 起轮询（30s 一次，**幂等**）：首个 tick 前先跑一次探针 + **建基线**。
+    /// 起**文件事件监听（主路径）+ 兜底轮询（60s）**，两者都幂等；首个 tick 前先跑一次探针 + **建基线**。
     ///
     /// 探针与取数都在**后台任务**里跑（`NotificationCenterReader` 无共享可变状态、可安全跨线程）——
     /// 库在 TCC 拒绝下会立刻失败，授权后也只是读一个几百 KB 的 SQLite，但一律不占主线程。
     ///
     /// **建基线是浮层语义的前提**：`refreshAll()` 把基线推到当前 `MAX(rec_id)`，激活前就躺在
-    /// 库里的通知因此不算「新增」——不建基线的话，装上后第一次轮询会把最近 40 条全当新通知
-    ///（还会为其中最旧的一条弹浮层）。它同时落好 `lastModificationDate`，让 mtime 闸门从第一刻起有效。
+    /// 库里的通知因此不算「新增」——不建基线的话，装上后第一次取数会把最近 40 条全当新通知
+    ///（还会为其中最旧的一条弹浮层）。
+    ///
+    /// 顺序有讲究：**先起监听再建基线**。反过来的话，建基线那几百毫秒里到达的通知会既不算新增
+    /// （被 `refreshAll` 推进基线）也没有浮层——先挂事件，事件驱动的取数会与 `refreshAll` 串行
+    /// （`isFetching` 闸）且排队补一次（`drainPendingIncrementalRefresh`）。
     func activate() async throws {
         guard pollTask == nil else { return }
         let store = self.store
         let shouldProbe = !didRunProbe
         didRunProbe = true
 
+        store.startWatching()
         pollTask = Task { [store] in
             if shouldProbe {
                 await store.runProbe()
             }
             await store.refreshAll()
             while !Task.isCancelled {
-                await store.pollOnce()
                 do {
-                    try await Task.sleep(for: .seconds(NotificationStore.pollInterval))
+                    try await Task.sleep(for: .seconds(NotificationStore.fallbackPollInterval))
                 } catch {
                     return  // 被取消（deactivate）：正常退出，不记错误
                 }
+                await store.pollOnce()
             }
         }
-        context.logger.info("notifications 模块已激活（轮询 \(Int(NotificationStore.pollInterval))s，已建增量基线）")
+        context.logger.info(
+            "notifications 模块已激活（db/db-wal 文件事件驱动 + 兜底轮询 "
+                + "\(Int(NotificationStore.fallbackPollInterval))s，已建增量基线）"
+        )
     }
 
     func deactivate() async {
         pollTask?.cancel()
         pollTask = nil
+        store.stopWatching()
     }
 
     /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、不算失败）。
