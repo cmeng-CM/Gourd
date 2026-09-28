@@ -990,6 +990,11 @@ struct ContentView: View {
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && !shelfState.isEmpty && !vm.hideOnClosed && !lockScreenManager.isLocked && !enableMinimalisticUI {
                           ShelfInlineLiveActivity()
                               .transition(.opacity.animation(.smooth(duration: 0.25)))
+                      } else if vm.notchState == .closed && !vm.hideOnClosed && !isCurrentScreenExpansionVisible && !enableMinimalisticUI && !ModuleRegistry.shared.compactEntries.isEmpty {
+                          // 模块的折叠态中央槽位：**低优先**——只在上面所有 live activity 都没占用
+                          // 关闭态时显示（与它们共用一条优先级链，故有活动时自动让位）。
+                          ModuleCompactSlotView()
+                              .transition(.opacity.animation(.smooth(duration: 0.25)))
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                       } else if !isCurrentScreenExpansionVisible && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           DynamicIslandFaceAnimation().animation(.interactiveSpring, value: musicManager.isPlayerIdle)

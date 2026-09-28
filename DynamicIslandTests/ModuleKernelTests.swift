@@ -7,7 +7,8 @@
 //  权限白名单常量表、config 子集解析、协议可一致性；构造一律走 `ModuleManifest.decode(from:)`
 //  （JSON 路径），与宿主读 descriptor 同一条路。
 //  T2 注册表与组合根——注册幂等、activate 抛错隔离、启用门、tab 投影、content 降级、
-//  `ModuleContextFactory` 的默认值读取、首启默认值幂等。
+//  `ModuleContextFactory` 的默认值读取、首启默认值幂等、**折叠态中央槽位投影**
+//  （`compactEntries` 过滤与排序、`compactSlotContent()` 的转发与无候选回退）。
 //  T3 接缝——S2 的 tab 计数（刘海最小宽度的输入）把注册表条目计入总数；S4 的
 //  `selectModule(_:)` 同时设 `selectedModuleID` 与 `currentView`。
 //  T4 试点模块 progress——进度计算（闰年 2 月 / 季度边界 / 年初年末 / 周起止随日历）、
@@ -964,10 +965,10 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.summary?.key, "module.progress.summary")
         XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.pie"))
         XCTAssertEqual(manifest.kind, "builtin")
-        XCTAssertEqual(manifest.surfaces, [.expanded])
+        XCTAssertEqual(manifest.surfaces, [.compact, .expanded], "折叠态中央槽位 + 展开面板清单")
         XCTAssertEqual(manifest.defaultEnabled, true)
         XCTAssertEqual(manifest.defaultPlacement?.order, 30)
-        XCTAssertNil(manifest.defaultPlacement?.slot, "slot 只在声明 compact 时有意义；progress 只声明 expanded")
+        XCTAssertEqual(manifest.defaultPlacement?.slot, .center, "声明 compact 后 slot 记 center（06 §6.2）")
         XCTAssertTrue(manifest.permissions.isEmpty, "09 §5.3：progress 无权限")
 
         let properties = try XCTUnwrap(manifest.config?.properties)
@@ -1035,16 +1036,71 @@ final class ModuleKernelTests: XCTestCase {
         // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
         XCTAssertTrue(["Progress", "进度"].contains(entry.label), "tab 文案应已本地化，实到 \(entry.label)")
 
-        // 只声明了 expanded：其余 surface 一律 `.none`（不占位、不算失败）
+        // 两个 surface 各给一份内容：expanded = 剩余量清单、compact = 中央槽位的图标 + 百分比；
+        // 未声明的 lockscreen 一律 `.none`（不占位、不算失败）
         guard case .view = registry.content(for: id, request: request(.expanded)) else {
             return XCTFail("展开请求应拿到 .view")
         }
-        guard case .none = registry.content(for: id, request: request(.compact)) else {
-            return XCTFail("compact 未声明，应返回 .none")
+        guard case .view = registry.content(for: id, request: request(.compact)) else {
+            return XCTFail("compact 已声明，应返回 .view")
         }
         guard case .none = registry.content(for: id, request: request(.lockscreen)) else {
             return XCTFail("lockscreen 未声明，应返回 .none")
         }
+
+        // 折叠态中央槽位投影：真模块是唯一候选，槽位内容同样拿到 `.view`
+        XCTAssertEqual(registry.compactEntries.map(\.id), [id])
+        guard case .view = registry.compactSlotContent() else {
+            return XCTFail("折叠态中央槽位应拿到 progress 的 .view 内容")
+        }
+    }
+
+    /// 折叠态中央槽位的投影：只含 `active` 且声明 `.compact` 的模块（**只有 `expanded` 的不得入选**，
+    /// failed / disabled 同样不入选），按 `order` 升序、同 `order` 按 id 字典序；
+    /// `compactSlotContent()` 转发候选里的第一个，无候选（未 bootstrap / 未激活）时返回 `.none`。
+    func testCompactEntriesProjectionAndSlotContent() async {
+        let registry = ModuleRegistry.shared
+        // 三个声明 compact 的：order 1 的 compact（只有 compact）、order 1 的 dual（compact + expanded，
+        // 同 order 按 id 字典序）、order 40 的 compact-late；加上只有 expanded 的 alpha（不得入选）、
+        // 抛错的 beta 与被禁用的 optin（不得入选）
+        registerProbes([
+            CompactProbeModule.self,
+            DualSurfaceProbeModule.self,
+            CompactLateProbeModule.self,
+            AlphaProbeModule.self,
+            BetaProbeModule.self,
+            OptInProbeModule.self,
+        ])
+
+        // 注册了但尚未 bootstrap：没有 active 的候选 → 槽位内容 `.none`（不占位）
+        XCTAssertTrue(registry.compactEntries.isEmpty, "未 bootstrap 时不应有候选")
+        guard case .none = registry.compactSlotContent() else {
+            return XCTFail("无候选时槽位内容应为 .none")
+        }
+
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.compactEntries.map(\.id), [
+            "com.cmeng.gourd.probe-compact",       // order 1，与 dual 同序 → id 字典序在前
+            "com.cmeng.gourd.probe-dual",          // order 1
+            "com.cmeng.gourd.probe-compact-late",  // order 40
+        ])
+        XCTAssertEqual(registry.compactEntries.map(\.order), [1, 1, 40])
+        // 只有 expanded 的模块（alpha）不得入选；failed（beta）/ disabled（optin）也不得入选
+        for id in ["com.cmeng.gourd.probe-alpha", "com.cmeng.gourd.probe-beta", "com.cmeng.gourd.probe-optin"] {
+            XCTAssertFalse(registry.compactEntries.contains { $0.id == id }, "\(id) 不应进折叠态槽位候选")
+        }
+
+        // 转发**第一个**候选：`compact` / `compact-late` 的内容都是 `.none`（与「无候选」同形），
+        // 所以换一组夹具——只注册 dual（compact 请求答一个可辨认的 `.unavailable`）
+        await registry.deactivateAll()
+        registerProbes([DualSurfaceProbeModule.self, AlphaProbeModule.self])
+        await registry.bootstrap()
+        XCTAssertEqual(registry.compactEntries.map(\.id), ["com.cmeng.gourd.probe-dual"])
+        guard case .unavailable(let reason) = registry.compactSlotContent() else {
+            return XCTFail("槽位内容应转发给第一个候选模块")
+        }
+        XCTAssertTrue(reason.contains("probe-dual"), "转发到的应是 compactEntries 的第一个，实到 \(reason)")
     }
 }
 
@@ -1190,5 +1246,25 @@ private final class CompactProbeModule: ProbeModule {
 private final class OptInProbeModule: ProbeModule {
     override class var manifest: ModuleManifest {
         RegistryFixture.manifest(shortID: "probe-optin", order: 2, defaultEnabled: false)
+    }
+}
+
+/// `compact` + `expanded`、order 1（与 `CompactProbeModule` 同序 → 比 id 字典序）；
+/// `compact` 请求答一个**可辨认**的 `.unavailable`（默认假体答 `.none`，与注册表「无候选」同形，
+/// 无法证明 `compactSlotContent()` 转发到了谁），其余 surface 仍答 `.none`。
+private final class DualSurfaceProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest {
+        RegistryFixture.manifest(shortID: "probe-dual", surfaces: [.compact, .expanded], order: 1)
+    }
+
+    override func content(for request: ContentRequest) -> ModuleContent {
+        request.surface == .compact ? .unavailable(reason: "probe-dual 的 compact 内容") : .none
+    }
+}
+
+/// 只声明 `compact`、order 40：验证折叠态候选按 `order` 升序（排在两个 order 1 的后面）
+private final class CompactLateProbeModule: ProbeModule {
+    override class var manifest: ModuleManifest {
+        RegistryFixture.manifest(shortID: "probe-compact-late", surfaces: [.compact], order: 40)
     }
 }

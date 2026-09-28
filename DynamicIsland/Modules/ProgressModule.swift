@@ -6,8 +6,9 @@
 //  `GourdModule` + 往 `KernelBootstrap.builtinModules` 加一行」（验收 A3）里那「一行」的样本。
 //
 //  **形态定稿（2026-09-27 用户反馈后重做，09 §5.3 呈现行）**：
-//  展开态（`expanded`）= **剩余量清单**：一行一个尺度（图标 + 标签 + 细进度条 + 剩余量 + 百分比），
-//  默认只显示 **日 + 年**（`visibleScopes` 默认值，可配；解析见 `ProgressCalculator.resolveScopes`）。
+//  - 折叠态（`compact` / `slot == .center`）= 中央槽位常驻**最关心的一个尺度**的百分比；
+//  - 展开态（`expanded`）= **剩余量清单**：一行一个尺度（图标 + 标签 + 细进度条 + 剩余量 + 百分比），
+//    默认只显示 **日 + 年**（`visibleScopes` 默认值，可配；解析见 `ProgressCalculator.resolveScopes`）。
 //  旧的三态排版（等权五环 / 条形 / 纯文本）已不再使用：`style` 配置项**保留**（契约不变），
 //  但本版**只实现清单这一种形态**，`ring` / `bar` / `text` 取值一律按清单渲染。
 //
@@ -47,8 +48,9 @@ enum ProgressBaseCalendar: String, CaseIterable {
 final class ProgressModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
-    /// - `surfaces` 只声明 `expanded`（D-07）：compact 槽位本批不做，故不声明；
-    /// - `defaultPlacement` 只给 `order`（`slot` 仅在声明 compact 时有意义，故不给）；
+    /// - `surfaces`：`expanded`（展开面板一页剩余量清单）+ `compact`（折叠态中央槽位）；
+    /// - `defaultPlacement`：`slot == .center`（折叠态槽位的归属，06 §6.2）、`order == 30`
+    ///   （既排 tab、也排槽位，同序按 id 字典序；槽位只取 `compactEntries` 的第一个）；
     /// - `config` 三项只声明类型与默认值：本批**没有用户可见的配置入口**（docs/13「明确不做」），
     ///   读取侧拿到的恒是这里的 `default`；`visibleScopes` 的默认值即「出厂显示哪些尺度」（日 + 年）。
     static let manifest = ModuleManifest(
@@ -60,8 +62,8 @@ final class ProgressModule: GourdModule {
         version: "1.0.0",
         apiVersion: HostInfo.currentAPIVersion,
         kind: "builtin",
-        surfaces: [.expanded],
-        defaultPlacement: Placement(slot: nil, order: 30),
+        surfaces: [.compact, .expanded],
+        defaultPlacement: Placement(slot: .center, order: 30),
         defaultEnabled: true,
         permissions: [],
         config: ConfigSchema(
@@ -105,14 +107,20 @@ final class ProgressModule: GourdModule {
 
     func deactivate() async {}
 
-    /// 只在展开面板给内容；`compact` / `lockscreen` 未声明 → `.none`
+    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`
     ///（06 §3.2 的「该 surface 此刻无内容」：不占位、也不算失败）。
     ///
     /// 配置在**每次请求时重读**：宿主 `requestRedraw()` 触发重算时，视图拿到的是新的
     /// `visibleScopes`（本批没有配置入口，读到的是 manifest 默认值）。
     func content(for request: ContentRequest) -> ModuleContent {
-        guard request.surface == .expanded else { return .none }
-        return .view(AnyView(ProgressModuleView(scopes: scopes)))
+        switch request.surface {
+        case .compact:
+            return .view(AnyView(ProgressCompactView(scopes: scopes)))
+        case .expanded:
+            return .view(AnyView(ProgressModuleView(scopes: scopes)))
+        case .lockscreen:
+            return .none
+        }
     }
 
     // MARK: - 配置读取
@@ -199,6 +207,36 @@ private struct ProgressScopeRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.6))
                     .padding(.leading, 22)
+            }
+        }
+    }
+}
+
+// MARK: - 折叠态中央槽位视图
+
+/// 折叠态中央槽位的内容：尺度图标 + 百分比，尺度取 `visibleScopes` 的第一个（默认「今天」）。
+///
+/// 常驻在关闭态的刘海中央，所以**自带 60s 的 `TimelineView`**：宿主不会为这一格起定时器，
+/// 没有它百分比会一直停在视图构造时的值（与展开面板同一粒度，见 docs/13「已知限制」14）。
+///
+/// 关闭态的槽位尺寸极窄，因此只有 11pt 图标 + 13pt 数值（`HStack(spacing: 5)`），
+/// 不显示标签文案——尺度靠图标区分，最关心的那个由 `visibleScopes` 的首项决定。
+private struct ProgressCompactView: View {
+    let scopes: [ProgressCalculator.Scope]
+
+    private var scope: ProgressCalculator.Scope { scopes.first ?? .day }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+            HStack(spacing: 5) {
+                Image(systemName: scope.symbolName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+
+                Text(ProgressText.percent(ProgressCalculator.progress(for: scope, now: timeline.date)))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
             }
         }
     }

@@ -168,6 +168,45 @@ public final class ModuleRegistry: ObservableObject {
             .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
     }
 
+    /// 折叠态中央槽位的候选：`active` 且 `surfaces` 含 `.compact`，
+    /// 按 `order` 升序、同 `order` 按 id 字典序（与 `tabEntries` 同一比较器）。
+    ///
+    /// 本批**只有中央槽位**：06 §6.2 的三槽布局（`slot` 的 left/right 与每侧上限）
+    /// 仍需重构关闭态的 HStack，仍推 P2（docs/13「明确不做」）。
+    public var compactEntries: [ModuleTabEntry] {
+        manifests.values
+            .filter { states[$0.id] == .active && $0.surfaces.contains(.compact) }
+            .map { manifest in
+                ModuleTabEntry(
+                    id: manifest.id,
+                    label: Self.label(for: manifest),
+                    symbolName: manifest.icon.name ?? "",
+                    order: manifest.defaultPlacement?.order ?? Int.max
+                )
+            }
+            .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
+    }
+
+    /// 折叠态中央槽位的内容：取 `compactEntries` 的**第一个**转发；无候选、或模块答 `.none` → `.none`
+    ///（不占位，关闭态自然回落到人脸动画 / 空矩形等既有分支）。
+    ///
+    /// 请求按 06 §3.1 填成「compact + 折叠 + 中央槽位」：`sizeHint` 用 `.zero`（槽位不做尺寸协商，
+    /// 模块自报高度属 P2）、`reason` 用 `.initial`（宿主尚未记录「第几次评估」，与 `ModuleHostView` 同一口径）。
+    public func compactSlotContent() -> ModuleContent {
+        guard let entry = compactEntries.first else { return .none }
+        return content(for: entry.id, request: Self.compactSlotRequest)
+    }
+
+    /// 折叠态中央槽位的定值请求（`compactSlotContent()` 的唯一生产点）。
+    private static let compactSlotRequest = ContentRequest(
+        surface: .compact,
+        phase: .collapsed,
+        slot: .center,
+        sizeHint: .zero,
+        reason: .initial,
+        isLowPower: false
+    )
+
     /// tab 标题的解析顺序：Localizable key 形态 → locale 表（`en`）→ `shortID`。
     ///
     /// key 拿不到译文时 `Bundle.localizedString(forKey:value:table:)` **原样返回 key**，
