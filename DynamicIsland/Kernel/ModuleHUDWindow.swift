@@ -453,6 +453,14 @@ public final class ModuleHUDWindowHost {
         panel.backgroundColor = .clear
         panel.hasShadow = true                // 独立窗口靠投影从桌面 / 壁纸上「托起」卡片
         panel.isMovable = false
+        // **强制深色外观**（2026-09-28，配合浮层卡片的液态玻璃底）：浅色系统外观下，苹果私有的
+        // `NSGlassEffectView`（`LiquidGlassBackground`）与 `NSVisualEffectView` 一族都会渲染成
+        // **浅色**玻璃，而浮层文字一律显式白色（`NotificationHUDView` 的既定口径：面板黑底、
+        // 系统外观可为浅色）——白字压浅玻璃就看不见了。口径与本项目既有做法一致：
+        // `EditPanelView.VisualEffectView.forcedAppearance` 对 `hudWindow` 材质强制 `darkAqua`。
+        // 设在这一层（窗口）而不是卡片上：`LiquidGlassBackground` 内部的 `NSGlassEffectView`
+        // 是 AppKit 视图，只有**窗口/视图的 appearance** 能真正改它的材质取值。
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.isReleasedWhenClosed = false
         panel.level = .screenSaver            // 与上游其它 HUD 窗口同档
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]

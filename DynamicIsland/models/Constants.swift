@@ -860,6 +860,27 @@ enum ColorExtractionMode: String, CaseIterable, Identifiable, Defaults.Serializa
     var id: Self { self }
 }
 
+/// 通知浮层卡片的**背景样式**（2026-09-28 用户要求「背景设置（是否为液态玻璃模式）」）。
+///
+/// 放在模块内核这一族设置里（`Defaults.Keys` 的 Module Kernel 段），与
+/// `notificationHUDScale` / `notificationHUDDurationSeconds` / `enableNotificationHUD` 同处；
+/// 消费点唯一：`NotificationsModule.NotificationHUDView.cardBackground(cornerRadius:)`。
+///
+/// 存储口径：`String` 原始值枚举 → `Defaults` 走 `RawRepresentable` 桥，盘上就是 `rawValue`
+/// 字符串（同 `LockScreenGlassStyle` / `OSDMaterial` 的既有形态），因此这里**不写本地化**——
+/// 设置页 Picker 显示的就是 rawValue（与上游 OSD 的 Material 选择器同口径）。
+enum NotificationHUDBackgroundStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
+    /// 液态玻璃（**默认**）：苹果私有的 `NSGlassEffectView`（`LiquidGlassBackground` 组件）。
+    /// **强制深色外观**：浅色系统下玻璃会渲染成浅色，而卡片文字一律显式白色（会看不清）——
+    /// 窗口层面 `ModuleHUDWindowHost` 把 `panel.appearance` 设成 `darkAqua`（口径同
+    /// `EditPanelView.VisualEffectView.forcedAppearance` 对 `hudWindow` 材质的处理）。
+    case liquidGlass = "Liquid glass"
+    /// 纯色：`Color.black.opacity(0.92)` + 一圈浅描边（改造前的观感，浅色壁纸上对比度足够）。
+    case solid = "Solid"
+
+    var id: String { rawValue }
+}
+
 extension Defaults.Keys {
         // MARK: General
     static let updateChannel = Key<UpdateChannel>("updateChannel", default: .stable)
@@ -1484,6 +1505,25 @@ extension Defaults.Keys {
     /// 通道共用同一个 ttl），最终仍被 `ModuleRegistry.hudTTLRange`（1…15s）夹取——
     /// 直接改 UserDefaults 写了个 0.2 或 600 也有确定行为（同 `notificationHUDScale` 的口径）。
     static let notificationHUDDurationSeconds = Key<Double>("notificationHUDDurationSeconds", default: 8)
+
+    /// 通知浮层的**总开关**（2026-09-28 用户要求「做一个配置项，要包含总开关、显示时长、
+    /// 背景设置（是否为液态玻璃模式）这些」）。
+    ///
+    /// **默认 true**。false 时**完全不弹浮层**（模块连 `UIHandle.presentTransient` 都不调）——
+    /// 但**只关掉浮层**：展开面板的通知列表、未读计数、AX 通道的真关闭、DB 通道的增量取数
+    /// 全部照常（总开关管的是「关闭态那一下的打扰」，不是「通知上岛」这个功能本身）。
+    /// 这也是 13 号文档已知限制 27 里「想完全不要浮层却没有开关」那条缺口的补法。
+    static let enableNotificationHUD = Key<Bool>("enableNotificationHUD", default: true)
+
+    /// 通知浮层卡片的**背景样式**（默认 `.liquidGlass` = 液态玻璃；见 `NotificationHUDBackgroundStyle`）。
+    ///
+    /// 消费点唯一：`NotificationsModule.NotificationHUDView.cardBackground(cornerRadius:)`。
+    /// 存的是 `rawValue` 字符串（`String` 原始值枚举走 `RawRepresentable` 桥，同 `LockScreenGlassStyle`），
+    /// 因此老版本留下的值 / 手改 UserDefaults 写成未知串时退回默认档（`Defaults` 的桥行为）。
+    static let notificationHUDBackgroundStyle = Key<NotificationHUDBackgroundStyle>(
+        "notificationHUDBackgroundStyle",
+        default: .liquidGlass
+    )
 
     /// 已关闭（**仅从岛上移除**）的通知 `rec_id` 集合，有序、最近关闭的在后。
     ///

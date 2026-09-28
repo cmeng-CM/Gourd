@@ -55,7 +55,9 @@
 //  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。呈现口径都是**宿主设置**
 //  （`Defaults.Keys`，设置页 Live Activities → Notification HUD）：
 //  `showBodyInHUD`（默认 true：浮层是否显示正文）、`notificationHUDScale`（默认 1.3：字号 / 卡片
-//  倍率）、**`notificationHUDDurationSeconds`**（默认 8：显示时长，见 `NotificationHUDPolicy`）；
+//  倍率）、**`notificationHUDDurationSeconds`**（默认 8：显示时长，见 `NotificationHUDPolicy`）、
+//  **`enableNotificationHUD`**（总开关，默认 true：关掉后完全不弹浮层——列表与 AX / DB 通道照常）、
+//  **`notificationHUDBackgroundStyle`**（默认 `.liquidGlass`：卡片底 = 液态玻璃 / 纯色）；
 //  已关闭集合 `dismissedNotificationIDs` 也是宿主设置键（由本模块读写，上限 500）。
 //  **AX 通道不需要任何新设置键**：去重窗口与轮询间隔都是代码常量
 //  （`NotificationBannerLedger.window` = 10s、`NotificationBannerObserver.pollInterval` = 0.5s）。
@@ -87,6 +89,10 @@
 //  ## 颜色（本项目已踩过两次的坑）
 //  面板是黑底、系统外观可为浅色——本模块所有文字与图标**一律显式浅色**
 //  （`Color.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`。
+//  浮层卡片的底也是同一条链的延伸（2026-09-28）：**默认液态玻璃**（`notificationHUDBackgroundStyle`
+//  = `.liquidGlass`）时，玻璃在**浅色系统外观**下会渲染成浅色，白字就看不清了——因此
+//  ① 窗口层面强制 `darkAqua`（`ModuleHUDWindowHost.ensureSlot`，口径同 `EditPanelView` 对
+//  `hudWindow` 材质的处理）、② 玻璃内容上再压一层 `Color.black.opacity(0.35)`。
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
@@ -545,6 +551,43 @@ enum NotificationHUDPolicy {
     }
 }
 
+/// 浮层呈现的**纯决策**（2026-09-28 用户要求「做一个配置项，要包含总开关、显示时长、
+/// 背景设置（是否为液态玻璃模式）这些」）：总开关关掉 → 这一次**完全不弹**（`nil`）；
+/// 否则把这一次要用的呈现口径打成一份快照交给视图。
+///
+/// 为什么是纯函数：`resolve` 是「总开关决定弹 / 不弹」这条判据的**唯一落点**，两条通道
+/// （AX 横幅 / DB 增量）与单测共用它——不必起真窗口、也不必读开发机上的 UserDefaults。
+/// 快照形态（而不是让视图自己读设置）沿用既有口径：浮层只活几秒，不值得为它维护一条
+/// 「设置改了要重渲」的观察链，弹出那一刻读一次即可。
+struct NotificationHUDPresentation: Equatable {
+    /// `showBodyInHUD`：第二行是否显示标题 / 正文（false 只留「新通知」，正文看展开列表）。
+    let showsBody: Bool
+    /// `notificationHUDBackgroundStyle`：卡片底（液态玻璃 / 纯色）。
+    let backgroundStyle: NotificationHUDBackgroundStyle
+
+    /// **纯函数**：总开关关掉（`enabled == false`）→ `nil` = **不弹浮层**。
+    ///
+    /// 注意「不弹」的边界：只有浮层不弹。列表 / 未读计数 / AX 真关闭 / DB 增量取数都不看这个
+    /// 开关（它们由模块自身的激活状态决定），因此用户在设置里关掉浮层**不会**让通知列表变空。
+    static func resolve(
+        enabled: Bool,
+        showsBody: Bool,
+        backgroundStyle: NotificationHUDBackgroundStyle
+    ) -> NotificationHUDPresentation? {
+        guard enabled else { return nil }
+        return NotificationHUDPresentation(showsBody: showsBody, backgroundStyle: backgroundStyle)
+    }
+
+    /// 生产路径入口：读当前设置（总开关 / 正文 / 背景）。
+    static func fromDefaults() -> NotificationHUDPresentation? {
+        resolve(
+            enabled: Defaults[.enableNotificationHUD],
+            showsBody: Defaults[.showBodyInHUD],
+            backgroundStyle: Defaults[.notificationHUDBackgroundStyle]
+        )
+    }
+}
+
 // MARK: - 模块
 
 /// 通知上岛模块（09 §5.5）。
@@ -679,15 +722,24 @@ final class NotificationsModule: GourdModule {
 
     /// 弹一条通知浮层（`store.presentHUD` 的唯一消费者）。
     ///
-    /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
-    /// 浮层只活 `NotificationHUDPolicy` 给的 ttl 秒，不需要为它维护一条「设置改了要重渲」的观察链。
+    /// 视图在**这一刻**按当前设置快照构造（`NotificationHUDPresentation.fromDefaults()`：总开关 /
+    /// 正文 / 背景三项一次读齐），浮层只活 `NotificationHUDPolicy` 给的 ttl 秒，
+    /// 不需要为它维护一条「设置改了要重渲」的观察链。
     /// `moreCount` 直接用 store 给的「同批还有几条」（0 = 单条到达）。
+    ///
+    /// **总开关关掉时在这里返回**（`presentation == nil`）：连 `presentTransient` 都不调——
+    /// 浮层窗口不会上台，也**不会有任何一个新窗口被创建**。列表 / 未读计数 / 去重台账都不受影响
+    /// （它们在 `refreshIncremental` 的前半段就完成了）。
     private func presentNotificationHUD(for item: NotificationItem, moreCount: Int) {
-        let showsBody = Defaults[.showBodyInHUD]
+        guard let presentation = NotificationHUDPresentation.fromDefaults() else {
+            context.logger.info("浮层跳过（总开关关闭 enableNotificationHUD=false）：rec_id=\(item.id)")
+            return
+        }
         let handle = store.closeHandle(for: item)
         let ui = context.ui
         context.logger.info(
-            "弹通知浮层（DB）：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")，同批另有 \(moreCount) 条"
+            "弹通知浮层（DB）：rec_id=\(item.id)，正文\(presentation.showsBody ? "显示" : "隐藏")，"
+                + "背景=\(presentation.backgroundStyle.rawValue)，同批另有 \(moreCount) 条"
         )
         context.ui.presentTransient(
             view: AnyView(
@@ -695,7 +747,8 @@ final class NotificationsModule: GourdModule {
                     appName: Self.hudAppName(for: item),
                     title: item.title,
                     bodyText: item.body,
-                    showsBody: showsBody,
+                    showsBody: presentation.showsBody,
+                    backgroundStyle: presentation.backgroundStyle,
                     moreCount: moreCount,
                     closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
@@ -719,11 +772,19 @@ final class NotificationsModule: GourdModule {
     /// × 的口径：有句柄 → 真关掉系统通知；没有 → 仅从岛上隐藏（内核侧撤掉浮层后浮层窗口
     /// 当场淡出，两条路都是「点完立刻看不见」）。
     /// `moreCount` 恒为 0：AX 通道是「一条横幅一次回调」，不存在一批多条。
+    ///
+    /// **总开关与 DB 路径同一道闸门**（`NotificationHUDPresentation.fromDefaults()`）：关掉后
+    /// AX 通道也完全不弹浮层。注意 `handleBanner` 已经先跑了去重台账（`shouldPresentBanner`），
+    /// 因此关掉浮层期间同一条通知不会「攒着」在开回开关后又冒出来——台账早已记过它。
     private func presentBannerHUD(_ event: BannerEvent) {
-        let showsBody = Defaults[.showBodyInHUD]
+        guard let presentation = NotificationHUDPresentation.fromDefaults() else {
+            context.logger.info("浮层跳过（总开关关闭 enableNotificationHUD=false）：app=\(event.appName)")
+            return
+        }
         let ui = context.ui
         context.logger.info(
-            "弹通知浮层（AX）：app=\(event.appName)，标题=\(event.title)，正文\(showsBody ? "显示" : "隐藏")"
+            "弹通知浮层（AX）：app=\(event.appName)，标题=\(event.title)，"
+                + "正文\(presentation.showsBody ? "显示" : "隐藏")，背景=\(presentation.backgroundStyle.rawValue)"
         )
         context.ui.presentTransient(
             view: AnyView(
@@ -731,7 +792,8 @@ final class NotificationsModule: GourdModule {
                     appName: event.appName,
                     title: event.title,
                     bodyText: event.body,
-                    showsBody: showsBody,
+                    showsBody: presentation.showsBody,
+                    backgroundStyle: presentation.backgroundStyle,
                     moreCount: 0,
                     closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
@@ -1104,6 +1166,9 @@ enum NotificationHUDCardLayout {
 /// 颜色：渲染在**独立窗口**里（窗口透明、桌面/任意 App 在后），文字**一律显式浅色**
 ///（`.white` / `.white.opacity(...)`）并自带深色圆角底 —— 不用 `.primary` / `.secondary`
 ///（那会随系统外观变成深色字，浮在浅色壁纸上就看不见了）。
+/// 卡片底本身是**可配的**（`notificationHUDBackgroundStyle`，2026-09-28）：默认液态玻璃
+/// （`.liquidGlass`，强制深色外观），可切成纯色（`.solid`）——两档的对比度前提都是
+/// 「底足够深」，见 `cardBackground(cornerRadius:)`。
 ///
 /// 尺寸：**固定**（= 窗口尺寸，`NotificationHUDCardLayout.metrics(scale:)` 的 `cardSize`，
 /// 基准 320 × 64 × 倍率 `notificationHUDScale`，默认 1.3）。固定尺寸带来两个分工：
@@ -1133,8 +1198,10 @@ private struct NotificationHUDView: View {
     let title: String
     /// 通知正文（**不叫 `body`**：那个名字被 SwiftUI 的 `View.body` 占了）。
     let bodyText: String
-    /// `Defaults[.showBodyInHUD]`（在模块侧取一次快照）。
+    /// `Defaults[.showBodyInHUD]`（在模块侧取一次快照；由 `NotificationHUDPresentation` 打包进来）。
     let showsBody: Bool
+    /// `Defaults[.notificationHUDBackgroundStyle]`（同一份快照）：卡片底 = 液态玻璃 / 纯色。
+    let backgroundStyle: NotificationHUDBackgroundStyle
     /// 这次取数里**除展示的这条之外**还有几条新通知（0 = 没有）。> 0 时第二行末尾追加「等 N 条」。
     let moreCount: Int
     /// × 的提示文案 key：有真关闭句柄时是「关闭系统通知」，否则是「关闭（仅从岛上移除）」。
@@ -1199,14 +1266,40 @@ private struct NotificationHUDView: View {
         .padding(.vertical, card.verticalPadding)
         // **固定尺寸**：卡片与内核窗口用同一个来源（`cardSize`），内容多少都不跳动。
         .frame(width: card.cardSize.width, height: card.cardSize.height, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: card.cornerRadius, style: .continuous)
-                .fill(.black.opacity(0.82))
+        .background(cardBackground(cornerRadius: card.cornerRadius))
+    }
+
+    /// 卡片底：按 `notificationHUDBackgroundStyle` 二选一（2026-09-28 用户要求「背景设置
+    /// （是否为液态玻璃模式）」）。
+    ///
+    /// - `.liquidGlass`（**默认**）：苹果私有的 `NSGlassEffectView`（`LiquidGlassBackground` 组件，
+    ///   降级链在组件内部：老系统退回 `NSVisualEffectView`）。variant 用组件声明的默认档
+    ///   `.v11`（`LiquidGlassVariant.defaultVariant`，组件作者标注「视觉上最讨喜」的一档，
+    ///   锁屏面板 / OSD 的自定义玻璃也都在这个家族里取默认）——本卡片没有理由偏离默认；
+    ///   **圆角与卡片一致**（`cornerRadius`，两档共同口径）；玻璃上再压一层深色
+    ///   （`Color.black.opacity(0.35)`）保证白字对比度。
+    ///   **强制深色外观**：浅色系统外观下玻璃会渲染成浅色，而本卡片文字一律显式白色（会看不清）——
+    ///   窗口层面已由 `ModuleHUDWindowHost` 把 `panel.appearance` 设成 `darkAqua`
+    ///   （口径同 `EditPanelView.VisualEffectView.forcedAppearance` 对 `hudWindow` 材质的处理），
+    ///   这里再给玻璃的**内容**补一份 `.environment(\.colorScheme, .dark)`：`LiquidGlassBackground`
+    ///   内部是**另一个** `NSHostingView`（它的内容不继承外层的环境）。
+    /// - `.solid`：`Color.black.opacity(0.92)` + 一圈浅描边（改造前的观感）。
+    @ViewBuilder
+    private func cardBackground(cornerRadius: CGFloat) -> some View {
+        switch backgroundStyle {
+        case .liquidGlass:
+            LiquidGlassBackground(variant: .defaultVariant, cornerRadius: cornerRadius) {
+                Color.black.opacity(0.35)
+                    .environment(\.colorScheme, .dark)
+            }
+        case .solid:
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.black.opacity(0.92))
                 .overlay(
-                    RoundedRectangle(cornerRadius: card.cornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .stroke(.white.opacity(0.12), lineWidth: 1)
                 )
-        )
+        }
     }
 
     /// × ：**先本地隐藏（立刻生效）+ 内核撤浮层（窗口随之淡出），再交给上层做真关闭**——

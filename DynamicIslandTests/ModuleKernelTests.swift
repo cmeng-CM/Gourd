@@ -36,7 +36,9 @@
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
 //  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）、
-//  **显示时长口径**（`notificationHUDDurationSeconds` 默认 8s + 设置值 → ttl 的映射与夹取边界）。
+//  **显示时长口径**（`notificationHUDDurationSeconds` 默认 8s + 设置值 → ttl 的映射与夹取边界）、
+//  **配置区口径**（`enableNotificationHUD` 总开关关掉 → 不弹浮层的纯判据、`notificationHUDBackgroundStyle`
+//  的默认档与写盘往返）。
 //
 
 import AppKit
@@ -2230,6 +2232,71 @@ final class ModuleKernelTests: XCTestCase {
             ModuleRegistry.hudTTLRange.contains(Defaults.Keys.notificationHUDDurationSeconds.defaultValue),
             "默认值必须落在内核夹取区间（1…15）内，否则一装上就被夹、日志与实际不符"
         )
+    }
+
+    // MARK: - 通知浮层的配置区（D-25：总开关 / 背景样式）
+
+    /// **总开关**（2026-09-28 用户要求「做一个配置项，要包含总开关…」）：关掉 → 判定函数直接给 `nil`，
+    /// 模块因此**连 `presentTransient` 都不调**（两条通道共用这一个判据）。
+    ///
+    /// 用纯判定函数测（不起真窗口、不读开发机上的 UserDefaults）：`resolve` 就是「弹 / 不弹」
+    /// 这条判据的唯一落点。
+    func testNotificationHUDPresentationMasterSwitchGatesPresentation() {
+        XCTAssertNil(
+            NotificationHUDPresentation.resolve(enabled: false, showsBody: true, backgroundStyle: .liquidGlass),
+            "总开关关掉 → 不弹浮层（这就是「不调用 presentTransient」的判据）"
+        )
+        XCTAssertNil(
+            NotificationHUDPresentation.resolve(enabled: false, showsBody: false, backgroundStyle: .solid),
+            "总开关优先于其余三项：它们怎么设都不弹"
+        )
+
+        XCTAssertEqual(
+            NotificationHUDPresentation.resolve(enabled: true, showsBody: false, backgroundStyle: .solid),
+            NotificationHUDPresentation(showsBody: false, backgroundStyle: .solid),
+            "开起来时两项口径原样进快照"
+        )
+        XCTAssertEqual(
+            NotificationHUDPresentation.resolve(enabled: true, showsBody: true, backgroundStyle: .liquidGlass),
+            NotificationHUDPresentation(showsBody: true, backgroundStyle: .liquidGlass)
+        )
+    }
+
+    /// 两个新键的**声明默认值** + 背景样式的**序列化往返**（写盘 → 读回）。
+    ///
+    /// 往返走一个**临时 suite**（不碰开发机 `com.cmeng.gourd` 域）：枚举存的是 `rawValue`
+    /// 字符串（`RawRepresentable` 桥，同 `LockScreenGlassStyle` / `OSDMaterial`），
+    /// 因此断言盘上真的出现 `"Solid"` 而不只是一个内存值。
+    func testNotificationHUDConfigKeysDefaultsAndBackgroundRoundTrip() {
+        XCTAssertEqual(Defaults.Keys.enableNotificationHUD.name, "enableNotificationHUD")
+        XCTAssertTrue(Defaults.Keys.enableNotificationHUD.defaultValue, "总开关默认开（不给用户添意外）")
+        XCTAssertEqual(
+            Defaults.Keys.notificationHUDBackgroundStyle.defaultValue,
+            .liquidGlass,
+            "背景默认液态玻璃（用户 2026-09-28 口径：要能选「是否为液态玻璃模式」）"
+        )
+
+        // 取值词汇表：rawValue 是设置页 Picker 直接显示的字面量（同 OSD 的 Material 选择器）
+        XCTAssertEqual(NotificationHUDBackgroundStyle.allCases.map(\.rawValue), ["Liquid glass", "Solid"])
+        XCTAssertEqual(NotificationHUDBackgroundStyle(rawValue: "Liquid glass"), .liquidGlass)
+
+        let suiteName = "com.cmeng.gourd.tests.notificationHUDBackgroundStyle"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("建不出临时 suite（\(suiteName)）")
+        }
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let key = Defaults.Key<NotificationHUDBackgroundStyle>(
+            "notificationHUDBackgroundStyle",
+            default: .liquidGlass,
+            suite: suite
+        )
+
+        XCTAssertEqual(Defaults[key], .liquidGlass, "没写过时读回声明默认值")
+        Defaults[key] = .solid
+        XCTAssertEqual(Defaults[key], .solid, "写盘 → 读回同一档")
+        XCTAssertEqual(suite.string(forKey: key.name), "Solid", "盘上存的就是 rawValue 字符串")
+        Defaults[key] = .liquidGlass
+        XCTAssertEqual(Defaults[key], .liquidGlass, "再切回默认档同样往返")
     }
 
     // MARK: - 通知浮层卡片的尺寸口径（D-23）

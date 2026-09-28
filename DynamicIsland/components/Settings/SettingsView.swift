@@ -727,6 +727,9 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .liveActivities, title: "Enable reminder live activity", keywords: ["reminder", "live activity"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable reminder live activity")),
             SettingsSearchEntry(tab: .liveActivities, title: "Show notification body in the notch HUD", keywords: ["notification", "hud", "notifications", "body", "privacy"], highlightID: SettingsTab.liveActivities.highlightID(for: "Show notification body in the notch HUD")),
             SettingsSearchEntry(tab: .liveActivities, title: "Notification HUD size", keywords: ["notification", "hud", "size", "bigger", "scale", "larger", "font"], highlightID: SettingsTab.liveActivities.highlightID(for: "Notification HUD size")),
+            SettingsSearchEntry(tab: .liveActivities, title: "Show notification HUD", keywords: ["notification", "hud", "overlay", "toggle", "disable", "turn off", "notifications"], highlightID: SettingsTab.liveActivities.highlightID(for: "Show notification HUD")),
+            SettingsSearchEntry(tab: .liveActivities, title: "Display duration", keywords: ["notification", "hud", "duration", "seconds", "how long", "display time"], highlightID: SettingsTab.liveActivities.highlightID(for: "Display duration")),
+            SettingsSearchEntry(tab: .liveActivities, title: "Background", keywords: ["notification", "hud", "background", "liquid glass", "glass", "solid", "material"], highlightID: SettingsTab.liveActivities.highlightID(for: "Background")),
 
             // Battery (Charge)
             SettingsSearchEntry(tab: .battery, title: "Show battery indicator", keywords: ["battery hud", "charge"], highlightID: SettingsTab.battery.highlightID(for: "Show battery indicator")),
@@ -4047,6 +4050,12 @@ struct LiveActivitiesSettings: View {
     @Default(.capsLockIndicatorTintMode) var capsLockTintMode
     /// 通知浮层的尺寸倍率（D-23 之后浮层是独立窗口，尺寸只由这一项决定）。
     @Default(.notificationHUDScale) var notificationHUDScale
+    /// 通知浮层相关设置（2026-09-28「通知配置区」）：总开关 / 显示时长 / 卡片背景。
+    /// 三项的区间与默认值见 `Defaults.Keys`（时长还要与 `NotificationHUDPolicy.durationRange` 同源，
+    /// 因此滑块直接用那个常量而不是再写一遍字面量）。
+    @Default(.enableNotificationHUD) var enableNotificationHUD
+    @Default(.notificationHUDDurationSeconds) var notificationHUDDurationSeconds
+    @Default(.notificationHUDBackgroundStyle) var notificationHUDBackgroundStyle
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.liveActivities.highlightID(for: title)
@@ -4260,10 +4269,47 @@ struct LiveActivitiesSettings: View {
                 Text("Configure countdown style and lock screen widgets in the Calendar tab.")
             }
 
+            // 通知浮层的配置区（2026-09-28 用户要求「做一个配置项，要包含总开关、显示时长、
+            // 背景设置（是否为液态玻璃模式）这些」）：一项一件事，顺序 = 用户想到它们的顺序
+            // （先开不开 → 显示多久 → 长什么样 → 再是内容与字号这两个已有项）。
             Section {
+                // 总开关：关掉后**完全不弹浮层**（模块连 `presentTransient` 都不调），
+                // 但展开面板的列表 / 未读计数 / AX 真关闭 / DB 增量都照常——管的是「打扰」，
+                // 不是「通知上岛」功能本身。关掉后下面几项灰显（它们只影响浮层）。
+                Defaults.Toggle(key: .enableNotificationHUD) {
+                    Text("Show notification HUD")
+                }
+                .settingsHighlight(id: highlightID("Show notification HUD"))
+
+                // 显示时长（2026-09-28 用户反馈「显示时长太短」）：原口径是模块里的代码常量 4s，
+                // 现为设置项、**默认 8s**。区间 2…15 与内核的 ttl 夹取区间（1…15）同源
+                // （`NotificationHUDPolicy.durationRange`），步进 1s、label 里显示当前秒数。
+                Slider(value: $notificationHUDDurationSeconds, in: NotificationHUDPolicy.durationRange, step: 1) {
+                    HStack {
+                        Text("Display duration")
+                        Spacer()
+                        Text("\(notificationHUDDurationSeconds, specifier: "%.0f") s")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                .disabled(!enableNotificationHUD)
+                .settingsHighlight(id: highlightID("Display duration"))
+
+                // 背景（用户口径：「是否为液态玻璃模式」）：默认液态玻璃（强制深色外观，
+                // 否则浅色系统下玻璃变浅、白字看不清），可切成纯色。
+                Picker("Background", selection: $notificationHUDBackgroundStyle) {
+                    ForEach(NotificationHUDBackgroundStyle.allCases) { style in
+                        Text(style.rawValue).tag(style)
+                    }
+                }
+                .disabled(!enableNotificationHUD)
+                .settingsHighlight(id: highlightID("Background"))
+
                 Defaults.Toggle(key: .showBodyInHUD) {
                     Text("Show notification body in the notch HUD")
                 }
+                .disabled(!enableNotificationHUD)
                 .settingsHighlight(id: highlightID("Show notification body in the notch HUD"))
 
                 // 浮层尺寸（2026-09-28 用户要求「太小，需要调大一些」）：浮层改由独立窗口渲染后
@@ -4277,11 +4323,12 @@ struct LiveActivitiesSettings: View {
                             .monospacedDigit()
                     }
                 }
+                .disabled(!enableNotificationHUD)
                 .settingsHighlight(id: highlightID("Notification HUD size"))
             } header: {
-                Text("Notifications")
+                Text("Notification HUD")
             } footer: {
-                Text("Reads the notification database (needs Full Disk Access) and shows a brief overlay when a new notification arrives. The overlay is its own floating window (it follows the pointer's display), so its size is controlled by the slider above. Body text is shown by default; turn this off to only see which app sent it.")
+                Text("Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears on every display at once, in its own floating window. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below.")
             }
         }
         .navigationTitle("Live Activities")
