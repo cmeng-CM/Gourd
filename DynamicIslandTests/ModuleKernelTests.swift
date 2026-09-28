@@ -31,6 +31,8 @@
 //  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）、
 //  **可见性状态机的幂等性**（2026-09-28：首次上台 / 淡出中被接手 / 淡出结束无接手 / 同尺寸重弹 /
 //  有接手时不 orderOut——「内置屏偶发只显示第一条」的根因判据）。
+//  **浮层的多屏显示**（D-25：`targetScreenNames` 的三种输入口径——全屏模式取全集 /
+//  单屏模式「指定屏 → 主屏 → 第一块」三档兜底 / 空屏集合给空集合）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
 //  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）。
@@ -1502,6 +1504,112 @@ final class ModuleKernelTests: XCTestCase {
             ModuleHUDWindowHost.topInset(safeAreaTop: 0, frameMaxY: 1000, visibleFrameMaxY: 1000),
             0,
             "量不出菜单栏高度时兜底 0（不能是负数）"
+        )
+    }
+
+    // MARK: - 浮层的多屏显示（D-25：所有屏同时显示）
+
+    /// **全屏模式**（用户当前设置 `showOnAllDisplays = 1`）：所有屏都该显示浮层——
+    /// 这条钉住 2026-09-28 的用户反馈「应该是所有屏幕都显示才对」（旧口径是跟随鼠标屏，
+    /// 于是只有一块屏看得见）。
+    func testHUDScreensAllDisplaysModeShowsEveryScreen() {
+        let names = ["Built-in Retina Display", "VA2478-H-2", "DELL U2720Q"]
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: true,
+                screenNames: names,
+                mainScreenName: names[0],
+                preferredScreenName: names[2]
+            ),
+            Set(names),
+            "全屏模式下三层输入都无关：所有屏都在集合里（鼠标 / 主屏 / 指定屏都不该收窄它）"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: true,
+                screenNames: ["Only One"],
+                mainScreenName: "Only One",
+                preferredScreenName: nil
+            ),
+            ["Only One"],
+            "单屏机器同样成立"
+        )
+    }
+
+    /// **单屏模式**（`showOnAllDisplays = false`）：只在该设置指定的那块屏；
+    /// 指定屏不在场时退到主屏；主屏也取不到时退到列表第一块（三档兜底，见纯函数文档）。
+    func testHUDScreensSingleDisplayModePrefersSettingThenMainThenFirst() {
+        let names = ["Built-in Retina Display", "VA2478-H-2"]
+
+        // ① 指定屏在场 → 只它
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: false,
+                screenNames: names,
+                mainScreenName: names[0],
+                preferredScreenName: names[1]
+            ),
+            [names[1]],
+            "单屏模式：只显示在设置指定的那块屏上（与岛同源：preferred_screen_name）"
+        )
+
+        // ② 指定屏不在场（拔掉 / 改名 / 尚未写入键）→ 主屏
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: false,
+                screenNames: names,
+                mainScreenName: names[0],
+                preferredScreenName: "已拔掉的外接屏"
+            ),
+            [names[0]],
+            "指定屏不在场时退到主屏（不能让浮层彻底消失）"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: false,
+                screenNames: names,
+                mainScreenName: names[0],
+                preferredScreenName: nil
+            ),
+            [names[0]],
+            "键没写过（nil）同口径 → 主屏"
+        )
+
+        // ③ 连主屏都取不到 → 列表第一块（仍然要有一块屏显示）
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: false,
+                screenNames: names,
+                mainScreenName: nil,
+                preferredScreenName: nil
+            ),
+            [names[0]],
+            "主屏也取不到时退到列表第一块"
+        )
+    }
+
+    /// **空屏集合兜底**：没有屏可显示 → 空集合（调用方（`present`）据此什么都不做，
+    /// 不会去创建 0 个窗口或崩在取下标上）。两种模式都要成立。
+    func testHUDScreensEmptyFallbackYieldsNoScreen() {
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: true,
+                screenNames: [],
+                mainScreenName: "Main",
+                preferredScreenName: "Main"
+            ),
+            [],
+            "全屏模式 + 空屏集合 → 空集合"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                showOnAllDisplays: false,
+                screenNames: [],
+                mainScreenName: nil,
+                preferredScreenName: nil
+            ),
+            [],
+            "单屏模式 + 空屏集合 → 空集合（不越界取 screenNames[0]）"
         )
     }
 
