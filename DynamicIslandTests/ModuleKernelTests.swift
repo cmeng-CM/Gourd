@@ -11,6 +11,8 @@
 //  T3 接缝——S2 的 tab 计数（刘海最小宽度的输入）把注册表条目计入总数；S4 的
 //  `selectModule(_:)` 同时设 `selectedModuleID` 与 `currentView`。
 //  T4 试点模块 progress——进度计算（闰年 2 月 / 季度边界 / 年初年末 / 周起止随日历）、
+//  剩余量分档（`remaining`：跨天向上取整 / 跨小时 / 最后一分钟 / 刚过整点）、
+//  `visibleScopes` 解析（缺省=日+年 / 非法值忽略 / 顺序按输入）、
 //  manifest 与 config 契约、真组合根注册后的 tab 投影与展开内容。
 //
 
@@ -824,6 +826,122 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// `remaining` 的分档边界（09 §5.3 剩余量）：跨天（≥ 1 天，**向上取整**）、
+    /// 跨小时（1 小时 ≤ r < 1 天，整点截断）、最后一分钟（截断且至少 1）、刚过整点（区间起点重新计数）。
+    func testProgressRemainingBoundaries() throws {
+        let calendar = try fixedGregorian()
+
+        // 跨天：年尺度剩 95 整日；同一天的正午「余量算一天」仍是 95（向上取整）
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 9, 28, calendar: calendar), calendar: calendar).value,
+            95
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 9, 28, 12, calendar: calendar), calendar: calendar).value,
+            95
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 9, 28, calendar: calendar), calendar: calendar).unit,
+            .day
+        )
+        // 刚过整点：区间起点（元旦 00:00）剩满一年 365 天；日尺度 00:00 剩满 24 小时 = 1 天
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 1, 1, calendar: calendar), calendar: calendar).value,
+            365
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, calendar: calendar), calendar: calendar).value,
+            1
+        )
+        // 刚过整点 + 30 秒：不足 1 整日 → 落到小时档（23 小时 59 分）
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 0, 0, 30, calendar: calendar), calendar: calendar).value,
+            23
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 0, 0, 30, calendar: calendar), calendar: calendar).unit,
+            .hour
+        )
+
+        // 跨小时：2 小时 / 1 小时 30 分都落小时档（整点截断，分钟余量由视图从同一区间拼）
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 22, calendar: calendar), calendar: calendar).value,
+            2
+        )
+        let hourAndHalf = ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 22, 30, calendar: calendar), calendar: calendar)
+        XCTAssertEqual(hourAndHalf.value, 1)
+        XCTAssertEqual(hourAndHalf.unit, .hour)
+        // 恰好 1 小时：整点边界仍算小时档
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 23, calendar: calendar), calendar: calendar).unit,
+            .hour
+        )
+        // 月末最后半天 / 周日的最后半天：同一条规则（12 小时、18 小时）
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .month, now: try instant(2026, 9, 30, 12, calendar: calendar), calendar: calendar).value,
+            12
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .week, now: try instant(2026, 3, 29, 12, calendar: calendar), calendar: calendar).value,
+            12
+        )
+
+        // 最后一分钟：不足 1 分钟时截断为 0，**至少给 1**；59 分 30 秒仍是 59（不越到小时档）
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 23, 59, 30, calendar: calendar), calendar: calendar).value,
+            1
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 23, 59, 30, calendar: calendar), calendar: calendar).unit,
+            .minute
+        )
+        let almostAnHour = ProgressCalculator.remaining(for: .day, now: try instant(2026, 9, 27, 23, 0, 30, calendar: calendar), calendar: calendar)
+        XCTAssertEqual(almostAnHour.value, 59)
+        XCTAssertEqual(almostAnHour.unit, .minute)
+
+        // 年末最后一天：00:00 剩 1 整天（天档），正午只剩 12 小时（小时档）——分档按剩余量而非日期
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 12, 31, calendar: calendar), calendar: calendar).unit,
+            .day
+        )
+        XCTAssertEqual(
+            ProgressCalculator.remaining(for: .year, now: try instant(2026, 12, 31, 12, calendar: calendar), calendar: calendar).unit,
+            .hour
+        )
+    }
+
+    /// `visibleScopes` 解析（纯函数）：缺省 / 非 list / 空 / 全非法 → **日 + 年**；
+    /// 非法值逐项忽略；顺序按输入；重复项去重。manifest 的默认值本身也是「日 + 年」。
+    func testProgressVisibleScopesResolution() {
+        XCTAssertEqual(ProgressCalculator.defaultVisibleScopes, [.day, .year])
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: nil), [.day, .year], "缺省 → 日 + 年")
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .string("day")), [.day, .year], "不是 list → 回落默认")
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .strings([])), [.day, .year], "空列表 → 回落默认")
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: .strings(["bogus", "Week"])),
+            [.day, .year],
+            "全非法（含大小写不符的取值）→ 回落默认"
+        )
+
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .strings(["year", "month"])), [.year, .month], "顺序按输入")
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: .strings(["day", "bogus", "year"])),
+            [.day, .year],
+            "非法值逐项忽略，剩下的按输入顺序"
+        )
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: .strings(["week", "week", "day"])),
+            [.week, .day],
+            "重复项去重且保留首次出现的位置"
+        )
+
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: ProgressModule.manifest.config?.properties["visibleScopes"]?.default),
+            [.day, .year],
+            "manifest 的 visibleScopes 默认值即出厂展示尺度"
+        )
+    }
+
     /// 行首图标的符号名必须能被系统符号表解析（否则面板上那一行只剩空白）。
     func testProgressScopeSymbolsResolve() {
         for scope in ProgressCalculator.Scope.allCases {
@@ -857,7 +975,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(properties["visibleScopes"]?.itemType, "string")
         XCTAssertEqual(
             properties["visibleScopes"]?.default,
-            ConfigValue.strings(["day", "week", "month", "quarter", "year"])
+            ConfigValue.strings(["day", "year"]),
+            "09 §5.3 呈现行定稿：出厂只显示 日 + 年"
         )
         XCTAssertEqual(properties["style"]?.type, "enum")
         XCTAssertEqual(properties["style"]?.values, ["ring", "bar", "text"])

@@ -2,17 +2,29 @@
 //  ProgressModule.swift
 //  Gourd 内置模块 · 日/周/月/季/年进度（P1 批次 / T4）
 //
-//  P1 的试点模块（D-07）：零私有 API、零依赖，只声明 `expanded` surface——它同时是
-//  「新增一个模块 = 实现 `GourdModule` + 往 `KernelBootstrap.builtinModules` 加一行」
-//  （验收 A3）里那「一行」的样本。
+//  P1 的试点模块（D-07）：零私有 API、零依赖——它同时是「新增一个模块 = 实现
+//  `GourdModule` + 往 `KernelBootstrap.builtinModules` 加一行」（验收 A3）里那「一行」的样本。
 //
-//  文案走 Localizable key（06 §3.3 R5）：`module.progress.name` / `module.progress.summary`。
-//  视图内**不含任何非本地化文案**——行首是 SF Symbol 图标，数值是百分比文本。
+//  **形态定稿（2026-09-27 用户反馈后重做，09 §5.3 呈现行）**：
+//  展开态（`expanded`）= **剩余量清单**：一行一个尺度（图标 + 标签 + 细进度条 + 剩余量 + 百分比），
+//  默认只显示 **日 + 年**（`visibleScopes` 默认值，可配；解析见 `ProgressCalculator.resolveScopes`）。
+//  旧的三态排版（等权五环 / 条形 / 纯文本）已不再使用：`style` 配置项**保留**（契约不变），
+//  但本版**只实现清单这一种形态**，`ring` / `bar` / `text` 取值一律按清单渲染。
+//
+//  **颜色**：面板是黑底，而系统外观可以是浅色——`.primary` / `.secondary` 在这种组合下就是
+//  黑字黑底（上游其它面板视图都显式 `.foregroundStyle(.white)`）。因此本模块内**所有**文字与
+//  图标一律显式浅色（`Color.white` / `.white.opacity(...)`），不再依赖语义色。
+//
+//  文案走 Localizable key（06 §3.3 R5）：`module.progress.name` / `module.progress.summary`、
+//  `module.progress.scope.<scope>`、`module.progress.remaining`、`module.progress.unit.<unit>`。
 //
 
 import SwiftUI
 
 /// `style` 配置的取值（09 §5.3：ring / bar / text）。
+///
+/// 本版**只渲染清单形态**：三个取值都能被解析、也都写进了 manifest 的 `values`（契约不变），
+/// 但展开面板一律按剩余量清单渲染——等权多环被用户判定为「看不出在表达什么」。
 enum ProgressStyle: String, CaseIterable {
     case ring
     case bar
@@ -38,7 +50,7 @@ final class ProgressModule: GourdModule {
     /// - `surfaces` 只声明 `expanded`（D-07）：compact 槽位本批不做，故不声明；
     /// - `defaultPlacement` 只给 `order`（`slot` 仅在声明 compact 时有意义，故不给）；
     /// - `config` 三项只声明类型与默认值：本批**没有用户可见的配置入口**（docs/13「明确不做」），
-    ///   读取侧拿到的恒是这里的 `default`。
+    ///   读取侧拿到的恒是这里的 `default`；`visibleScopes` 的默认值即「出厂显示哪些尺度」（日 + 年）。
     static let manifest = ModuleManifest(
         manifestVersion: 1,
         id: "com.cmeng.gourd.progress",
@@ -58,7 +70,7 @@ final class ProgressModule: GourdModule {
                 "visibleScopes": ConfigNode(
                     type: "list",
                     title: nil,
-                    default: .strings(ProgressCalculator.Scope.allCases.map(\.rawValue)),
+                    default: .strings(ProgressCalculator.defaultVisibleScopes.map(\.rawValue)),
                     values: nil,
                     itemType: "string"
                 ),
@@ -97,176 +109,164 @@ final class ProgressModule: GourdModule {
     ///（06 §3.2 的「该 surface 此刻无内容」：不占位、也不算失败）。
     ///
     /// 配置在**每次请求时重读**：宿主 `requestRedraw()` 触发重算时，视图拿到的是新的
-    /// `visibleScopes` / `style`（本批没有配置入口，读到的是 manifest 默认值）。
+    /// `visibleScopes`（本批没有配置入口，读到的是 manifest 默认值）。
     func content(for request: ContentRequest) -> ModuleContent {
         guard request.surface == .expanded else { return .none }
-        return .view(AnyView(ProgressModuleView(scopes: scopes, style: style)))
+        return .view(AnyView(ProgressModuleView(scopes: scopes)))
     }
 
     // MARK: - 配置读取
 
-    /// `visibleScopes`（list<string>）：解析不出任何已知尺度时回落到**全部五种**——
-    /// 配置被改坏不该让面板空白（07 §2 规则 4 的「回落默认值、不崩」口径）。
-    /// 去重是为 `ForEach(id: \.self)`：重复 id 会让 SwiftUI 少渲染行。
+    /// 展示哪些尺度 = manifest 的 `visibleScopes` **默认值**经 `resolveScopes` 解析
+    /// （默认 日 + 年；未知取值逐项忽略、空值回落默认）。
+    ///
+    /// 本版直接读 manifest：没有用户可见的配置入口，`context.config` 读到的也是同一个默认值
+    /// （docs/13 已知限制 12/21）；P1-3 接上配置入口时改走 `context.config`（覆盖值优先）。
     private var scopes: [ProgressCalculator.Scope] {
-        let declared = (context.config.get("visibleScopes", as: [String].self) ?? [])
-            .compactMap(ProgressCalculator.Scope.init(rawValue:))
-        var seen: Set<ProgressCalculator.Scope> = []
-        let unique = declared.filter { seen.insert($0).inserted }
-        return unique.isEmpty ? ProgressCalculator.Scope.allCases : unique
-    }
-
-    /// `style`（enum ring|bar|text）：未知取值回落 `ring`。
-    private var style: ProgressStyle {
-        context.config.get("style", as: String.self).flatMap(ProgressStyle.init(rawValue:)) ?? .ring
+        ProgressCalculator.resolveScopes(from: Self.manifest.config?.properties["visibleScopes"]?.default)
     }
 }
 
-// MARK: - 展开面板视图
+// MARK: - 展开面板视图（剩余量清单）
 
-/// 展开面板里的 progress 内容：五个进度 + 百分比文本，按分钟重算。
+/// 展开面板里的 progress 内容：**剩余量清单**——一行一个尺度，主信息是「还剩多久」。
 ///
-/// 刷新粒度是**粗粒度**的 60s（docs/13「已知限制」14）：日进度 1 分钟粒度足够，
-/// 周/月/季/年统一按 60s 重算（成本可忽略），也**未监听 `NSSystemClockDidChange`**
-/// ——系统的时钟 / 时区变更最多 60s 内被感知，超过 60s 的跳变在下一个周期校正。
+/// 刷新粒度沿用**粗粒度**的 60s（docs/13「已知限制」14）：清单里最小单位是分钟，
+/// 1 分钟粒度足够，也**未监听 `NSSystemClockDidChange`**——系统的时钟 / 时区变更最多 60s 内
+/// 被感知，超过 60s 的跳变在下一个周期校正。
 ///
-/// 排版口径（面板拉宽后「一行一环 + `Spacer` 把数值甩到最右」显得像几个孤立的蓝圈）：
-/// - `.ring` / `.text` 改成**一排五个单元**，百分比就近贴住环 / 数值本体，不再有行尾 `Spacer`；
-/// - 尺度图标从 `.secondary`（灰 12pt）提亮为 `.primary.opacity(0.75)`（11pt）；
-/// - 内容整体在面板里**居中**，不再贴左上角。
+/// 排版口径（取代旧的「一排五个等权环」）：一行 = 图标 + 尺度标签 + 细进度条（占满剩余宽度）
+/// + 剩余量（主信息、白色）+ 百分比（小字、`.white.opacity(0.6)`）；行悬停时在该行下方补一行
+/// 起止时刻（`Date.FormatStyle` 本地化格式，无新增文案 key）。
 private struct ProgressModuleView: View {
     let scopes: [ProgressCalculator.Scope]
-    let style: ProgressStyle
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            layout(now: timeline.date)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(scopes, id: \.self) { scope in
+                    ProgressScopeRow(scope: scope, now: timeline.date)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-    }
-
-    /// 三种 `style` 的排版分支。宽度预算：五个环单元 = 5×46 + 4×16 = 294pt，
-    /// 加上左右 padding 16×2 仍塞得进极简模式 340pt 宽的面板，不会溢出。
-    @ViewBuilder
-    private func layout(now: Date) -> some View {
-        switch style {
-        case .ring:
-            HStack(spacing: 16) {
-                ForEach(scopes, id: \.self) { scope in
-                    ProgressRingUnit(scope: scope, progress: progress(for: scope, now: now))
-                }
-            }
-        case .bar:
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(scopes, id: \.self) { scope in
-                    ProgressBarRow(scope: scope, progress: progress(for: scope, now: now))
-                }
-            }
-        case .text:
-            HStack(spacing: 16) {
-                ForEach(scopes, id: \.self) { scope in
-                    ProgressTextUnit(scope: scope, progress: progress(for: scope, now: now))
-                }
-            }
-        }
-    }
-
-    /// 日历**在渲染时**才取 `.autoupdatingCurrent`（09 §5.3 的默认参数）：
-    /// 用户改系统时间 / 时区后，最迟下一个刷新周期就跟上，不留住旧日历。
-    private func progress(for scope: ProgressCalculator.Scope, now: Date) -> Double {
-        ProgressCalculator.progress(for: scope, now: now)
     }
 }
 
-/// 环形单元：46×46 的环（底环 + 进度环），百分比画在环心，环下是尺度图标。
-/// 单元内没有需要本地化的文案（06 §3.3 R5）——尺度由图标表达，数值是百分比。
-private struct ProgressRingUnit: View {
+/// 清单的一行：图标 + 标签 + 进度条 + 剩余量 + 百分比；悬停时在下方补起止时刻。
+///
+/// 每行自带 `@State` 悬停标志，因此行必须是一个独立的 View（`ForEach` 里共享不了 `@State`）。
+private struct ProgressScopeRow: View {
     let scope: ProgressCalculator.Scope
-    let progress: Double
+    let now: Date
+
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 5)
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: scope.symbolName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 14)
 
-                Text(ProgressPercent.text(progress))
+                Text(LocalizedStringKey(scope.labelKey))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .fixedSize()
+
+                ProgressView(value: ProgressCalculator.progress(for: scope, now: now))
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: .infinity)
+
+                Text(ProgressText.remainingText(for: scope, now: now))
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .foregroundStyle(.white)
+
+                Text(ProgressText.percent(ProgressCalculator.progress(for: scope, now: now)))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.6))
             }
-            .frame(width: 46, height: 46)
+            .onHover { isHovered = $0 }
 
-            ScopeSymbol(scope: scope)
+            if isHovered, let interval = ProgressCalculator.interval(for: scope, now: now) {
+                Text(ProgressText.interval(interval))
+                    .font(.system(size: 10, weight: .regular, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.leading, 22)
+            }
         }
     }
 }
 
-/// 条形行：尺度图标 + 进度条 + **紧跟其后的**百分比（不用 `Spacer` 甩到行尾）。
-private struct ProgressBarRow: View {
-    let scope: ProgressCalculator.Scope
-    let progress: Double
+// MARK: - 文案出口
 
-    var body: some View {
-        HStack(spacing: 10) {
-            ScopeSymbol(scope: scope, size: 12)
-
-            // 可伸缩宽度：窄面板里收缩，宽面板里止步于 160pt，不再固定 120 显得突兀。
-            ProgressView(value: progress)
-                .progressViewStyle(.linear)
-                .frame(minWidth: 64, maxWidth: 160)
-
-            Text(ProgressPercent.text(progress))
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .monospacedDigit()
-        }
-    }
-}
-
-/// 纯文本单元：大号百分比在上，尺度图标在下。
-private struct ProgressTextUnit: View {
-    let scope: ProgressCalculator.Scope
-    let progress: Double
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(ProgressPercent.text(progress))
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-
-            ScopeSymbol(scope: scope)
-        }
-    }
-}
-
-/// 尺度图标。比旧的 `.secondary`（灰 12pt 太暗）提亮一档，在深色面板上也看得清。
-private struct ScopeSymbol: View {
-    let scope: ProgressCalculator.Scope
-    var size: CGFloat = 11
-
-    var body: some View {
-        Image(systemName: scope.symbolName)
-            .font(.system(size: size, weight: .medium))
-            .foregroundStyle(.primary.opacity(0.75))
-    }
-}
-
-/// 百分比文本的唯一出口。
-private enum ProgressPercent {
-    /// 走 `Text(_: String)` 的 verbatim 重载（不是 `LocalizedStringKey`），
-    /// 因此不会去 Localizable 里查 `%lld%%` 这类 key。
-    static func text(_ progress: Double) -> String {
+/// 模块内所有动态文案 / 数值的唯一出口（06 §3.3 R5：视图内不写字面量文案）。
+///
+/// 百分比与剩余量都**先拼成 String 再给 `Text`**——走 `Text(_: String)` 的 verbatim 重载，
+/// 不会把 `%lld%%` / `%@` 这类形态当成本地化 key 去查表。
+private enum ProgressText {
+    /// `0.42` → `"42%"`。
+    static func percent(_ progress: Double) -> String {
         "\(Int((progress * 100).rounded()))%"
     }
+
+    /// 剩余量主信息：`remaining` 只给数值与单位，这里拼「数值 + 单位」再套 `module.progress.remaining`
+    /// （en `%@ left` / zh-Hans `剩 %@`）。
+    ///
+    /// 小时档由 `remaining` 只给整点，**分钟余量在这里从同一区间取**（09 §5.3：「1 小时 ≤ 剩余 < 1 天
+    /// → 小时 + 分钟，view 里拼 X 小时 Y 分钟」）；日历口径与 `ProgressCalculator` 一致，都用
+    /// `.autoupdatingCurrent`。
+    static func remainingText(for scope: ProgressCalculator.Scope, now: Date) -> String {
+        let remaining = ProgressCalculator.remaining(for: scope, now: now)
+        let amount: String
+        switch remaining.unit {
+        case .day:
+            amount = "\(remaining.value) \(localized("module.progress.unit.day"))"
+        case .hour:
+            let minutes = trailingMinutes(for: scope, now: now)
+            amount = "\(remaining.value) \(localized("module.progress.unit.hour")) "
+                + "\(minutes) \(localized("module.progress.unit.minute"))"
+        case .minute:
+            amount = "\(remaining.value) \(localized("module.progress.unit.minute"))"
+        }
+        return String(format: localized("module.progress.remaining"), amount)
+    }
+
+    /// 行悬停的起止时刻：`Date.FormatStyle` 的本地化格式（形如 `09-28 00:00 → 10-01 00:00`），
+    /// 因此**不新增文案 key**。
+    static func interval(_ interval: DateInterval) -> String {
+        let momentStyle = Date.FormatStyle()
+            .month(.twoDigits)
+            .day(.twoDigits)
+            .hour(.twoDigits(amPM: .omitted))
+            .minute(.twoDigits)
+        return "\(interval.start.formatted(momentStyle)) → \(interval.end.formatted(momentStyle))"
+    }
+
+    /// 小时档的分钟余量（整点差，落在 `0...59`）。
+    private static func trailingMinutes(for scope: ProgressCalculator.Scope, now: Date) -> Int {
+        guard let end = ProgressCalculator.interval(for: scope, now: now)?.end else { return 0 }
+        let minutes = Calendar.autoupdatingCurrent.dateComponents([.minute], from: now, to: end).minute ?? 0
+        return max(0, minutes)
+    }
+
+    /// `module.<shortID>.<field>` 形态的 key → 当前语言文案。
+    /// 查不到时 `Bundle` 原样返回 key（不崩、也不显示空串），与 `ModuleRegistry.label(for:)` 同一口径。
+    private static func localized(_ key: String) -> String {
+        Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
 }
 
+// MARK: - 尺度图标与标签
+
 extension ProgressCalculator.Scope {
-    /// 行首图标。纯观感，不参与计算；单测对系统符号表逐个校验可用性
+    /// 行首 / 槽位图标。纯观感，不参与计算；单测对系统符号表逐个校验可用性
     /// （internal 而非 private 就是为了让这条校验能写到单测里）。
     var symbolName: String {
         switch self {
@@ -277,4 +277,8 @@ extension ProgressCalculator.Scope {
         case .year: return "calendar.badge.clock"
         }
     }
+
+    /// 标签的本地化 key（`module.progress.scope.<rawValue>`）。
+    /// 走 key 而不是 `LocalizedText`：06 §3.3 R5 只约束 manifest 的 name/summary 形态。
+    var labelKey: String { "module.progress.scope.\(rawValue)" }
 }

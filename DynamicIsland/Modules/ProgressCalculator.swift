@@ -9,6 +9,10 @@
 //  纯函数、无 UI 依赖：日历与「现在」都可注入（单测传固定 `now` + 固定时区日历），
 //  默认值 `Calendar.autoupdatingCurrent`（09 §5.3 的边界要求：用户改系统时间 / 时区要跟着变）。
 //
+//  2026-09-27 形态定稿后新增两个纯函数（09 §5.3 呈现行）：
+//  - `resolveScopes(from:)`：manifest 的 `visibleScopes` 默认值 → 展示尺度（默认 **日 + 年**）；
+//  - `remaining(for:now:calendar:)`：剩余量清单的主信息，只给结构化数值（value + unit），文案归视图。
+//
 
 import Foundation
 
@@ -22,6 +26,69 @@ enum ProgressCalculator {
         case month
         case quarter
         case year
+    }
+
+    /// 剩余量的计量单位。`rawValue` 同时是文案 key 的后缀（`module.progress.unit.<rawValue>`），
+    /// 因此**只加不改**；具体文案由视图拼（09 §5.3 呈现行：剩余量只给结构化数值）。
+    enum RemainingUnit: String, Sendable {
+        case day
+        case hour
+        case minute
+    }
+
+    /// 未配置 `visibleScopes` 时的默认展示尺度：**日 + 年**（09 §5.3 呈现行定稿）。
+    static let defaultVisibleScopes: [Scope] = [.day, .year]
+
+    /// `manifest.config.properties["visibleScopes"].default` → 实际展示的尺度（纯函数）。
+    ///
+    /// 规则（09 §5.3 定稿）：
+    /// - 默认（`nil` / 不是 list / 空列表 / 全是未知取值）→ `defaultVisibleScopes`（日 + 年）；
+    /// - 未知取值**逐项忽略**（配置被改坏不该让面板空白，07 §2 规则 4 的「回落默认、不崩」口径）；
+    /// - 顺序按输入（用户给的先后即展示先后）；重复项去重（`ForEach(id:)` 的 id 必须唯一）。
+    static func resolveScopes(from value: ConfigValue?) -> [Scope] {
+        guard case .strings(let raw)? = value else { return defaultVisibleScopes }
+        var seen: Set<Scope> = []
+        let declared = raw.compactMap(Scope.init(rawValue:)).filter { seen.insert($0).inserted }
+        return declared.isEmpty ? defaultVisibleScopes : declared
+    }
+
+    /// 距离 `scope` 区间结束还剩多久——**只返回结构化数值**，文案由视图拼（09 §5.3）。
+    ///
+    /// 分档规则：
+    /// | 剩余量 | 返回 | 视图里的形态 |
+    /// |---|---|---|
+    /// | ≥ 1 天 | 天数（**向上取整**：整日之外还有余量就算一天） | 「剩 98 天」 |
+    /// | 1 小时 ≤ r < 1 天 | 整点小时数（分钟余量由视图从同一区间取） | 「剩 5 小时 30 分钟」 |
+    /// | < 1 小时 | 分钟（**截断**，至少 1） | 「剩 59 分钟」 |
+    ///
+    /// 天数/小时数/分钟数一律用 `Calendar` 做**日期分量差**（不按 86400 秒手算）：
+    /// 夏令时的一天不等于 24 小时，按秒算会在切换日差一天（09 §5.3 的「不手算」口径）。
+    /// 「向上取整」也落在日期分量上：先取整日数，再加一天仍早于区间结束就是有余量。
+    static func remaining(
+        for scope: Scope,
+        now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> (value: Int, unit: RemainingUnit) {
+        guard let end = interval(for: scope, now: now, calendar: calendar)?.end else {
+            // 区间取不到（正常取值不可达，见 `progress(for:)`）：给「至少 1 分钟」的兜底，
+            // 面板不显示 0（与下面 < 1 小时档的「至少 1」一致）。
+            return (1, .minute)
+        }
+
+        let wholeDays = calendar.dateComponents([.day], from: now, to: end).day ?? 0
+        if wholeDays >= 1 {
+            let boundary = calendar.date(byAdding: .day, value: wholeDays, to: now)
+            let hasRemainder = boundary.map { $0 < end } ?? false
+            return (wholeDays + (hasRemainder ? 1 : 0), .day)
+        }
+
+        let wholeHours = calendar.dateComponents([.hour], from: now, to: end).hour ?? 0
+        if wholeHours >= 1 {
+            return (wholeHours, .hour)
+        }
+
+        let wholeMinutes = calendar.dateComponents([.minute], from: now, to: end).minute ?? 0
+        return (max(1, wholeMinutes), .minute)
     }
 
     /// `now` 所在区间的完成比例，落在 `0...1`。
