@@ -665,16 +665,21 @@ struct NoteListView: View {
             } else {
                 ZStack {
                     ScrollView {
-                        let useGrid = sortedNotes.count > 3
-                        let columns = useGrid ? [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)] : [GridItem(.flexible())]
+                        // 2026-09-28: 列数改为按宽度自适应。原先按条数决定列数（多于 3 条才两列），
+                        // 笔记清理到 3 条时宽面板会退化成单列，卡片被拉满整个面板宽度、内容靠左、
+                        // 右侧大片留白，纵向也只能放下两条。adaptive(minimum: 240, maximum: 340)
+                        // 让宽面板（≈1000pt）自动排 3 列、窄面板（≈400pt）自动 1 列，无需额外宽度判断。
+                        let columns = [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 10)]
                         
                         LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(sortedNotes) { note in
+                                // 2026-09-28: 列宽自适应后单元格宽度在 240–340pt，统一按紧凑渲染
+                                // （标题 1 行、摘要最多 2 行），让每张卡片填满自己的格子。
                                 NoteRow(
                                     note: note, 
                                     onDelete: { onDeleteItem(note) },
                                     onTogglePin: { onTogglePin(note) },
-                                    isCompact: useGrid
+                                    isCompact: true
                                 )
                                 .contentShape(Rectangle())
                                 .onTapGesture {
@@ -759,7 +764,8 @@ struct NoteRow: View {
                     Text(note.content.isEmpty ? "No content" : note.content)
                         .font(.system(size: isCompact ? 10 : 12))
                         .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(isCompact ? 1 : 2)
+                        // 2026-09-28: 摘要统一给 2 行（自适应单元格宽度足够，2 行信息更有用）
+                        .lineLimit(2)
                         .multilineTextAlignment(.leading)
                 }
                 .animation(.easeInOut(duration: 0.2), value: isHovered)
