@@ -20,6 +20,13 @@
 //     是**上一条**内容甚至 0×0（实测：首条浮层窗口尺寸量成兜底值、卡片完全不显示）。
 //     现在的量尺寸时机是 `HUDSizingHostingView.layout()`（每次内容布局完回调）。
 //
+//  ## 显隐是状态机（2026-09-28 修「内置屏偶发只显示第一条」）
+//  用户反馈是**间歇性**的（同一台机器上时好时坏），所以修法定在**根因**而不是打补丁：
+//  显隐集中在 `HUDVisibilityStateMachine` 的纯函数里（动作只由当前状态决定），三处入口
+//  （`present` / 内容布局回调 / 淡出完成）只负责「取动作 → 按序执行」。两个坏状态因此消失：
+//  ① 淡出被新浮层接手后窗口停在 `alpha == 0`（下次 present 又跳过上台）；② 尺寸没变时
+//  尺寸回调早退、窗口已被收起却没人再露出它。**没有定时器 / 重试**（约束）。
+//
 
 import AppKit
 import Combine
@@ -45,6 +52,79 @@ private final class HUDSizingHostingView<Content: View>: NSHostingView<Content> 
     }
 }
 
+/// 可见性状态机的**动作词汇**（`present` / 内容布局回调 / 淡出完成三处共用同一套）。
+///
+/// 数组顺序 = 执行顺序（`ModuleHUDWindowHost.apply(_:to:)` 按序执行）。
+enum HUDVisibilityAction: Equatable {
+    /// `orderFrontRegardless`：窗口上台（非前台应用上 `orderFront` 不保证露出来）。
+    case orderFront
+    /// 直接给 alpha 终态（不走动画；用于「上台前归零」与「把停在 0 / 半透明的补到 1」）。
+    case setAlpha(CGFloat)
+    /// 把 alpha 动画补到 1（淡入观感）。
+    case fadeIn
+    /// `orderOut`：真正下台（窗口留着复用）。
+    case orderOut
+    /// 重新贴顶居中（换屏、尺寸变化后都要）。
+    case reposition
+
+    /// 这条动作会把窗口**收起来**吗（只有一种）——淡出完成处据此决定要不要记「已收起」。
+    var hidesWindow: Bool { self == .orderOut }
+}
+
+/// 浮层窗口可见性状态机的**纯函数内核**（单测直接钉；宿主只负责按序执行动作）。
+///
+/// **为什么要有它**（2026-09-28 用户反馈「主屏第一条显示、后面不显示」，且是**间歇性**的）：
+/// 窗口的显隐此前散在 `present` / `dismiss` 完成回调 / 尺寸回调三处，每处只看自己关心的一两个
+/// 条件，于是留下两个能停住的坏状态——
+/// ① **淡出期间新浮层接手**：完成回调因「已不是当前代数 / 有 activeHUD」提前 return，
+///    窗口 `isVisible == true` 但 alpha 停在 0；下一次 `present` 又因 `isVisible == true`
+///    跳过 `orderFrontRegardless`，只靠 `fadeIn` 的 `guard alphaValue < 1` 恢复——
+///    窗口层序异常时就表现为「看不到」；
+/// ② **尺寸没变**：`contentSizeChanged` 直接 return，窗口若已被收起，没有任何路径把它重新露出。
+///
+/// **幂等的定义**：动作**只由「进入时的窗口状态」决定**（不看历史、不看过渡中间态），
+/// 同一份状态永远给出同一份动作，执行完落在「有浮层 → 在台上 + alpha = 1 + 贴顶居中；
+/// 无浮层 → 已下台」这个终态上。因此坏状态一旦被下一个事件观测到就被纠正，
+/// **不需要定时器 / 重试兜底**（约束：这条路不准用）。
+enum HUDVisibilityStateMachine {
+    /// `present`（含「同尺寸重弹」）与内容布局回调要执行的动作。
+    ///
+    /// 三条不变量：
+    /// ① 窗口不在台上 → `setAlpha(0)` + 上台 + 淡入（先归零是为了淡入看得见）；
+    /// ② 窗口在台上但 alpha < 1（**淡出被打断后停在 0 / 半透明**，即坏状态 ①）→
+    ///    `setAlpha(1)` **直接给终态**，不赌动画——`fadeIn` 不再是唯一恢复路径；
+    /// ③ 每次 present 都重新贴顶居中（换屏 / 鼠标移动后仍然对）。
+    static func presentActions(isVisible: Bool, alpha: CGFloat) -> [HUDVisibilityAction] {
+        var actions: [HUDVisibilityAction] = []
+        if !isVisible {
+            actions.append(.setAlpha(0))
+            actions.append(.reposition)   // 先摆位再上台：不会在旧位置闪一帧
+            actions.append(.orderFront)
+            actions.append(.fadeIn)
+        } else if alpha < 1 {
+            actions.append(.setAlpha(1))
+            actions.append(.reposition)
+        } else {
+            // 已在台上且已不透明：唯一还需要的是「位置可能变了」（例如鼠标换到另一块屏）
+            actions.append(.reposition)
+        }
+        return actions
+    }
+
+    /// 淡出完成时（`dismiss` 的完成回调）要执行的动作。
+    ///
+    /// - **代数不匹配**（`generationMatches == false`）：这期间有更新的浮层 `present` 过，
+    ///   它自己会保证可见 → 什么都不做；尤其**不能** `orderOut`（会把新浮层一起藏掉）；
+    /// - **有 activeHUD**（新浮层在台前）：不 `orderOut`、**也不把 alpha 留在 0**——
+    ///   撤销这次淡出（恢复到不透明 + 重新贴顶居中），这正是坏状态 ① 的修复；
+    /// - 否则：真正下台（`orderOut` + 归零，下次上台重新淡入）。
+    static func dismissCompletionActions(generationMatches: Bool, hasActiveHUD: Bool) -> [HUDVisibilityAction] {
+        guard generationMatches else { return [] }
+        if hasActiveHUD { return [.setAlpha(1), .reposition] }
+        return [.orderOut, .setAlpha(0)]
+    }
+}
+
 /// 浮层窗口宿主：把 `ModuleRegistry.activeHUD` 渲染进一个**独立的自适应窗口**。
 ///
 /// 三条形态约束（对应 2026-09-28 的两条用户反馈）：
@@ -54,6 +134,12 @@ private final class HUDSizingHostingView<Content: View>: NSHostingView<Content> 
 ///    「太小、看不到」由此消除（不再依赖关闭态那把位置让给谁）；
 /// ③ **不与岛内容同层**：窗口是独立的一格（`level = .screenSaver`），既不与关闭态优先级链
 ///    抢位置，也不再要求 hide-until-hover 豁免（D-22 的旧豁免随之删除）。
+///
+/// **显隐是状态机**（2026-09-28 修「内置屏偶发只显示第一条」）：三处入口
+/// （`present` / 内容布局回调 / 淡出完成）都只做一件事——把当前状态喂给
+/// `HUDVisibilityStateMachine` 拿到动作、按序执行（`apply(_:to:)`）。
+/// 三条不变量：窗口的显隐**只由「有没有浮层」决定**，不由历史路径决定；
+/// 每次 present 都重新贴顶居中；**没有定时器 / 重试兜底**（约束）。
 @MainActor
 public final class ModuleHUDWindowHost {
     public static let shared = ModuleHUDWindowHost()
@@ -112,43 +198,40 @@ public final class ModuleHUDWindowHost {
         generation += 1
         guard let panel = ensurePanel() else { return }
 
-        if !panel.isVisible {
-            panel.alphaValue = 0
-            // 用 `orderFrontRegardless`（与上游其它 HUD 窗口同口径）：通知到达时 Gourd 通常
-            // 不是前台应用，`orderFront` 在非激活应用上不保证把窗口露出来。
-            // 先以 alpha 0 上台：窗口上台才会为内容跑布局，我们也才量得到尺寸（见坑 ②）。
-            panel.orderFrontRegardless()
-        }
-        // 已知尺寸（上一条浮层量到的）→ 立刻按它摆好；尺寸没变时窗口不会跳。
+        // ① 尺寸：已知尺寸（上一条浮层量到的）先摆好；尺寸没变时窗口不会跳。
         if let contentSize { applyContentSize(contentSize, to: panel) }
-        // 逼一次布局：`layout()` 回调随即把**新内容**的理想尺寸回报上来。
+        // ② 显隐：**每次 present 都按当前状态重算一遍动作**（幂等），不是「只有不可见时才处理」。
+        //    这一步保证「present 返回后窗口一定在台上且不透明」——坏状态在这里被纠正，
+        //    不依赖 `fadeIn` 的前置判断，也不依赖上一次 present 做过什么。
+        apply(
+            HUDVisibilityStateMachine.presentActions(isVisible: panel.isVisible, alpha: panel.alphaValue),
+            to: panel
+        )
+        // ③ 逼一次布局：`layout()` 回调随即把**新内容**的理想尺寸回报上来（并再 reconcile 一次）。
         hostingView?.needsLayout = true
         hostingView?.layoutSubtreeIfNeeded()
 
-        // 内容已就绪（尺寸可用）→ 立刻淡入；否则等布局回调把它淡入（见 `contentSizeChanged`）。
-        // 两条路都是幂等的：alpha 已是 1 时再动画一次没有视觉差别。
-        if contentSize != nil { fadeIn(panel) }
-
         // 几何日志：窗口要等布局回调（还有它之后的尺寸应用）才会摆好，所以延后一拍再记真值——
         // 核对窗口落点看这一行（`screencapture` 的窗口几何也可用 CGWindowList 交叉验证）。
+        // **记的是窗口的实际内容尺寸与 alpha**（不是缓存值）：这条日志是「同一屏连发多条通知，
+        // 尺寸 / 可见性是否一致」的实测证据。
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
             guard let self, self.generation == generation, let panel = self.panel, panel.isVisible else { return }
-            if let size = self.contentSize {
-                self.log.info("""
-                浮层窗口显示：模块 \(hud.moduleID, privacy: .public)，\
-                尺寸 \(NSStringFromSize(size), privacy: .public)，\
-                frame \(NSStringFromRect(panel.frame), privacy: .public)
-                """)
-            } else {
-                self.log.warning("浮层窗口：模块 \(hud.moduleID, privacy: .public) 未量到可用内容尺寸，窗口未出示内容")
-            }
+            self.log.info("""
+            浮层窗口显示：模块 \(hud.moduleID, privacy: .public)，\
+            尺寸 \(NSStringFromSize(panel.contentLayoutRect.size), privacy: .public)，\
+            alpha \(panel.alphaValue, privacy: .public)，\
+            frame \(NSStringFromRect(panel.frame), privacy: .public)
+            """)
         }
     }
 
     /// 收起：淡出 `fadeOutDuration` 后 `orderOut`（窗口留着复用）。
     ///
     /// **不维护 ttl**：`activeHUD` 变 nil 才会走到这里（到期任务 / 模块主动撤 / `deactivateAll()`）。
+    /// 完成回调不做判断，只把「代数 / 有没有新浮层」交给状态机（见 `dismissCompletionActions`）：
+    /// 新浮层接手时不 `orderOut`、也不把 alpha 留在 0。
     private func dismiss() {
         guard let panel, panel.isVisible else { return }
         let generation = generation
@@ -157,39 +240,73 @@ public final class ModuleHUDWindowHost {
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.generation == generation, ModuleRegistry.shared.activeHUD == nil else { return }
-                panel.orderOut(nil)
-                // 下次上台要重新淡入：归零，别让 `present` 以为「已可见且已淡入」。
-                panel.alphaValue = 0
-                self.log.info("浮层窗口已收起（ttl 到期 / 被撤）")
+                guard let self, let panel = self.panel else { return }
+                let actions = HUDVisibilityStateMachine.dismissCompletionActions(
+                    generationMatches: self.generation == generation,
+                    hasActiveHUD: ModuleRegistry.shared.activeHUD != nil
+                )
+                self.apply(actions, to: panel)
+                if actions.contains(where: \.hidesWindow) {
+                    self.log.info("浮层窗口已收起（ttl 到期 / 被撤）")
+                } else if actions.isEmpty {
+                    self.log.debug("淡出完成：已有更新的浮层接手 / 更新的一次淡出在途，不做处理")
+                } else {
+                    self.log.info("淡出被接手：新浮层在台前，窗口不收起并恢复不透明")
+                }
             }
         }
     }
 
-    /// 内容尺寸变化（`HUDSizingHostingView.layout()` 回调）→ 改窗口尺寸 + 重新贴顶 + （首次）淡入。
+    /// 内容尺寸变化（`HUDSizingHostingView.layout()` 回调）→ 改窗口尺寸 + 可见性纠正 + 重新贴顶。
     ///
     /// 回调发生在**布局过程中**，所以把动作挪到下一拍：在布局里改窗口尺寸会与这一次布局打架。
-    /// 尺寸没变就直接返回——`layout()` 每次布局都会回调，不设这道闸会变成「布局 → 改尺寸 →
-    /// 再布局」的死循环。
+    /// 尺寸没变时**只省掉 `setContentSize`**（`layout()` 每次布局都会回调，不设这道闸会变成
+    /// 「布局 → 改尺寸 → 再布局」的死循环）——但**可见性纠正照走**：窗口被收起 / alpha 停在 0
+    /// 这类坏状态正是靠这里被观测到并纠正（早退只该省尺寸，不该省显隐）。
     private func contentSizeChanged(_ size: CGSize) {
         let sanitized = Self.sanitizedContentSize(size, fallback: contentSize ?? Self.fallbackContentSize)
-        guard sanitized != contentSize else { return }
+        let resized = sanitized != contentSize
         contentSize = sanitized
         Task { @MainActor [weak self] in
             guard let self, let panel = self.panel else { return }
-            self.applyContentSize(sanitized, to: panel)
-            if ModuleRegistry.shared.activeHUD != nil { self.fadeIn(panel) }
+            if resized { self.applyContentSize(sanitized, to: panel) }
+            guard ModuleRegistry.shared.activeHUD != nil else { return }
+            self.apply(
+                HUDVisibilityStateMachine.presentActions(isVisible: panel.isVisible, alpha: panel.alphaValue),
+                to: panel
+            )
         }
     }
 
-    /// 按内容尺寸摆窗口：先定尺寸（左上角不动），再按新尺寸贴顶居中。
+    /// 按尺寸摆窗口（**只改尺寸，不摆位置**：位置由 `.reposition` 动作统一负责，两条路径
+    /// 因此不会各摆一半）。左上角不动，位置随后由 `.reposition` 按新尺寸重算。
     private func applyContentSize(_ size: CGSize, to panel: NSWindow) {
         if panel.contentLayoutRect.size != size { panel.setContentSize(size) }
-        position(panel)
     }
 
+    /// 执行状态机给出的动作（**唯一执行落点**：三处入口共用，避免每个入口各写一半）。
+    private func apply(_ actions: [HUDVisibilityAction], to panel: NSWindow) {
+        for action in actions {
+            switch action {
+            case .orderFront:
+                // 用 `orderFrontRegardless`（与上游其它 HUD 窗口同口径）：通知到达时 Gourd 通常
+                // 不是前台应用，`orderFront` 在非激活应用上不保证把窗口露出来。
+                panel.orderFrontRegardless()
+            case .setAlpha(let alpha):
+                panel.alphaValue = alpha
+            case .fadeIn:
+                fadeIn(panel)
+            case .orderOut:
+                panel.orderOut(nil)
+            case .reposition:
+                position(panel)
+            }
+        }
+    }
+
+    /// 淡入：把 alpha 动画补到 1。**没有「已经是 1 就跳过」的前置判断**——这条函数的目标是
+    /// 「结束时不透明」：从 1 动到 1 没有视觉差别（幂等），从 0 动到 1 才是淡入观感。
     private func fadeIn(_ panel: NSWindow) {
-        guard panel.alphaValue < 1 else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.fadeInDuration
             panel.animator().alphaValue = 1

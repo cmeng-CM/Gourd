@@ -28,7 +28,9 @@
 //  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
 //  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）、
 //  **主动撤浮层**（`dismissHUD(id:)` 的 id 判据与 `UIHandle.dismissTransient()` 的归属判定）、
-//  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）。
+//  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）、
+//  **可见性状态机的幂等性**（2026-09-28：首次上台 / 淡出中被接手 / 淡出结束无接手 / 同尺寸重弹 /
+//  有接手时不 orderOut——「内置屏偶发只显示第一条」的根因判据）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
 //  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）。
@@ -1523,6 +1525,84 @@ final class ModuleKernelTests: XCTestCase {
             ),
             CGSize(width: 360, height: 70),
             "正常量到的尺寸原样使用"
+        )
+    }
+
+    // MARK: - 浮层窗口的可见性状态机（2026-09-28：「内置屏偶发只显示第一条」）
+
+    /// ① **首次 present**：窗口还不在台上（刚创建时 `alphaValue` 是 1，所以这里是 `alpha = 1` +
+    /// `isVisible = false`）→ 必须「先归零 + 摆位 + 上台 + 淡入」，四步一个都不能少。
+    func testHUDVisibilityFirstPresentOrdersFrontAndFadesIn() {
+        let actions = HUDVisibilityStateMachine.presentActions(isVisible: false, alpha: 1)
+        XCTAssertEqual(actions, [.setAlpha(0), .reposition, .orderFront, .fadeIn])
+        XCTAssertTrue(actions.contains(.orderFront), "首次 present 必须让窗口上台")
+        XCTAssertEqual(actions.last, .fadeIn, "淡入在三步之后（先归零，淡入才看得见）")
+    }
+
+    /// ② **淡出中被接手**（坏状态 ①）：窗口还在台上但 alpha 停在 0 / 半透明 →
+    /// 必须**直接给 alpha 终态 1**（不赌动画），且不许出现 `orderOut`。
+    ///
+    /// 这条正是「内置屏偶发看不到」的修复判据：旧实现只剩 `fadeIn` 的 `guard alphaValue < 1`
+    /// 一条恢复路径，且 present 因 `isVisible == true` 跳过 `orderFrontRegardless`。
+    func testHUDVisibilityPresentRecoversWindowStuckTransparent() {
+        let actions = HUDVisibilityStateMachine.presentActions(isVisible: true, alpha: 0)
+        XCTAssertEqual(actions, [.setAlpha(1), .reposition])
+        XCTAssertFalse(actions.contains(.orderOut), "在台的窗口不许被收起")
+        XCTAssertFalse(actions.contains(.fadeIn), "停在 0 的窗口要给终态，不靠动画恢复")
+
+        // 半透明（淡出进行到一半）同样直接补到 1
+        XCTAssertEqual(
+            HUDVisibilityStateMachine.presentActions(isVisible: true, alpha: 0.4),
+            [.setAlpha(1), .reposition]
+        )
+        // 已经 1：只剩「重新贴顶居中」一条（幂等；不做无意义的 alpha 写入）
+        XCTAssertEqual(HUDVisibilityStateMachine.presentActions(isVisible: true, alpha: 1), [.reposition])
+    }
+
+    /// ③ **淡出结束、无人接手**：这才是真正该下台的时刻（`orderOut` + 归零，下次上台重新淡入）。
+    func testHUDVisibilityDismissCompletionOrdersOutWhenNobodyTookOver() {
+        XCTAssertEqual(
+            HUDVisibilityStateMachine.dismissCompletionActions(generationMatches: true, hasActiveHUD: false),
+            [.orderOut, .setAlpha(0)]
+        )
+    }
+
+    /// ④ **同尺寸重弹**：尺寸回调的早退只该省掉 `setContentSize`，不该省掉显隐纠正——
+    /// 窗口已被收起（`isVisible == false`）时，即使内容尺寸与缓存一模一样，也必须重新露出。
+    ///
+    /// 状态机因此**不看尺寸**（尺寸是另一条正交的输入）：动作只由「窗口在不在台上 / 透明不透明」
+    /// 决定，所以「同尺寸重弹」得到的动作与首次 present 完全一致。
+    func testHUDVisibilitySameSizeRePresentStillBringsWindowBack() {
+        let first = HUDVisibilityStateMachine.presentActions(isVisible: false, alpha: 1)
+        let sameSizeAgain = HUDVisibilityStateMachine.presentActions(isVisible: false, alpha: 0)
+        XCTAssertEqual(first, sameSizeAgain, "同尺寸重弹的动作必须与首次一致（不因尺寸相同而空转）")
+        XCTAssertTrue(sameSizeAgain.contains(.orderFront), "窗口已被收起时重新露出它")
+        XCTAssertTrue(
+            HUDVisibilityStateMachine.presentActions(isVisible: true, alpha: 1).contains(.reposition),
+            "尺寸没变也要重新贴顶居中（鼠标可能换到了另一块屏）"
+        )
+    }
+
+    /// ⑤ **有接手时不 orderOut**：新浮层已经在台前 / 已有更新的淡出在途时，
+    /// 旧淡出的完成回调不得把窗口收起来、也不得把 alpha 留在 0（否则新浮层跟着一起消失）。
+    func testHUDVisibilityDismissCompletionNeverHidesAHandedOverWindow() {
+        let takenOver = HUDVisibilityStateMachine.dismissCompletionActions(
+            generationMatches: true,
+            hasActiveHUD: true
+        )
+        XCTAssertFalse(takenOver.contains(.orderOut), "新浮层在台前：不许收起窗口")
+        XCTAssertFalse(takenOver.contains(.setAlpha(0)), "更不许把 alpha 留在 0（那就是「看不到」）")
+        XCTAssertEqual(takenOver, [.setAlpha(1), .reposition], "撤销这次淡出并重新贴顶居中")
+
+        XCTAssertEqual(
+            HUDVisibilityStateMachine.dismissCompletionActions(generationMatches: false, hasActiveHUD: false),
+            [],
+            "代数不匹配 = 早有更新的浮层/淡出接手，旧回调什么都不做"
+        )
+        XCTAssertEqual(
+            HUDVisibilityStateMachine.dismissCompletionActions(generationMatches: false, hasActiveHUD: true),
+            [],
+            "代数不匹配优先：接手方自己保证可见，旧回调不得插手"
         )
     }
 
