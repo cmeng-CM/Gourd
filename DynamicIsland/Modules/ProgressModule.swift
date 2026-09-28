@@ -129,79 +129,138 @@ final class ProgressModule: GourdModule {
 /// 刷新粒度是**粗粒度**的 60s（docs/13「已知限制」14）：日进度 1 分钟粒度足够，
 /// 周/月/季/年统一按 60s 重算（成本可忽略），也**未监听 `NSSystemClockDidChange`**
 /// ——系统的时钟 / 时区变更最多 60s 内被感知，超过 60s 的跳变在下一个周期校正。
+///
+/// 排版口径（面板拉宽后「一行一环 + `Spacer` 把数值甩到最右」显得像几个孤立的蓝圈）：
+/// - `.ring` / `.text` 改成**一排五个单元**，百分比就近贴住环 / 数值本体，不再有行尾 `Spacer`；
+/// - 尺度图标从 `.secondary`（灰 12pt）提亮为 `.primary.opacity(0.75)`（11pt）；
+/// - 内容整体在面板里**居中**，不再贴左上角。
 private struct ProgressModuleView: View {
     let scopes: [ProgressCalculator.Scope]
     let style: ProgressStyle
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            VStack(alignment: .leading, spacing: 8) {
+            layout(now: timeline.date)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+    }
+
+    /// 三种 `style` 的排版分支。宽度预算：五个环单元 = 5×46 + 4×16 = 294pt，
+    /// 加上左右 padding 16×2 仍塞得进极简模式 340pt 宽的面板，不会溢出。
+    @ViewBuilder
+    private func layout(now: Date) -> some View {
+        switch style {
+        case .ring:
+            HStack(spacing: 16) {
                 ForEach(scopes, id: \.self) { scope in
-                    ProgressRow(
-                        scope: scope,
-                        // 日历**在渲染时**才取 `.autoupdatingCurrent`（09 §5.3 的默认参数）：
-                        // 用户改系统时间 / 时区后，最迟下一个刷新周期就跟上，不留住旧日历。
-                        progress: ProgressCalculator.progress(for: scope, now: timeline.date),
-                        style: style
-                    )
+                    ProgressRingUnit(scope: scope, progress: progress(for: scope, now: now))
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        case .bar:
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(scopes, id: \.self) { scope in
+                    ProgressBarRow(scope: scope, progress: progress(for: scope, now: now))
+                }
+            }
+        case .text:
+            HStack(spacing: 16) {
+                ForEach(scopes, id: \.self) { scope in
+                    ProgressTextUnit(scope: scope, progress: progress(for: scope, now: now))
+                }
+            }
+        }
+    }
+
+    /// 日历**在渲染时**才取 `.autoupdatingCurrent`（09 §5.3 的默认参数）：
+    /// 用户改系统时间 / 时区后，最迟下一个刷新周期就跟上，不留住旧日历。
+    private func progress(for scope: ProgressCalculator.Scope, now: Date) -> Double {
+        ProgressCalculator.progress(for: scope, now: now)
+    }
+}
+
+/// 环形单元：46×46 的环（底环 + 进度环），百分比画在环心，环下是尺度图标。
+/// 单元内没有需要本地化的文案（06 §3.3 R5）——尺度由图标表达，数值是百分比。
+private struct ProgressRingUnit: View {
+    let scope: ProgressCalculator.Scope
+    let progress: Double
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.25), lineWidth: 5)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+
+                Text(ProgressPercent.text(progress))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .frame(width: 46, height: 46)
+
+            ScopeSymbol(scope: scope)
         }
     }
 }
 
-/// 单行：尺度图标 + 进度指示 + 百分比文本。行内没有需要本地化的文案（R5）——
-/// 尺度由图标表达，数值是百分比。
-private struct ProgressRow: View {
+/// 条形行：尺度图标 + 进度条 + **紧跟其后的**百分比（不用 `Spacer` 甩到行尾）。
+private struct ProgressBarRow: View {
     let scope: ProgressCalculator.Scope
     let progress: Double
-    let style: ProgressStyle
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: scope.symbolName)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+            ScopeSymbol(scope: scope, size: 12)
 
-            indicator
+            // 可伸缩宽度：窄面板里收缩，宽面板里止步于 160pt，不再固定 120 显得突兀。
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+                .frame(minWidth: 64, maxWidth: 160)
 
-            Spacer(minLength: 8)
-
-            Text(percentText)
+            Text(ProgressPercent.text(progress))
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .monospacedDigit()
         }
     }
+}
 
-    @ViewBuilder
-    private var indicator: some View {
-        switch style {
-        case .ring:
-            ZStack {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 3)
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 16, height: 16)
-        case .bar:
-            ProgressView(value: progress)
-                .progressViewStyle(.linear)
-                .frame(width: 120)
-        case .text:
-            EmptyView()
+/// 纯文本单元：大号百分比在上，尺度图标在下。
+private struct ProgressTextUnit: View {
+    let scope: ProgressCalculator.Scope
+    let progress: Double
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(ProgressPercent.text(progress))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+
+            ScopeSymbol(scope: scope)
         }
     }
+}
 
+/// 尺度图标。比旧的 `.secondary`（灰 12pt 太暗）提亮一档，在深色面板上也看得清。
+private struct ScopeSymbol: View {
+    let scope: ProgressCalculator.Scope
+    var size: CGFloat = 11
+
+    var body: some View {
+        Image(systemName: scope.symbolName)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(.primary.opacity(0.75))
+    }
+}
+
+/// 百分比文本的唯一出口。
+private enum ProgressPercent {
     /// 走 `Text(_: String)` 的 verbatim 重载（不是 `LocalizedStringKey`），
     /// 因此不会去 Localizable 里查 `%lld%%` 这类 key。
-    private var percentText: String {
+    static func text(_ progress: Double) -> String {
         "\(Int((progress * 100).rounded()))%"
     }
 }
