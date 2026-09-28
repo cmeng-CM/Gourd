@@ -26,7 +26,8 @@
 //  **单测不读系统通知库**（构造的二进制 plist 夹具），真实可读性由运行期探针报告判定。
 //  P2d 瞬时浮层——`presentHUD` 的覆盖语义与身份更替、`ttl` 夹取到 1…15s、
 //  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
-//  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）。
+//  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）、
+//  **主动撤浮层**（`dismissHUD(id:)` 的 id 判据与 `UIHandle.dismissTransient()` 的归属判定）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值。
 //
@@ -1306,6 +1307,60 @@ final class ModuleKernelTests: XCTestCase {
         ModuleRegistry.shared.clearHUD()
     }
 
+    /// `dismissHUD(id:)` **只撤匹配 id 的那条**：`id` 是「这一次弹出」的身份，不是模块 id——
+    /// 模块点掉自己那条 × 时台前可能已被后来者替换（通知连发 / 别的模块抢先），
+    /// 那种情况必须让后来者继续显示。不匹配 = 空操作（幂等）。
+    func testDismissHUDOnlyClearsMatchingID() throws {
+        let registry = ModuleRegistry.shared
+
+        // 第一条（极短 ttl → 夹到 1s 下界，代表「已经被顶掉的旧身份」）
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 0.05)
+        let staleID = try XCTUnwrap(registry.activeHUD?.id)
+
+        // 第二条把它顶掉（覆盖语义）——台前那次弹出的身份已经换人
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-beta", view: AnyView(Text("B")), ttl: 15)
+        let liveID = try XCTUnwrap(registry.activeHUD?.id)
+        XCTAssertNotEqual(staleID, liveID, "覆盖后是新身份")
+
+        // 拿旧身份 / 无关身份去撤：一条都不许动
+        registry.dismissHUD(id: staleID)
+        XCTAssertEqual(registry.activeHUD?.id, liveID, "旧身份的撤请求不得清掉台前的后来者")
+        registry.dismissHUD(id: UUID())
+        XCTAssertEqual(registry.activeHUD?.id, liveID, "无关 id 同样是空操作")
+
+        // 拿当前身份去撤：这一条消失；重复撤仍幂等
+        registry.dismissHUD(id: liveID)
+        XCTAssertNil(registry.activeHUD)
+        registry.dismissHUD(id: liveID)
+        XCTAssertNil(registry.activeHUD, "dismissHUD 必须幂等")
+        registry.dismissHUD(id: UUID())
+        XCTAssertNil(registry.activeHUD, "本来就没有浮层时也不崩")
+    }
+
+    /// `UIHandle.dismissTransient()`（工厂实现）→ 注册表 `dismissHUD(id:)`，且**先判归属**：
+    /// 只撤本模块弹的那一条；台前是别的模块的浮层时什么都不做。
+    func testDismissTransientDismissesOwnHUDOnly() throws {
+        let registry = ModuleRegistry.shared
+        let manifest = RegistryFixture.manifest(shortID: "hud-probe")
+        let context = ModuleContextFactory.make(manifest: manifest, redraw: {})
+
+        // 本模块弹的那条：撤得掉
+        context.ui.presentTransient(view: AnyView(Text("mine")), ttl: 4)
+        XCTAssertEqual(registry.activeHUD?.moduleID, "com.cmeng.gourd.hud-probe")
+        context.ui.dismissTransient()
+        XCTAssertNil(registry.activeHUD, "本模块的浮层应被主动撤掉")
+
+        // 别的模块弹的那条：撤不动（归属判定，不是「无条件清台前」）
+        registry.presentHUD(moduleID: "com.cmeng.gourd.someone-else", view: AnyView(Text("other")), ttl: 4)
+        context.ui.dismissTransient()
+        XCTAssertEqual(
+            registry.activeHUD?.moduleID,
+            "com.cmeng.gourd.someone-else",
+            "别的模块的浮层不在本模块的处置范围内"
+        )
+        registry.clearHUD()
+    }
+
     // MARK: - 待办模块 todos（T5）
 
     /// 构造一条待办（id 兼作标题，便于按 id 断言顺序）。
@@ -2271,9 +2326,12 @@ private final class StubUIHandle: UIHandle {
     var redrawCount = 0
     /// 收到的瞬时浮层请求（`ttl` 逐条记下，断言夹取/覆盖语义时不必等真实到期）。
     var presentedTTLs: [TimeInterval] = []
+    /// 收到的主动撤浮层请求次数（只记次数：假体不持有注册表，转发语义由别处钉）。
+    var dismissCount = 0
     func requestRedraw() { redrawCount += 1 }
     var isLowPower: Bool { false }
     func presentTransient(view: AnyView, ttl: TimeInterval) { presentedTTLs.append(ttl) }
+    func dismissTransient() { dismissCount += 1 }
 }
 
 @MainActor

@@ -74,6 +74,13 @@ public protocol UIHandle: AnyObject {
     /// - `ttl` 由宿主夹取到 1…15s（`ModuleRegistry.hudTTLRange`），模块给什么值都不会常驻；
     /// - 关掉/无刘海（`hideOnClosed`）时宿主不渲染它，但方法本身仍返回正常（不抛错、不降级）。
     func presentTransient(view: AnyView, ttl: TimeInterval)
+    /// **主动撤掉本模块当前的瞬时浮层**：模块上的 × / 关闭入口被点掉后调它，
+    /// 关闭态那一格**立刻**让位给下层内容（音乐 / 计时器 / 槽位…），而不是等 ttl 到点。
+    ///
+    /// 判据是「当前浮层是不是**本模块**弹的那一条」（对应 `ModuleRegistry.dismissHUD(id:)`）：
+    /// 台前已被后来者替换时它是**空操作**——撤掉别人的浮层不是本模块该有的能力，
+    /// 也不需要模块自己记住浮层 id（`presentTransient` 不返回 id，模块本来也拿不到）。
+    func dismissTransient()
 }
 
 /// 自动带 `moduleID` 与 subsystem 前缀 `com.cmeng.gourd.module.<shortID>` 的日志器。

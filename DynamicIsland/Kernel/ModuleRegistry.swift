@@ -298,4 +298,18 @@ public final class ModuleRegistry: ObservableObject {
         guard activeHUD != nil else { return }
         activeHUD = nil
     }
+
+    /// 撤掉**指定的那一条**浮层（模块侧入口是 `UIHandle.dismissTransient()`；模块点掉浮层的 × 后
+    /// 走它让位给下层内容，而不是等 ttl 到点——否则关闭后关闭态那一格仍被浮层分支占着）。
+    ///
+    /// 与 `clearHUD()` 的分工：`clearHUD()` 是宿主侧的**无条件**收尾（到期任务 / `deactivateAll()`），
+    /// 本方法带 `id` 判据——模块点 × 的那一刻台前可能已经**被后来者替换**（通知连发 /
+    /// 另一个模块抢先），那种情况必须让后来者继续显示，撤掉它不是本模块该做的事。
+    ///
+    /// **幂等**：`id` 不等于当前浮层（已被替换 / 已到期 / 本来就没有）时是空操作。
+    public func dismissHUD(id: UUID) {
+        guard let current = activeHUD, current.id == id else { return }
+        activeHUD = nil
+        log.info("dismissHUD：模块 \(current.moduleID, privacy: .public) 主动撤掉浮层，让位给下层内容")
+    }
 }

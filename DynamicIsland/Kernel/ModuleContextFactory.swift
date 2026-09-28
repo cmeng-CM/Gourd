@@ -125,4 +125,13 @@ private final class RedrawUIHandle: UIHandle {
     func presentTransient(view: AnyView, ttl: TimeInterval) {
         ModuleRegistry.shared.presentHUD(moduleID: moduleID, view: view, ttl: ttl)
     }
+
+    /// 主动撤浮层：**先判归属**再撤——模块只能撤自己弹的那一条
+    /// （`dismissHUD(id:)` 只认 id，归属判定在模块与 id 之间缺的一环，落在这里）。
+    /// 当前浮层不是本模块的（被别的模块抢先 / 已经到期清空）时什么都不做。
+    func dismissTransient() {
+        let registry = ModuleRegistry.shared
+        guard let hud = registry.activeHUD, hud.moduleID == moduleID else { return }
+        registry.dismissHUD(id: hud.id)
+    }
 }

@@ -67,6 +67,9 @@
 //  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，4s 后自动消失
 //    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条）。
 //    **两条来源**：AX 横幅（实时，× 可真关）/ DB 增量（降级，× 只从岛上隐藏）；
+//    × 走 `.highPriorityGesture`（同一层上压过祖先的 `openNotch()` 普通手势，见
+//    `NotificationHUDView` 的手势优先级说明），点掉后调 `UIHandle.dismissTransient()` **立刻**撤浮层
+//    （内核 `ModuleRegistry.dismissHUD(id:)`），不等 ttl；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
@@ -640,6 +643,7 @@ final class NotificationsModule: GourdModule {
     private func presentNotificationHUD(for item: NotificationItem) {
         let showsBody = Defaults[.showBodyInHUD]
         let handle = store.closeHandle(for: item)
+        let ui = context.ui
         context.logger.info("弹通知浮层（DB）：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")")
         context.ui.presentTransient(
             view: AnyView(
@@ -649,7 +653,13 @@ final class NotificationsModule: GourdModule {
                     bodyText: item.body,
                     showsBody: showsBody,
                     closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
-                    onClose: { [store] in
+                    onClose: { [store, ui] in
+                        // ① **内核侧撤浮层（先做）**：关闭态那一格立即让位给下层内容。
+                        //    视图自己的 `isHidden` 只清掉这一格的内容，关闭态优先级链的判据
+                        //    仍是「注册表里有浮层」，光靠它下层内容要等到 ttl 到点才回来。
+                        ui.dismissTransient()
+                        // ② 真关闭（AX 动作，`closeSystemBanner` 甩到后台队列）：没有句柄时
+                        //    这一步就是「仅从岛上隐藏」的前一半，退化为空操作。
                         guard let handle else { return }
                         store.closeSystemBanner(handle, reason: "浮层关闭 rec_id=\(item.id)")
                     }
@@ -665,6 +675,7 @@ final class NotificationsModule: GourdModule {
     /// 自己先把这一格隐掉，两条路都是「点完立刻看不见」）。
     private func presentBannerHUD(_ event: BannerEvent) {
         let showsBody = Defaults[.showBodyInHUD]
+        let ui = context.ui
         context.logger.info(
             "弹通知浮层（AX）：app=\(event.appName)，标题=\(event.title)，正文\(showsBody ? "显示" : "隐藏")"
         )
@@ -676,7 +687,9 @@ final class NotificationsModule: GourdModule {
                     bodyText: event.body,
                     showsBody: showsBody,
                     closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
-                    onClose: { [store] in
+                    onClose: { [store, ui] in
+                        // 与 DB 路径同口径：内核侧撤浮层在前（立刻让位），真关闭在后。
+                        ui.dismissTransient()
                         guard let handle = event.closeHandle else { return }
                         store.closeSystemBanner(handle, reason: "浮层关闭 AX 横幅")
                     }
@@ -945,8 +958,16 @@ private struct NotificationRow: View {
 /// 它右侧：`.frame(maxWidth: 140)` + 图标/间距/× 合计 ≈ 178pt，× 因此留在可见区域内
 /// （**超出刘海宽的部分会被窗口裁掉，按钮被裁掉就等于点不到**——这是把 220 收到 140 的原因）。
 ///
-/// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空（内核没有「模块主动撤浮层」的
-/// API，也不必为它加——浮层本来就只活 ttl 秒，本地置空与 `clearHUD()` 对用户是同一件事）。
+/// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空，并配合 `UIHandle.dismissTransient()`
+/// 把浮层从内核撤掉（关闭态优先级链的判据是「注册表里有浮层」，只本地置空的话下层内容
+/// 仍要等 ttl 到点才回来）。
+///
+/// ## × 的手势优先级（2026-09-28 修正）
+/// 关闭态的根容器上挂着**祖先**的 `.onTapGesture { openNotch() }`（`ContentView` 的
+/// `configuredMainLayout`，覆盖整条关闭态内容链——浮层分支也在里面）：同一层上的普通手势
+/// 会被它先一步拿走，× 收不到事件（合成点击实测：无「浮层关闭…」日志、浮层按自然 ttl 消失）。
+/// 因此 × 用 **`.highPriorityGesture`** 声明：它在自己这一层压过祖先的普通手势，事件先到 ×。
+/// **不动** `ContentView` 里那个 `openNotch()`（上游行为，所有关闭态内容靠它展开）。
 private struct NotificationHUDView: View {
     let appName: String
     let title: String
@@ -996,14 +1017,15 @@ private struct NotificationHUDView: View {
         }
     }
 
-    /// × ：**先本地隐藏（立刻生效），再交给上层做真关闭**——AX 动作是同步 IPC，
-    /// 放在点击回调里做会把主线程卡一下，所以上层（`closeSystemBanner`）甩到后台队列。
-    /// 失败不弹错误：这一步已经不是「浮层消不消失」的前提了。
+    /// × ：**先本地隐藏（立刻生效）+ 内核撤浮层（让位给下层内容），再交给上层做真关闭**——
+    /// AX 动作是同步 IPC，放在点击回调里做会把主线程卡一下，所以上层（`closeSystemBanner`）
+    /// 甩到后台队列。失败不弹错误：这一步已经不是「浮层消不消失」的前提了。
+    ///
+    /// 手势用 `.highPriorityGesture`：关闭态根容器的祖先手势（`openNotch()`）会先一步吃掉
+    /// 这颗按钮的点击（见 `NotificationHUDView` 文档的实测记录），高优先级手势把事件拿回来。
+    /// 保留 `Button` 外观与 `.buttonStyle(.plain)`，动作体与之共用同一个 `dismiss()`。
     private var closeButton: some View {
-        Button {
-            isHidden = true
-            onClose()
-        } label: {
+        Button(action: dismiss) {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white.opacity(isCloseHovered ? 1 : 0.7))
@@ -1012,8 +1034,18 @@ private struct NotificationHUDView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .highPriorityGesture(TapGesture().onEnded { dismiss() })
         .onHover { isCloseHovered = $0 }
         .help(NotificationText.localized(closeHelpKey))
+    }
+
+    /// × 的动作体（按钮与高优先级手势共用）。`isHidden` 既是「这一格立刻变空」的本地效果，
+    /// 也充当**幂等闸**：两个入口在同一轮事件里都触发时只走一次（`onClose` 里的 AX 关闭
+    /// 只该发一次）。
+    private func dismiss() {
+        guard !isHidden else { return }
+        isHidden = true
+        onClose()
     }
 
     /// 第二行：`showBodyInHUD` 为真时是「标题 + 正文」，否则是「新通知」这一行文案。
