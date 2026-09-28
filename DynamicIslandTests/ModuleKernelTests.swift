@@ -15,6 +15,9 @@
 //  剩余量分档（`remaining`：跨天向上取整 / 跨小时 / 最后一分钟 / 刚过整点）、
 //  `visibleScopes` 解析（缺省=日+年 / 非法值忽略 / 顺序按输入）、
 //  manifest 与 config 契约、真组合根注册后的 tab 投影与展开内容。
+//  T5 待办模块 todos——分类与计数（今日 / 本周 / 所有三档的成员与 `(已办, 总量)`、
+//  「无到期时间只进所有」、今日与本周的刻意重叠、本周随 `firstWeekday`）、清单排序、
+//  manifest 契约、中央槽位的候选顺序（todos 的 order 20 排在 progress 的 30 之前）。
 //
 
 import AppKit
@@ -1013,14 +1016,17 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// T4 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 激活 →
+    /// T4/T5 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 激活 →
     /// 进 tab 投影 → 展开请求拿到 `.view`。
     ///
-    /// 证明两件事：A3「新增模块 = 协议 + 注册一行」在本批的数组上成立；`module.progress.name`
-    /// 真的能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）。
+    /// 证明两件事：A3「新增模块 = 协议 + 注册一行」在本批的数组上成立；`module.progress.name` /
+    /// `module.todos.name` 真的能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）。
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
-    func testKernelBootstrapRegistersProgressModuleAndServesExpandedContent() async throws {
+    ///
+    /// **这条用例的 `count == 2` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第三个内置模块时会红，按该条的口径一并放宽。
+    func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
         let defaults = UserDefaults.standard
@@ -1035,11 +1041,11 @@ final class ModuleKernelTests: XCTestCase {
         }
         defaults.set(true, forKey: flagKey)
 
-        XCTAssertEqual(KernelBootstrap.builtinModules.count, 1, "A3：内置模块清单本批只有 progress 一行")
+        XCTAssertEqual(KernelBootstrap.builtinModules.count, 2, "A3：内置模块清单 = 两行（progress + todos）")
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
-            [ObjectIdentifier(ProgressModule.self)],
-            "builtinModules 里应只有 ProgressModule"
+            [ObjectIdentifier(ProgressModule.self), ObjectIdentifier(TodosModule.self)],
+            "builtinModules 里应是 ProgressModule 与 TodosModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1049,11 +1055,15 @@ final class ModuleKernelTests: XCTestCase {
 
         let registry = ModuleRegistry.shared
         let id = "com.cmeng.gourd.progress"
+        let todosID = "com.cmeng.gourd.todos"
         XCTAssertEqual(registry.states[id], .active)
+        XCTAssertEqual(registry.states[todosID], .active)
         XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
+        XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
 
-        let entry = try XCTUnwrap(registry.tabEntries.first, "progress 应进展开面板的 tab 投影")
-        XCTAssertEqual(registry.tabEntries.map(\.id), [id])
+        // tab 投影按 `order` 升序：todos（20）排在 progress（30）之前
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id])
+        let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
         // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
@@ -1071,10 +1081,12 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("lockscreen 未声明，应返回 .none")
         }
 
-        // 折叠态中央槽位投影：真模块是唯一候选，槽位内容同样拿到 `.view`
-        XCTAssertEqual(registry.compactEntries.map(\.id), [id])
+        // 折叠态中央槽位投影：两个模块都声明 compact，**第一个候选是 order 20 的 todos**
+        //（`compactSlotContent()` 只转发第一个），因此槽位内容现在是待办的视图
+        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, id])
+        XCTAssertEqual(registry.compactEntries.map(\.order), [20, 30])
         guard case .view = registry.compactSlotContent() else {
-            return XCTFail("折叠态中央槽位应拿到 progress 的 .view 内容")
+            return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }
     }
 
@@ -1124,6 +1136,223 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("槽位内容应转发给第一个候选模块")
         }
         XCTAssertTrue(reason.contains("probe-dual"), "转发到的应是 compactEntries 的第一个，实到 \(reason)")
+    }
+
+    // MARK: - 待办模块 todos（T5）
+
+    /// 构造一条待办（id 兼作标题，便于按 id 断言顺序）。
+    private func todo(
+        _ id: String,
+        due: Date? = nil,
+        completed: Bool = false,
+        completedAt: Date? = nil,
+        list: String = "提醒"
+    ) -> TodoBucketing.Item {
+        TodoBucketing.Item(
+            id: id,
+            title: id,
+            dueDate: due,
+            isCompleted: completed,
+            completionDate: completedAt,
+            listName: list
+        )
+    }
+
+    private func todoIDs(_ result: TodoBucketing.BucketResult) -> [String] { result.items.map(\.id) }
+
+    /// 分类与计数（2026-09-28 用户定稿的口径）：
+    /// 今日 = ① 到期在今天 ∪ ② 已过期且未完成 ∪ ③ 今天完成；本周 = 到期落在一周区间内 **∪ 今日**（刻意重叠）；
+    /// 所有 = 全集。**无到期时间只进「所有」**（含「无到期时间 + 今天完成」这种两条规则相抵的条目）。
+    func testTodoBucketingMembershipAndCounts() throws {
+        let calendar = try fixedGregorian()  // Asia/Shanghai，周一为首日
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)  // 2026-09-28 是周一
+
+        let summary = TodoBucketing.classify([
+            todo("due-today", due: try instant(2026, 9, 28, 9, calendar: calendar)),
+            todo(
+                "done-today",
+                due: try instant(2026, 9, 28, 8, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 28, 9, 30, calendar: calendar)
+            ),
+            todo("overdue-open", due: try instant(2026, 9, 25, 9, calendar: calendar)),
+            todo(
+                "overdue-done-last-week",
+                due: try instant(2026, 9, 25, 9, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 26, 9, calendar: calendar)
+            ),
+            todo("later-this-week", due: try instant(2026, 10, 1, 9, calendar: calendar)),
+            todo("next-month", due: try instant(2026, 10, 20, 9, calendar: calendar)),
+            todo("no-due", list: "收集箱"),
+            todo(
+                "no-due-done-today",
+                completed: true,
+                completedAt: try instant(2026, 9, 28, 9, calendar: calendar),
+                list: "收集箱"
+            ),
+        ], now: now, calendar: calendar)
+
+        // 今日：未完成在前（到期升序）、已完成排最后 → 逾期 > 今天到期 > 今天完成
+        XCTAssertEqual(todoIDs(summary.today), ["overdue-open", "due-today", "done-today"])
+        // 本周：今日的三条**重复出现**（刻意重叠），再加本周内到期的 later-this-week
+        XCTAssertEqual(todoIDs(summary.week), ["overdue-open", "due-today", "later-this-week", "done-today"])
+        XCTAssertEqual(summary.week.total, summary.today.total + 1, "本周 ⊇ 今日：本周是更大窗口，重叠计数是刻意的")
+        // 本周之后 / 上周完成的 / 无到期时间的：都不进今日、本周（later-this-week 则只在本周、不在今日）
+        for id in ["next-month", "overdue-done-last-week", "no-due", "no-due-done-today"] {
+            XCTAssertFalse(todoIDs(summary.week).contains(id), "\(id) 不应在本周")
+            XCTAssertFalse(todoIDs(summary.today).contains(id), "\(id) 不应在今日")
+        }
+        XCTAssertFalse(todoIDs(summary.today).contains("later-this-week"), "本周内但非今天到期的，不进今日")
+
+        // 所有：全集（含无到期时间与下月的）；未完成按到期升序、无到期时间排最后，已完成按完成时刻倒序
+        XCTAssertEqual(summary.all.total, 8)
+        XCTAssertEqual(todoIDs(summary.all), [
+            "overdue-open", "due-today", "later-this-week", "next-month", "no-due",
+            "done-today", "no-due-done-today", "overdue-done-last-week",
+        ])
+
+        // (已办, 总量) 与环心文案
+        XCTAssertEqual(summary.today.completed, 1)
+        XCTAssertEqual(summary.today.total, 3)
+        XCTAssertEqual(summary.today.counterText, "1/3")
+        XCTAssertEqual(summary.week.completed, 1)
+        XCTAssertEqual(summary.week.total, 4)
+        XCTAssertEqual(summary.week.counterText, "1/4")
+        XCTAssertEqual(summary.all.completed, 3)
+        XCTAssertEqual(summary.all.total, 8)
+        XCTAssertEqual(summary.all.counterText, "3/8")
+        XCTAssertEqual(summary.all.progress, 3.0 / 8.0, accuracy: 1e-9)
+    }
+
+    /// 今日的第 ③ 条「今天完成的也归今日」：把被第 ② 条（已过期**且未完成**）挡掉的
+    /// 「已过期但今天完成」接回来；未来到期但今天完成的同样归今日。
+    /// 而「无到期时间 + 今天完成」按单列的硬规则**只进「所有」**（两条规则相抵时以前者为准）。
+    func testTodoBucketingCompletedTodayEntersToday() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)
+        let completedAt = try instant(2026, 9, 28, 9, calendar: calendar)
+
+        let summary = TodoBucketing.classify([
+            todo(
+                "overdue-done-today",
+                due: try instant(2026, 9, 25, 9, calendar: calendar),
+                completed: true,
+                completedAt: completedAt
+            ),
+            todo(
+                "future-done-today",
+                due: try instant(2026, 10, 20, 9, calendar: calendar),
+                completed: true,
+                completedAt: completedAt
+            ),
+            todo("no-due-done-today", completed: true, completedAt: completedAt),
+        ], now: now, calendar: calendar)
+
+        XCTAssertEqual(todoIDs(summary.today), ["overdue-done-today", "future-done-today"], "今天完成的都归今日（有到期时间的）")
+        XCTAssertEqual(todoIDs(summary.all), ["overdue-done-today", "future-done-today", "no-due-done-today"])
+        XCTAssertFalse(todoIDs(summary.today).contains("no-due-done-today"), "无到期时间只进「所有」")
+        XCTAssertFalse(todoIDs(summary.week).contains("no-due-done-today"), "无到期时间不进「本周」")
+    }
+
+    /// 总量为 0 的边界：三个类别都是 `0/0`、进度 0（环为空）；并钉住环的展示顺序。
+    func testTodoBucketingEmptyBoundary() throws {
+        let calendar = try fixedGregorian()
+        let summary = TodoBucketing.classify(
+            [],
+            now: try instant(2026, 9, 28, 10, calendar: calendar),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.ordered.map(\.bucket), [.today, .week, .all], "环的展示顺序：今日 → 本周 → 所有")
+        for result in summary.ordered {
+            XCTAssertEqual(result.completed, 0)
+            XCTAssertEqual(result.total, 0)
+            XCTAssertEqual(result.counterText, "0/0")
+            XCTAssertEqual(result.progress, 0)
+        }
+    }
+
+    /// 周区间的起止随日历的 `firstWeekday`（不假定周一）：2026-10-04（周日）在「周一为首日」的
+    /// 周 `[09-28, 10-05)` 内，在「周日为首日」的周 `[09-27, 10-04)` 之外（它是下一周的第一天）——
+    /// 两种日历下都不进今日、都进所有。
+    ///
+    /// 用未来到期（而非昨天）的条目，是为了不撞上「已过期 → 进今日」那条规则：
+    /// 2026-09-27（周日）虽然也随 `firstWeekday` 在两周之间挪动，但它已过期，两种日历下都进今日。
+    func testTodoBucketingWeekFollowsFirstWeekday() throws {
+        let mondayFirst = try fixedGregorian(firstWeekday: 2)
+        let sundayFirst = try fixedGregorian(firstWeekday: 1)
+        let now = try instant(2026, 9, 28, 10, calendar: mondayFirst)
+        let item = todo("sunday-due", due: try instant(2026, 10, 4, 9, calendar: mondayFirst))
+
+        let mondaySummary = TodoBucketing.classify([item], now: now, calendar: mondayFirst)
+        let sundaySummary = TodoBucketing.classify([item], now: now, calendar: sundayFirst)
+
+        XCTAssertEqual(todoIDs(mondaySummary.week), ["sunday-due"], "周一为首日：本周 = [09-28, 10-05)")
+        XCTAssertTrue(todoIDs(sundaySummary.week).isEmpty, "周日为首日：本周 = [09-27, 10-04)，10-04 已是下一周")
+        XCTAssertEqual(mondaySummary.today.total, 0, "日后到期且未完成 → 不进今日")
+        XCTAssertEqual(sundaySummary.today.total, 0)
+        XCTAssertEqual(mondaySummary.all.total, 1)
+        XCTAssertEqual(sundaySummary.all.total, 1)
+    }
+
+    /// 到期时间恰好是**明天 00:00** 时不算今天（自然日的半开区间边界）。
+    /// `DateInterval.contains(_:)` 的实现含 end 端点，用它会把这条算进今天——本模块因此自写半开判定。
+    func testTodoBucketingMidnightBoundary() throws {
+        let calendar = try fixedGregorian()
+        let summary = TodoBucketing.classify([
+            todo("tomorrow-midnight", due: try instant(2026, 9, 29, calendar: calendar)),
+            todo("today-last-minute", due: try instant(2026, 9, 28, 23, 59, calendar: calendar)),
+        ], now: try instant(2026, 9, 28, 23, 59, calendar: calendar), calendar: calendar)
+
+        XCTAssertEqual(todoIDs(summary.today), ["today-last-minute"])
+    }
+
+    /// `TodosModule.manifest` 的契约：id / surfaces / icon / defaultEnabled / placement / 空权限 / 无配置；
+    /// 并回走一次 JSON 路径（与宿主读 descriptor 同一条路）。
+    func testTodosModuleManifestMatchesContract() throws {
+        let manifest = TodosModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.todos")
+        XCTAssertEqual(manifest.shortID, "todos")
+        XCTAssertEqual(manifest.name.key, "module.todos.name")
+        XCTAssertEqual(manifest.summary?.key, "module.todos.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "checklist"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.expanded, .compact], "展开面板 + 折叠态中央槽位")
+        XCTAssertEqual(manifest.defaultEnabled, true)
+        XCTAssertEqual(manifest.defaultPlacement, Placement(slot: .center, order: 20))
+        XCTAssertTrue(manifest.permissions.isEmpty, "06 §7.1 无「提醒」词条：提醒走系统 TCC，不声明 capability")
+        XCTAssertNil(manifest.config, "第一版不做配置")
+
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// `module.todos.*` 的 key 必须能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）：
+    /// 解析不到时 `Bundle` 原样返回 key，断言因此能抓住漏编译 / 拼错的 key。
+    func testTodosLocalizationKeysResolve() {
+        let keys = [
+            "module.todos.name",
+            "module.todos.summary",
+            "module.todos.scope.today",
+            "module.todos.scope.week",
+            "module.todos.scope.all",
+            "module.todos.empty",
+            "module.todos.overdue",
+            "module.todos.permission",
+            "module.todos.requestAccess",
+            "module.todos.openSettings",
+        ]
+        for key in keys {
+            let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+            XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
+            XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
+        }
+        // 三个类别的标签 key 与 `TodoBucketing.Bucket.rawValue` 同源
+        XCTAssertEqual(TodoBucketing.Bucket.allCases.map(\.labelKey), [
+            "module.todos.scope.today", "module.todos.scope.week", "module.todos.scope.all",
+        ])
     }
 }
 

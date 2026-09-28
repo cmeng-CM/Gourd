@@ -18,8 +18,8 @@ import os
 /// 组合根。模块的注册、启用门、激活与首启默认值都收在这一处。
 @MainActor
 public enum KernelBootstrap {
-    /// 内置模块清单。本任务（T2）留空数组——T4 把 `ProgressModule` 加进来。
-    static let builtinModules: [any GourdModule.Type] = [ProgressModule.self]
+    /// 内置模块清单。T4 落 `ProgressModule`，T5 落 `TodosModule`——即「新增模块 = 加一行」的那一行。
+    static let builtinModules: [any GourdModule.Type] = [ProgressModule.self, TodosModule.self]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
 
