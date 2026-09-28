@@ -992,7 +992,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.pie"))
         XCTAssertEqual(manifest.kind, "builtin")
         XCTAssertEqual(manifest.surfaces, [.compact, .expanded], "折叠态中央槽位 + 展开面板清单")
-        XCTAssertEqual(manifest.defaultEnabled, true)
+        // 2026-09-28 用户判定「时间进度」无行动价值 → 默认关（代码保留），中央槽位默认内容改由 todos 承担
+        XCTAssertEqual(manifest.defaultEnabled, false, "progress 默认关（13 号文档 D-20）")
         XCTAssertEqual(manifest.defaultPlacement?.order, 30)
         XCTAssertEqual(manifest.defaultPlacement?.slot, .center, "声明 compact 后 slot 记 center（06 §6.2）")
         XCTAssertTrue(manifest.permissions.isEmpty, "09 §5.3：progress 无权限")
@@ -1016,11 +1017,13 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// T4/T5 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 激活 →
-    /// 进 tab 投影 → 展开请求拿到 `.view`。
+    /// T4/T5 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 过启用门 →
+    /// 激活 → 进 tab 投影 → 内容请求拿到 `.view`。
     ///
-    /// 证明两件事：A3「新增模块 = 协议 + 注册一行」在本批的数组上成立；`module.progress.name` /
-    /// `module.todos.name` 真的能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）。
+    /// 两段：① 走**真启用门**（`defaultEnabled`）——todos 默认开、progress 默认关（D-20）；
+    /// ② 手动全放行重注册一次，保住 progress 的内容路径覆盖（它是「两条 surface + lockscreen 降级」
+    /// 的样本）。`module.progress.name` / `module.todos.name` 必须能从宿主 bundle 解析出文案
+    /// （06 §3.3 R5 的 key 形态）。
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
@@ -1056,12 +1059,42 @@ final class ModuleKernelTests: XCTestCase {
         let registry = ModuleRegistry.shared
         let id = "com.cmeng.gourd.progress"
         let todosID = "com.cmeng.gourd.todos"
-        XCTAssertEqual(registry.states[id], .active)
+
+        // ① 真启用门逐字取 `defaultEnabled`：todos 默认开、progress 默认关（D-20）
         XCTAssertEqual(registry.states[todosID], .active)
-        XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
+        XCTAssertEqual(registry.states[id], .disabled, "progress 默认关（D-20），启用门不放行")
+        XCTAssertNil(registry.instance(for: id), "disabled 的模块不实例化")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
 
-        // tab 投影按 `order` 升序：todos（20）排在 progress（30）之前
+        // 投影里只剩 todos（未激活的 progress 不进 tab、不进槽位候选），
+        // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID])
+        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID])
+        guard case .view = registry.compactSlotContent() else {
+            return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
+        }
+        guard case .view = registry.content(for: todosID, request: request(.expanded)) else {
+            return XCTFail("todos 的展开请求应拿到 .view")
+        }
+        guard case .view = registry.content(for: todosID, request: request(.compact)) else {
+            return XCTFail("todos 声明了 compact，应返回 .view")
+        }
+        guard case .none = registry.content(for: todosID, request: request(.lockscreen)) else {
+            return XCTFail("todos 未声明 lockscreen，应返回 .none")
+        }
+        guard case .unavailable = registry.content(for: id, request: request(.expanded)) else {
+            return XCTFail("未激活的 progress 应降级为 .unavailable")
+        }
+
+        // ② 手动全放行（模拟用户显式开启 progress）后重注册：两个模块都 active
+        await registry.deactivateAll()
+        registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[id], .active)
+        XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
+
+        // tab / 槽位候选都按 `order` 升序：todos（20）排在 progress（30）之前
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id])
         let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
@@ -1082,7 +1115,7 @@ final class ModuleKernelTests: XCTestCase {
         }
 
         // 折叠态中央槽位投影：两个模块都声明 compact，**第一个候选是 order 20 的 todos**
-        //（`compactSlotContent()` 只转发第一个），因此槽位内容现在是待办的视图
+        //（`compactSlotContent()` 只转发第一个），因此槽位内容仍是待办的视图
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, id])
         XCTAssertEqual(registry.compactEntries.map(\.order), [20, 30])
         guard case .view = registry.compactSlotContent() else {

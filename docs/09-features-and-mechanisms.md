@@ -19,7 +19,7 @@
 | P5 | **不用的上游功能：保留原样、不投入** | AI 对话、AI 用量面板、全屏视频壁纸、系统 Clock 计时器镜像、蓝牙耳机管理——代码与界面原样保留，不做维护承诺、不进 P2 接管清单 |
 | P6 | **仍不做的** | 照片浏览、番茄钟、AI agent 状态面板 |
 
-**范围定稿过程**：初版曾计划删除 6 项上游功能，后修订为不删（删除要清理接线、每次季度同步重删、且有引入 bug 的风险，而"保留"成本只是代码在场）；又曾一律不新增功能，随后修订为**按需新增**（快捷启动、农历、进度、Shortcuts 上岛、通知上岛、终端外部化 —— 见 §5）。
+**范围定稿过程**：初版曾计划删除 6 项上游功能，后修订为不删（删除要清理接线、每次季度同步重删、且有引入 bug 的风险，而"保留"成本只是代码在场）；又曾一律不新增功能，随后修订为**按需新增**（快捷启动、农历、进度、Shortcuts 上岛、通知上岛、终端外部化 —— 见 §5）。**2026-09-28 增补第 7 项：待办 `todos`**（§5.7），它同时把「进度」挤下折叠态中央槽位（进度默认关，见 §5.3）。
 
 **新增部分的共同要求**：全部做成 [06 号协议](06-module-protocol.md) 下的独立模块（声明 manifest + 配置 schema + 事件），**不改上游文件**——这样季度同步零冲突，也符合"一切皆模块"的目标。
 
@@ -66,7 +66,8 @@
 | 电量/充电/健康 | ✅ | IOKit `IOPSCopyPowerSourcesInfo` + `IOPSNotificationCreateRunLoopSource` |
 | 蓝牙设备电量 | ⬜️ | `system_profiler` + `pmset` + `ioreg` 三子进程（属蓝牙管理功能，不投入） |
 | 进程列表 | ✅ | `proc_pidinfo` |
-| **日/周/月/季/年进度** | 🆕 | **零私有 API、零依赖**：`Calendar.current.dateInterval(of:for:)` 取区间算 elapsed/total。细节见 §5.3 |
+| **日/周/月/季/年进度** | 🆕 **默认关** | **零私有 API、零依赖**：`Calendar.current.dateInterval(of:for:)` 取区间算 elapsed/total。细节见 §5.3。**2026-09-28 用户判定「时间进度」无行动价值 → `defaultEnabled` 改 `false`**（代码保留、可手动开回；中央槽位的默认内容改由待办 `todos` 承担，见 §5.7） |
+| **待办（今日/本周/所有）** | 🆕 | **零私有 API**：EventKit 取提醒（未完成 + 最近 7 天已完成）+ 写回 `EKReminder.isCompleted`；环心是 `已办/总量`。细节见 §5.7 |
 
 **采样策略（上游已符合性能基线，沿用）**：默认 1s，clamp [1,60]；只在刘海展开且停在 stats tab 时采样，关闭后延迟 3s 停；进程列表独立节流 2s。
 
@@ -75,7 +76,7 @@
 | 功能 | 动作 | 机制 |
 |---|---|---|
 | 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce） |
-| 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted` |
+| 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数与三环视图** |
 | 日程提前提醒 | ✅ | `reminderLeadTime` + 独立 Live Activity 管理器 |
 | 本地计时器 | 🔧 | `Timer.scheduledTimer` 1s tick → 上游**退出即丢状态、无 UserNotifications** → 补持久化 + 到点通知 |
 | 锁屏计时器面板 | ✅ | 用 `TimerManager.shared` |
@@ -177,7 +178,7 @@
 | **通知中心数据库**（新增） | 通知上岛 | 只读 SQLite（`group.com.apple.usernoted/db2/db`） | **通知上岛失效**（见 §5.5 降级） |
 
 **要求**：每处都要有**失效降级路径**，并建台账记录用途 + 替代路径（[01-architecture.md](01-architecture.md) §9 的"私有 API 诱惑"，升级为台账 + 降级实现）。
-**好消息**：本轮 6 项新增功能里有 5 项**零私有 API**（Launcher、农历、进度、Shortcuts、终端外部化），只有通知上岛引入新的私有数据依赖。
+**好消息**：本轮 6 项新增功能里有 5 项**零私有 API**（Launcher、农历、进度、Shortcuts、终端外部化），只有通知上岛引入新的私有数据依赖。**2026-09-28 增补的待办 `todos`（§5.7）同样零私有 API**（EventKit + 系统 TCC），因此是「6 项新增里有 6 项零私有 API」。
 
 ### 3.2 外部子进程（约 22 处，新增 1 处）
 
@@ -228,7 +229,7 @@
 
 ## 5. 新增功能的实现机制（本轮重点）
 
-六项新增功能的详细设计。共同点：**都做成独立模块**（[06 号协议](06-module-protocol.md) 的 manifest + config schema + 事件），不改上游文件；除通知外**全部零私有 API**。
+六项新增功能的详细设计（**2026-09-28 增补第 7 项：待办 `todos`，见 §5.7**）。共同点：**都做成独立模块**（[06 号协议](06-module-protocol.md) 的 manifest + config schema + 事件），不改上游文件；除通知外**全部零私有 API**。
 
 ### 5.1 快捷启动 `launcher`
 
@@ -259,7 +260,9 @@
 | 测试 | 单测对照 1900–2100 抽样日期（与系统"日历"App 或权威万年历比对），**节气表要有校验用例** |
 | 工作量 | 低（1～2 天） |
 
-### 5.3 日/周/月/季/年进度 `progress`
+### 5.3 日/周/月/季/年进度 `progress`（**默认关**，2026-09-28）
+
+> **状态**：`defaultEnabled = false`（2026-09-28 用户判定「时间进度」无行动价值——看得到但不构成要做的事；中央槽位默认内容改由 §5.7 的待办 `todos` 承担）。**代码、manifest 与配置项全部保留**，可手动开回；本节其余设计仍然有效，只是默认不上屏。
 
 | 项 | 设计 |
 |---|---|
@@ -317,6 +320,20 @@
 | 优先级 | **最低，放 P2b 最后**（用户指定） |
 | 工作量 | 低（1～2 天） |
 
+### 5.7 待办 `todos`（2026-09-28 增补）
+
+| 项 | 设计 |
+|---|---|
+| 定位 | **取代进度成为折叠态中央槽位的默认内容**（13 号文档 D-20）：`已办/总量` 是真实进度，「今天过了 62%」不是 |
+| 取数 | **模块自己持有 `EKEventStore`**（不改上游 `CalendarServiceProviding`，也不进 `CalendarManager`）。未完成 = `predicateForReminders(in: nil)`（跨所有列表，**含无到期时间**）；已完成 = `predicateForCompletedReminders(withCompletionDateStarting: 最近 7 天起点, ending: nil, calendars: nil)`。上游的 `fetchReminders(from:to:)` 只取「未完成 + 按 dueDate 过滤」的条目，拿不到无到期时间与已完成的，因此不复用 |
+| 呈现 | **展开态 = 顶部三环（今日 / 本周 / 所有）+ 下方该类别清单**：环 52×52、环心为 `已办/总量`，三个环同时是**筛选器**（点击切换清单类别，默认今日；选中态用类别色 + 标签加粗，未选中 `.white.opacity(0.4)`）。清单一行 = 勾选框（点击写回 `EKReminder.isCompleted`）+ 标题 + 到期时间（**有才显示**，过期红 + 「已过期」标）+ 所属列表名；已完成项排最后、置灰 + 删除线。**折叠态 = 图标 + 今日的 `已办/总量`**（自带 60s `TimelineView`，宿主不起定时器） |
+| 分类口径 | **今日** = ① 到期在今天 ∪ ② 已过期（到期 < 今天 00:00）且未完成 ∪ ③ 今天完成；**本周** = 到期落在 `dateInterval(of: .weekOfYear, for: now)` 内 ∪ 今日（**刻意重叠**：本周是更大窗口，今日 ⊆ 本周 ⊆ 所有）；**所有** = 全集。**无到期时间的待办只进「所有」**，不进今日 / 本周（单列的硬规则） |
+| 已办/总量 | 分子分母**同源**：该类别的成员条数 = 总量，其中已完成的条数 = 已办（不做「应办」的另一套口径）。**已完成只取最近 7 天**——窗口理由与替代方案见 13 号文档 D-21 |
+| 权限 | **提醒（系统 TCC）**。**不在模块初始化 / 视图出现时请求**（沿用「每次安装最多问一次 / 不打扰」策略）：未授权时展开面板显示一句说明 + 「请求访问提醒」（**点击才** `requestFullAccessToReminders()`）+ 「打开系统设置」（`x-apple.systempreferences:…?Privacy_Reminders`）两颗按钮 |
+| 配置 | **第一版不做配置**（`config: nil`，见 [14](14-module-manifests.md) 的 todos 行） |
+| 测试 | `TodoBucketing` 是纯函数（注入 `Calendar` + `now`）：分类与计数、`0/0` 边界、周区间随 `firstWeekday`、自然日半开区间边界、manifest 契约、10 条本地化 key 可解析 |
+| 工作量 | 低～中（1～2 天；**已落地**，P1 批次 T5） |
+
 ---
 
 ## 6. 路线图映射
@@ -360,7 +377,7 @@
 | 项 | 结论 |
 |---|---|
 | **通知上岛的能力边界** | ✅ **接受**："能显示通知、能点击打开 App"即可，不要求关闭/回复。因此主方案（只读通知库 + `NSWorkspace` 打开 App）成立，AX 仅作降级 |
-| **模块化边界** | ✅ **接受**：接管 10 个（nowplaying、lyrics、stats、calendar、shelf、timer、clipboard、controls、weather、mirror）+ 新增 5 个模块（launcher、lunar、progress、shortcuts、notifications）+ 终端配置；其余（HUD、取色器、下载监控、笔记、隐私指示灯、空闲动画、AI…）**保持上游原样**，不追求 100% 模块化 |
+| **模块化边界** | ✅ **接受**：接管 10 个（nowplaying、lyrics、stats、calendar、shelf、timer、clipboard、controls、weather、mirror）+ 新增 5 个模块（launcher、lunar、progress、shortcuts、notifications）+ 终端配置；其余（HUD、取色器、下载监控、笔记、隐私指示灯、空闲动画、AI…）**保持上游原样**，不追求 100% 模块化。**2026-09-28 增补**：新增模块再添 `todos`（待办，§5.7，第 6 个新增模块），它是当前折叠态中央槽位的默认内容；`progress` 保留代码但 `defaultEnabled` 改 `false`（§5.3） |
 | **"不需要的上游功能"如何落地** | ✅ **用上游已有开关的默认值**：首启时把 `enableScreenAssistant` 等开关写成 `false`（在 `Kernel/ConfigStore` 初始化时写入，**不改上游源码**）。比从界面移除便宜得多，也避免了删除接线 |
 | **终端形态** | ✅ **走外部 App（Ghostty）**，`mode` 默认 `external`；内嵌 SwiftTerm 代码保留但不作为目标形态。**优先级最低，放 P2b 最后** |
 | ~~Metal Toolchain~~ | ✅ **已安装**；基线构建已跑通（`BUILD SUCCEEDED`，产物 116MB） |

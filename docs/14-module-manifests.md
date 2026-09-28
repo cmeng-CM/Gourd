@@ -1,6 +1,6 @@
-# 内置模块清单（15 个模块 + 终端条目）
+# 内置模块清单（15 个模块 + 终端条目；2026-09-28 增补 `todos` → 16 个模块 + 终端条目）
 
-这份文档回答一件事：**15 个内置模块（接管 10 + 新增 5）与终端条目，各自的 manifest 声明什么。** 它是 P1-0 前置清障第 3 项（[12-p1-batches.md](12-p1-batches.md) §P1-0）的产物，也是 [09-features-and-mechanisms.md](09-features-and-mechanisms.md) §8.1 已拍板模块化边界的逐项落地。
+这份文档回答一件事：**15 个内置模块（接管 10 + 新增 5）与终端条目，各自的 manifest 声明什么。** 它是 P1-0 前置清障第 3 项（[12-p1-batches.md](12-p1-batches.md) §P1-0）的产物，也是 [09-features-and-mechanisms.md](09-features-and-mechanisms.md) §8.1 已拍板模块化边界的逐项落地。**2026-09-28**：新增第 6 个新增模块 `com.cmeng.gourd.todos`（见 §1 的 todos 行与开头说明），本文的「16 份 manifest」相应变成 17 份。
 
 与其它文档的分工：
 
@@ -13,7 +13,9 @@
 
 **取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的三个取值（本清单只用到 `compact` / `expanded`，锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
 
-已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）——表内 progress 一行的 `surfaces` / `permissions` / `config` 键名与它一致；其 `defaultPlacement` 的**当前值**见该行注与 T-1（本批 `order` 还被兼作 expanded tab 的排序键，见 [13](13-runtime-kernel.md) 已知限制 25）。
+已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）与 `com.cmeng.gourd.todos`（`DynamicIsland/Modules/TodosModule.swift`，P1 批次 T5）——表内对应行的 `surfaces` / `permissions` / `config` 键名与它们一致；`defaultPlacement` 的**当前值**见各自行注与 T-1（本批 `order` 还被兼作 expanded tab 的排序键，见 [13](13-runtime-kernel.md) 已知限制 25）。
+
+**2026-09-28 增补**：`com.cmeng.gourd.todos`（待办）不在 P1-0 定稿的 16 份 manifest 内——它是用户当日判定「进度无行动价值」后新增的**第 17 份**（模块计 16 个：接管 10 + 新增 6；终端仍是独立条目），并接过 `progress` 空出的折叠态中央槽位（[13](13-runtime-kernel.md) D-20）。下表按模块逐个列出，`todos` 行紧跟 `progress` 之后。
 
 ---
 
@@ -35,7 +37,8 @@
 | `com.cmeng.gourd.mirror` | `expanded` | — | `[]` | `showMirror`、`mirrorShape`、`selectedCameraID`（接管映射） | P2a；依赖相机 TCC |
 | `com.cmeng.gourd.launcher` | `compact`、`expanded` | `right` / order 30 | `[]` | `pinnedApps`、`showRecents`、`iconSize`、`density`（09 §5.1） | P2b 第 4；全局热键用上游 `KeyboardShortcuts` |
 | `com.cmeng.gourd.lunar` | `compact` | `left` / order 30 | `[]` | `displayFormat`、`showFestivals`（09 §5.2） | P2b 第 1；展开区归属见 T-6 |
-| `com.cmeng.gourd.progress` | `compact`、`expanded`（折叠态形态 = **中央槽位常驻百分比**；展开态 = **剩余量清单**——一行一个尺度：图标 + 标签 + 细进度条 + 剩余量 + 百分比，行悬停显示起止时刻） | `center` / order 30（2026-09-27 落地：`slot` 记 `center`，`order` 同时是 expanded tab 与 compact 槽位候选的排序键，双语义已按 [13](13-runtime-kernel.md) 已知限制 25 的「明确写下」分支处理，见 D-19；与 T-1 早期给折叠态预留的 `left` / order 40 不同——本版**只做中央槽位**，左/右槽位仍推 P2） | `[]` | `visibleScopes`（默认 `day` + `year`）、`style`、`baseCalendar`（09 §5.3；已落地三键） | 已落地（P1-4 提前消化 P2b 第 2）；折叠态中央槽位 2026-09-27 落地 |
+| `com.cmeng.gourd.progress` | `compact`、`expanded`（折叠态形态 = **中央槽位常驻百分比**；展开态 = **剩余量清单**——一行一个尺度：图标 + 标签 + 细进度条 + 剩余量 + 百分比，行悬停显示起止时刻） | `center` / order 30（2026-09-27 落地：`slot` 记 `center`，`order` 同时是 expanded tab 与 compact 槽位候选的排序键，双语义已按 [13](13-runtime-kernel.md) 已知限制 25 的「明确写下」分支处理，见 D-19；与 T-1 早期给折叠态预留的 `left` / order 40 不同——本版**只做中央槽位**，左/右槽位仍推 P2） | `[]` | `visibleScopes`（默认 `day` + `year`）、`style`、`baseCalendar`（09 §5.3；已落地三键） | **默认关（`defaultEnabled = false`，2026-09-28 用户判定「时间进度」无行动价值，见 [13](13-runtime-kernel.md) D-20）**；代码与 manifest 全部保留、可手动开回。落地：P1-4 提前消化 P2b 第 2；折叠态中央槽位 2026-09-27 落地 |
+| `com.cmeng.gourd.todos` | `compact`、`expanded`（折叠态 = 图标 + **今日**的 `已办/总量`；展开态 = 顶部三环「今日 / 本周 / 所有」+ 下方该类别清单，环本身是筛选器） | `center` / order 20 | `[]` | **无（第一版不做配置）** | **已落地（P1 批次 T5，2026-09-28）**；`defaultEnabled: true`——它是折叠态中央槽位的默认内容（`order` 20 < progress 的 30，见 [13](13-runtime-kernel.md) D-20）；依赖提醒 TCC（系统授权，不是模块 capability，故 `permissions` 为空集） |
 | `com.cmeng.gourd.shortcuts` | `expanded`（折叠态槽位可选，见 T-1） | — | `shortcuts:run` | `pinnedShortcuts`、`showOutput`、`timeoutSeconds`（09 §5.4） | P2b 第 3；依赖 shelf 的文件输入联动（`--input-path`） |
 | `com.cmeng.gourd.notifications` | `expanded`（浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
@@ -110,6 +113,7 @@
 
 - **结论**：16 份 manifest 统一取 `manifestVersion` 1、`version` `"1.0.0"`、`apiVersion` = `HostInfo.currentAPIVersion`（当前 `1.0`）、`kind` `builtin`、`entry` 缺省、`icon.type` 取 `symbol`、`name`/`summary` 用 `LocalizedText` 的 `key` 形态（`module.<shortID>.name` / `module.<shortID>.summary`）；`defaultEnabled` 接管模块映射上游开关默认值，新增模块除 progress 外取 `false`。
 - **理由**：前六项是 06 §2.2/§2.3/§2.4/§2.5 对内置的强制约束（`kind == builtin`、`entry` 出现即 `E_UNEXPECTED_FIELD`、内置 `icon` 必须 `symbol`），progress 已按此落地（D-11）；`defaultEnabled` 取保守值，与 06 §2.2「装了自动上屏不可接受」的取向一致。
+- **2026-09-28 修订**：`progress` 由 `true` 改 `false`（用户判定「时间进度」无行动价值，[13](13-runtime-kernel.md) D-20）；新增的 `todos` 取 `true`——它是折叠态中央槽位的默认内容，上屏是它的存在理由（同为 D-20）。因此本批 `defaultEnabled` 的实际判据收敛成一条：**占中央槽位者取 `true`（现为 `todos`），其余一律 `false`（含被替换下来的 `progress`）**。
 
 ### T-13 只有字段名没有类型/默认值的项
 
@@ -136,7 +140,7 @@
 
 ### 4.1 零私有 API
 
-`launcher`、`lunar`、`progress`、`shortcuts`、`terminal`（09 §3.1 明示"本轮 6 项新增功能里有 5 项零私有 API"）+ 接管的 `lyrics`、`calendar`、`shelf`、`timer`、`clipboard`、`mirror`、`weather`。
+`launcher`、`lunar`、`progress`、`todos`、`shortcuts`、`terminal`（09 §3.1 明示"本轮 6 项新增功能里有 5 项零私有 API"+ 2026-09-28 增补的 `todos` 同样零私有 API）+ 接管的 `lyrics`、`calendar`、`shelf`、`timer`、`clipboard`、`mirror`、`weather`。
 
 > 注：`nowplaying` 依赖 `MediaRemote.framework`、`stats` 依赖 AppleSMC / `IOReport.framework`、`controls` 依赖 `CoreBrightness.framework` / `DisplayServices.framework`、`notifications` 依赖通知中心数据库——这 4 个不在此类，逐条见 [15-platform-dependencies.md](15-platform-dependencies.md) §1。
 
@@ -145,6 +149,7 @@
 | 模块 | 依赖的系统授权（09 §3.3） |
 |---|---|
 | `calendar` | 日历、提醒 |
+| `todos` | 提醒（EventKit 取数 + 写回完成状态；`permissions` 仍为 `[]`——系统 TCC 不是模块 capability，见 06 §7.1） |
 | `weather` | 位置 |
 | `mirror` | 相机 |
 | `notifications` | 完全磁盘访问（主）；辅助功能（降级方案） |

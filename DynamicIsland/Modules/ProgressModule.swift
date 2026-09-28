@@ -51,6 +51,9 @@ final class ProgressModule: GourdModule {
     /// - `surfaces`：`expanded`（展开面板一页剩余量清单）+ `compact`（折叠态中央槽位）；
     /// - `defaultPlacement`：`slot == .center`（折叠态槽位的归属，06 §6.2）、`order == 30`
     ///   （既排 tab、也排槽位，同序按 id 字典序；槽位只取 `compactEntries` 的第一个）；
+    /// - **`defaultEnabled` 改为 `false`（2026-09-28 用户判定「时间进度」无行动价值）**：
+    ///   代码与 manifest 全部保留（可手动开回），中央槽位的默认内容改由 `todos` 承担
+    ///   （`todos` 的 order 20 < 本模块的 30，故槽位候选的第一个是 todos，见 docs/13 D-20）；
     /// - `config` 三项只声明类型与默认值：本批**没有用户可见的配置入口**（docs/13「明确不做」），
     ///   读取侧拿到的恒是这里的 `default`；`visibleScopes` 的默认值即「出厂显示哪些尺度」（日 + 年）。
     static let manifest = ModuleManifest(
@@ -64,7 +67,7 @@ final class ProgressModule: GourdModule {
         kind: "builtin",
         surfaces: [.compact, .expanded],
         defaultPlacement: Placement(slot: .center, order: 30),
-        defaultEnabled: true,
+        defaultEnabled: false,
         permissions: [],
         config: ConfigSchema(
             type: "object",
