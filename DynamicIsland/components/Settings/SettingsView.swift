@@ -725,6 +725,7 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .liveActivities, title: "Enable Microphone Detection", keywords: ["microphone", "privacy"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable Microphone Detection")),
             SettingsSearchEntry(tab: .liveActivities, title: "Enable music live activity", keywords: ["music", "now playing"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable music live activity")),
             SettingsSearchEntry(tab: .liveActivities, title: "Enable reminder live activity", keywords: ["reminder", "live activity"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable reminder live activity")),
+            SettingsSearchEntry(tab: .liveActivities, title: "Show notification body in the notch HUD", keywords: ["notification", "hud", "notifications", "body", "privacy"], highlightID: SettingsTab.liveActivities.highlightID(for: "Show notification body in the notch HUD")),
 
             // Battery (Charge)
             SettingsSearchEntry(tab: .battery, title: "Show battery indicator", keywords: ["battery hud", "charge"], highlightID: SettingsTab.battery.highlightID(for: "Show battery indicator")),
@@ -4254,6 +4255,17 @@ struct LiveActivitiesSettings: View {
                 Text("Reminder Live Activity")
             } footer: {
                 Text("Configure countdown style and lock screen widgets in the Calendar tab.")
+            }
+
+            Section {
+                Defaults.Toggle(key: .showBodyInHUD) {
+                    Text("Show notification body in the notch HUD")
+                }
+                .settingsHighlight(id: highlightID("Show notification body in the notch HUD"))
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Reads the notification database (needs Full Disk Access) and shows a brief overlay in the closed notch when a new notification arrives. Body text is shown by default; turn this off to only see which app sent it.")
             }
         }
         .navigationTitle("Live Activities")

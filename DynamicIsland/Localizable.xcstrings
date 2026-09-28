@@ -81180,6 +81180,22 @@
           }
         }
       }
+    },
+    "module.notifications.newNotification" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New notification"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新通知"
+          }
+        }
+      }
     }
   },
   "version" : "1.2"

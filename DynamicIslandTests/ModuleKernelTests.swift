@@ -27,6 +27,8 @@
 //  P2d 瞬时浮层——`presentHUD` 的覆盖语义与身份更替、`ttl` 夹取到 1…15s、
 //  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
 //  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）。
+//  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
+//  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值。
 //
 
 import AppKit
@@ -1680,12 +1682,135 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.hoursAgo",
             "module.notifications.daysAgo",
             "module.notifications.readOnlyNote",
+            "module.notifications.newNotification",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
             XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
             XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
         }
+    }
+
+    // MARK: - 通知浮层（P2d：基线 + 正文口径）
+
+    /// 浮层候选是**纯函数**：只有 `rec_id > 基线` 的条目才可能触发，且多条时只取**最新一条**。
+    ///
+    /// 这条钉住「首次 activate 建基线」的语义——激活前就在库里的通知（≤ 基线）永远不弹浮层，
+    /// 一次轮询进来一串新通知也不刷屏（其余只进未读计数）。
+    func testNotificationHUDCandidateFiltersByBaseline() {
+        // 激活前已存在（≤ 基线）→ 不弹
+        XCTAssertNil(NotificationStore.hudCandidate(in: [], above: 10), "空集合没有候选")
+        XCTAssertNil(
+            NotificationStore.hudCandidate(in: [notificationItem(3), notificationItem(9), notificationItem(10)], above: 10),
+            "等于基线的也不算新增（SQL 侧是 `rec_id > 基线`，此处必须同口径）"
+        )
+
+        // 严格大于基线才入选
+        XCTAssertEqual(NotificationStore.hudCandidate(in: [notificationItem(10), notificationItem(11)], above: 10)?.id, 11)
+
+        // 多条新通知只弹最新那一条（与到达顺序无关，按 id 取最大）
+        XCTAssertEqual(
+            NotificationStore.hudCandidate(
+                in: [notificationItem(12), notificationItem(11), notificationItem(15), notificationItem(13)],
+                above: 10
+            )?.id,
+            15,
+            "一次轮询有多条新增时只弹最新一条"
+        )
+
+        // 基线与新记录混在一起：老的一条不得顶掉新的
+        XCTAssertEqual(
+            NotificationStore.hudCandidate(in: [notificationItem(2), notificationItem(7), notificationItem(8)], above: 6)?.id,
+            8
+        )
+    }
+
+    /// `showBodyInHUD` 的呈现口径（纯函数）：**默认为 true = 浮层显示正文**；
+    /// 关掉后浮层第二行只剩「新通知」，正文一个字都不进浮层。
+    func testNotificationHUDDetailHonorsShowBodyFlag() {
+        let newNotification = NotificationText.localized("module.notifications.newNotification")
+        XCTAssertNotEqual(newNotification, "module.notifications.newNotification", "新通知文案没解析出来")
+
+        // 默认（true）：标题 + 正文
+        XCTAssertEqual(
+            NotificationText.hudDetail(title: "构建完成", body: "全部任务通过", showsBody: true),
+            "构建完成 · 全部任务通过"
+        )
+        // 关掉：正文不进浮层
+        let hidden = NotificationText.hudDetail(title: "构建完成", body: "全部任务通过", showsBody: false)
+        XCTAssertEqual(hidden, newNotification)
+        XCTAssertFalse(hidden.contains("全部任务通过"), "关掉后正文不得出现在浮层文案里")
+
+        // 单边为空：只显示有的那一边；首尾空白不算内容
+        XCTAssertEqual(NotificationText.hudDetail(title: "只有标题", body: "", showsBody: true), "只有标题")
+        XCTAssertEqual(NotificationText.hudDetail(title: "   ", body: "只有正文", showsBody: true), "只有正文")
+        XCTAssertEqual(
+            NotificationText.hudDetail(title: "  ", body: "\n", showsBody: true),
+            newNotification,
+            "两边都空时不留一行空白"
+        )
+    }
+
+    /// 键本身的口径：`showBodyInHUD` 的**声明默认值是 true**（用户 2026-09-28 要求默认显示正文，
+    /// 覆盖设计稿原口径的 false）——断言读 `defaultValue` 而不是当前生效值，
+    /// 不受开发机上真实 UserDefaults 影响。
+    func testShowBodyInHUDKeyDefaultsToTrue() {
+        XCTAssertEqual(Defaults.Keys.showBodyInHUD.name, "showBodyInHUD", "键名与设计稿/设置页一致")
+        XCTAssertTrue(
+            Defaults.Keys.showBodyInHUD.defaultValue,
+            "默认必须是 true（用户口径）；设计稿原口径的 false 已被覆盖"
+        )
+    }
+
+    /// 构造一条通知夹具（只关心 id 的用例用它）。
+    private func notificationItem(_ id: Int64, title: String = "", body: String = "") -> NotificationItem {
+        NotificationItem(
+            id: id,
+            bundleIdentifier: "com.apple.Mail",
+            appName: "邮件",
+            title: title,
+            subtitle: nil,
+            body: body,
+            deliveredDate: nil
+        )
+    }
+
+    /// `modificationDate` 必须把 **WAL 旁文件**算进来（2026-09-28 实测：库是 WAL 模式，
+    /// 新通知只改 `db-wal`，主库 mtime 纹丝不动）。只认主库会让 30s 轮询永远早退——
+    /// 增量与浮层都不再触发。夹具用临时文件，**不碰系统通知库**。
+    func testNotificationReaderModificationDateTracksWALSibling() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-wal-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let database = directory.appendingPathComponent("db")
+        try Data([0x00]).write(to: database)
+        let mainDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: mainDate], ofItemAtPath: database.path)
+
+        let reader = NotificationCenterReader(databasePath: database.path)
+        XCTAssertEqual(reader.modificationDate, mainDate, "没有 -wal 时退化成只看主库")
+
+        // WAL 比主库新 → 闸门看到的是 WAL 的时间（新通知写在这里）
+        let wal = directory.appendingPathComponent("db-wal")
+        let walDate = mainDate.addingTimeInterval(600)
+        try Data([0x00]).write(to: wal)
+        try FileManager.default.setAttributes([.modificationDate: walDate], ofItemAtPath: wal.path)
+        XCTAssertEqual(reader.modificationDate, walDate, "WAL 较新时必须取 WAL 的时间")
+
+        // WAL 较旧（例如 checkpoint 后主库被改写）→ 取主库
+        try FileManager.default.setAttributes(
+            [.modificationDate: mainDate.addingTimeInterval(1200)],
+            ofItemAtPath: database.path
+        )
+        XCTAssertEqual(reader.modificationDate, mainDate.addingTimeInterval(1200), "主库较新时取主库")
+
+        // 库文件不存在 → nil（`pollOnce` 据此报「库文件不可访问」而不是静默早退）
+        let missing = NotificationCenterReader(
+            databasePath: directory.appendingPathComponent("nope").path
+        )
+        XCTAssertNil(missing.modificationDate)
     }
 
     /// 构造二进制 plist 夹具（通知库的 `record.data` 就是二进制 plist）——**不读系统通知库**。

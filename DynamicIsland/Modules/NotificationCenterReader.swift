@@ -221,10 +221,20 @@ final class NotificationCenterReader: @unchecked Sendable {
 
     // MARK: 元数据
 
-    /// 库文件的修改时间。**TCC 通常不拦 `stat`**（本机实测可读），因此 mtime 可以当
-    /// 「库有没有变」的第一道廉价闸门（09 §5.5 的增量策略）。
+    /// 库文件（含 WAL 旁文件）的修改时间。**TCC 通常不拦 `stat`**（本机实测可读），
+    /// 因此 mtime 可以当「库有没有变」的第一道廉价闸门（09 §5.5 的增量策略）。
+    ///
+    /// **必须把 `-wal` 一起看（2026-09-28 实测校正）**：该库是 **WAL 模式**——新通知只写进
+    /// `db-wal`，主库文件 `db` 的 mtime **纹丝不动**（本机实测：`db` 停在 9-26 21:17，
+    /// 而 `db-wal` 每次通知都变）。只看主库会让 30s 轮询**永远早退**，增量与浮层都再不会触发
+    ///（直到某次 checkpoint 偶然改写主库）。取两者里较晚的那个：checkpoint 前的写入靠 `-wal`，
+    /// checkpoint 后靠主库，两种情形都能感知。
+    ///
+    /// `-wal` 不存在（已 checkpoint 清理）时自然退化成「只看主库」。
     var modificationDate: Date? {
-        (try? FileManager.default.attributesOfItem(atPath: databasePath))?[.modificationDate] as? Date
+        [databasePath, databasePath + "-wal"]
+            .compactMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.modificationDate] as? Date }
+            .max()
     }
 
     // MARK: 读取列表

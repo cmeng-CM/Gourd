@@ -1453,6 +1453,16 @@ extension Defaults.Keys {
     /// `enableScreenAssistant = false` 后置 true，之后永不再覆盖用户手动改回的值。
     static let gourdFirstLaunchDefaultsApplied = Key<Bool>("gourdFirstLaunchDefaultsApplied", default: false)
 
+    /// 通知浮层是否显示正文（09 §5.5 的配置项 `showBodyInHUD`；键名与设计稿一致）。
+    ///
+    /// **默认 true（用户 2026-09-28 明确要求默认显示正文）**；设计稿原口径为 false
+    /// （只显示「来自 X」，正文留到展开列表）。落地形态见 `NotificationsModule.NotificationHUDView`：
+    /// false 时浮层第二行只留一条「新通知」文案。
+    ///
+    /// 注意这是**宿主设置**（`Defaults.Keys`），不是模块 manifest 的 config——本批模块配置入口
+    /// 未开（见 docs/14 的 notifications 行），用户在设置页直接改这一项。
+    static let showBodyInHUD = Key<Bool>("showBodyInHUD", default: true)
+
     // MARK: Permission prompts
 
     /// 辅助功能授权的"只申请一次"闸门（2026-09-28）：媒体键拦截在启动时最多弹一次系统提示，

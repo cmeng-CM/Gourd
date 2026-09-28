@@ -1,9 +1,10 @@
 //
 //  NotificationsModule.swift
-//  Gourd 内置模块 · 通知上岛（P2c）
+//  Gourd 内置模块 · 通知上岛（P2c 列表 + P2d 浮层）
 //
 //  设计依据：docs/09-features-and-mechanisms.md §5.5（本轮风险最高的一项）+ docs/12-p1-batches.md P2c。
-//  本批交付 = **可行性探针 + 模块骨架 + 展开列表一次落地**（折叠态瞬时浮层不在本批）。
+//  P2c 交付 = 可行性探针 + 模块骨架 + 展开列表；**P2d 交付 = 折叠态瞬时浮层**（内核 `presentHUD`，
+//  见 `Kernel/ModuleHUDView.swift` 与 13 号文档 D-22）。
 //
 //  ## 数据源与权限
 //  - 数据源：`~/Library/Group Containers/group.com.apple.usernoted/db2/db`（SQLite，**只读**，
@@ -15,20 +16,26 @@
 //  ## 能力边界（09 §5.5「必须接受」，UI 上有一行 footer 明示）
 //  ① **只能读**：不能关闭、回复、操作真实通知（那需要 AX 或私有 API，属降级方案）；
 //  ② 需要完全磁盘访问；③ schema 私有、系统改版可能失效；
-//  ④ 内容敏感：**默认不在浮层显示正文**（`showBodyInHUD` 默认 false——本批连浮层都未做）。
+//  ④ 内容敏感：浮层**默认显示正文**（`showBodyInHUD` 默认 true——**用户 2026-09-28 口径，
+//    覆盖设计稿原口径的 false**）；不想要正文的用户在设置页（Live Activities → Notifications）
+//    关掉该项即可，关掉后浮层第二行只留「新通知」。
 //
 //  ## 增量策略（09 §5.5）
 //  30s 轮询（`activate()` 起一个 Task，`deactivate()` 取消）→ **先看库文件 mtime**，没变直接返回；
 //  变了才按 `record.rec_id > 基线` 取新增。**不做 1s 全表扫**（该库可能很大）。
+//  **首次 `activate()` 建基线**（`refreshAll()` 把基线推到当前 `MAX(rec_id)`）：激活前就在库里的
+//  通知不算「新增」，因此不会为旧通知弹浮层、也不会一装上就冒出几十条未读。
 //
 //  ## 配置
-//  本批 `config: nil`——**第一版不读配置**（`appsFilter` / `maxItems` / `pollIntervalSeconds` /
-//  `showBodyInHUD` 都还没有配置入口，见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。
-//  接口边界与 09 §5.5 的差异（本批**没做**的部分）：折叠态瞬时浮层、按 App 分组、ax 降级路径、
-//  `appsFilter` 黑白名单——前两项见下一条「本批形态」，后两项见 09 §5.5 的降级方案。
+//  `config: nil`——模块侧仍不读 manifest 配置（`appsFilter` / `maxItems` / `pollIntervalSeconds`
+//  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。唯一的呈现开关
+//  `showBodyInHUD` 是**宿主设置**（`Defaults.Keys.showBodyInHUD`，默认 true）。
+//  09 §5.5 里**尚未做**的部分：按 App 分组、ax 降级路径、`appsFilter` 黑白名单。
 //
 //  ## 本批形态
 //  - 展开面板：标题行（模块名 + 状态 + 刷新按钮）+ 可滚动通知列表 + 一行能力边界说明；
+//  - 折叠态**瞬时浮层**：新通知到达时 `bell.badge` + App 显示名 + 标题/正文，4s 后自动消失
+//    （内核 `ModuleRegistry.presentHUD`；一次轮询多条新通知只弹最新一条）；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
@@ -39,10 +46,11 @@
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
-//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote`。
+//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification`。
 //
 
 import AppKit
+import Defaults
 import SwiftUI
 
 // MARK: - Store
@@ -68,6 +76,23 @@ final class NotificationStore: ObservableObject {
     var failureReason: String? {
         if case .failure(let reason) = state { return reason }
         return nil
+    }
+
+    /// 浮层出口（**模块在 `init` 里注入**）：store 只把「这次新增里最新的那一条」交出去，
+    /// 视图与 ttl 属模块的 UI 决策——store 因此不认识 `UIHandle`，也不依赖 SwiftUI 视图，
+    /// 基线/增量这套逻辑仍可单测。
+    var presentHUD: ((NotificationItem) -> Void)?
+
+    /// 一次轮询的浮层候选：**只取 `id > baseline` 里 id 最大的那个**。
+    ///
+    /// - 基线之外的一律不算（激活前就存在的通知、被 mtime 闸门漏过的旧记录都不会弹浮层）；
+    /// - 多条新通知只弹**最新一条**（09 §5.5：避免刷屏），其余只进未读计数。
+    ///
+    /// **纯函数**（生产路径与单测共用）：单测直接喂「基线 + 新记录集合」，不必起轮询。
+    static func hudCandidate(in items: [NotificationItem], above baseline: Int64) -> NotificationItem? {
+        items
+            .filter { $0.id > baseline }
+            .max { $0.id < $1.id }
     }
 
     private let reader: NotificationCenterReader
@@ -153,6 +178,12 @@ final class NotificationStore: ObservableObject {
         let fetched = await Task.detached(priority: .utility) { reader.fetchRecent(limit: limit) }.value
         apply(fetched, from: reader)
         log.info("新增 \(newItems.count) 条通知（未读累计 \(unseenCount)）")
+
+        // 浮层：只弹**最新一条**，且必须严格晚于**本次取数前的基线**（`hudCandidate` 的判据）。
+        // 用取数前的 `baseline` 而不是刚更新的 `baselineRecordID`——后者已经把新条目算进去了。
+        if let latest = Self.hudCandidate(in: newItems, above: baseline) {
+            presentHUD?(resolveAppNames(for: [latest]).first ?? latest)
+        }
     }
 
     /// 面板打开：未读数清零（「自上次打开面板以来」的口径）。
@@ -257,15 +288,28 @@ final class NotificationsModule: GourdModule {
     /// 探针只跑一次（**首次 activate**）。`deactivate()` 不会重置它——重新激活不重复探针。
     private var didRunProbe = false
 
+    /// 浮层的 ttl（秒）。4s：够看清「谁发的 + 标题」，又不至于挡住其它 live activity。
+    private static let hudTTL: TimeInterval = 4
+
     init(context: ModuleContext) {
         self.context = context
-        self.store = NotificationStore(logger: context.logger)
+        let store = NotificationStore(logger: context.logger)
+        self.store = store
+        // 浮层出口：store 只交「最新一条新增」，视图（含 `showBodyInHUD` 的读值）与 ttl 在这里定。
+        store.presentHUD = { [weak self] item in
+            guard let self else { return }
+            self.presentNotificationHUD(for: item)
+        }
     }
 
-    /// 起轮询（30s 一次，**幂等**）：首个 tick 前先跑一次探针。
+    /// 起轮询（30s 一次，**幂等**）：首个 tick 前先跑一次探针 + **建基线**。
     ///
     /// 探针与取数都在**后台任务**里跑（`NotificationCenterReader` 无共享可变状态、可安全跨线程）——
     /// 库在 TCC 拒绝下会立刻失败，授权后也只是读一个几百 KB 的 SQLite，但一律不占主线程。
+    ///
+    /// **建基线是浮层语义的前提**：`refreshAll()` 把基线推到当前 `MAX(rec_id)`，激活前就躺在
+    /// 库里的通知因此不算「新增」——不建基线的话，装上后第一次轮询会把最近 40 条全当新通知
+    ///（还会为其中最旧的一条弹浮层）。它同时落好 `lastModificationDate`，让 mtime 闸门从第一刻起有效。
     func activate() async throws {
         guard pollTask == nil else { return }
         let store = self.store
@@ -276,6 +320,7 @@ final class NotificationsModule: GourdModule {
             if shouldProbe {
                 await store.runProbe()
             }
+            await store.refreshAll()
             while !Task.isCancelled {
                 await store.pollOnce()
                 do {
@@ -285,7 +330,7 @@ final class NotificationsModule: GourdModule {
                 }
             }
         }
-        context.logger.info("notifications 模块已激活（轮询 \(Int(NotificationStore.pollInterval))s）")
+        context.logger.info("notifications 模块已激活（轮询 \(Int(NotificationStore.pollInterval))s，已建增量基线）")
     }
 
     func deactivate() async {
@@ -303,6 +348,19 @@ final class NotificationsModule: GourdModule {
         case .lockscreen:
             return .none
         }
+    }
+
+    /// 弹一条通知浮层（`store.presentHUD` 的唯一消费者）。
+    ///
+    /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
+    /// 浮层只活 `hudTTL` 秒，不需要为它维护一条「设置改了要重渲」的观察链。
+    private func presentNotificationHUD(for item: NotificationItem) {
+        let showsBody = Defaults[.showBodyInHUD]
+        context.logger.info("弹通知浮层：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")")
+        context.ui.presentTransient(
+            view: AnyView(NotificationHUDView(item: item, showsBody: showsBody)),
+            ttl: Self.hudTTL
+        )
     }
 }
 
@@ -473,6 +531,60 @@ private struct NotificationRow: View {
     }
 }
 
+// MARK: - 折叠态瞬时浮层视图
+
+/// 折叠态瞬时浮层（09 §5.5 呈现 ①）：`bell.badge` + 「App 显示名」+ 「标题 + 正文」。
+///
+/// **默认显示正文**（`showBodyInHUD` 默认 true——用户 2026-09-28 明确要求，覆盖设计稿原口径的
+/// false）；关掉后第二行只留一条「新通知」文案，正文仍可在展开列表里看。
+///
+/// 颜色：面板是黑底、系统外观可为浅色——与模块其余视图同口径，文字**一律显式浅色**
+///（`.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`。
+///
+/// 宽度：关闭态刘海只有一格（`closedNotchWidth`，本机 100pt），故给正文列一个上界，
+/// 让长标题/长正文按 `.tail` 截断而不是把内容撑出可见区域。
+private struct NotificationHUDView: View {
+    let item: NotificationItem
+    /// `Defaults[.showBodyInHUD]`（在 `presentNotificationHUD` 里取一次快照）。
+    let showsBody: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bell.badge")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(appName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Text(secondLine)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: 220, alignment: .leading)
+        }
+    }
+
+    /// App 显示名：`NSWorkspace` 解析出的显示名（store 已回填到 `appName`）优先，
+    /// 取不到时退回 bundle id 的**最后一段**（`faceTime` 而非 `com.apple.FaceTime`）。
+    private var appName: String {
+        if !item.appName.isEmpty { return item.appName }
+        let fallback = NotificationCenterReader.appDisplayName(bundleIdentifier: item.bundleIdentifier, appMap: [:])
+        return fallback.isEmpty ? item.displayName : fallback
+    }
+
+    /// 第二行：`showBodyInHUD` 为真时是「标题 + 正文」，否则是「新通知」这一行文案。
+    private var secondLine: String {
+        NotificationText.hudDetail(title: item.title, body: item.body, showsBody: showsBody)
+    }
+}
+
 // MARK: - 权限提示
 
 /// 未授权（完全磁盘访问未授予）时的占位：说明 + 「打开系统设置」。
@@ -587,6 +699,21 @@ enum NotificationText {
     /// `module.notifications.<field>` 形态的 key → 当前语言文案（查不到时 `Bundle` 原样返回 key）。
     static func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    /// 浮层第二行的文案口径（`showBodyInHUD` 的呈现规则，**纯函数**，单测直接钉）：
+    ///
+    /// - `showsBody == true`（**默认**）：`标题 · 正文`，逐段去首尾空白、空段忽略；
+    /// - `showsBody == false`：只给「新通知」（正文不进浮层，但展开列表照旧显示全文）；
+    /// - 两边都空（plist 缺 `titl` / `body`）时同样给「新通知」，不留一行空白。
+    static func hudDetail(title: String, body: String, showsBody: Bool) -> String {
+        let newNotification = localized("module.notifications.newNotification")
+        guard showsBody else { return newNotification }
+        let text = [title, body]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        return text.isEmpty ? newNotification : text
     }
 
     /// 按字数截断（错误串可能很长：SQLite 的 errmsg 会带上整条 SQL）。
