@@ -1391,6 +1391,72 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertFalse(shouldSuppressHoverOpen(activeHUD: nil), "显式 nil 同样放行（判据形状）")
     }
 
+    // MARK: - 非刘海屏 hide-until-hover 与模块浮层
+
+    /// **基础为真**：非刘海屏 + 关闭态 + 设置开启 + 没有任何瞬时提示 → 隐藏（挪出屏幕）。
+    /// 这条是 hide-until-hover 的原有语义，改判据不得把它改掉。
+    func testHideClosedContentUntilHoverBaseline() {
+        XCTAssertTrue(
+            shouldHideClosedContentUntilHover(
+                hideSetting: true,
+                isNonNotch: true,
+                isClosed: true,
+                hasSneakPeek: false,
+                hasModuleHUD: false
+            ),
+            "非刘海屏关闭态且无任何瞬时提示时必须隐藏"
+        )
+    }
+
+    /// **上游 sneak 在场 → 不隐藏**：sneakPeek（音量 / 亮度 / 音乐…）是上游既有的豁免项，
+    /// 与改造前同口径（音量键按下时非刘海屏必须露出来）。
+    func testHideClosedContentUntilHoverRevealedBySneakPeek() {
+        XCTAssertFalse(
+            shouldHideClosedContentUntilHover(
+                hideSetting: true,
+                isNonNotch: true,
+                isClosed: true,
+                hasSneakPeek: true,
+                hasModuleHUD: false
+            ),
+            "上游瞬时提示在场时必须强制显示"
+        )
+    }
+
+    /// **模块浮层在场 → 不隐藏**（2026-09-28 修的根因）：外接（非刘海）屏上收到通知时，
+    /// 浮层必须和 sneakPeek 同口径豁免 hide-until-hover——否则关闭态内容（含浮层）
+    /// 被整体挪出屏幕，模块弹了浮层、日志也有，用户却什么都看不到。
+    /// 判据同时**读真值**（注册表 `activeHUD`）验证接缝，避免纯函数与调用点脱节。
+    func testHideClosedContentUntilHoverRevealedByModuleHUD() {
+        let registry = ModuleRegistry.shared
+        XCTAssertNil(registry.activeHUD, "前置：setUp 的 deactivateAll 应已清掉浮层")
+        registry.presentHUD(moduleID: "com.cmeng.gourd.hud-probe", view: AnyView(Text("HUD")), ttl: 4)
+        defer { registry.clearHUD() }
+
+        XCTAssertFalse(
+            shouldHideClosedContentUntilHover(
+                hideSetting: true,
+                isNonNotch: true,
+                isClosed: true,
+                hasSneakPeek: false,
+                hasModuleHUD: registry.activeHUD != nil
+            ),
+            "模块浮层在场时必须强制显示（外接屏通知看不到的根因）"
+        )
+
+        registry.clearHUD()
+        XCTAssertTrue(
+            shouldHideClosedContentUntilHover(
+                hideSetting: true,
+                isNonNotch: true,
+                isClosed: true,
+                hasSneakPeek: false,
+                hasModuleHUD: registry.activeHUD != nil
+            ),
+            "浮层撤掉后回到隐藏（豁免随浮层生命周期自动解除）"
+        )
+    }
+
     // MARK: - 待办模块 todos（T5）
 
     /// 构造一条待办（id 兼作标题，便于按 id 断言顺序）。

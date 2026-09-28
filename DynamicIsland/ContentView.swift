@@ -48,6 +48,26 @@ func shouldSuppressHoverOpen(activeHUD: ModuleHUD?) -> Bool {
     activeHUD != nil
 }
 
+/// 非刘海屏「不悬停就隐藏」的判据：关闭态内容是否该被整体挪出屏幕。
+///
+/// 上游的形态是「非刘海屏 + 关闭态 + 设置开启 + **当前没有上游瞬时提示**（sneakPeek：
+/// 音量 / 亮度 / 音乐…）」才隐藏；本判据把**模块瞬时浮层**（`activeHUD`，如通知）也
+/// 补进豁免项：浮层与 sneakPeek 同为「必须立刻被看见」的瞬时反馈，若只豁免上游那一路，
+/// 通知到达时关闭态内容会被 `ContentView` 的 hide-until-hover 偏移整块挪出屏幕——模块
+/// 弹了浮层、日志也有，用户却什么都看不到（2026-09-28 定位）。
+///
+/// 抽成纯函数是为了可测：入参都是纯值，调用点从视图状态 / 注册表取值后传进来，
+/// 判据本身不读单例、不碰视图状态。
+func shouldHideClosedContentUntilHover(
+    hideSetting: Bool,
+    isNonNotch: Bool,
+    isClosed: Bool,
+    hasSneakPeek: Bool,
+    hasModuleHUD: Bool
+) -> Bool {
+    hideSetting && isNonNotch && isClosed && !hasSneakPeek && !hasModuleHUD
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -439,7 +459,18 @@ struct ContentView: View {
     /// Whether the notch/island should hide off-screen when closed on a non-notch display.
     /// Temporarily reveals the notch when a sneakPeek HUD (volume, brightness, music, etc.) is active.
     private var shouldHideUntilHover: Bool {
-        hideNonNotchUntilHover && isNonNotchScreen && vm.notchState == .closed && !isSneakPeekVisibleOnCurrentScreen
+        shouldHideClosedContentUntilHover(
+            hideSetting: hideNonNotchUntilHover,
+            isNonNotch: isNonNotchScreen,
+            isClosed: vm.notchState == .closed,
+            hasSneakPeek: isSneakPeekVisibleOnCurrentScreen,
+            // Modified for Gourd (2026-09-28)：模块瞬时浮层（如通知）在非刘海屏上也要强制显示，
+            // 与上游对 isSneakPeekVisibleOnCurrentScreen 的处理保持一致——否则通知到达时
+            // 内容被 hide-until-hover 偏移挪出屏幕，用户什么都看不到。
+            // 读本视图**观察**到的注册表（同一个对象）而不是 `ModuleRegistry.shared`：
+            // 只有被观察时浮层弹出 / 到期才会让本判据重算（见 D-22 的实测约束）。
+            hasModuleHUD: moduleRegistry.activeHUD != nil
+        )
     }
 
     /// Whether the fallback top-edge hover detector should run.
