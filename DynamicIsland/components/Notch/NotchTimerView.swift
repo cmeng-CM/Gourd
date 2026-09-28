@@ -107,7 +107,7 @@ struct NotchTimerView: View {
             if timerPresets.isEmpty {
                 Text("Configure presets in Settings to see them here.")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.7))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .background(Color.white.opacity(0.05))
@@ -350,15 +350,16 @@ struct NotchTimerView: View {
         VStack(spacing: 16) {
             Image(systemName: "timer.slash")
                 .font(.system(size: 48, weight: .light))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.7))
 
             Text("Timer Disabled")
                 .font(.title2)
                 .fontWeight(.medium)
+                .foregroundStyle(.white)
 
             Text("Enable the timer feature in Settings to access this tab.")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -712,7 +713,7 @@ private struct TimerPresetCard: View {
                         .lineLimit(1)
                     Text(preset.formattedDuration)
                         .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
                 .foregroundStyle(preset.color)
 
@@ -720,7 +721,7 @@ private struct TimerPresetCard: View {
 
                 Image(systemName: isActive ? "checkmark" : "play.fill")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(isActive ? preset.color : Color.secondary)
+                    .foregroundStyle(isActive ? preset.color : Color.white.opacity(0.7))
                     .padding(6)
                     .background(isActive ? preset.color.opacity(0.2) : Color.white.opacity(0.08))
                     .clipShape(Circle())
