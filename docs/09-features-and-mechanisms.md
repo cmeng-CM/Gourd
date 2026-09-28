@@ -198,6 +198,8 @@
 | 辅助功能（媒体键拦截） | `didPromptAccessibilityOnce` | `managers/MediaKeyInterceptor.swift` |
 | 定位（锁屏天气） | `didPromptLocationOnce` | `managers/LockScreenWeatherManager.swift` |
 
+**默认关掉的高打扰功能**：锁屏「动态封面」（`lockScreenMusicFullscreenVideoArtwork`，需 Apple Music 授权）于 2026-09-28 改为**默认关**，并在 设置 → 锁屏 加了开关（`Fullscreen video artwork`）。理由：默认开启时，只要播放 Apple Music 就会触发系统的 Apple Music 授权弹窗（自动化/媒体资料库按"服务 × 目标应用"分别授权，Music / 备忘录 / Spotify 各一条），与"不需要的功能不打扰用户"的口径冲突。同理，任何**会触发系统授权弹窗**的新功能，默认值一律取关。
+
 两条闸门都持久化在 UserDefaults（随 Bundle ID 保留，重装/升级不重置），且测试宿主（XCTest，含单测宿主）**一律不弹**（`helpers/AppRuntimeEnvironment.isRunningTests`）；下载目录探测同样在测试宿主下跳过。用户后续仍可主动授予：菜单「请求辅助功能权限／打开系统设置」，或系统设置 › 隐私与安全性 › 定位服务。
 
 > **为什么要这样改**：上游的实现是"只要授权状态仍是未决定（或未授权）就每次启动都弹"（`didRequestAccessibilityPrompt` 是内存变量；定位侧只看 `.notDetermined`）。用户关掉弹窗后下次启动还会被问；叠加签名身份变更（ad-hoc → 自签证书）时系统会重新询问，表现为"授权永远授不完"。签名侧的处理见 [10-p0-execution.md](10-p0-execution.md)。
