@@ -830,6 +830,7 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .appearance, title: "Use simpler close animation", keywords: ["close animation", "notch"], highlightID: SettingsTab.appearance.highlightID(for: "Use simpler close animation")),
             SettingsSearchEntry(tab: .appearance, title: "Notch Width", keywords: ["expanded notch", "width", "resize"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch width")),
             SettingsSearchEntry(tab: .appearance, title: "Expanded notch height", keywords: ["expanded height", "open notch", "height", "panel size"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch height")),
+            SettingsSearchEntry(tab: .appearance, title: "Panel background", keywords: ["notch panel", "liquid glass", "frosted", "background"], highlightID: SettingsTab.appearance.highlightID(for: "Panel background")),
             SettingsSearchEntry(tab: .appearance, title: "Enable colored spectrograms", keywords: ["spectrogram", "audio"], highlightID: SettingsTab.appearance.highlightID(for: "Enable colored spectrograms")),
             SettingsSearchEntry(tab: .appearance, title: "Enable blur effect behind album art", keywords: ["blur", "album art"], highlightID: SettingsTab.appearance.highlightID(for: "Enable blur effect behind album art")),
             SettingsSearchEntry(tab: .appearance, title: "Slider color", keywords: ["slider", "accent"], highlightID: SettingsTab.appearance.highlightID(for: "Slider color")),
@@ -4358,6 +4359,8 @@ struct Appearance: View {
     @Default(.notchHeight) var notchHeight
     @Default(.notchHeightMode) var notchHeightMode
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
+    /// 主面板背景样式（2026-09-28 新增，默认纯黑）；玻璃两档只在展开态 / 浮动药丸上生效。
+    @Default(.notchPanelBackgroundStyle) private var notchPanelBackgroundStyle
     @Default(.lockScreenGlassCustomizationMode) private var lockScreenGlassCustomizationMode
     @Default(.lockScreenGlassStyle) private var lockScreenGlassStyle
     @Default(.lockScreenMusicLiquidGlassVariant) private var lockScreenMusicLiquidGlassVariant
@@ -4477,6 +4480,8 @@ struct Appearance: View {
             notchHeightControls()
 
             notchWidthControls()
+
+            panelBackgroundControls()
 
             Section {
                 if #available(macOS 26.0, *) {
@@ -5096,6 +5101,31 @@ struct Appearance: View {
                 Text("Notch Width")
                 customBadge(text: "Beta")
             }
+        }
+    }
+
+    /// 主面板背景（2026-09-28 用户要求「看下这个显示的内容是否可以走液态玻璃的模式…增加对应配置，
+    /// 我现在没找到配置项」——此前主面板底是 `ContentView` 里写死的纯黑，设置页没有任何入口）。
+    ///
+    /// 三档：**纯黑（默认，与改造前完全一致）** / 液态玻璃 / 毛玻璃。
+    /// **玻璃两档只在展开态与非刘海屏的浮动药丸上生效**，刘海屏折叠态仍为纯黑——那条口径写在
+    /// caption 里，避免用户以为「选了玻璃但折叠态没变」是 bug（折叠态要与物理刘海融合，
+    /// 玻璃会露出壁纸、在刘海下方形成一块突兀的方块）。
+    @ViewBuilder
+    private func panelBackgroundControls() -> some View {
+        Section {
+            Picker("Panel background", selection: $notchPanelBackgroundStyle) {
+                ForEach(NotchPanelBackgroundStyle.allCases) { style in
+                    Text(style.rawValue).tag(style)
+                }
+            }
+            .settingsHighlight(id: highlightID("Panel background"))
+
+            Text("Glass styles apply to the expanded panel and to the floating pill on non-notch displays. On notched displays the collapsed notch stays solid black so it blends with the physical notch.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Panel Background")
         }
     }
 

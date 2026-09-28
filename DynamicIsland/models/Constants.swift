@@ -881,6 +881,34 @@ enum NotificationHUDBackgroundStyle: String, CaseIterable, Identifiable, Default
     var id: String { rawValue }
 }
 
+/// 主面板（展开态 / 非刘海屏浮动药丸）的**背景样式**（2026-09-28 用户反馈：「看下这个显示的内容
+/// 是否可以走液态玻璃的模式，还是只能是黑色背景，如果可以走，增加对应配置，我现在没找到配置项」——
+/// 截图是展开态的音乐 + 日历那一屏；此前主面板底是 `ContentView.mainLayoutBase` 里写死的 `.background(.black)`）。
+///
+/// 消费点唯一：`ContentView.mainLayoutBase` 的背景（判据 `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`）。
+/// 存储口径：`String` 原始值枚举 → `Defaults` 走 `RawRepresentable` 桥，盘上就是 `rawValue`
+/// 字符串（同 `NotificationHUDBackgroundStyle` / `LockScreenGlassStyle` / `OSDMaterial` 的既有形态），
+/// 因此这里**不写本地化**——设置页 Picker 显示的就是 rawValue（同 OSD 的 Material 选择器）。
+///
+/// **状态口径**：玻璃两档**只在「展开态」或「非刘海屏的浮动药丸」上生效**；刘海屏的折叠态
+/// 保持纯黑——那个形态要与物理刘海对齐融合，玻璃会露出壁纸、在刘海下方形成一块突兀的方块
+/// （判据收在 `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`，四条组合有单测）。
+enum NotchPanelBackgroundStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
+    /// 纯黑（**默认**）：`Color.black`——与改造前**完全一致**的行为（默认值不该改变任何人的观感）。
+    case solidBlack = "Solid black"
+    /// 液态玻璃：苹果私有的 `NSGlassEffectView`（`LiquidGlassBackground` 组件，降级链在组件内部）。
+    /// **强制深色外观**：浅色系统下玻璃会渲染成浅色，而面板文字一律显式白色（会看不清）——
+    /// 与通知浮层卡片同口径（`NotificationHUDBackgroundStyle.liquidGlass`）：玻璃上再压一层
+    /// 深色（`Color.black.opacity(0.35)`）保证对比度。
+    case liquidGlass = "Liquid glass"
+    /// 毛玻璃：`NSVisualEffectView` 的 `.hudWindow` + `.behindWindow`，材质层**强制深色外观**
+    /// （口径同 `EditPanelView.VisualEffectView.forcedAppearance`：`hudWindow` 在浅色系统外观下
+    /// 会渲染成浅色磨砂玻璃，与面板内的白字冲突）。
+    case frostedGlass = "Frosted glass"
+
+    var id: String { rawValue }
+}
+
 extension Defaults.Keys {
         // MARK: General
     static let updateChannel = Key<UpdateChannel>("updateChannel", default: .stable)
@@ -932,6 +960,19 @@ extension Defaults.Keys {
     static let enableShadow = Key<Bool>("enableShadow", default: true)
     static let cornerRadiusScaling = Key<Bool>("cornerRadiusScaling", default: true)
     static let useModernCloseAnimation = Key<Bool>("useModernCloseAnimation", default: true)
+
+    /// 主面板背景样式（2026-09-28 新增）：**默认纯黑**，可切液态玻璃 / 毛玻璃；见 `NotchPanelBackgroundStyle`。
+    ///
+    /// 消费点唯一：`ContentView.mainLayoutBase` 的背景（`panelBackground`）。
+    /// 玻璃两档**只在展开态或非刘海屏的浮动药丸上生效**，刘海屏折叠态保持纯黑（判据
+    /// `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`：折叠态要与物理刘海融合，
+    /// 玻璃会露出壁纸、形成一块突兀的方块）。
+    /// 存的是 `rawValue` 字符串（`String` 原始值枚举走 `RawRepresentable` 桥，同 `notificationHUDBackgroundStyle`），
+    /// 因此老版本留下的值 / 手改 UserDefaults 写成未知串时退回默认档（`Defaults` 的桥行为）。
+    static let notchPanelBackgroundStyle = Key<NotchPanelBackgroundStyle>(
+        "notchPanelBackgroundStyle",
+        default: .solidBlack
+    )
     static let showNotHumanFace = Key<Bool>("showNotHumanFace", default: false)
     static let customIdleAnimations = Key<[CustomIdleAnimation]>("customIdleAnimations", default: [])
     static let selectedIdleAnimation = Key<CustomIdleAnimation?>("selectedIdleAnimation", default: nil)

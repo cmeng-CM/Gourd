@@ -68,6 +68,24 @@ func shouldHideClosedContentUntilHover(
     hideSetting && isNonNotch && isClosed && !hasSneakPeek
 }
 
+/// 主面板背景是否该用**配置的样式**（纯黑 / 液态玻璃 / 毛玻璃），而不是恒定的纯黑。
+///
+/// **状态口径**（2026-09-28 用户要求给主面板背景加配置，见 `NotchPanelBackgroundStyle`）：
+/// 玻璃两档**只在「展开态」或「非刘海屏的浮动药丸」上生效**；其余情况（刘海屏的折叠态）
+/// 一律纯黑——折叠态的形态要与物理刘海对齐融合，玻璃会透出壁纸、在刘海下方形成一块突兀的
+/// 方块，所以这条是**状态**层面的约束，不是用户可选项。
+///
+/// 两个入参对应面板的两个状态维度：
+/// - `isOpen`：`vm.notchState == .open`（展开态：音乐 / 日历那一屏，也是用户截图里那一屏）；
+/// - `isDynamicIslandMode`：`ContentView.isDynamicIslandMode`（非刘海屏的浮动药丸，
+///   它本身就是一块独立悬浮的圆角面板，没有要与物理刘海融合的前提）。
+///
+/// 抽成纯函数是为了可测：入参都是纯值，调用点从视图状态取值后传进来，
+/// 判据本身不读单例、不碰视图状态（同 `shouldSuppressHoverOpen` / `shouldHideClosedContentUntilHover`）。
+func panelBackgroundUsesStyle(isOpen: Bool, isDynamicIslandMode: Bool) -> Bool {
+    isOpen || isDynamicIslandMode
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -277,6 +295,8 @@ struct ContentView: View {
     @Default(.showNotHumanFace) var showNotHumanFace
     @Default(.useModernCloseAnimation) var useModernCloseAnimation
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
+    /// 主面板背景样式（2026-09-28 新增，默认纯黑）；生效范围见 `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`。
+    @Default(.notchPanelBackgroundStyle) var notchPanelBackgroundStyle
 
     private static let musicControlLogFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -593,7 +613,7 @@ struct ContentView: View {
             .padding(.horizontal, notchHorizontalPadding)
             .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
             .padding(.top, isIslandMode ? 0 : notchTopScreenBleedAmount)
-            .background(.black)
+            .background(panelBackground)
             .clipShape(resolvedClipShape)
             .compositingGroup()
             .shadow(
@@ -608,6 +628,70 @@ struct ContentView: View {
             .padding(.bottom, isIslandMode ? dynamicIslandShadowInset : 0)
             .padding(.top, pillTopOffset)
             .accessibilityIdentifier("GourdNotch")
+    }
+
+    /// 主面板底：按 `notchPanelBackgroundStyle` 三选一（2026-09-28 用户反馈「看下这个显示的内容
+    /// 是否可以走液态玻璃的模式…增加对应配置」）。
+    ///
+    /// **状态口径**：玻璃两档只在「展开态」或「非刘海屏的浮动药丸」上生效，其余情况（刘海屏的
+    /// 折叠态）一律纯黑——折叠态要与物理刘海对齐融合，玻璃会露出壁纸、形成一块突兀的方块；
+    /// 判据是纯函数 `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`（四条组合有单测）。
+    ///
+    /// 三档的落点与理由：
+    /// - `.solidBlack`（**默认**）：`Color.black`——与改造前写死的 `.background(.black)` 逐字一致；
+    /// - `.liquidGlass`：苹果私有的 `NSGlassEffectView`（`LiquidGlassBackground` 组件；老系统由组件
+    ///   内部退回 `NSVisualEffectView`）。variant 用组件声明的默认档 `.defaultVariant`（= `.v11`，
+    ///   组件作者标注「视觉上最讨喜」的一档，通知浮层卡片 / 锁屏自定义玻璃都取同一个默认）——
+    ///   主面板没有理由偏离默认（同 `NotificationsModule.NotificationHUDView.cardBackground`）。
+    ///   **强制深色外观**（口径同通知浮层卡片）：浅色系统外观下玻璃会渲染成浅色，而面板内的文字
+    ///   一律显式白色（会看不清）→ 玻璃上再压一层 `Color.black.opacity(0.35)`；圆角交给下面的
+    ///   `.clipShape(resolvedClipShape)`（玻璃半径取裁剪形状的半径，见 `panelGlassCornerRadius`）。
+    /// - `.frostedGlass`：`NSVisualEffectView` 的 `.hudWindow` + `.behindWindow`，材质层强制
+    ///   `darkAqua`（口径同 `EditPanelView.VisualEffectView.forcedAppearance`：`hudWindow` 在浅色
+    ///   系统外观下会渲染成浅色磨砂玻璃，与面板内的白字冲突）。
+    ///
+    /// 三种样式都**只换底**：`.clipShape` / 阴影 / padding / 内容布局一概不动。
+    @ViewBuilder
+    private var panelBackground: some View {
+        if panelBackgroundUsesStyle(isOpen: vm.notchState == .open, isDynamicIslandMode: isDynamicIslandMode) {
+            switch notchPanelBackgroundStyle {
+            case .solidBlack:
+                Color.black
+            case .liquidGlass:
+                LiquidGlassBackground(variant: .defaultVariant, cornerRadius: panelGlassCornerRadius) {
+                    Color.black.opacity(0.35)
+                        .environment(\.colorScheme, .dark)
+                }
+                // 玻璃是 AppKit 视图（`NSGlassEffectView`）：不参与命中测试，别吃掉面板上
+                // 「点一下就收起 / 拖拽」这一类落在留白上的手势（口径同 `LockScreenMusicPanel`
+                // 的 `customLiquidPanelBackdrop`）。
+                .allowsHitTesting(false)
+            case .frostedGlass:
+                PanelFrostedGlassBackground()
+                    .allowsHitTesting(false)
+            }
+        } else {
+            Color.black
+        }
+    }
+
+    /// 玻璃背景的圆角：与 `resolvedClipShape` 的半径取**同一来源**，并取上下两档中的**较大值**。
+    ///
+    /// 为什么必须对齐：背景先画、再被 `.clipShape(resolvedClipShape)` 裁（最终可见形状是两者的交集），
+    /// 玻璃自己的圆角若**小于**裁剪半径，角就由玻璃决定（比面板本身的角更方）；
+    /// 取较大值则保证裁剪形状始终是决定方（相等或更大都不改变裁剪结果）。
+    private var panelGlassCornerRadius: CGFloat {
+        if isDynamicIslandMode {
+            return currentPillShape.cornerRadius
+        }
+        let isOpenWithScaling = vm.notchState == .open && Defaults[.cornerRadiusScaling]
+        let topRadius = isOpenWithScaling
+            ? activeCornerRadiusInsets.opened.top
+            : activeCornerRadiusInsets.closed.top
+        let bottomRadius = isOpenWithScaling
+            ? activeCornerRadiusInsets.opened.bottom
+            : activeCornerRadiusInsets.closed.bottom
+        return max(topRadius, bottomRadius)
     }
 
     private var configuredMainLayout: some View {
@@ -3132,6 +3216,32 @@ private func musicMeasureText(_ text: String, font: MusicSupplementFont) -> CGFl
     guard !text.isEmpty else { return 0 }
     let attributes: [NSAttributedString.Key: Any] = [.font: font]
     return CGFloat(ceil(NSAttributedString(string: text, attributes: attributes).size().width))
+}
+
+/// 主面板的**毛玻璃底**（`NotchPanelBackgroundStyle.frostedGlass`）。
+///
+/// 用 `NSVisualEffectView` 的 `.hudWindow` + `.behindWindow`（`state = .active`）——这是工程里
+/// 悬浮面板 / 弹窗一族一直在用的材质（`TimerPopover` / `ClipboardPanel` / `ChatPanels` …），
+/// 取它能让主面板的观感与这些面板一致。
+///
+/// **强制深色外观**：口径同 `EditPanelView.VisualEffectView.forcedAppearance`——`hudWindow`
+/// 材质在浅色系统外观下会渲染成**浅色**磨砂玻璃，与面板内的白色文字冲突（白字压浅底看不清）。
+struct PanelFrostedGlassBackground: NSViewRepresentable {
+    func makeNSView(context _: Context) -> NSVisualEffectView {
+        let visualEffectView = NSVisualEffectView()
+        visualEffectView.material = .hudWindow
+        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.state = .active
+        visualEffectView.isEmphasized = true
+        visualEffectView.appearance = NSAppearance(named: .darkAqua)
+        return visualEffectView
+    }
+
+    func updateNSView(_ visualEffectView: NSVisualEffectView, context _: Context) {
+        visualEffectView.material = .hudWindow
+        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.appearance = NSAppearance(named: .darkAqua)
+    }
 }
 
 struct FullScreenDropDelegate: DropDelegate {

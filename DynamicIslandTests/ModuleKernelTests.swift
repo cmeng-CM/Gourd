@@ -39,6 +39,8 @@
 //  **显示时长口径**（`notificationHUDDurationSeconds` 默认 8s + 设置值 → ttl 的映射与夹取边界）、
 //  **配置区口径**（`enableNotificationHUD` 总开关关掉 → 不弹浮层的纯判据、`notificationHUDBackgroundStyle`
 //  的默认档与写盘往返）。
+//  **主面板背景可配**（D-26：`notchPanelBackgroundStyle` 的默认纯黑 / 三档词汇表 / 写盘往返、以及
+//  `panelBackgroundUsesStyle` 的「玻璃只在展开态与浮动药丸上生效、刘海屏折叠态保持纯黑」四条组合）。
 //
 
 import AppKit
@@ -2385,6 +2387,79 @@ final class ModuleKernelTests: XCTestCase {
             NotificationHUDCardLayout.metrics(scale: 2.0),
             "高于上限按 2.0 算"
         )
+    }
+
+    // MARK: - 主面板背景（D-26）
+
+    /// **主面板背景的生效范围是纯函数**（2026-09-28 用户要求给展开态主面板加「液态玻璃」配置）：
+    /// 玻璃两档**只在「展开态」或「非刘海屏的浮动药丸」上生效**，刘海屏的折叠态保持纯黑
+    /// （折叠态要与物理刘海对齐融合，玻璃会露出壁纸、在刘海下方形成一块突兀的方块）。
+    ///
+    /// 四条组合逐条钉住——这是「用户选了玻璃但折叠态没变」不算 bug 的唯一依据，
+    /// 也是唯一一条把「状态」与「样式」绑在一起的判据（样式本身三档都能选）。
+    func testPanelBackgroundUsesStyleOnlyForExpandedOrFloatingPill() {
+        XCTAssertTrue(
+            panelBackgroundUsesStyle(isOpen: true, isDynamicIslandMode: false),
+            "展开态（用户截图里音乐 / 日历那一屏）：标准刘海屏也要走配置的样式"
+        )
+        XCTAssertTrue(
+            panelBackgroundUsesStyle(isOpen: true, isDynamicIslandMode: true),
+            "展开态 + 浮动药丸：两条件任一成立即生效"
+        )
+        XCTAssertTrue(
+            panelBackgroundUsesStyle(isOpen: false, isDynamicIslandMode: true),
+            "非刘海屏的折叠态就是那块浮动药丸：本身就是独立悬浮面板，没有要与物理刘海融合的前提"
+        )
+        XCTAssertFalse(
+            panelBackgroundUsesStyle(isOpen: false, isDynamicIslandMode: false),
+            "刘海屏的折叠态：**保持纯黑**（唯一的 false 组合，玻璃在这里会露出壁纸）"
+        )
+    }
+
+    /// 主面板背景键的**声明默认值** + 三档取值词汇表 + **序列化往返**（写盘 → 读回）。
+    ///
+    /// 默认必须是 `.solidBlack`：改造前主面板底是 `ContentView` 里写死的 `.background(.black)`，
+    /// 新键的默认值不该改变任何老用户的观感（升级即变色是回归）。
+    /// 往返走临时 suite（不碰开发机 `com.cmeng.gourd` 域）：枚举存的是 `rawValue` 字符串
+    /// （`RawRepresentable` 桥，同 `notificationHUDBackgroundStyle`），因此断言盘上真的出现
+    /// `"Liquid glass"` 而不只是一个内存值。
+    func testNotchPanelBackgroundStyleKeyDefaultsAndRoundTrip() {
+        XCTAssertEqual(Defaults.Keys.notchPanelBackgroundStyle.name, "notchPanelBackgroundStyle")
+        XCTAssertEqual(
+            Defaults.Keys.notchPanelBackgroundStyle.defaultValue,
+            .solidBlack,
+            "默认纯黑（与改造前写死的 .background(.black) 完全一致）"
+        )
+
+        // 取值词汇表：rawValue 是设置页 Picker 直接显示的字面量（同 OSD 的 Material 选择器）
+        XCTAssertEqual(
+            NotchPanelBackgroundStyle.allCases.map(\.rawValue),
+            ["Solid black", "Liquid glass", "Frosted glass"]
+        )
+        XCTAssertEqual(NotchPanelBackgroundStyle(rawValue: "Liquid glass"), .liquidGlass)
+        XCTAssertEqual(NotchPanelBackgroundStyle(rawValue: "Frosted glass"), .frostedGlass)
+        XCTAssertEqual(Set(NotchPanelBackgroundStyle.allCases.map(\.id)).count, 3, "三档 id 互不相同")
+
+        let suiteName = "com.cmeng.gourd.tests.notchPanelBackgroundStyle"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("建不出临时 suite（\(suiteName)）")
+        }
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let key = Defaults.Key<NotchPanelBackgroundStyle>(
+            "notchPanelBackgroundStyle",
+            default: .solidBlack,
+            suite: suite
+        )
+
+        XCTAssertEqual(Defaults[key], .solidBlack, "没写过时读回声明默认值")
+        Defaults[key] = .liquidGlass
+        XCTAssertEqual(Defaults[key], .liquidGlass, "写盘 → 读回同一档")
+        XCTAssertEqual(suite.string(forKey: key.name), "Liquid glass", "盘上存的就是 rawValue 字符串")
+        Defaults[key] = .frostedGlass
+        XCTAssertEqual(Defaults[key], .frostedGlass, "第三档同样往返")
+        XCTAssertEqual(suite.string(forKey: key.name), "Frosted glass")
+        Defaults[key] = .solidBlack
+        XCTAssertEqual(Defaults[key], .solidBlack, "再切回默认档同样往返")
     }
 
     /// **固定尺寸与内容无关**（用户：「外接屏可以显示，但尺寸不固定」）：`metrics` 只吃倍率——

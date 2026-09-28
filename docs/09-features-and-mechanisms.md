@@ -145,6 +145,7 @@
 | 屏幕录制检测/停止 | ✅ | CGEventTap + `killall screencapture` + 私有 `CGSRegisterNotifyProc` |
 | 从截屏中隐藏刘海 | ✅ | `window.sharingType = .none` |
 | 动态封面（Apple Music motion artwork） | ✅ | `AnimatedArtworkManager`（与"视频壁纸"是两件事） |
+| 主面板背景（展开态 / 非刘海屏浮动药丸） | 🔧 **2026-09-28 可配** | 三档：**纯黑（默认，与上游写死的 `.background(.black)` 完全一致）** / 液态玻璃（私有 `NSGlassEffectView`，`LiquidGlassBackground` 组件）/ 毛玻璃（`NSVisualEffectView` `.hudWindow` + `.behindWindow`，材质层强制深色外观）。玻璃两档**只在「展开态」或「非刘海屏的浮动药丸」上生效**——刘海屏折叠态保持纯黑（要与物理刘海融合，玻璃会露出壁纸、形成一块突兀的方块）。入口：设置页 **Appearance → Panel Background**；接线与取舍见 [13](13-runtime-kernel.md) D-26 |
 
 ### I. 工程与系统集成
 
