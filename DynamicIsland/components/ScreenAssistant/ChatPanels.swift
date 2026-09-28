@@ -684,16 +684,26 @@ struct ScreenshotButton: View {
 struct ChatPanelsVisualEffectView: NSViewRepresentable {
     let material: NSVisualEffectView.Material
     let blendingMode: NSVisualEffectView.BlendingMode
-    
+
+    /// 2026-09-28: `hudWindow` 材质在浅色系统外观下会渲染成浅色磨砂玻璃，与这类悬浮面板的
+    /// 深色设计语言、面板内的白色文字冲突（白字压浅底看不清），所以强制使用深色外观。
+    /// 其它材质保持跟随系统外观。
+    private var forcedAppearance: NSAppearance? {
+        material == .hudWindow ? NSAppearance(named: .darkAqua) : nil
+    }
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = material
         view.blendingMode = blendingMode
         view.state = .active
+        view.appearance = forcedAppearance
         return view
     }
     
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.appearance = forcedAppearance
+    }
 }
 
 // MARK: - Screenshot Options Popover (Hidden from Screen Recording)

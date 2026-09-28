@@ -52,18 +52,27 @@ struct EditPanelView: View {
 struct VisualEffectView: NSViewRepresentable {
     let material: NSVisualEffectView.Material
     let blendingMode: NSVisualEffectView.BlendingMode
-    
+
+    /// 2026-09-28: `hudWindow` 材质在浅色系统外观下会渲染成浅色磨砂玻璃，与这类悬浮面板的
+    /// 深色设计语言、面板内的白色文字冲突（白字压浅底看不清），所以强制使用深色外观。
+    /// 其它材质（如 onboarding 的 `.underWindowBackground`）保持跟随系统外观。
+    private var forcedAppearance: NSAppearance? {
+        material == .hudWindow ? NSAppearance(named: .darkAqua) : nil
+    }
+
     func makeNSView(context _: Context) -> NSVisualEffectView {
         let visualEffectView = NSVisualEffectView()
         visualEffectView.material = material
         visualEffectView.blendingMode = blendingMode
         visualEffectView.state = NSVisualEffectView.State.active
         visualEffectView.isEmphasized = true
+        visualEffectView.appearance = forcedAppearance
         return visualEffectView
     }
     
     func updateNSView(_ visualEffectView: NSVisualEffectView, context _: Context) {
         visualEffectView.material = material
         visualEffectView.blendingMode = blendingMode
+        visualEffectView.appearance = forcedAppearance
     }
 }
