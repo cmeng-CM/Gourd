@@ -52,8 +52,10 @@
 //
 //  ## 配置
 //  `config: nil`——模块侧仍不读 manifest 配置（`appsFilter` / `maxItems` / `pollIntervalSeconds`
-//  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。呈现开关
-//  `showBodyInHUD` 是**宿主设置**（`Defaults.Keys.showBodyInHUD`，默认 true）；
+//  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。呈现口径都是**宿主设置**
+//  （`Defaults.Keys`，设置页 Live Activities → Notification HUD）：
+//  `showBodyInHUD`（默认 true：浮层是否显示正文）、`notificationHUDScale`（默认 1.3：字号 / 卡片
+//  倍率）、**`notificationHUDDurationSeconds`**（默认 8：显示时长，见 `NotificationHUDPolicy`）；
 //  已关闭集合 `dismissedNotificationIDs` 也是宿主设置键（由本模块读写，上限 500）。
 //  **AX 通道不需要任何新设置键**：去重窗口与轮询间隔都是代码常量
 //  （`NotificationBannerLedger.window` = 10s、`NotificationBannerObserver.pollInterval` = 0.5s）。
@@ -64,11 +66,16 @@
 //    （点击左侧内容 → 打开对应 App；行右侧 `xmark.circle.fill` → **关闭这一条，仅从岛上移除**；
 //    近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
 //    + 一行能力边界说明；
-//  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，4s 后自动消失
+//  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，到期自动消失
 //    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条，其余在第二行末尾以
-//    「等 N 条」计数交代）。**固定尺寸**（320 × 64 × 用户倍率，内核 `ModuleHUDWindowHost` 定窗口、
+//    「等 N 条」计数交代）。**显示时长可配**（`notificationHUDDurationSeconds`，2026-09-28
+//    用户反馈「显示时长太短」后从代码常量 4s 改为**默认 8s**，见 `NotificationHUDPolicy`）。
+//    **固定尺寸**（320 × 64 × 用户倍率，内核 `ModuleHUDWindowHost` 定窗口、
 //    本文件的 `NotificationHUDCardLayout` 定卡片，同一来源）：内容长短不跳；超长内容两行内截断，
 //    完整正文看展开面板列表（口径见 `NotificationHUDView` 的「超长内容策略」）。
+//    **多屏同时显示**（2026-09-28 用户反馈「应该是所有屏幕都显示才对」，内核 D-25）：
+//    应用会显示岛的每块屏上各有一个浮层窗口，同一条浮层在所有屏同时出现 / 同时消失
+//    （模块侧不用管——它只交一份视图）。
 //    **两条来源**：AX 横幅（实时，× 可真关）/ DB 增量（降级，× 只从岛上隐藏）；
 //    × 走 `.highPriorityGesture`（同一层上压过祖先的 `openNotch()` 普通手势，见
 //    `NotificationHUDView` 的手势优先级说明），点掉后调 `UIHandle.dismissTransient()` **立刻**撤浮层
@@ -510,6 +517,34 @@ final class NotificationStore: ObservableObject {
     }
 }
 
+// MARK: - 浮层时序策略
+
+/// 浮层**显示时长**的纯策略（2026-09-28 用户反馈「显示时长太短」）：设置值 → ttl 的唯一映射点。
+///
+/// 为什么要单独抽出来：ttl 有两个口径必须一致——**用户设置**（`notificationHUDDurationSeconds`，
+/// 默认 8s）与**内核夹取**（`ModuleRegistry.hudTTLRange`，1…15s）。映射写成纯函数后，
+/// 边界（1 / 8 / 15 / 20）由单测直接钉，两条通道（AX / DB）也共用同一个出口、不会各算一份。
+enum NotificationHUDPolicy {
+    /// 设置滑块的可用区间（秒）——与 `Defaults.Keys.notificationHUDDurationSeconds` 的语义同源
+    /// （设置页滑块 `Slider(value:in: 2...15, step: 1)` 用的是这一个常量，避免两处各写一份）。
+    /// **下界 2s**：滑块不必为用户提供「1s」这种看不见的档位（内核的下界仍是 1s，防的是
+    /// 直接改 UserDefaults 写个 0.2 这种值）。
+    static let durationRange: ClosedRange<Double> = 2...15
+
+    /// **纯函数**：设置里的显示时长（秒）→ 浮层 ttl（秒），夹取到 `ModuleRegistry.hudTTLRange`。
+    ///
+    /// 夹取发生在**这一层**（而不是抛错 / 忽略）：用户直接改 UserDefaults 写了个 0.2 或 600，
+    /// 也要有确定行为——0.2 → 1s（等于没弹的下界）、600 → 15s（不得变成常驻占位，D-22 的口径）。
+    static func ttl(forSettingSeconds seconds: Double) -> TimeInterval {
+        min(max(seconds, ModuleRegistry.hudTTLRange.lowerBound), ModuleRegistry.hudTTLRange.upperBound)
+    }
+
+    /// 生产路径入口：读当前设置 → 夹取后的 ttl。两条通道（AX / DB）都走这里。
+    static func ttlFromDefaults() -> TimeInterval {
+        ttl(forSettingSeconds: Defaults[.notificationHUDDurationSeconds])
+    }
+}
+
 // MARK: - 模块
 
 /// 通知上岛模块（09 §5.5）。
@@ -553,9 +588,6 @@ final class NotificationsModule: GourdModule {
     private var bannerCancel: (() -> Void)?
     /// 探针只跑一次（**首次 activate**）。`deactivate()` 不会重置它——重新激活不重复探针。
     private var didRunProbe = false
-
-    /// 浮层的 ttl（秒）。4s：够看清「谁发的 + 标题」，又不至于挡住其它 live activity。
-    private static let hudTTL: TimeInterval = 4
 
     init(context: ModuleContext) {
         self.context = context
@@ -648,7 +680,7 @@ final class NotificationsModule: GourdModule {
     /// 弹一条通知浮层（`store.presentHUD` 的唯一消费者）。
     ///
     /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
-    /// 浮层只活 `hudTTL` 秒，不需要为它维护一条「设置改了要重渲」的观察链。
+    /// 浮层只活 `NotificationHUDPolicy` 给的 ttl 秒，不需要为它维护一条「设置改了要重渲」的观察链。
     /// `moreCount` 直接用 store 给的「同批还有几条」（0 = 单条到达）。
     private func presentNotificationHUD(for item: NotificationItem, moreCount: Int) {
         let showsBody = Defaults[.showBodyInHUD]
@@ -678,7 +710,7 @@ final class NotificationsModule: GourdModule {
                     }
                 )
             ),
-            ttl: Self.hudTTL
+            ttl: NotificationHUDPolicy.ttlFromDefaults()
         )
     }
 
@@ -710,7 +742,7 @@ final class NotificationsModule: GourdModule {
                     }
                 )
             ),
-            ttl: Self.hudTTL
+            ttl: NotificationHUDPolicy.ttlFromDefaults()
         )
     }
 
@@ -1086,7 +1118,7 @@ enum NotificationHUDCardLayout {
 ///   计数是「还有几条」的可靠交代，比逐条排队弹更不打扰；
 /// - **完整正文的位置是展开面板的通知列表**（`NotificationsModuleView` 的 `NotificationRow`：
 ///   App 名 + 相对时间 + 标题 + 正文最多 2 行 + 每行可点开 App）。浮层是「刚发生了什么」的
-///   瞬时提示（4s 后自动消失），**不是阅读入口**——两行装不下的内容在这里截断，
+///   瞬时提示（到期自动消失，默认 8s），**不是阅读入口**——两行装不下的内容在这里截断，
 ///   用户要看全文就展开面板（这也是「截断」不会丢信息的前提）。
 ///
 /// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空，并配合 `UIHandle.dismissTransient()`
@@ -1114,7 +1146,7 @@ private struct NotificationHUDView: View {
     @State private var isHidden = false
     @State private var isCloseHovered = false
 
-    /// 尺寸倍率（用户设置）。浮层只活 4s，不需要为它维护「设置改了要重渲」的观察链——
+    /// 尺寸倍率（用户设置）。浮层只活几秒，不需要为它维护「设置改了要重渲」的观察链——
     /// 每次弹出时取一次当前值即可（同 `showsBody` 的口径）。
     @Default(.notificationHUDScale) private var scale: Double
 

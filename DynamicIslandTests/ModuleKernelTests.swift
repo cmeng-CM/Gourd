@@ -35,7 +35,8 @@
 //  单屏模式「指定屏 → 主屏 → 第一块」三档兜底 / 空屏集合给空集合）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
-//  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）。
+//  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）、
+//  **显示时长口径**（`notificationHUDDurationSeconds` 默认 8s + 设置值 → ttl 的映射与夹取边界）。
 //
 
 import AppKit
@@ -2186,6 +2187,48 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertTrue(
             Defaults.Keys.showBodyInHUD.defaultValue,
             "默认必须是 true（用户口径）；设计稿原口径的 false 已被覆盖"
+        )
+    }
+
+    // MARK: - 浮层显示时长（D-25：可配 + 默认 8s）
+
+    /// **显示时长可配**（2026-09-28 用户反馈「显示时长太短」）：设置值 → ttl 的映射与夹取。
+    /// 边界取 1 / 8 / 15 / 20 —— 内核 `hudTTLRange`（1…15）的两端、设置默认值（8）与其外侧。
+    func testNotificationHUDDurationMapsToTTLWithClamp() {
+        XCTAssertEqual(NotificationHUDPolicy.ttl(forSettingSeconds: 8), 8, "默认档 8s 原样交给内核")
+        XCTAssertEqual(NotificationHUDPolicy.ttl(forSettingSeconds: 2), 2, "滑块下界 2s")
+        XCTAssertEqual(NotificationHUDPolicy.ttl(forSettingSeconds: 1), 1, "内核下界 1s 仍可达（不是 0）")
+        XCTAssertEqual(
+            NotificationHUDPolicy.ttl(forSettingSeconds: 0.2),
+            1,
+            "低于内核下界 → 夹到 1s（直接改 UserDefaults 写了个 0.2 也要有确定行为）"
+        )
+        XCTAssertEqual(NotificationHUDPolicy.ttl(forSettingSeconds: 15), 15, "内核上界 15s")
+        XCTAssertEqual(
+            NotificationHUDPolicy.ttl(forSettingSeconds: 20),
+            15,
+            "高于上界 → 夹到 15s（浮层不得变成常驻占位）"
+        )
+        XCTAssertEqual(
+            NotificationHUDPolicy.durationRange,
+            2...15,
+            "设置滑块区间（2…15）与内核夹取区间（1…15）同源：滑块不会给出被夹掉的档位"
+        )
+    }
+
+    /// 键本身的口径：**默认 8s**（原实现是模块里的代码常量 `hudTTL = 4`——用户 2026-09-28
+    /// 反馈「显示时长太短」后改为可配）。断言 `defaultValue` 而不是当前生效值，
+    /// 不受开发机上真实 UserDefaults 影响。
+    func testNotificationHUDDurationKeyDefaultsToEightSeconds() {
+        XCTAssertEqual(
+            Defaults.Keys.notificationHUDDurationSeconds.name,
+            "notificationHUDDurationSeconds",
+            "键名与设置页 / 文档一致"
+        )
+        XCTAssertEqual(Defaults.Keys.notificationHUDDurationSeconds.defaultValue, 8, "默认 8s（原 4s）")
+        XCTAssertTrue(
+            ModuleRegistry.hudTTLRange.contains(Defaults.Keys.notificationHUDDurationSeconds.defaultValue),
+            "默认值必须落在内核夹取区间（1…15）内，否则一装上就被夹、日志与实际不符"
         )
     }
 

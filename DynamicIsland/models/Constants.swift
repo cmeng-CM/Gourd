@@ -1474,6 +1474,17 @@ extension Defaults.Keys {
     /// UserDefaults 时也要有确定的呈现（同 `ttl` 的夹取口径）。
     static let notificationHUDScale = Key<Double>("notificationHUDScale", default: 1.3)
 
+    /// 通知浮层的**显示时长**（秒）；**默认 8**。
+    ///
+    /// **2026-09-28 用户反馈「显示时长太短」**——原口径是模块里的代码常量 `hudTTL = 4`（4 秒），
+    /// 实测「刚看清 App 名就没了」。改成本键后：默认 8s，用户可在设置页
+    /// （Live Activities → Notification HUD）的滑块上按 1s 步进调 2…15s。
+    ///
+    /// 消费点唯一：`NotificationsModule.NotificationHUDPolicy.ttlFromDefaults()`（AX 与 DB 两条
+    /// 通道共用同一个 ttl），最终仍被 `ModuleRegistry.hudTTLRange`（1…15s）夹取——
+    /// 直接改 UserDefaults 写了个 0.2 或 600 也有确定行为（同 `notificationHUDScale` 的口径）。
+    static let notificationHUDDurationSeconds = Key<Double>("notificationHUDDurationSeconds", default: 8)
+
     /// 已关闭（**仅从岛上移除**）的通知 `rec_id` 集合，有序、最近关闭的在后。
     ///
     /// 为什么必须落盘：关闭只是「本地隐藏」——系统通知中心里的那一条仍然在（只读原则，
