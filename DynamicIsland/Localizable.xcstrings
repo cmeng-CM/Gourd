@@ -81170,13 +81170,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Read-only: dismissing only hides an item on the island; Notification Center keeps it. Private schema may break after updates."
+            "value" : "AX channel: the HUD is live and its × really closes the system notification. DB channel: list and fallback (latency bounded by macOS flush, ~5s). Both may break after OS updates."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只读：关闭只在岛上隐藏，系统通知中心里的条目仍在；schema 私有，系统改版后可能失效。"
+            "value" : "AX 通道：浮层实时，点 × 可真关闭系统通知；数据库通道：列表与降级（实时性受 macOS 落盘延迟约 5s 限制）。两条都可能随系统改版失效。"
           }
         }
       }
@@ -81225,6 +81225,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭"
+          }
+        }
+      }
+    },
+    "module.notifications.closeSystemNotification" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close the system notification too"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时关掉系统通知"
           }
         }
       }

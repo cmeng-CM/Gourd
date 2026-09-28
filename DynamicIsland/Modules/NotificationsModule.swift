@@ -14,15 +14,26 @@
 //  - **严禁**为了触发提示去读其它受保护路径（本机实测：通知库自身被拒即可判定）。
 //
 //  ## 能力边界（09 §5.5「必须接受」，UI 上有一行 footer 明示）
-//  ① **只能读**：不能回复、不能在系统通知中心里操作真实通知（那需要 AX 或私有 API，属降级方案）。
-//     **岛上能做的只有「关闭 / 清除」= 仅从岛上移除**（本地隐藏 + `dismissedNotificationIDs` 持久化）：
-//     系统通知中心里的条目**不由本应用增删**（只读原则，见 `NotificationCenterReader` 头注释），
-//     库里的记录也一条不动；若要连系统通知一起清掉，需走设计稿的 AX 降级路径
-//     （`AXPress` 关掉真实通知，**尚未实现**）；
-//  ② 需要完全磁盘访问；③ schema 私有、系统改版可能失效；
+//  ① **AX 通道能真关掉系统通知，DB 通道只能从岛上移除**（2026-09-28 加 AX 通道后收窄的口径）：
+//     浮层上的 × 命中 AX 横幅时执行「关闭」动作（`NotificationBannerObserver`），失败或没有
+//     关闭控件时退化为「仅从岛上隐藏」；展开列表的 × 默认仍是**仅从岛上移除**
+//     （本地隐藏 + `dismissedNotificationIDs` 持久化），只在近 10 秒内有同指纹的 AX 横幅句柄时
+//     顺带真关那一条。库里一条记录都不动（只读原则）；
+//  ② 需要完全磁盘访问（DB 通道）；AX 通道需要辅助功能权限（**调用方已具备**，未授权时静默降级）；
+//  ③ 两条通道都可能随系统改版失效：DB 是 schema 私有，AX 是元素树/动作名随版本变
+//     （探针原文落盘 `~/Library/Logs/Gourd/ax-banner-probe.log` 就是为此）；
 //  ④ 内容敏感：浮层**默认显示正文**（`showBodyInHUD` 默认 true——**用户 2026-09-28 口径，
-//    覆盖设计稿原口径的 false**）；不想要正文的用户在设置页（Live Activities → Notifications）
-//    关掉该项即可，关掉后浮层第二行只留「新通知」。
+//     覆盖设计稿原口径的 false**）；不想要正文的用户在设置页（Live Activities → Notifications）
+//     关掉该项即可，关掉后浮层第二行只留「新通知」。
+//
+//  ## 双通道口径（09 §5.5，2026-09-28 加 AX 通道后定稿）
+//  | 通道 | 职责 | 代价 |
+//  |---|---|---|
+//  | **AX**（`NotificationBannerObserver`） | **实时**（横幅一出现就在屏上，实测亚秒级）+ **可真关闭** | 依赖通知中心的 AX 树（role/subrole/自定义动作名），随系统版本可能失效 |
+//  | **DB**（`NotificationCenterReader`） | **历史列表**、未读计数、点击打开 App、**降级**（AX 不可用时浮层照弹） | 实时性受 macOS 批量落盘延迟限制（本机实测 5.0～5.1s） |
+//  两条通道会为同一条通知各触发一次 → 用「appName + title + body 指纹 + 10s 窗口」去重
+//  （`NotificationBannerLedger`，**AX 优先**）：AX 先到弹了浮层，5s 后 DB 那条同指纹事件
+//  在窗口期内不再弹浮层、只进列表；AX 没拿到（未授权 / 树变了）时 DB 照常弹，两条都不断。
 //
 //  ## 增量策略（09 §5.5）
 //  **文件事件驱动（主路径）+ 60s 兜底轮询（第二道闸门）**——2026-09-28 把原来的 30s 轮询换掉：
@@ -44,15 +55,18 @@
 //  见 [14](../../docs/14-module-manifests.md) 的 notifications 行）。呈现开关
 //  `showBodyInHUD` 是**宿主设置**（`Defaults.Keys.showBodyInHUD`，默认 true）；
 //  已关闭集合 `dismissedNotificationIDs` 也是宿主设置键（由本模块读写，上限 500）。
-//  09 §5.5 里**尚未做**的部分：按 App 分组、ax 降级路径（含「连系统通知一起清除」）、
-//  `appsFilter` 黑白名单。
+//  **AX 通道不需要任何新设置键**：去重窗口与轮询间隔都是代码常量
+//  （`NotificationBannerLedger.window` = 10s、`NotificationBannerObserver.pollInterval` = 0.5s）。
+//  09 §5.5 里**尚未做**的部分：按 App 分组、`appsFilter` 黑白名单。
 //
 //  ## 本批形态
 //  - 展开面板：标题行（模块名 + 状态 + **清除**（列表非空时）+ 刷新）+ 可滚动通知列表
-//    （点击左侧内容 → 打开对应 App；行右侧 `xmark.circle.fill` → **关闭这一条，仅从岛上移除**）
+//    （点击左侧内容 → 打开对应 App；行右侧 `xmark.circle.fill` → **关闭这一条，仅从岛上移除**；
+//    近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
 //    + 一行能力边界说明；
-//  - 折叠态**瞬时浮层**：新通知到达时 `bell.badge` + App 显示名 + 标题/正文，4s 后自动消失
-//    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条）；
+//  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，4s 后自动消失
+//    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条）。
+//    **两条来源**：AX 横幅（实时，× 可真关）/ DB 增量（降级，× 只从岛上隐藏）；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
@@ -63,7 +77,8 @@
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
-//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss`。
+//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss` /
+//  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）。
 //
 
 import AppKit
@@ -109,6 +124,10 @@ final class NotificationStore: ObservableObject {
     /// 视图与 ttl 属模块的 UI 决策——store 因此不认识 `UIHandle`，也不依赖 SwiftUI 视图，
     /// 基线/增量这套逻辑仍可单测。
     var presentHUD: ((NotificationItem) -> Void)?
+
+    /// 双通道去重台账（AX + DB）：同指纹 10s 内只弹一次浮层，并短期保留 AX 的真关闭句柄。
+    /// **纯逻辑**（时间由调用方注入）——判定规则全在 `NotificationBannerLedger` 里，可单测。
+    private var ledger = NotificationBannerLedger()
 
     /// 一次取数的浮层候选：**只取 `id > baseline` 里 id 最大的那个**。
     ///
@@ -296,7 +315,63 @@ final class NotificationStore: ObservableObject {
         // 浮层：只弹**最新一条**，且必须严格晚于**本次取数前的基线**（`hudCandidate` 的判据）。
         // 用取数前的 `baseline` 而不是刚更新的 `baselineRecordID`——后者已经把新条目算进去了。
         if let latest = Self.hudCandidate(in: newItems, above: baseline) {
-            presentHUD?(resolveAppNames(for: [latest]).first ?? latest)
+            let resolved = resolveAppNames(for: [latest]).first ?? latest
+            // 去重（**AX 优先**）：AX 通道刚为同一条通知弹过浮层时，这条晚到约 5s 的 DB 记录
+            // 在 10s 窗口内不再弹浮层——但仍进列表与未读计数（列表归 DB 通道管）。
+            if shouldPresentDatabaseItem(resolved) {
+                presentHUD?(resolved)
+            } else {
+                log.info("浮层跳过（10s 内已有同指纹的 AX 浮层）：rec_id=\(resolved.id)")
+            }
+        }
+    }
+
+    // MARK: 双通道（AX 实时 / DB 降级）的接缝
+
+    /// **纯函数**：一条 DB 通知对应的去重指纹（`appName + title + body`，归一化在指纹里做）。
+    static func fingerprint(for item: NotificationItem) -> NotificationFingerprint {
+        NotificationFingerprint(appName: item.displayName, title: item.title, body: item.body)
+    }
+
+    /// AX 横幅是否该弹浮层（顺手把真关闭句柄登记进窗口，供列表行 × 复用）。
+    ///
+    /// 口径：同一指纹 10s 内只弹一次（两条通道共用一个窗口），**AX 优先**
+    /// （AX 命中后同指纹的 DB 事件在窗口期内只进列表）。
+    func shouldPresentBanner(_ event: BannerEvent, now: Date = Date()) -> Bool {
+        ledger.shouldPresent(
+            event.fingerprint,
+            source: .ax,
+            closeHandle: event.closeHandle,
+            now: now
+        )
+    }
+
+    /// DB 增量是否该弹浮层（与 AX 通道同一把尺子；DB 没有句柄，故只登记来源）。
+    func shouldPresentDatabaseItem(_ item: NotificationItem, now: Date = Date()) -> Bool {
+        ledger.shouldPresent(Self.fingerprint(for: item), source: .database, now: now)
+    }
+
+    /// 近 10 秒内该条通知对应的 AX 真关闭句柄（`nil` = 没有 / 已过期 / 是 DB 来源的那一条）。
+    ///
+    /// 已过期的句柄不会返回；返回的句柄也可能在执行时失效（横幅早已自动消失）——
+    /// 那种情况由 `performAndVerify()` 判负，调用方只记日志、退化为「仅从岛上隐藏」。
+    func closeHandle(for item: NotificationItem, now: Date = Date()) -> NotificationBannerCloseHandle? {
+        ledger.closeHandle(for: Self.fingerprint(for: item), now: now)
+    }
+
+    /// **真关闭一条系统通知**（AX 动作，**必须在后台队列执行**：AX 是同步 IPC）。
+    ///
+    /// 成功 = 动作返回成功且元素失效（见 `NotificationBannerCloseHandle.performAndVerify`）。
+    /// 失败**不弹错误**：只记一条日志，浮层/列表那边已经做了「仅从岛上隐藏」。
+    func closeSystemBanner(_ handle: NotificationBannerCloseHandle, reason: String) {
+        let log = self.log
+        DispatchQueue.global(qos: .utility).async {
+            let closed = handle.performAndVerify()
+            if closed {
+                log.info("\(reason)：已真关掉系统通知（\(handle.label)）")
+            } else {
+                log.warn("\(reason)：关闭系统通知失败（\(handle.label)），仅从岛上隐藏")
+            }
         }
     }
 
@@ -306,13 +381,16 @@ final class NotificationStore: ObservableObject {
         unseenCount = 0
     }
 
-    // MARK: 关闭 / 清除（**仅从岛上移除**）
+    // MARK: 关闭 / 清除（**岛上移除为主，命中 AX 句柄时一并真关**）
 
     /// 关闭一条：立即从列表里去掉 + 记进「已关闭」集合 + 落盘。
     ///
-    /// **只从岛上移除**——系统通知中心里的那一条仍在，库里的记录也仍在（只读原则：
-    /// 本应用不增删系统通知，见文件头「能力边界」）。幂等（重复关同一条不重复记账）。
+    /// **岛上行为不变**（本地隐藏 + `dismissedNotificationIDs` 持久化，库里一条不动）。
+    /// 增量部分（2026-09-28）：若该条与**近 10 秒内的 AX 横幅**指纹匹配且仍有可用的关闭句柄，
+    /// 一并执行 AX 关闭动作**真关掉系统通知中心里的那一条**——这是「能真正关掉系统通知」的
+    /// 列表侧入口（浮层侧的入口是浮层右上角的 ×）。匹配不到 / 句柄失效 → 只隐藏，不报错。
     func dismiss(_ item: NotificationItem) {
+        let handle = closeHandle(for: item)
         guard !dismissedRecordIDs.contains(item.id) else {
             items.removeAll { $0.id == item.id }  // 已在集合里（例如上一次运行关过）：只保证列表里没有
             return
@@ -322,9 +400,16 @@ final class NotificationStore: ObservableObject {
         items.removeAll { $0.id == item.id }
         persistDismissed()
         log.info("关闭通知 rec_id=\(item.id)，仅从岛上移除（系统通知中心不动）")
+        if let handle {
+            closeSystemBanner(handle, reason: "列表关闭 rec_id=\(item.id)")
+        }
     }
 
     /// 一键清除：把**当前列表**里的条目全部标记为已关闭（等价于逐条关闭，一次落盘一次日志）。
+    ///
+    /// **只从岛上移除**（不逐条 AX 关闭）：用户点「清除」的语义是「把岛上这一屏清掉」，
+    /// 不是「把系统通知中心清空」——多条真关闭会连续打十几个 AX 动作，且清单里多数条目
+    /// 早就过了 10s 窗口（句柄已失效）。要真关某一条，用该行的 × 或浮层的 ×。
     func dismissAll() {
         guard !items.isEmpty else { return }
         let ids = items.map(\.id)
@@ -450,6 +535,11 @@ final class NotificationsModule: GourdModule {
     private let context: ModuleContext
     private let store: NotificationStore
     private var pollTask: Task<Void, Never>?
+    /// AX 横幅通道（**实时 + 可真关闭**那条路，见文件头「双通道口径」）。
+    /// `bannerCancel` 是 `start()` 的取消闭包（拆 AXObserver + 轮询 timer），`bannerObserver`
+    /// 只为持有它——模块停用/重新激活都走 `deactivate()` → `startBannerObservation()`。
+    private var bannerObserver: NotificationBannerObserver?
+    private var bannerCancel: (() -> Void)?
     /// 探针只跑一次（**首次 activate**）。`deactivate()` 不会重置它——重新激活不重复探针。
     private var didRunProbe = false
 
@@ -486,6 +576,7 @@ final class NotificationsModule: GourdModule {
         didRunProbe = true
 
         store.startWatching()
+        startBannerObservation()
         pollTask = Task { [store] in
             if shouldProbe {
                 await store.runProbe()
@@ -501,8 +592,8 @@ final class NotificationsModule: GourdModule {
             }
         }
         context.logger.info(
-            "notifications 模块已激活（db/db-wal 文件事件驱动 + 兜底轮询 "
-                + "\(Int(NotificationStore.fallbackPollInterval))s，已建增量基线）"
+            "notifications 模块已激活（AX 横幅实时通道 + db/db-wal 文件事件驱动 + 兜底轮询 "
+                + "\(Int(NotificationStore.fallbackPollInterval))s）"
         )
     }
 
@@ -510,6 +601,97 @@ final class NotificationsModule: GourdModule {
         pollTask?.cancel()
         pollTask = nil
         store.stopWatching()
+        // AX 通道也要拆干净：observer 的 run loop source 与轮询 timer 都归这个闭包管，
+        // 不拆的话模块停用后 handler 还活着（会继续扫窗口、继续弹浮层）。
+        bannerCancel?()
+        bannerCancel = nil
+        bannerObserver = nil
+    }
+
+    /// 起 AX 横幅通道（**实时 + 可真关闭**那条路，见文件头「双通道口径」）。
+    ///
+    /// - 未授权（`AXIsProcessTrusted() == false`）时 `start()` 返回空闭包、记一条日志，
+    ///   模块侧什么都不用管：DB 通道照常弹浮层（只是慢 ~5s），这是**静默降级**；
+    /// - 回调在主队列（`@MainActor` 的 store 直接可写），每次只做「去重 → 弹浮层」。
+    private func startBannerObservation() {
+        guard bannerObserver == nil else { return }
+        let observer = NotificationBannerObserver { [weak self] event in
+            self?.handleBanner(event)
+        }
+        bannerObserver = observer
+        bannerCancel = observer.start()
+    }
+
+    /// AX 横幅到达（**这条路径不碰数据库**：列表与历史仍归 DB 通道）。
+    ///
+    /// 去重：同指纹 10s 内只弹一次（`NotificationBannerLedger`，AX 优先）。
+    private func handleBanner(_ event: BannerEvent) {
+        guard store.shouldPresentBanner(event) else {
+            context.logger.info("AX 横幅跳过浮层（10s 内已有同指纹）：title=\(event.title)")
+            return
+        }
+        presentBannerHUD(event)
+    }
+
+    /// 弹一条通知浮层（`store.presentHUD` 的唯一消费者）。
+    ///
+    /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
+    /// 浮层只活 `hudTTL` 秒，不需要为它维护一条「设置改了要重渲」的观察链。
+    private func presentNotificationHUD(for item: NotificationItem) {
+        let showsBody = Defaults[.showBodyInHUD]
+        let handle = store.closeHandle(for: item)
+        context.logger.info("弹通知浮层（DB）：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")")
+        context.ui.presentTransient(
+            view: AnyView(
+                NotificationHUDView(
+                    appName: Self.hudAppName(for: item),
+                    title: item.title,
+                    bodyText: item.body,
+                    showsBody: showsBody,
+                    closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
+                    onClose: { [store] in
+                        guard let handle else { return }
+                        store.closeSystemBanner(handle, reason: "浮层关闭 rec_id=\(item.id)")
+                    }
+                )
+            ),
+            ttl: Self.hudTTL
+        )
+    }
+
+    /// AX 横幅浮层（**实时路径**）：内容直接来自横幅，不查库、不等落盘。
+    ///
+    /// × 的口径：有句柄 → 真关掉系统通知；没有 → 仅从岛上隐藏（`NotificationHUDView` 内部
+    /// 自己先把这一格隐掉，两条路都是「点完立刻看不见」）。
+    private func presentBannerHUD(_ event: BannerEvent) {
+        let showsBody = Defaults[.showBodyInHUD]
+        context.logger.info(
+            "弹通知浮层（AX）：app=\(event.appName)，标题=\(event.title)，正文\(showsBody ? "显示" : "隐藏")"
+        )
+        context.ui.presentTransient(
+            view: AnyView(
+                NotificationHUDView(
+                    appName: event.appName,
+                    title: event.title,
+                    bodyText: event.body,
+                    showsBody: showsBody,
+                    closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
+                    onClose: { [store] in
+                        guard let handle = event.closeHandle else { return }
+                        store.closeSystemBanner(handle, reason: "浮层关闭 AX 横幅")
+                    }
+                )
+            ),
+            ttl: Self.hudTTL
+        )
+    }
+
+    /// 浮层左上的 App 名：`NSWorkspace` 解析出的显示名优先，退回 bundle id 最后一段
+    /// （与 `NotificationHUDView.appName` 的兜底链同口径）。
+    private static func hudAppName(for item: NotificationItem) -> String {
+        if !item.appName.isEmpty { return item.appName }
+        let fallback = NotificationCenterReader.appDisplayName(bundleIdentifier: item.bundleIdentifier, appMap: [:])
+        return fallback.isEmpty ? item.displayName : fallback
     }
 
     /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、不算失败）。
@@ -522,19 +704,6 @@ final class NotificationsModule: GourdModule {
         case .lockscreen:
             return .none
         }
-    }
-
-    /// 弹一条通知浮层（`store.presentHUD` 的唯一消费者）。
-    ///
-    /// 视图在**这一刻**按当前设置快照构造：`showBodyInHUD` 是模块配置的呈现口径，
-    /// 浮层只活 `hudTTL` 秒，不需要为它维护一条「设置改了要重渲」的观察链。
-    private func presentNotificationHUD(for item: NotificationItem) {
-        let showsBody = Defaults[.showBodyInHUD]
-        context.logger.info("弹通知浮层：rec_id=\(item.id)，正文\(showsBody ? "显示" : "隐藏")")
-        context.ui.presentTransient(
-            view: AnyView(NotificationHUDView(item: item, showsBody: showsBody)),
-            ttl: Self.hudTTL
-        )
     }
 }
 
@@ -759,7 +928,11 @@ private struct NotificationRow: View {
 
 // MARK: - 折叠态瞬时浮层视图
 
-/// 折叠态瞬时浮层（09 §5.5 呈现 ①）：`bell.badge` + 「App 显示名」+ 「标题 + 正文」。
+/// 折叠态瞬时浮层（09 §5.5 呈现 ①）：`bell.badge` + 「App 名」+ 「标题 + 正文」+ **×**。
+///
+/// **两个来源共用这一个视图**（内容都是纯字符串，不依赖 `NotificationItem`）：
+/// - AX 横幅（实时通道，`presentBannerHUD`）：× 有真关闭句柄 → 执行 AX 关闭动作；
+/// - DB 增量（降级通道，`presentNotificationHUD`）：× 没有句柄 → 仅从岛上隐藏。
 ///
 /// **默认显示正文**（`showBodyInHUD` 默认 true——用户 2026-09-28 明确要求，覆盖设计稿原口径的
 /// false）；关掉后第二行只留一条「新通知」文案，正文仍可在展开列表里看。
@@ -767,14 +940,38 @@ private struct NotificationRow: View {
 /// 颜色：面板是黑底、系统外观可为浅色——与模块其余视图同口径，文字**一律显式浅色**
 ///（`.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`。
 ///
-/// 宽度：关闭态刘海只有一格（`closedNotchWidth`，本机 100pt），故给正文列一个上界，
-/// 让长标题/长正文按 `.tail` 截断而不是把内容撑出可见区域。
+/// 宽度：关闭态刘海只有一格（= 物理刘海宽，本机实测 **189pt**：`screen.frame.width -
+/// auxiliaryTopLeftArea - auxiliaryTopRightArea + 4`），所以给文字列一个**上界**并把 × 放在
+/// 它右侧：`.frame(maxWidth: 140)` + 图标/间距/× 合计 ≈ 178pt，× 因此留在可见区域内
+/// （**超出刘海宽的部分会被窗口裁掉，按钮被裁掉就等于点不到**——这是把 220 收到 140 的原因）。
+///
+/// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空（内核没有「模块主动撤浮层」的
+/// API，也不必为它加——浮层本来就只活 ttl 秒，本地置空与 `clearHUD()` 对用户是同一件事）。
 private struct NotificationHUDView: View {
-    let item: NotificationItem
-    /// `Defaults[.showBodyInHUD]`（在 `presentNotificationHUD` 里取一次快照）。
+    let appName: String
+    let title: String
+    /// 通知正文（**不叫 `body`**：那个名字被 SwiftUI 的 `View.body` 占了）。
+    let bodyText: String
+    /// `Defaults[.showBodyInHUD]`（在模块侧取一次快照）。
     let showsBody: Bool
+    /// × 的提示文案 key：有真关闭句柄时是「关闭系统通知」，否则是「关闭（仅从岛上移除）」。
+    let closeHelpKey: String
+    /// 点击 ×：真关闭（有句柄时）——**「仅从岛上隐藏」由本视图的 `isHidden` 自己完成**。
+    let onClose: () -> Void
+
+    /// 点过 × 之后不再渲染这一格（浮层 ttl 到期后内核自然清掉它）。
+    @State private var isHidden = false
+    @State private var isCloseHovered = false
 
     var body: some View {
+        if isHidden {
+            EmptyView()
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         HStack(spacing: 6) {
             Image(systemName: "bell.badge")
                 .font(.system(size: 12, weight: .medium))
@@ -793,21 +990,35 @@ private struct NotificationHUDView: View {
                     .lineLimit(2)
                     .truncationMode(.tail)
             }
-            .frame(maxWidth: 220, alignment: .leading)
+            .frame(maxWidth: 140, alignment: .leading)
+
+            closeButton
         }
     }
 
-    /// App 显示名：`NSWorkspace` 解析出的显示名（store 已回填到 `appName`）优先，
-    /// 取不到时退回 bundle id 的**最后一段**（`faceTime` 而非 `com.apple.FaceTime`）。
-    private var appName: String {
-        if !item.appName.isEmpty { return item.appName }
-        let fallback = NotificationCenterReader.appDisplayName(bundleIdentifier: item.bundleIdentifier, appMap: [:])
-        return fallback.isEmpty ? item.displayName : fallback
+    /// × ：**先本地隐藏（立刻生效），再交给上层做真关闭**——AX 动作是同步 IPC，
+    /// 放在点击回调里做会把主线程卡一下，所以上层（`closeSystemBanner`）甩到后台队列。
+    /// 失败不弹错误：这一步已经不是「浮层消不消失」的前提了。
+    private var closeButton: some View {
+        Button {
+            isHidden = true
+            onClose()
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(isCloseHovered ? 1 : 0.7))
+                .padding(2)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .onHover { isCloseHovered = $0 }
+        .help(NotificationText.localized(closeHelpKey))
     }
 
     /// 第二行：`showBodyInHUD` 为真时是「标题 + 正文」，否则是「新通知」这一行文案。
     private var secondLine: String {
-        NotificationText.hudDetail(title: item.title, body: item.body, showsBody: showsBody)
+        NotificationText.hudDetail(title: title, body: bodyText, showsBody: showsBody)
     }
 }
 

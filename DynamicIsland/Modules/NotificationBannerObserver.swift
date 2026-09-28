@@ -131,11 +131,18 @@ struct NotificationBannerCloseHandle: @unchecked Sendable {
     ///
     /// 返回「动作返回成功 **且** 元素已失效」。元素仍有效时返回 false —— 那说明没关掉，
     /// 调用方退化为「仅从岛上隐藏」（不弹错误，只记日志）。
-    func performAndVerify() -> Bool {
+    ///
+    /// 判定**要轮询**（不是测一次）：关闭有动画与异步清理，本机实测按下后元素在
+    /// ≤ 0.6s 内从树里消失；只测一次会把「已经关掉、只是还没清理完」误判成失败。
+    /// 轮询全程在后台队列上，最长 ~0.6s，不占主线程、不影响浮层（浮层点完即本地隐藏）。
+    func performAndVerify(timeout: TimeInterval = 0.64, step: TimeInterval = 0.08) -> Bool {
         let result = AXUIElementPerformAction(element, actionName as CFString)
         guard result == .success else { return false }
-        // 关闭有动画/异步清理：给它一小段时间再判定（本机实测按下后元素立刻从树里消失）。
-        usleep(80_000)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            usleep(useconds_t(step * 1_000_000))
+            if !isValid { return true }
+        }
         return !isValid
     }
 }
@@ -487,9 +494,10 @@ enum AXBridge {
 /// 监听通知中心横幅的观察器（AXObserver + 0.5s 轮询兜底）。
 ///
 /// 线程模型（三条约定）：
-/// 1. `start` **必须在主线程调用**——AXObserver 的 run loop source 挂在主 run loop 上；
-///    但回调本身**不做 AX 调用**，只把扫描甩到内部串行队列（AX IPC 不能占主线程）；
-/// 2. 所有 AX 调用都在内部串行队列 `com.cmeng.gourd.notifications.ax-banner` 上；
+/// 1. `start` / `stop` **可从任意线程调用**——AXObserver 的建/拆与 run loop source 的
+///    增删都在内部串行队列上做（CFRunLoop 的 source 增删自身是同步的），observer 的
+///    run loop source 挂在**主 run loop** 上，所以回调在主线程触发；
+/// 2. 回调本身**不做 AX 调用**，只把扫描甩回内部串行队列（AX IPC 不能占主线程）；
 /// 3. `onBanner` 回调**回主队列**投递（模块侧是 `@MainActor`，这样接进去不用再跳一次）。
 final class NotificationBannerObserver: @unchecked Sendable {
     /// 通知中心 App 的 bundle id（**按 id 匹配，不用显示名**：显示名是「通知中心」这种本地化串）。

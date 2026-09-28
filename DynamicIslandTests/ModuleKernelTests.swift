@@ -32,6 +32,7 @@
 //
 
 import AppKit
+import ApplicationServices
 import Defaults
 import SwiftUI
 import XCTest
@@ -1685,6 +1686,7 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.newNotification",
             "module.notifications.clearAll",
             "module.notifications.dismiss",
+            "module.notifications.closeSystemNotification",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
@@ -1891,6 +1893,312 @@ final class ModuleKernelTests: XCTestCase {
     func testDismissedNotificationIDsKeyShape() {
         XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.name, "dismissedNotificationIDs")
         XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.defaultValue, [], "默认没有已关闭条目")
+    }
+
+    // MARK: - AX 横幅通道（P2e：实时 + 真关闭）
+
+    /// **本机实测（macOS 27）**的横幅树形状 → 解析结果。
+    ///
+    /// 夹具逐字对齐 `~/Library/Logs/Gourd/ax-banner-probe.log` 里的真配置探针原文：
+    /// 静态文本是 标题 → 副标题 → 正文（App 名**不在**里面）；关闭是**横幅容器上的自定义动作**，
+    /// 名字含「关闭」；容器描述形如 `"<App 名> <标题>, <副标题>, <正文>"`。
+    func testNotificationBannerParseMatchesMacOS27Shape() {
+        let snapshot = Self.bannerSnapshot(
+            description: "脚本编辑器 无副标题测试, 正文只有一行",
+            texts: ["无副标题测试", "正文只有一行"],
+            actions: ["AXPress", "Name:关闭\nTarget:0x0\nSelector:(null)"]
+        )
+
+        let content = NotificationBannerParser.parse(snapshot)
+        XCTAssertTrue(content.foundBannerRoot, "subrole=AXNotificationCenterBanner 必须被认成横幅")
+        XCTAssertEqual(content.appName, "脚本编辑器", "App 名从容器描述首段剥掉标题得到")
+        XCTAssertEqual(content.title, "无副标题测试", "第一个静态文本 = 标题")
+        XCTAssertEqual(content.subtitle, "", "两个静态文本时没有副标题")
+        XCTAssertEqual(content.body, "正文只有一行", "最后一个静态文本 = 正文")
+        XCTAssertEqual(content.closeActionName, "Name:关闭\nTarget:0x0\nSelector:(null)", "自定义动作名要原样保留（截断就执行不了）")
+        XCTAssertEqual(content.closeLabel, "自定义动作: Name:关闭\nTarget:0x0\nSelector:(null)")
+
+        // 带副标题（三个静态文本）：标题 / 副标题 / 正文 依次取
+        let withSubtitle = NotificationBannerParser.parse(
+            Self.bannerSnapshot(
+                description: "脚本编辑器 AX 探针, 副标题, AX 实时测试",
+                texts: ["AX 探针", "副标题", "AX 实时测试"],
+                actions: ["AXPress", "Name:关闭\nTarget:0x0\nSelector:(null)"]
+            )
+        )
+        XCTAssertEqual(withSubtitle.appName, "脚本编辑器")
+        XCTAssertEqual(withSubtitle.title, "AX 探针")
+        XCTAssertEqual(withSubtitle.subtitle, "副标题")
+        XCTAssertEqual(withSubtitle.body, "AX 实时测试")
+    }
+
+    /// 关闭控件的**两条路**与「没有关闭控件」：按钮（`AXPress`）优先于自定义动作；
+    /// 都没有时 `closeActionName == nil`（调用方据此退化为「仅从岛上隐藏」）。
+    func testNotificationBannerCloseControlVariants() {
+        // ① 真按钮（带副标题的横幅本机偶尔暴露）：命中后动作用 AXPress
+        let button = NotificationBannerParser.parse(
+            Self.bannerSnapshot(
+                description: "脚本编辑器 标题, 正文",
+                texts: ["标题", "正文"],
+                buttons: ["显示", "关闭"],
+                actions: ["AXPress"]
+            )
+        )
+        XCTAssertEqual(button.closeActionName, kAXPressAction as String)
+        XCTAssertEqual(button.closeLabel, "AXButton: 关闭")
+
+        // ② 英文按钮 + 其它关键词（大小写不敏感）
+        XCTAssertEqual(
+            NotificationBannerParser.parse(Self.bannerSnapshot(buttons: ["CLOSE"])).closeActionName,
+            kAXPressAction as String
+        )
+        XCTAssertEqual(
+            NotificationBannerParser.parse(Self.bannerSnapshot(buttons: ["Dismiss"])).closeActionName,
+            kAXPressAction as String
+        )
+        XCTAssertEqual(
+            NotificationBannerParser.parse(Self.bannerSnapshot(buttons: ["清除"])).closeActionName,
+            kAXPressAction as String
+        )
+        // ③ 非关闭按钮（「显示」）不算
+        XCTAssertNil(NotificationBannerParser.parse(Self.bannerSnapshot(buttons: ["显示"])).closeActionName)
+        // ④ 都没有 → nil
+        let none = NotificationBannerParser.parse(Self.bannerSnapshot(texts: ["标题"]))
+        XCTAssertNil(none.closeActionName)
+        XCTAssertNil(none.closeLabel)
+
+        // ⑤ 关键词判据本身
+        XCTAssertTrue(NotificationBannerParser.matchesCloseKeyword("Close"))
+        XCTAssertTrue(NotificationBannerParser.matchesCloseKeyword("关闭"))
+        XCTAssertTrue(NotificationBannerParser.matchesCloseKeyword("dismiss notification"))
+        XCTAssertFalse(NotificationBannerParser.matchesCloseKeyword("显示"))
+        XCTAssertFalse(NotificationBannerParser.matchesCloseKeyword(""))
+    }
+
+    /// **防御式解析**（AX 树随系统版本变）：
+    /// 空树 / 没有横幅子角色 / App 名剥不出来 / 超深超宽 —— 一律给空值，**不崩不抛**。
+    func testNotificationBannerParseIsDefensive() {
+        let empty = NotificationBannerParser.parse(AXNodeSnapshot())
+        XCTAssertFalse(empty.foundBannerRoot)
+        XCTAssertFalse(empty.hasContent)
+        XCTAssertNil(empty.closeActionName)
+
+        // 没有横幅子角色（例如通知中心面板开着）：仍尽力解析，但 foundBannerRoot = false
+        let panel = NotificationBannerParser.parse(
+            AXNodeSnapshot(
+                role: "AXWindow",
+                title: "Notification Center",
+                children: [AXNodeSnapshot(role: "AXStaticText", value: "某条通知")]
+            )
+        )
+        XCTAssertFalse(panel.foundBannerRoot, "不是横幅窗口不得被认成横幅")
+        XCTAssertEqual(panel.title, "某条通知", "兜底解析仍给出尽力而为的结果（探针要它）")
+        XCTAssertEqual(panel.appName, "", "描述为空 → 不猜 App 名")
+
+        // App 名剥不出来（描述首段就是标题本身）→ 给空串，**不把标题当 App 名**
+        XCTAssertEqual(
+            NotificationBannerParser.appName(fromDescription: "标题甲", title: "标题甲", body: "正文"),
+            ""
+        )
+        XCTAssertEqual(NotificationBannerParser.appName(fromDescription: "", title: "标题", body: ""), "")
+        // 描述首段以正文结尾（标题为空）也能剥
+        XCTAssertEqual(
+            NotificationBannerParser.appName(fromDescription: "脚本编辑器 正文乙", title: "", body: "正文乙"),
+            "脚本编辑器"
+        )
+
+        // 超深树：不爆栈、不卡死（深度上限 8）
+        var deep = AXNodeSnapshot(role: "AXStaticText", value: "最深处")
+        for _ in 0..<40 { deep = AXNodeSnapshot(role: "AXGroup", children: [deep]) }
+        _ = NotificationBannerParser.parse(deep)
+        XCTAssertLessThanOrEqual(NotificationBannerParser.render(deep).count, NotificationBannerParser.maxNodes + 1)
+
+        // 超宽树：节点数上限 200，渲染截断并留一行说明
+        let wide = AXNodeSnapshot(
+            role: "AXGroup",
+            children: (0..<500).map { AXNodeSnapshot(role: "AXStaticText", value: "第 \($0) 条") }
+        )
+        XCTAssertLessThanOrEqual(NotificationBannerParser.render(wide).count, NotificationBannerParser.maxNodes + 1)
+        XCTAssertGreaterThanOrEqual(NotificationBannerParser.staticTexts(in: wide).count, 1)
+    }
+
+    /// 探针渲染：一行一个元素、关键字段齐全、换行转义（BOM 是单文件追加，靠这些行 grep）。
+    func testNotificationBannerProbeRendering() {
+        let snapshot = Self.bannerSnapshot(
+            description: "脚本编辑器 标题, 正文",
+            texts: ["标题", "正文"],
+            actions: ["Name:关闭\nTarget:0x0\nSelector:(null)"]
+        )
+        let lines = NotificationBannerParser.render(snapshot)
+        XCTAssertGreaterThan(lines.count, 3)
+        let bannerLine = lines.first { $0.contains(NotificationBannerParser.bannerSubrole) }
+        XCTAssertNotNil(bannerLine, "探针必须写出横幅容器那一行（校准靠它）")
+        XCTAssertTrue(bannerLine?.contains("description=") == true)
+        XCTAssertTrue(bannerLine?.contains("actions=") == true)
+        XCTAssertFalse(lines.joined().contains("\n\n"), "动作名里的换行必须转义，否则一行一个元素的约定就废了")
+
+        XCTAssertEqual(NotificationBannerParser.escaped("a\"b\nc", limit: 80), "a\\\"b\\nc")
+        XCTAssertEqual(NotificationBannerParser.escaped(String(repeating: "x", count: 100), limit: 10).count, 11, "超长截断 + 省略号")
+    }
+
+    /// 指纹归一化：去首尾空白、折叠内部空白、小写——AX 的 App 名与 DB 的 App 名来源不同，
+    /// 不归一化就会「同一条通知弹两次」。
+    func testNotificationFingerprintNormalization() {
+        let axSide = NotificationFingerprint(appName: "脚本编辑器", title: "构建 完成", body: "全部通过")
+        let dbSide = NotificationFingerprint(appName: " 脚本编辑器 ", title: "构建\t完成", body: "全部通过\n")
+        XCTAssertEqual(axSide, dbSide, "空白/大小写差异不得影响去重")
+        XCTAssertNotEqual(axSide, NotificationFingerprint(appName: "脚本编辑器", title: "构建 完成", body: "别的正文"))
+        XCTAssertNotEqual(axSide, NotificationFingerprint(appName: "别的 App", title: "构建 完成", body: "全部通过"))
+        XCTAssertEqual(NotificationFingerprint.normalized("  A  b\nC "), "a b c")
+        XCTAssertEqual(NotificationFingerprint.normalized(""), "")
+    }
+
+    /// 去重台账（**AX 优先** + 10s 窗口 + 句柄台账）：
+    /// - 同指纹 10s 内只弹一次：AX 先到 → DB 那条（约 5s 后）不再弹浮层；
+    /// - AX 没到（未授权 / 树变了）时 DB 照常弹——两条通道都不会被对方饿死；
+    /// - 窗口过期后同指纹可再弹；
+    /// - 窗口期内保留 AX 的真关闭句柄，过期即丢；DB 来源不留句柄。
+    func testNotificationBannerLedgerDedupWindowAndAXPriority() {
+        XCTAssertEqual(NotificationBannerLedger.window, 10, "去重窗口是 10s（覆盖 DB 约 5s 的落盘延迟）")
+
+        let key = NotificationFingerprint(appName: "邮件", title: "新邮件", body: "来自张三")
+        let other = NotificationFingerprint(appName: "邮件", title: "新邮件", body: "来自李四")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var ledger = NotificationBannerLedger()
+
+        // AX 先到：弹
+        XCTAssertTrue(ledger.shouldPresent(key, source: .ax, now: start))
+        // 同指纹再来（AX 重放 / DB 那条晚到 5s）：窗口内不弹（**AX 优先**）
+        XCTAssertFalse(ledger.shouldPresent(key, source: .ax, now: start.addingTimeInterval(0.4)))
+        XCTAssertFalse(ledger.shouldPresent(key, source: .database, now: start.addingTimeInterval(5.1)))
+        // 不同指纹不受影响（未读数与列表照旧，只是浮层不重复）
+        XCTAssertTrue(ledger.shouldPresent(other, source: .database, now: start.addingTimeInterval(5.2)))
+        // 窗口外（≥ 10s）同指纹可再弹
+        XCTAssertFalse(ledger.shouldPresent(key, source: .database, now: start.addingTimeInterval(9.9)))
+        XCTAssertTrue(ledger.shouldPresent(key, source: .database, now: start.addingTimeInterval(10.1)))
+        // 台账不随运行时长增长：过期登记会被清掉（20.2s 时前两条登记都已过期，只剩刚登记的这条）
+        XCTAssertEqual(ledger.count, 2, "10.1s：key 刚登记，other（5.2s 登记）仍在 10s 窗口内")
+        XCTAssertTrue(ledger.shouldPresent(key, source: .ax, now: start.addingTimeInterval(20.2)))
+        XCTAssertEqual(ledger.count, 1, "两条旧登记都已过期并被清掉，台账只保存最近 10s 内的")
+
+        // 反向：DB 先到（AX 没拿到）→ AX 后到来时窗口内不弹，但通道本身没死
+        var databaseFirst = NotificationBannerLedger()
+        XCTAssertTrue(databaseFirst.shouldPresent(key, source: .database, now: start))
+        XCTAssertFalse(databaseFirst.shouldPresent(key, source: .ax, now: start.addingTimeInterval(1)))
+        XCTAssertTrue(databaseFirst.shouldPresent(key, source: .ax, now: start.addingTimeInterval(11)))
+    }
+
+    /// 真关闭句柄的台账口径：**只有 AX 来源**在窗口期内能取到句柄，过期即 nil，DB 来源恒 nil。
+    func testNotificationBannerLedgerCloseHandleWindow() {
+        let key = NotificationFingerprint(appName: "邮件", title: "新邮件", body: "来自张三")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var ledger = NotificationBannerLedger()
+
+        // DB 来源：窗口期内也取不到句柄（它没有 AX 横幅）
+        XCTAssertTrue(ledger.shouldPresent(key, source: .database, now: start))
+        XCTAssertNil(ledger.closeHandle(for: key, now: start.addingTimeInterval(1)))
+
+        // 同指纹的 AX 横幅在窗口外到来 → 登记成功；窗口内可取句柄
+        let later = start.addingTimeInterval(11)
+        let handle = Self.closeHandleFixture()
+        XCTAssertTrue(ledger.shouldPresent(key, source: .ax, closeHandle: handle, now: later))
+        XCTAssertEqual(ledger.closeHandle(for: key, now: later.addingTimeInterval(9.9))?.label, handle.label)
+        XCTAssertNil(ledger.closeHandle(for: key, now: later.addingTimeInterval(10.1)), "过期即丢")
+        XCTAssertNil(ledger.closeHandle(for: NotificationFingerprint(appName: "别的", title: "", body: ""), now: later))
+    }
+
+    /// 模块接缝：DB 侧指纹取自 `NotificationItem`（`displayName + title + body`），
+    /// 与 AX 侧的 `BannerEvent.fingerprint` 同一口径 —— 这条钉住「两条通道能对上」。
+    func testNotificationFingerprintFromItemMatchesBannerEvent() {
+        let item = NotificationItem(
+            id: 77,
+            bundleIdentifier: "com.apple.Mail",
+            appName: "邮件",
+            title: "新邮件",
+            subtitle: nil,
+            body: "来自张三",
+            deliveredDate: nil
+        )
+        let event = BannerEvent(
+            appName: "邮件",
+            title: "新邮件",
+            subtitle: "",
+            body: "来自张三",
+            closeHandle: Self.closeHandleFixture(),
+            receivedAt: Date()
+        )
+        XCTAssertEqual(NotificationStore.fingerprint(for: item), event.fingerprint, "两条通道的指纹必须一致，否则去重失效")
+
+        // 没有显示名时退回 bundle id（`displayName` 的兜底链）
+        let unnamed = NotificationItem(
+            id: 78,
+            bundleIdentifier: "com.apple.Mail",
+            appName: "",
+            title: "新邮件",
+            subtitle: nil,
+            body: "来自张三",
+            deliveredDate: nil
+        )
+        XCTAssertEqual(NotificationStore.fingerprint(for: unnamed).appName, "com.apple.mail")
+    }
+
+    /// AX 通道新增文案：× 的「真关闭」提示必须能解析出译文（06 §3.3 R5 的 key 形态）。
+    func testNotificationCloseSystemKeyResolves() {
+        let localized = Bundle.main.localizedString(
+            forKey: "module.notifications.closeSystemNotification",
+            value: nil,
+            table: nil
+        )
+        XCTAssertNotEqual(localized, "module.notifications.closeSystemNotification", "key 没解析出文案")
+        XCTAssertFalse(localized.isEmpty)
+    }
+
+    /// 关闭句柄夹具：**只构造、不执行**（单测不该起 AX IPC、也不该动任何真实界面）。
+    /// `AXUIElementCreateApplication(getpid())` 只建一个指向本进程的 CF 对象——不申请权限、
+    /// 不读写任何元素；台账只搬运这个句柄，从不碰它的内容。
+    private static func closeHandleFixture(label: String = "自定义动作: 关闭") -> NotificationBannerCloseHandle {
+        NotificationBannerCloseHandle(
+            element: AXUIElementCreateApplication(getpid()),
+            actionName: "关闭",
+            label: label
+        )
+    }
+
+    /// 构造一棵**横幅树**夹具（形状逐字对齐真探针原文；`buttons` 可选，macOS 27 通常没有）。
+    private static func bannerSnapshot(
+        description: String = "",
+        texts: [String] = [],
+        buttons: [String] = [],
+        actions: [String] = []
+    ) -> AXNodeSnapshot {
+        var bannerChildren = texts.map { AXNodeSnapshot(role: "AXStaticText", value: $0) }
+        bannerChildren += buttons.map { AXNodeSnapshot(role: "AXButton", description: $0) }
+        let banner = AXNodeSnapshot(
+            role: "AXGroup",
+            subrole: NotificationBannerParser.bannerSubrole,
+            description: description,
+            actionNames: actions,
+            children: bannerChildren
+        )
+        return AXNodeSnapshot(
+            role: "AXWindow",
+            subrole: "AXSystemDialog",
+            title: "Notification Center",
+            children: [
+                AXNodeSnapshot(
+                    role: "AXGroup",
+                    subrole: "AXHostingView",
+                    children: [
+                        AXNodeSnapshot(
+                            role: "AXGroup",
+                            children: [
+                                AXNodeSnapshot(role: "AXScrollArea", children: [banner])
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
     }
 
     /// 构造一条通知夹具（只关心 id 的用例用它）。
