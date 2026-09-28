@@ -20,6 +20,10 @@
 //  manifest 契约、中央槽位的候选顺序（todos 的 order 20 排在 progress 的 30 之前）。
 //  T6 笔记同步过滤——`AppleNotesTrashFilter.isTrashed` 的语言表命中、表外与空串不命中、
 //  大小写与首尾空白无关（「最近删除」条目按语言名判定，表外语言保持旧行为）。
+//  P2c 通知上岛——相对时间分档边界（<1 分钟 / 59 分钟 / 1 小时 / 23 小时 / 1 天 与时钟回拨）、
+//  二进制 plist 的防御式解码（键齐解出 / 缺键给空并记缺失键名 / 垃圾字节与空 data 只记错不崩）、
+//  manifest 契约与本地化 key 可解析、组合根的模块投影（三模块 tab 与槽位候选顺序）。
+//  **单测不读系统通知库**（构造的二进制 plist 夹具），真实可读性由运行期探针报告判定。
 //
 
 import AppKit
@@ -1046,11 +1050,15 @@ final class ModuleKernelTests: XCTestCase {
         }
         defaults.set(true, forKey: flagKey)
 
-        XCTAssertEqual(KernelBootstrap.builtinModules.count, 2, "A3：内置模块清单 = 两行（progress + todos）")
+        XCTAssertEqual(KernelBootstrap.builtinModules.count, 3, "A3：内置模块清单 = 三行（progress + todos + notifications）")
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
-            [ObjectIdentifier(ProgressModule.self), ObjectIdentifier(TodosModule.self)],
-            "builtinModules 里应是 ProgressModule 与 TodosModule"
+            [
+                ObjectIdentifier(ProgressModule.self),
+                ObjectIdentifier(TodosModule.self),
+                ObjectIdentifier(NotificationsModule.self),
+            ],
+            "builtinModules 里应是 ProgressModule、TodosModule 与 NotificationsModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1061,17 +1069,20 @@ final class ModuleKernelTests: XCTestCase {
         let registry = ModuleRegistry.shared
         let id = "com.cmeng.gourd.progress"
         let todosID = "com.cmeng.gourd.todos"
+        let notificationsID = "com.cmeng.gourd.notifications"
 
-        // ① 真启用门逐字取 `defaultEnabled`：todos 默认开、progress 默认关（D-20）
+        // ① 真启用门逐字取 `defaultEnabled`：todos 与 notifications 默认开、progress 默认关（D-20）
         XCTAssertEqual(registry.states[todosID], .active)
+        XCTAssertEqual(registry.states[notificationsID], .active)
         XCTAssertEqual(registry.states[id], .disabled, "progress 默认关（D-20），启用门不放行")
         XCTAssertNil(registry.instance(for: id), "disabled 的模块不实例化")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
+        XCTAssertNotNil(registry.instance(for: notificationsID) as? NotificationsModule)
 
-        // 投影里只剩 todos（未激活的 progress 不进 tab、不进槽位候选），
+        // 投影里只剩已激活的两个（未激活的 progress 不进 tab、不进槽位候选），
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID])
-        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID])
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID])
+        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
         guard case .view = registry.compactSlotContent() else {
             return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }
@@ -1084,11 +1095,21 @@ final class ModuleKernelTests: XCTestCase {
         guard case .none = registry.content(for: todosID, request: request(.lockscreen)) else {
             return XCTFail("todos 未声明 lockscreen，应返回 .none")
         }
+        // 通知上岛：expanded（列表）/ compact（未读数）各一份内容，lockscreen 不占位
+        guard case .view = registry.content(for: notificationsID, request: request(.expanded)) else {
+            return XCTFail("notifications 的展开请求应拿到 .view")
+        }
+        guard case .view = registry.content(for: notificationsID, request: request(.compact)) else {
+            return XCTFail("notifications 声明了 compact，应返回 .view")
+        }
+        guard case .none = registry.content(for: notificationsID, request: request(.lockscreen)) else {
+            return XCTFail("notifications 未声明 lockscreen，应返回 .none")
+        }
         guard case .unavailable = registry.content(for: id, request: request(.expanded)) else {
             return XCTFail("未激活的 progress 应降级为 .unavailable")
         }
 
-        // ② 手动全放行（模拟用户显式开启 progress）后重注册：两个模块都 active
+        // ② 手动全放行（模拟用户显式开启 progress）后重注册：三个模块都 active
         await registry.deactivateAll()
         registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
         await registry.bootstrap()
@@ -1096,8 +1117,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(registry.states[id], .active)
         XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
 
-        // tab / 槽位候选都按 `order` 升序：todos（20）排在 progress（30）之前
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id])
+        // tab / 槽位候选都按 `order` 升序：todos（20）→ progress（30）→ notifications（40）
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID])
         let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
@@ -1116,10 +1137,11 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("lockscreen 未声明，应返回 .none")
         }
 
-        // 折叠态中央槽位投影：两个模块都声明 compact，**第一个候选是 order 20 的 todos**
-        //（`compactSlotContent()` 只转发第一个），因此槽位内容仍是待办的视图
-        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, id])
-        XCTAssertEqual(registry.compactEntries.map(\.order), [20, 30])
+        // 折叠态中央槽位投影：三个模块都声明 compact，**第一个候选是 order 20 的 todos**
+        //（`compactSlotContent()` 只转发第一个），因此槽位内容仍是待办的视图——
+        // notifications（order 40）在默认配置下拿不到槽位，它的 compact 视图只是候选之一。
+        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, id, notificationsID])
+        XCTAssertEqual(registry.compactEntries.map(\.order), [20, 30, 40])
         guard case .view = registry.compactSlotContent() else {
             return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }
@@ -1388,6 +1410,179 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(TodoBucketing.Bucket.allCases.map(\.labelKey), [
             "module.todos.scope.today", "module.todos.scope.week", "module.todos.scope.all",
         ])
+    }
+
+    // MARK: - 通知上岛 notifications（P2c：探针 + 表）
+
+    /// `NotificationText.relativeParts` 的分档边界（09 §5.5 的列表形态「3 分钟前」）：
+    /// `< 1 分钟` / `59 分钟` / `1 小时` / `23 小时` / `1 天`，外加时钟回拨（未来时间）不得出负数。
+    func testNotificationsRelativeTimeBoundaries() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func parts(_ interval: TimeInterval) -> (key: String, value: Int) {
+            NotificationText.relativeParts(since: now.addingTimeInterval(-interval), now: now)
+        }
+
+        XCTAssertEqual(parts(0).key, "module.notifications.justNow", "0 秒 = 刚刚")
+        XCTAssertEqual(parts(0).value, 0)
+        XCTAssertEqual(parts(59).key, "module.notifications.justNow", "59 秒未满 1 分钟，仍是「刚刚」")
+        XCTAssertEqual(parts(60).key, "module.notifications.minutesAgo", "满 1 分钟进分钟档")
+        XCTAssertEqual(parts(60).value, 1)
+        XCTAssertEqual(parts(59 * 60).key, "module.notifications.minutesAgo", "59 分钟仍在分钟档")
+        XCTAssertEqual(parts(59 * 60).value, 59)
+        XCTAssertEqual(parts(3600).key, "module.notifications.hoursAgo", "满 1 小时进小时档")
+        XCTAssertEqual(parts(3600).value, 1)
+        XCTAssertEqual(parts(23 * 3600).key, "module.notifications.hoursAgo", "23 小时仍在小时档")
+        XCTAssertEqual(parts(23 * 3600).value, 23)
+        XCTAssertEqual(parts(24 * 3600).key, "module.notifications.daysAgo", "满 24 小时进天档")
+        XCTAssertEqual(parts(24 * 3600).value, 1)
+        XCTAssertEqual(parts(47 * 3600).value, 1, "47 小时向下取整仍是 1 天")
+        XCTAssertEqual(parts(3 * 24 * 3600).value, 3)
+        XCTAssertEqual(parts(-120).key, "module.notifications.justNow", "未来时间（时钟回拨）按「刚刚」，不出负数")
+    }
+
+    /// 相对时间的**成文**形态走本地化查表（`String(format:)` + `%d`）：查不到时 `Bundle` 原样返回 key，
+    /// 且 `%d` 必须被替换掉——断言因此能抓住「key 漏编译」与「格式串写错」两类问题。
+    func testNotificationsRelativeTimeTextIsLocalized() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let text = NotificationText.relative(now.addingTimeInterval(-3 * 60), now: now)
+        XCTAssertFalse(text.contains("%d"), "格式串没被替换：\(text)")
+        XCTAssertTrue(text.contains("3"), "应带上分钟数：\(text)")
+        XCTAssertNotEqual(text, "module.notifications.minutesAgo", "key 没解析出文案")
+    }
+
+    /// `NotificationItem` 的字段拼装是**纯函数**：喂一个构造的二进制 plist（`req.titl` 等键）
+    /// 应解出 title / subtitle / body / bundleIdentifier，缺省字段由调用方补。
+    func testNotificationItemCompositionFromBinaryPlist() throws {
+        let data = try Self.binaryPlist([
+            "req": [
+                "titl": "构建完成",
+                "subt": "CI",
+                "body": "全部任务通过",
+                "cate": "",
+                "app": "com.apple.Mail",
+                "date": 800_000_000,
+            ] as [String: Any],
+        ])
+
+        let payload = NotificationCenterReader.payload(fromRecord: data)
+        XCTAssertEqual(payload.title, "构建完成")
+        XCTAssertEqual(payload.subtitle, "CI")
+        XCTAssertEqual(payload.body, "全部任务通过")
+        XCTAssertEqual(payload.bundleIdentifier, "com.apple.Mail")
+        XCTAssertTrue(payload.missingKeys.isEmpty, "键齐时不该报缺失：\(payload.missingKeys)")
+        XCTAssertNil(payload.decodeError)
+
+        let item = NotificationItem.make(recordID: 42, data: data, appName: "邮件")
+        XCTAssertEqual(item.id, 42)
+        XCTAssertEqual(item.bundleIdentifier, "com.apple.Mail")
+        XCTAssertEqual(item.appName, "邮件")
+        XCTAssertEqual(item.displayName, "邮件")
+        XCTAssertEqual(item.title, "构建完成")
+        XCTAssertEqual(item.subtitle, "CI")
+        XCTAssertEqual(item.body, "全部任务通过")
+        // plist 的时间是 Apple 纪元（2001）秒数：< 1e9 走 `timeIntervalSinceReferenceDate`
+        XCTAssertEqual(item.deliveredDate, Date(timeIntervalSinceReferenceDate: 800_000_000))
+
+        // 拿不到 `app` 表映射时退回 bundle id 的最后一段；两者都拿不到时留空串
+        XCTAssertEqual(
+            NotificationCenterReader.appDisplayName(bundleIdentifier: "com.apple.Mail", appMap: ["com.apple.Mail": "邮件"]),
+            "邮件"
+        )
+        XCTAssertEqual(
+            NotificationCenterReader.appDisplayName(bundleIdentifier: "com.apple.Mail", appMap: [:]),
+            "Mail",
+            "app 表取不到显示名时退回 bundle id 最后一段"
+        )
+        XCTAssertEqual(NotificationCenterReader.appDisplayName(bundleIdentifier: "", appMap: [:]), "")
+        // 条目自身的兜底：appName 空 → 用 bundle id；两者都空 → `?`
+        XCTAssertEqual(NotificationItem.make(recordID: 43, data: data).displayName, "com.apple.Mail")
+        XCTAssertEqual(NotificationItem.make(recordID: 44, data: Data()).displayName, "?")
+    }
+
+    /// **防御式解码**（09 §5.5：schema 私有，Apple 改版即失效）：缺键给空并记录缺失键名、
+    /// 垃圾字节 / 空 data 只记 `decodeError`，两种情形都**不许崩、不许抛错**。
+    func testNotificationPayloadToleratesMissingKeysAndGarbage() throws {
+        // 只有 titl：其余键全缺 → 空串 / nil + 可读的缺键清单（探针报告据此校准新键名）
+        let partial = NotificationCenterReader.payload(fromRecord: try Self.binaryPlist([
+            "req": ["titl": "只有标题"] as [String: Any],
+        ]))
+        XCTAssertEqual(partial.title, "只有标题")
+        XCTAssertEqual(partial.body, "")
+        XCTAssertNil(partial.subtitle)
+        XCTAssertNil(partial.bundleIdentifier)
+        XCTAssertNil(partial.decodeError)
+        XCTAssertEqual(partial.missingKeys, ["subt", "body", "cate", "app", "date"])
+
+        // 顶层直接给键（老格式没有 req 包一层）同样能解出
+        let flat = NotificationCenterReader.payload(fromRecord: try Self.binaryPlist([
+            "titl": "扁平标题",
+            "body": "扁平正文",
+        ]))
+        XCTAssertEqual(flat.title, "扁平标题")
+        XCTAssertEqual(flat.body, "扁平正文")
+
+        // 非 plist 的垃圾字节：给空字段 + decodeError，不抛错
+        let garbage = NotificationCenterReader.payload(fromRecord: Data([0x00, 0x01, 0x02]))
+        XCTAssertEqual(garbage.title, "")
+        XCTAssertEqual(garbage.body, "")
+        XCTAssertNotNil(garbage.decodeError)
+        XCTAssertEqual(garbage.missingKeys, ["titl", "subt", "body", "cate", "app", "date"])
+
+        // 空 data（列是 NULL 或零长）
+        let empty = NotificationCenterReader.payload(fromRecord: Data())
+        XCTAssertEqual(empty.decodeError, "data 列为空")
+        XCTAssertEqual(NotificationItem.make(recordID: 1, data: Data()).title, "")
+    }
+
+    /// `NotificationsModule.manifest` 的契约：id / surfaces / icon / placement / 默认启用 / 空权限 / 无配置；
+    /// 并回走一次 JSON 路径（与宿主读 descriptor 同一条路）。
+    func testNotificationsModuleManifestMatchesContract() throws {
+        let manifest = NotificationsModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.notifications")
+        XCTAssertEqual(manifest.shortID, "notifications")
+        XCTAssertEqual(manifest.name.key, "module.notifications.name")
+        XCTAssertEqual(manifest.summary?.key, "module.notifications.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "bell.badge"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.expanded, .compact], "展开面板通知列表 + 折叠态未读数")
+        XCTAssertEqual(manifest.defaultEnabled, true)
+        XCTAssertEqual(manifest.defaultPlacement, Placement(slot: .center, order: 40))
+        XCTAssertTrue(
+            manifest.permissions.isEmpty,
+            "06 §7.1 白名单里还没有 `notifications:read`（docs/14 标注「待落」）；完全磁盘访问是系统 TCC，不是模块 capability"
+        )
+        XCTAssertNil(manifest.config, "第一版不读配置")
+
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// `module.notifications.*` 的 key 必须能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）。
+    func testNotificationsLocalizationKeysResolve() {
+        let keys = [
+            "module.notifications.name",
+            "module.notifications.summary",
+            "module.notifications.empty",
+            "module.notifications.needsFullDiskAccess",
+            "module.notifications.openSettings",
+            "module.notifications.recent",
+            "module.notifications.justNow",
+            "module.notifications.minutesAgo",
+            "module.notifications.hoursAgo",
+            "module.notifications.daysAgo",
+            "module.notifications.readOnlyNote",
+        ]
+        for key in keys {
+            let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+            XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
+            XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
+        }
+    }
+
+    /// 构造二进制 plist 夹具（通知库的 `record.data` 就是二进制 plist）——**不读系统通知库**。
+    private static func binaryPlist(_ object: [String: Any]) throws -> Data {
+        try PropertyListSerialization.data(fromPropertyList: object, format: .binary, options: 0)
     }
 }
 
