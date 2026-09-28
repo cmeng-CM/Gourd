@@ -31,6 +31,7 @@
 //  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）。
 //  P2d 通知浮层——基线过滤（只有 `rec_id > 基线` 才弹、多条只弹最新一条）、
 //  `showBodyInHUD` 的呈现口径（默认 true 显示正文，关掉只剩「新通知」）与键的声明默认值、
+//  **卡片尺寸口径**（`notificationHUDScale` 的边界与钳位）。
 //
 
 import AppKit
@@ -1983,6 +1984,228 @@ final class ModuleKernelTests: XCTestCase {
             Defaults.Keys.showBodyInHUD.defaultValue,
             "默认必须是 true（用户口径）；设计稿原口径的 false 已被覆盖"
         )
+    }
+
+    // MARK: - 通知浮层卡片的尺寸口径（D-23）
+
+    /// **倍率越大、每一项都越大**：字号 / 图标 / 内边距 / 卡片最大宽度随倍率单调增，
+    /// 且默认值 1.3 明显大于改造前的口径（这就是用户要的「调大一些」）。
+    func testNotificationHUDCardMetricsScaleWithSetting() {
+        let small = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: true)
+        let scaled = NotificationHUDCardLayout.metrics(scale: 1.3, isNotchScreen: true)
+        let large = NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: true)
+
+        XCTAssertLessThan(small.titleSize, scaled.titleSize)
+        XCTAssertLessThan(scaled.titleSize, large.titleSize)
+        XCTAssertLessThan(small.bodySize, scaled.bodySize)
+        XCTAssertLessThan(small.iconSize, scaled.iconSize)
+        XCTAssertLessThan(small.padding, scaled.padding)
+        XCTAssertLessThan(small.cardMaxWidth, scaled.cardMaxWidth)
+
+        // 1.3 倍 = 基准 × 1.3（保留两位小数，避开浮点尾巴）
+        XCTAssertEqual(scaled.titleSize, 15.6, accuracy: 0.001)
+        XCTAssertEqual(scaled.bodySize, 14.3, accuracy: 0.001)
+        XCTAssertEqual(scaled.iconSize, 18.2, accuracy: 0.001)
+        XCTAssertEqual(scaled.padding, 13, accuracy: 0.001)
+        // 卡片最大宽度：320 × 1.3 = 416（未到 480 的上限）
+        XCTAssertEqual(scaled.cardMaxWidth, 416, accuracy: 0.001)
+    }
+
+    /// **边界一：下限 0.8**——每一项按 0.8 缩放，字体仍可读（标题 ≥ 9pt），文字列不会被压到 0。
+    func testNotificationHUDCardMetricsAtLowerBound() {
+        let metrics = NotificationHUDCardLayout.metrics(scale: 0.8, isNotchScreen: true)
+        XCTAssertEqual(metrics.titleSize, 9.6, accuracy: 0.001)
+        XCTAssertEqual(metrics.bodySize, 8.8, accuracy: 0.001)
+        XCTAssertEqual(metrics.iconSize, 11.2, accuracy: 0.001)
+        XCTAssertGreaterThan(metrics.titleSize, 8, "0.8 倍下标题仍要能读")
+        XCTAssertGreaterThan(metrics.textMaxWidth, 0, "文字列宽度不得归零")
+    }
+
+    /// **边界二：上限 2.0**——字号翻倍，但卡片最大宽度被绝对上限（480pt）夹住：
+    /// 2.0 倍时 320 × 2 = 640 > 480，取 480（再宽就该改布局而不是继续放大）。
+    func testNotificationHUDCardMetricsAtUpperBound() {
+        let metrics = NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: true)
+        XCTAssertEqual(metrics.titleSize, 24, accuracy: 0.001)
+        XCTAssertEqual(metrics.bodySize, 22, accuracy: 0.001)
+        XCTAssertEqual(metrics.iconSize, 28, accuracy: 0.001)
+        XCTAssertEqual(metrics.cardMaxWidth, NotificationHUDCardLayout.cardMaxWidthCeiling, accuracy: 0.001)
+        // 文字列 = 卡片最大宽度 −（两侧内边距 + 图标 + 两个间距 + ×）
+        XCTAssertLessThan(metrics.textMaxWidth, metrics.cardMaxWidth)
+        XCTAssertGreaterThan(metrics.textMaxWidth, 300, "上限档下文字列仍要足够宽")
+    }
+
+    /// **越界值夹取到区间端点**：用户直接改 UserDefaults 写了个离谱值（0.2 / 5.0）时，
+    /// 呈现必须是确定的（同 `ttl` 的夹取口径），而不是崩或缩成一条。
+    func testNotificationHUDCardMetricsClampsOutOfRangeScale() {
+        XCTAssertEqual(
+            NotificationHUDCardLayout.metrics(scale: 0.2, isNotchScreen: false),
+            NotificationHUDCardLayout.metrics(scale: 0.8, isNotchScreen: false),
+            "低于下限按 0.8 算"
+        )
+        XCTAssertEqual(
+            NotificationHUDCardLayout.metrics(scale: 5.0, isNotchScreen: false),
+            NotificationHUDCardLayout.metrics(scale: 2.0, isNotchScreen: false),
+            "高于上限按 2.0 算"
+        )
+    }
+
+    /// **非刘海屏的卡片基准更宽**（`isNotchScreen` 的唯一作用）：外接屏没有菜单栏两侧的视觉约束，
+    /// 给到 360 基准（用户反馈「外接屏太小」的落点）；刘海屏收窄到 320，避免卡片横跨整条菜单栏。
+    func testNotificationHUDCardMetricsDiffersByNotchScreen() {
+        let notched = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: true)
+        let plain = NotificationHUDCardLayout.metrics(scale: 1.0, isNotchScreen: false)
+        XCTAssertEqual(notched.cardMaxWidth, 320, accuracy: 0.001)
+        XCTAssertEqual(plain.cardMaxWidth, 360, accuracy: 0.001)
+        XCTAssertGreaterThan(plain.textMaxWidth, notched.textMaxWidth)
+        // 除宽度外的尺寸两档一致（只有基准宽度分档）
+        XCTAssertEqual(notched.titleSize, plain.titleSize, accuracy: 0.001)
+        XCTAssertEqual(notched.padding, plain.padding, accuracy: 0.001)
+    }
+
+    /// 键本身的口径：`notificationHUDScale` 的**声明默认值是 1.3**（2026-09-28 用户要求
+    /// 「外接屏太小，需要调大一些」）——断言读 `defaultValue`，不受开发机上真实 UserDefaults 影响。
+    func testNotificationHUDScaleKeyDefaultsToLargerThanBefore() {
+        XCTAssertEqual(Defaults.Keys.notificationHUDScale.name, "notificationHUDScale", "键名与设置滑块一致")
+        XCTAssertEqual(Defaults.Keys.notificationHUDScale.defaultValue, 1.3, accuracy: 0.0001)
+        XCTAssertGreaterThan(
+            Defaults.Keys.notificationHUDScale.defaultValue,
+            1.0,
+            "默认必须比改造前大（改造前的字号口径 = 1.0）"
+        )
+        // 默认值必须落在滑块区间内，否则设置页一打开滑块就跳到端点
+        XCTAssertTrue(
+            NotificationHUDCardLayout.scaleRange.contains(Defaults.Keys.notificationHUDScale.defaultValue),
+            "默认值必须落在 \(NotificationHUDCardLayout.scaleRange) 内"
+        )
+    }
+
+    /// **新记录筛选**是纯函数（实时化的核心判据）：`id > 基线`、**按 id 升序**、**按 id 去重**。
+    ///
+    /// 它与 SQL 侧的 `WHERE rec_id > ? ORDER BY rec_id ASC` 是同一口径——单测钉住它，
+    /// 就不必为了验证「哪些算新增」去读真实的系统通知库（那既慢又要完全磁盘访问）。
+    func testNotificationNewRecordsFilterSortAndDeduplicate() {
+        // 空集：没有输入就没有输出（事件驱动下"文件变了但没有新记录"是常态，不能崩）
+        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 10).isEmpty)
+        XCTAssertTrue(NotificationStore.newRecords(in: [], above: 0).isEmpty)
+
+        // 全部 ≤ 基线：旧记录一条都不算新增（含**恰好等于基线**的那条——判据是 `>` 不是 `>=`）
+        XCTAssertTrue(
+            NotificationStore.newRecords(
+                in: [notificationItem(3), notificationItem(9), notificationItem(10)],
+                above: 10
+            ).isEmpty
+        )
+
+        // 乱序输入 → 输出按 id 升序（调用方按到达顺序累加，`hudCandidate` 取 `.last` = 最新）
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [notificationItem(15), notificationItem(11), notificationItem(18), notificationItem(13)],
+                above: 10
+            ).map(\.id),
+            [11, 13, 15, 18]
+        )
+
+        // 重复 id（同一批里重复投递 / 事件重放）只算一条：不过滤会让未读数虚高
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [notificationItem(11), notificationItem(12), notificationItem(11), notificationItem(12)],
+                above: 10
+            ).map(\.id),
+            [11, 12]
+        )
+
+        // 重复 + 乱序 + 基线的混合：一条不多、一条不少、顺序稳定
+        XCTAssertEqual(
+            NotificationStore.newRecords(
+                in: [
+                    notificationItem(10), notificationItem(12), notificationItem(11),
+                    notificationItem(2), notificationItem(12), notificationItem(11),
+                ],
+                above: 10
+            ).map(\.id),
+            [11, 12]
+        )
+
+        // 基线 0（空库 / 首次取数）：全部都是新增，整段升序
+        XCTAssertEqual(
+            NotificationStore.newRecords(in: [notificationItem(2), notificationItem(1)], above: 0).map(\.id),
+            [1, 2]
+        )
+        // 负基线（理论上的回退）不改变判据
+        XCTAssertEqual(NotificationStore.newRecords(in: [notificationItem(1)], above: -5).map(\.id), [1])
+    }
+
+    /// 浮层候选与新记录筛选是同一口径（`hudCandidate` = 升序结果的 `.last`）：
+    /// 去重不会让「最新那一条」变成别人，`>` 基线也不会漏掉紧邻基线的第一条。
+    func testNotificationHUDCandidateMatchesNewRecordsOrdering() {
+        let newItems = [notificationItem(12), notificationItem(11), notificationItem(12)]
+        XCTAssertEqual(NotificationStore.newRecords(in: newItems, above: 10).last?.id, 12)
+        XCTAssertEqual(NotificationStore.hudCandidate(in: newItems, above: 10)?.id, 12)
+        // 只有一条晚于基线时，浮层就是那一条（实时性验收里最常见的形态）
+        XCTAssertEqual(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(11)], above: 10)?.id, 11)
+        XCTAssertNil(NotificationStore.hudCandidate(in: [notificationItem(4), notificationItem(10)], above: 10))
+    }
+
+    /// 事件驱动 / 兜底轮询的两个常量口径：兜底是 **60s**（原来 30s 轮询的替代），
+    /// 不能再回到「亚秒轮询」——实时性由文件事件负责（09 §5.5）。
+    func testNotificationFallbackPollIntervalIsCoarse() {
+        XCTAssertEqual(NotificationStore.fallbackPollInterval, 60, "兜底轮询是 60s；实时性靠文件事件")
+    }
+
+    /// 「关闭 / 清除」的过滤是**纯函数**：`fetchRecent` / `fetchNew` 返回前按 id 滤掉已关闭的条目。
+    ///
+    /// 这是只读原则在代码上的落点：**过滤只发生在我们这一侧**，函数既不排序也不去重，
+    /// 更不触碰任何库状态——关闭只是「岛上不再显示这一条」。
+    func testNotificationDismissedFilterIsPure() {
+        let items = [notificationItem(11), notificationItem(12), notificationItem(13)]
+
+        // 没有已关闭条目（热路径）：原样返回，且**同一个数组实例**
+        let untouched = NotificationCenterReader.visible(in: items, excluding: [])
+        XCTAssertEqual(untouched.map(\.id), [11, 12, 13])
+
+        // 空输入：空输出（不给下游留 nil/崩溃路径）
+        XCTAssertTrue(NotificationCenterReader.visible(in: [], excluding: [11, 12]).isEmpty)
+
+        // 滤掉命中项，保持输入顺序（不排序、不去重）
+        XCTAssertEqual(
+            NotificationCenterReader.visible(in: items, excluding: [12]).map(\.id),
+            [11, 13]
+        )
+        // 关闭集合里有「不在这一批里」的 id：不影响结果（跨批次的关闭状态）
+        XCTAssertEqual(
+            NotificationCenterReader.visible(in: items, excluding: [1, 99, 1000]).map(\.id),
+            [11, 12, 13]
+        )
+        // 全部关闭 → 空列表（面板显示「暂无通知」，不是错误）
+        XCTAssertTrue(NotificationCenterReader.visible(in: items, excluding: [11, 12, 13]).isEmpty)
+    }
+
+    /// 已关闭集合的**落盘裁剪**是纯函数：只保留最近 `limit` 个（尾部 = 最近关闭的）并去重。
+    /// 上限存在的意义是「用一年后 UserDefaults 里不该堆几万个 id」。
+    func testNotificationDismissedTrimmingKeepsMostRecent() {
+        XCTAssertEqual(NotificationStore.dismissedLimit, 500, "上限口径：保留最近 500 个")
+
+        // 未超上限：原样（保序）
+        XCTAssertEqual(NotificationStore.trimmed([3, 1, 2], limit: 5), [3, 1, 2])
+        // 恰好等于上限：不裁剪
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 3), [1, 2, 3])
+        // 超上限：只留**最近** limit 个（尾部），最旧的被丢掉
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3, 4, 5], limit: 3), [3, 4, 5])
+        // 重复 id 去重（重复只算一次关闭）
+        XCTAssertEqual(NotificationStore.trimmed([7, 7, 8, 8, 9], limit: 10), [7, 8, 9])
+        // 去重后再裁剪：`[5,5,6,6,7,7]` 去重成 3 个，limit 2 → 留最近两个
+        XCTAssertEqual(NotificationStore.trimmed([5, 5, 6, 6, 7, 7], limit: 2), [6, 7])
+        // 边界：空输入、limit 0（丢弃一切）、limit 1
+        XCTAssertTrue(NotificationStore.trimmed([], limit: 10).isEmpty)
+        XCTAssertTrue(NotificationStore.trimmed([1, 2, 3], limit: 0).isEmpty)
+        XCTAssertEqual(NotificationStore.trimmed([1, 2, 3], limit: 1), [3])
+    }
+
+    /// `dismissedNotificationIDs` 键本身的口径：键名与类型（`[Int]`）固定，默认空。
+    /// 断言读 `defaultValue` 而不是当前生效值——不受开发机上真实 UserDefaults 影响。
+    func testDismissedNotificationIDsKeyShape() {
+        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.name, "dismissedNotificationIDs")
+        XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.defaultValue, [], "默认没有已关闭条目")
     }
 
     // MARK: - AX 横幅通道（P2e：实时 + 真关闭）

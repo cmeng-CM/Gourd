@@ -4,7 +4,7 @@
 //
 //  设计依据：docs/09-features-and-mechanisms.md §5.5（本轮风险最高的一项）+ docs/12-p1-batches.md P2c。
 //  P2c 交付 = 可行性探针 + 模块骨架 + 展开列表；**P2d 交付 = 折叠态瞬时浮层**（内核 `presentHUD`，
-//  见 `Kernel/ModuleHUDView.swift` 与 13 号文档 D-22）。
+//  见 `Kernel/ModuleHUDWindow.swift` 与 13 号文档 D-22 / D-23）。
 //
 //  ## 数据源与权限
 //  - 数据源：`~/Library/Group Containers/group.com.apple.usernoted/db2/db`（SQLite，**只读**，
@@ -654,9 +654,9 @@ final class NotificationsModule: GourdModule {
                     showsBody: showsBody,
                     closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
-                        // ① **内核侧撤浮层（先做）**：关闭态那一格立即让位给下层内容。
-                        //    视图自己的 `isHidden` 只清掉这一格的内容，关闭态优先级链的判据
-                        //    仍是「注册表里有浮层」，光靠它下层内容要等到 ttl 到点才回来。
+                        // ① **内核侧撤浮层（先做）**：注册表里那一条被清掉 → 浮层窗口淡出
+                        //   （D-23 后浮层是独立窗口，`isHidden` 只是让卡片当场变空的那一帧；
+                        //   真正让浮层消失的是这一步）。
                         ui.dismissTransient()
                         // ② 真关闭（AX 动作，`closeSystemBanner` 甩到后台队列）：没有句柄时
                         //    这一步就是「仅从岛上隐藏」的前一半，退化为空操作。
@@ -671,8 +671,8 @@ final class NotificationsModule: GourdModule {
 
     /// AX 横幅浮层（**实时路径**）：内容直接来自横幅，不查库、不等落盘。
     ///
-    /// × 的口径：有句柄 → 真关掉系统通知；没有 → 仅从岛上隐藏（`NotificationHUDView` 内部
-    /// 自己先把这一格隐掉，两条路都是「点完立刻看不见」）。
+    /// × 的口径：有句柄 → 真关掉系统通知；没有 → 仅从岛上隐藏（内核侧撤掉浮层后浮层窗口
+    /// 当场淡出，两条路都是「点完立刻看不见」）。
     private func presentBannerHUD(_ event: BannerEvent) {
         let showsBody = Defaults[.showBodyInHUD]
         let ui = context.ui
@@ -688,7 +688,7 @@ final class NotificationsModule: GourdModule {
                     showsBody: showsBody,
                     closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
                     onClose: { [store, ui] in
-                        // 与 DB 路径同口径：内核侧撤浮层在前（立刻让位），真关闭在后。
+                        // 与 DB 路径同口径：内核侧撤浮层在前（窗口随即淡出），真关闭在后。
                         ui.dismissTransient()
                         guard let handle = event.closeHandle else { return }
                         store.closeSystemBanner(handle, reason: "浮层关闭 AX 横幅")
@@ -941,6 +941,103 @@ private struct NotificationRow: View {
 
 // MARK: - 折叠态瞬时浮层视图
 
+/// 浮层卡片的尺寸口径（**纯函数**，单测直接钉边界）。
+///
+/// 为什么需要它：浮层改由内核的独立窗口渲染（D-23）之后，尺寸不再由刘海宽度决定，
+/// 而是由「用户设置的倍率 `notificationHUDScale`（默认 1.3）+ 卡片自己的上界」决定——
+/// 把这条算式从视图里抽出来，边界（0.8 / 2.0）才有地方钉住。
+///
+/// 取值口径：
+/// - **倍率夹取**到 0.8…2.0（用户直接改 UserDefaults 写了个离谱值时也有确定呈现）；
+/// - 所有尺寸 = 基准值 × 倍率，**保留两位小数**（避免 0.8 × 12 = 9.600000000000001 这类
+///   浮点尾巴，也让 `Equatable` 与单测的等值断言有意义）；
+/// - 卡片总宽 = `textMaxWidth` + 图标 + 两个间距 + × + 两侧内边距，其中 `textMaxWidth` 由
+///   「卡片最大宽度 − 其它元素」反推（不是独立常量），因此改任一项都不会撑破卡片；
+/// - **`cardMaxWidth` 有绝对上限** `cardMaxWidthCeiling`：倍率 2.0 时卡片已经接近半屏宽，
+///   再宽就该改布局而不是继续放大。
+enum NotificationHUDCardLayout {
+    /// 倍率的可用区间（与设置滑块 `Slider(value:in: 0.8...2.0)` 同源）。
+    static let scaleRange: ClosedRange<Double> = 0.8...2.0
+
+    /// 基准值（倍率 = 1.0 时的一档；都按「独立窗口里的浮层」重新定过，不再是刘海尺寸）。
+    private enum Base {
+        static let icon: CGFloat = 14
+        static let title: CGFloat = 12
+        static let body: CGFloat = 11
+        static let close: CGFloat = 11
+        static let padding: CGFloat = 10
+        static let iconSpacing: CGFloat = 8
+        static let lineSpacing: CGFloat = 2
+        static let cornerRadius: CGFloat = 10
+        /// 卡片最大宽度的基准：刘海屏收窄一档（浮层挂在刘海正下方，太宽会横跨整条菜单栏），
+        /// 非刘海屏给到 360pt（用户 2026-09-28 反馈「外接屏太小」的落点）。
+        static let cardMaxWidthNotched: CGFloat = 320
+        static let cardMaxWidthPlain: CGFloat = 360
+        /// 文字列的下限宽度：任何倍率下都要能放下一行几个字，否则卡片会缩成一条。
+        static let textMinWidth: CGFloat = 160
+    }
+
+    /// 卡片最大宽度的绝对上限（pt，倍率乘完再夹）。
+    static let cardMaxWidthCeiling: CGFloat = 480
+
+    struct Metrics: Equatable {
+        let iconSize: CGFloat
+        let titleSize: CGFloat
+        let bodySize: CGFloat
+        let closeSize: CGFloat
+        /// 卡片四周的内边距（卡片背景与内容之间）。
+        let padding: CGFloat
+        /// 图标与文字列之间的间距。
+        let iconSpacing: CGFloat
+        /// 文字列两行之间的间距。
+        let lineSpacing: CGFloat
+        /// 文字列的最大宽度：超出即按 `lineLimit(2)` 截断。
+        let textMaxWidth: CGFloat
+        /// 卡片整体最大宽度（含内边距）。
+        let cardMaxWidth: CGFloat
+        let cornerRadius: CGFloat
+    }
+
+    /// 给定倍率与「是否刘海屏」→ 卡片尺寸。`isNotchScreen` 只影响卡片最大宽度的基准档。
+    static func metrics(scale: Double, isNotchScreen: Bool) -> Metrics {
+        let s = CGFloat(min(max(scale, scaleRange.lowerBound), scaleRange.upperBound))
+
+        let icon = round2(Base.icon * s)
+        let title = round2(Base.title * s)
+        let body = round2(Base.body * s)
+        let close = round2(Base.close * s)
+        let padding = round2(Base.padding * s)
+        let iconSpacing = round2(Base.iconSpacing * s)
+        let lineSpacing = round2(Base.lineSpacing * s)
+        let cornerRadius = round2(Base.cornerRadius * s)
+
+        let baseCardMax = isNotchScreen ? Base.cardMaxWidthNotched : Base.cardMaxWidthPlain
+        let cardMaxWidth = round2(min(baseCardMax * s, cardMaxWidthCeiling))
+        let textMaxWidth = max(
+            round2(cardMaxWidth - (padding * 2 + icon + iconSpacing * 2 + close)),
+            Base.textMinWidth
+        )
+
+        return Metrics(
+            iconSize: icon,
+            titleSize: title,
+            bodySize: body,
+            closeSize: close,
+            padding: padding,
+            iconSpacing: iconSpacing,
+            lineSpacing: lineSpacing,
+            textMaxWidth: textMaxWidth,
+            cardMaxWidth: cardMaxWidth,
+            cornerRadius: cornerRadius
+        )
+    }
+
+    /// 保留两位小数（口径见类型文档）。
+    private static func round2(_ value: CGFloat) -> CGFloat {
+        (value * 100).rounded() / 100
+    }
+}
+
 /// 折叠态瞬时浮层（09 §5.5 呈现 ①）：`bell.badge` + 「App 名」+ 「标题 + 正文」+ **×**。
 ///
 /// **两个来源共用这一个视图**（内容都是纯字符串，不依赖 `NotificationItem`）：
@@ -950,24 +1047,22 @@ private struct NotificationRow: View {
 /// **默认显示正文**（`showBodyInHUD` 默认 true——用户 2026-09-28 明确要求，覆盖设计稿原口径的
 /// false）；关掉后第二行只留一条「新通知」文案，正文仍可在展开列表里看。
 ///
-/// 颜色：面板是黑底、系统外观可为浅色——与模块其余视图同口径，文字**一律显式浅色**
-///（`.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`。
+/// 颜色：渲染在**独立窗口**里（窗口透明、桌面/任意 App 在后），文字**一律显式浅色**
+///（`.white` / `.white.opacity(...)`）并自带深色圆角底 —— 不用 `.primary` / `.secondary`
+///（那会随系统外观变成深色字，浮在浅色壁纸上就看不见了）。
 ///
-/// 宽度：关闭态刘海只有一格（= 物理刘海宽，本机实测 **189pt**：`screen.frame.width -
-/// auxiliaryTopLeftArea - auxiliaryTopRightArea + 4`），所以给文字列一个**上界**并把 × 放在
-/// 它右侧：`.frame(maxWidth: 140)` + 图标/间距/× 合计 ≈ 178pt，× 因此留在可见区域内
-/// （**超出刘海宽的部分会被窗口裁掉，按钮被裁掉就等于点不到**——这是把 220 收到 140 的原因）。
+/// 尺寸：字号 / 图标 / 内外边距 / 卡片最大宽度**全部**来自
+/// `NotificationHUDCardLayout.metrics(scale:isNotchScreen:)`（用户设置 `notificationHUDScale`，
+/// 默认 1.3）。**不再有「必须塞进 189pt 刘海」这一条**——那是关闭态链内渲染时期的约束
+/// （`presentNotificationHUD` 的旧注释与 docs/13 已知限制 27 都已回写）。
 ///
 /// 「仅从岛上隐藏」的落点：`isHidden` 让这一格**立刻**渲染成空，并配合 `UIHandle.dismissTransient()`
-/// 把浮层从内核撤掉（关闭态优先级链的判据是「注册表里有浮层」，只本地置空的话下层内容
-/// 仍要等 ttl 到点才回来）。
+/// 把浮层从内核撤掉（内核撤 → 浮层窗口淡出，所以是本视图与窗口一起消失，不只是这一格变空）。
 ///
-/// ## × 的手势优先级（2026-09-28 修正）
-/// 关闭态的根容器上挂着**祖先**的 `.onTapGesture { openNotch() }`（`ContentView` 的
-/// `configuredMainLayout`，覆盖整条关闭态内容链——浮层分支也在里面）：同一层上的普通手势
-/// 会被它先一步拿走，× 收不到事件（合成点击实测：无「浮层关闭…」日志、浮层按自然 ttl 消失）。
-/// 因此 × 用 **`.highPriorityGesture`** 声明：它在自己这一层压过祖先的普通手势，事件先到 ×。
-/// **不动** `ContentView` 里那个 `openNotch()`（上游行为，所有关闭态内容靠它展开）。
+/// ## × 的手势优先级（2026-09-28 修正；D-23 后仍保留）
+/// 关闭态时期 × 收不到点击的根因是**祖先**的 `.onTapGesture { openNotch() }` 先吃掉了事件。
+/// 浮层搬进独立窗口后祖先手势已不在同一条链上，但 `.highPriorityGesture` 保留：换来的是
+/// 「窗口内任何一层再挂普通手势也不会抢走 ×」这条稳定性，成本为零。
 private struct NotificationHUDView: View {
     let appName: String
     let title: String
@@ -984,6 +1079,10 @@ private struct NotificationHUDView: View {
     @State private var isHidden = false
     @State private var isCloseHovered = false
 
+    /// 尺寸倍率（用户设置）。浮层只活 4s，不需要为它维护「设置改了要重渲」的观察链——
+    /// 每次弹出时取一次当前值即可（同 `showsBody` 的口径）。
+    @Default(.notificationHUDScale) private var scale: Double
+
     var body: some View {
         if isHidden {
             EmptyView()
@@ -992,42 +1091,66 @@ private struct NotificationHUDView: View {
         }
     }
 
+    /// 当前这一档尺寸。`isNotchScreen` 按**内核窗口宿主的取屏规则**（鼠标所在屏）判定：
+    /// 浮层窗口正是落在那一块屏上，两者由同一条规则保证一致。判错也只是卡片最大宽度差
+    /// 一档（320 vs 360 基准），不影响可读性。
+    private var metrics: NotificationHUDCardLayout.Metrics {
+        NotificationHUDCardLayout.metrics(scale: scale, isNotchScreen: Self.isNotchScreenUnderMouse)
+    }
+
     private var content: some View {
-        HStack(spacing: 6) {
+        let card = metrics
+        return HStack(spacing: card.iconSpacing) {
             Image(systemName: "bell.badge")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: card.iconSize, weight: .medium))
                 .foregroundStyle(.white)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: card.lineSpacing) {
                 Text(appName)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: card.titleSize, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 Text(secondLine)
-                    .font(.system(size: 10))
+                    .font(.system(size: card.bodySize))
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(2)
                     .truncationMode(.tail)
             }
-            .frame(maxWidth: 140, alignment: .leading)
+            // 文字列的上界由卡片最大宽度反推（见 `NotificationHUDCardLayout`）：超出的部分
+            // 按 `lineLimit` 截断，× 永远留在卡片内。
+            .frame(maxWidth: card.textMaxWidth, alignment: .leading)
 
-            closeButton
+            closeButton(size: card.closeSize)
         }
+        .padding(card.padding)
+        .background(
+            RoundedRectangle(cornerRadius: card.cornerRadius, style: .continuous)
+                .fill(.black.opacity(0.82))
+                .overlay(
+                    RoundedRectangle(cornerRadius: card.cornerRadius, style: .continuous)
+                        .stroke(.white.opacity(0.12), lineWidth: 1)
+                )
+        )
     }
 
-    /// × ：**先本地隐藏（立刻生效）+ 内核撤浮层（让位给下层内容），再交给上层做真关闭**——
+    /// 浮层当前落在的屏是否带刘海：**与 `ModuleHUDWindowHost.targetScreen()` 同一条规则**
+    /// （鼠标所在屏 → 主屏），因此两者指向同一块屏。
+    private static var isNotchScreenUnderMouse: Bool {
+        let screen = ModuleHUDWindowHost.targetScreen()
+        return (screen?.safeAreaInsets.top ?? 0) > 0
+    }
+
+    /// × ：**先本地隐藏（立刻生效）+ 内核撤浮层（窗口随之淡出），再交给上层做真关闭**——
     /// AX 动作是同步 IPC，放在点击回调里做会把主线程卡一下，所以上层（`closeSystemBanner`）
     /// 甩到后台队列。失败不弹错误：这一步已经不是「浮层消不消失」的前提了。
     ///
-    /// 手势用 `.highPriorityGesture`：关闭态根容器的祖先手势（`openNotch()`）会先一步吃掉
-    /// 这颗按钮的点击（见 `NotificationHUDView` 文档的实测记录），高优先级手势把事件拿回来。
-    /// 保留 `Button` 外观与 `.buttonStyle(.plain)`，动作体与之共用同一个 `dismiss()`。
-    private var closeButton: some View {
+    /// 手势用 `.highPriorityGesture`（见类型文档）：按钮外观与动作体共用同一个 `dismiss()`。
+    private func closeButton(size: CGFloat) -> some View {
         Button(action: dismiss) {
             Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(.white.opacity(isCloseHovered ? 1 : 0.7))
                 .padding(2)
                 .contentShape(Rectangle())

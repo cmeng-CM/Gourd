@@ -726,6 +726,7 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .liveActivities, title: "Enable music live activity", keywords: ["music", "now playing"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable music live activity")),
             SettingsSearchEntry(tab: .liveActivities, title: "Enable reminder live activity", keywords: ["reminder", "live activity"], highlightID: SettingsTab.liveActivities.highlightID(for: "Enable reminder live activity")),
             SettingsSearchEntry(tab: .liveActivities, title: "Show notification body in the notch HUD", keywords: ["notification", "hud", "notifications", "body", "privacy"], highlightID: SettingsTab.liveActivities.highlightID(for: "Show notification body in the notch HUD")),
+            SettingsSearchEntry(tab: .liveActivities, title: "Notification HUD size", keywords: ["notification", "hud", "size", "bigger", "scale", "larger", "font"], highlightID: SettingsTab.liveActivities.highlightID(for: "Notification HUD size")),
 
             // Battery (Charge)
             SettingsSearchEntry(tab: .battery, title: "Show battery indicator", keywords: ["battery hud", "charge"], highlightID: SettingsTab.battery.highlightID(for: "Show battery indicator")),
@@ -4044,6 +4045,8 @@ struct LiveActivitiesSettings: View {
     @Default(.enableDoNotDisturbDetection) var enableDoNotDisturbDetection
     @Default(.focusIndicatorNonPersistent) var focusIndicatorNonPersistent
     @Default(.capsLockIndicatorTintMode) var capsLockTintMode
+    /// 通知浮层的尺寸倍率（D-23 之后浮层是独立窗口，尺寸只由这一项决定）。
+    @Default(.notificationHUDScale) var notificationHUDScale
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.liveActivities.highlightID(for: title)
@@ -4262,10 +4265,23 @@ struct LiveActivitiesSettings: View {
                     Text("Show notification body in the notch HUD")
                 }
                 .settingsHighlight(id: highlightID("Show notification body in the notch HUD"))
+
+                // 浮层尺寸（2026-09-28 用户要求「太小，需要调大一些」）：浮层改由独立窗口渲染后
+                //（D-23），尺寸只由这一项决定——字号 / 图标 / 内边距 / 卡片最大宽度全部按倍率缩放。
+                Slider(value: $notificationHUDScale, in: 0.8...2.0, step: 0.05) {
+                    HStack {
+                        Text("Notification HUD size")
+                        Spacer()
+                        Text("\(notificationHUDScale, specifier: "%.2f")×")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                .settingsHighlight(id: highlightID("Notification HUD size"))
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("Reads the notification database (needs Full Disk Access) and shows a brief overlay in the closed notch when a new notification arrives. Body text is shown by default; turn this off to only see which app sent it.")
+                Text("Reads the notification database (needs Full Disk Access) and shows a brief overlay when a new notification arrives. The overlay is its own floating window (it follows the pointer's display), so its size is controlled by the slider above. Body text is shown by default; turn this off to only see which app sent it.")
             }
         }
         .navigationTitle("Live Activities")

@@ -1463,6 +1463,17 @@ extension Defaults.Keys {
     /// 未开（见 docs/14 的 notifications 行），用户在设置页直接改这一项。
     static let showBodyInHUD = Key<Bool>("showBodyInHUD", default: true)
 
+    /// 通知浮层的**整体尺寸倍率**（2026-09-28 用户要求：「外接屏太小，需要调大一些」）。
+    ///
+    /// **默认 1.3**——比改造前的口径大 30%（浮层不再受刘海宽度约束后，原来的 11/10pt 字号
+    /// 与 140pt 文字宽在小屏上偏小）。消费点唯一：`NotificationsModule` 的
+    /// `NotificationHUDCardLayout.metrics(scale:isNotchScreen:)`（字号 / 图标 / 内外边距 /
+    /// 卡片最大宽度都乘它），设置入口在 Live Activities → Notifications 的滑块（0.8…2.0）。
+    ///
+    /// 越界值（< 0.8 或 > 2.0）在 `metrics` 里夹取到区间端点，不在这里纠正：用户直接改
+    /// UserDefaults 时也要有确定的呈现（同 `ttl` 的夹取口径）。
+    static let notificationHUDScale = Key<Double>("notificationHUDScale", default: 1.3)
+
     /// 已关闭（**仅从岛上移除**）的通知 `rec_id` 集合，有序、最近关闭的在后。
     ///
     /// 为什么必须落盘：关闭只是「本地隐藏」——系统通知中心里的那一条仍然在（只读原则，
