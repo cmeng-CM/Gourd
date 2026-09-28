@@ -267,9 +267,12 @@ private enum ProgressText {
         case .day:
             amount = "\(remaining.value) \(localized("module.progress.unit.day"))"
         case .hour:
-            let minutes = trailingMinutes(for: scope, now: now)
-            amount = "\(remaining.value) \(localized("module.progress.unit.hour")) "
-                + "\(minutes) \(localized("module.progress.unit.minute"))"
+            // 小时与余分钟**成对**取（同一个总分钟数拆分）——分别取会出现「13 小时 826 分钟」。
+            let pair = ProgressCalculator.remainingHoursAndMinutes(for: scope, now: now)
+            let hours = "\(pair.hours) \(localized("module.progress.unit.hour"))"
+            amount = pair.minutes > 0
+                ? hours + " \(pair.minutes) \(localized("module.progress.unit.minute"))"
+                : hours
         case .minute:
             amount = "\(remaining.value) \(localized("module.progress.unit.minute"))"
         }
@@ -285,13 +288,6 @@ private enum ProgressText {
             .hour(.twoDigits(amPM: .omitted))
             .minute(.twoDigits)
         return "\(interval.start.formatted(momentStyle)) → \(interval.end.formatted(momentStyle))"
-    }
-
-    /// 小时档的分钟余量（整点差，落在 `0...59`）。
-    private static func trailingMinutes(for scope: ProgressCalculator.Scope, now: Date) -> Int {
-        guard let end = ProgressCalculator.interval(for: scope, now: now)?.end else { return 0 }
-        let minutes = Calendar.autoupdatingCurrent.dateComponents([.minute], from: now, to: end).minute ?? 0
-        return max(0, minutes)
     }
 
     /// `module.<shortID>.<field>` 形态的 key → 当前语言文案。

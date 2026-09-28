@@ -91,6 +91,24 @@ enum ProgressCalculator {
         return (max(1, wholeMinutes), .minute)
     }
 
+    /// 小时档的（整点小时, 余分钟）**成对**取值。
+    ///
+    /// 两者必须来自同一次取整：早先的实现是 `remaining()` 取整点小时、另一个私有函数取总分钟，
+    /// 于是出现「剩 13 小时 826 分钟」这种把**总分钟当余数**的显示（826 = 13×60 + 46）。
+    /// 现在统一在这里算：`hours = 总分钟 / 60`、`minutes = 总分钟 % 60`（0…59）。
+    static func remainingHoursAndMinutes(
+        for scope: Scope,
+        now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> (hours: Int, minutes: Int) {
+        guard let end = interval(for: scope, now: now, calendar: calendar)?.end else {
+            return (0, 1)
+        }
+        let totalMinutes = calendar.dateComponents([.minute], from: now, to: end).minute ?? 0
+        let clamped = max(0, totalMinutes)
+        return (clamped / 60, clamped % 60)
+    }
+
     /// `now` 所在区间的完成比例，落在 `0...1`。
     ///
     /// 区间由 `now` 自己派生，正常取值必在区间内；钳制只为系统时钟跳变兜底（不崩、不返回负数）。

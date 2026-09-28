@@ -829,6 +829,29 @@ final class ModuleKernelTests: XCTestCase {
 
     /// `remaining` 的分档边界（09 §5.3 剩余量）：跨天（≥ 1 天，**向上取整**）、
     /// 跨小时（1 小时 ≤ r < 1 天，整点截断）、最后一分钟（截断且至少 1）、刚过整点（区间起点重新计数）。
+    /// 回归测试（2026-09-28）：小时档必须**成对**取值。
+    ///
+    /// 修复前的显示是「剩 13 小时 826 分钟」——`remaining()` 给整点小时、另一个函数给**总分钟**，
+    /// 两者口径不一致（826 = 13×60 + 46）。这条用例把"余分钟必须落在 0…59 且与整点小时同源"钉住。
+    func testProgressRemainingHoursAndMinutesArePaired() throws {
+        let calendar = try fixedGregorian()
+
+        // 10:14 → 当天 24:00 剩 13 小时 46 分（修复前分钟位会显示 826）
+        let pair = ProgressCalculator.remainingHoursAndMinutes(
+            for: .day, now: try instant(2026, 9, 28, 10, 14, calendar: calendar), calendar: calendar
+        )
+        XCTAssertEqual(pair.hours, 13)
+        XCTAssertEqual(pair.minutes, 46)
+
+        // 余分钟永不越界：全天逐刻扫一遍，分钟位必须恒在 0…59
+        for minute in stride(from: 0, to: 24 * 60, by: 7) {
+            let now = try instant(2026, 9, 28, minute / 60, minute % 60, calendar: calendar)
+            let p = ProgressCalculator.remainingHoursAndMinutes(for: .day, now: now, calendar: calendar)
+            XCTAssertTrue((0...59).contains(p.minutes), "分钟位越界：\(p)")
+            XCTAssertEqual(p.hours * 60 + p.minutes, 24 * 60 - minute, "小时/分钟不同源：\(p)")
+        }
+    }
+
     func testProgressRemainingBoundaries() throws {
         let calendar = try fixedGregorian()
 
