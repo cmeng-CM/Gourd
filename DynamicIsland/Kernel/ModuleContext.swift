@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import SwiftUI
 import os
 
 /// 模块的依赖注入面。**struct 而非 protocol**：它是数据载体（一堆句柄），不是行为契约；
@@ -54,12 +55,25 @@ public protocol ConfigHandle: AnyObject {
     func set<T: Codable & Sendable>(_ key: String, to value: T) -> Bool
 }
 
-/// 宿主给模块的 UI 能力（06 §3.4 的本批子集：`present(Overlay)` 属 P1-2 的 OverlayHost）。
+/// 宿主给模块的 UI 能力（06 §3.4 的本批子集：`present(Overlay)` 属 P1-2 的 OverlayHost；
+/// 本批只多一条**瞬时浮层**——D-22，形态借 09 §5.5 呈现 ① 的 `ttlMs` 语义）。
+///
+/// `@MainActor`：UI 能力只对主线程开放。模块本身已是主 actor（`GourdModule` 的全部方法都在
+/// 主 actor 上），把这条约束提到类型层后，`presentTransient` 的实现可以直接落到
+/// `ModuleRegistry`（同为 `@MainActor`），不必在实现里写 `MainActor.assumeIsolated` 这种
+/// 「运行期兜底」——误用在编译期就红。
+@MainActor
 public protocol UIHandle: AnyObject {
     /// 触发 `ModuleHostView` 重绘。
     func requestRedraw()
     /// 低功耗信号（架构 §7 要求动画可关）。本批恒 false（P1-3）。
     var isLowPower: Bool { get }
+    /// 弹一条**瞬时浮层**：折叠态刘海上短暂占一格，`ttl` 秒后自动消失。
+    ///
+    /// - 覆盖语义（不排队）：已有浮层被新的替换——后到者就是最新事件；
+    /// - `ttl` 由宿主夹取到 1…15s（`ModuleRegistry.hudTTLRange`），模块给什么值都不会常驻；
+    /// - 关掉/无刘海（`hideOnClosed`）时宿主不渲染它，但方法本身仍返回正常（不抛错、不降级）。
+    func presentTransient(view: AnyView, ttl: TimeInterval)
 }
 
 /// 自动带 `moduleID` 与 subsystem 前缀 `com.cmeng.gourd.module.<shortID>` 的日志器。

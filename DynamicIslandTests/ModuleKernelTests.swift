@@ -24,10 +24,14 @@
 //  二进制 plist 的防御式解码（键齐解出 / 缺键给空并记缺失键名 / 垃圾字节与空 data 只记错不崩）、
 //  manifest 契约与本地化 key 可解析、组合根的模块投影（三模块 tab 与槽位候选顺序）。
 //  **单测不读系统通知库**（构造的二进制 plist 夹具），真实可读性由运行期探针报告判定。
+//  P2d 瞬时浮层——`presentHUD` 的覆盖语义与身份更替、`ttl` 夹取到 1…15s、
+//  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
+//  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）。
 //
 
 import AppKit
 import Defaults
+import SwiftUI
 import XCTest
 
 @testable import Gourd
@@ -1195,6 +1199,110 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertTrue(reason.contains("probe-dual"), "转发到的应是 compactEntries 的第一个，实到 \(reason)")
     }
 
+    // MARK: - 瞬时浮层 HUD（D-22）
+
+    /// 覆盖语义：第二条浮层**替换**第一条（不排队、不叠加），`id` 换成新的（到期任务的判据）；
+    /// `clearHUD()` 幂等；`deactivateAll()` 也把浮层撤掉（注册表清空后它没有归属）。
+    func testPresentHUDOverridesPreviousHUD() async {
+        let registry = ModuleRegistry.shared
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 4)
+        let firstID = registry.activeHUD?.id
+        XCTAssertNotNil(firstID)
+        XCTAssertEqual(registry.activeHUD?.moduleID, "com.cmeng.gourd.probe-alpha")
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-beta", view: AnyView(Text("B")), ttl: 4)
+        XCTAssertNotEqual(registry.activeHUD?.id, firstID, "第二条浮层必须是新身份（旧到期任务据此让路）")
+        XCTAssertEqual(registry.activeHUD?.moduleID, "com.cmeng.gourd.probe-beta", "后到者覆盖先到者")
+
+        registry.clearHUD()
+        XCTAssertNil(registry.activeHUD)
+        registry.clearHUD()
+        XCTAssertNil(registry.activeHUD, "clearHUD 必须幂等")
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 4)
+        await registry.deactivateAll()
+        XCTAssertNil(registry.activeHUD, "注册表清空时浮层必须一并撤掉")
+    }
+
+    /// `ttl` 夹取到 1…15s：给 0.05s（等于没弹）与 600s（等于常驻）都落回区间端点，
+    /// `expiresAt` 按夹取后的值算（模块给什么值都不会让浮层常驻）。
+    func testPresentHUDClampsTTLToRange() {
+        let registry = ModuleRegistry.shared
+        XCTAssertEqual(ModuleRegistry.hudTTLRange.lowerBound, 1)
+        XCTAssertEqual(ModuleRegistry.hudTTLRange.upperBound, 15)
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 0.05)
+        XCTAssertEqual(
+            registry.activeHUD?.expiresAt.timeIntervalSinceNow ?? -1,
+            ModuleRegistry.hudTTLRange.lowerBound,
+            accuracy: 0.5,
+            "过短的 ttl 应被抬到下界 1s"
+        )
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: -10)
+        XCTAssertEqual(
+            registry.activeHUD?.expiresAt.timeIntervalSinceNow ?? -1,
+            ModuleRegistry.hudTTLRange.lowerBound,
+            accuracy: 0.5,
+            "负数 ttl 同样夹到下界"
+        )
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 600)
+        XCTAssertEqual(
+            registry.activeHUD?.expiresAt.timeIntervalSinceNow ?? -1,
+            ModuleRegistry.hudTTLRange.upperBound,
+            accuracy: 0.5,
+            "过长的 ttl 应被压到上界 15s"
+        )
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 4)
+        XCTAssertEqual(registry.activeHUD?.expiresAt.timeIntervalSinceNow ?? -1, 4, accuracy: 0.5, "区间内的 ttl 原样使用")
+
+        registry.clearHUD()
+    }
+
+    /// 到期清除**只清自己那一条**：先弹一条短 ttl、立即被长 ttl 的后来者替换，
+    /// 旧任务的到期时刻醒来后不得把新浮层清掉（否则「两条通知先后到达」会闪断）。
+    func testHUDExpiryDoesNotClearNewerEntry() async throws {
+        let registry = ModuleRegistry.shared
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("short")), ttl: 1)
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-beta", view: AnyView(Text("long")), ttl: 15)
+        let newerID = registry.activeHUD?.id
+
+        try await Task.sleep(for: .seconds(1.3))  // 跨过第一条的到期点
+
+        XCTAssertEqual(registry.activeHUD?.id, newerID, "旧浮层的到期任务不得清掉后来者")
+        XCTAssertEqual(registry.activeHUD?.moduleID, "com.cmeng.gourd.probe-beta")
+        registry.clearHUD()
+    }
+
+    /// 没有人接替时，到期**自动清除**（浮层是瞬时的：不需要模块自己收尾）。
+    func testHUDExpiresAndClearsItself() async throws {
+        let registry = ModuleRegistry.shared
+
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 1)
+        XCTAssertNotNil(registry.activeHUD)
+
+        try await Task.sleep(for: .seconds(1.3))
+
+        XCTAssertNil(registry.activeHUD, "ttl 到点后应自动清除")
+    }
+
+    /// `UIHandle.presentTransient` 的实现落点是注册表（同一份浮层状态，不是第二处副本）：
+    /// 模块 id 由工厂补上，视图原样送达。
+    func testPresentTransientRoutesToRegistry() throws {
+        let manifest = RegistryFixture.manifest(shortID: "hud-probe")
+        let context = ModuleContextFactory.make(manifest: manifest, redraw: {})
+
+        context.ui.presentTransient(view: AnyView(Text("hi")), ttl: 4)
+
+        XCTAssertEqual(ModuleRegistry.shared.activeHUD?.moduleID, "com.cmeng.gourd.hud-probe")
+        XCTAssertNotNil(ModuleRegistry.shared.activeHUD?.view)
+        ModuleRegistry.shared.clearHUD()
+    }
+
     // MARK: - 待办模块 todos（T5）
 
     /// 构造一条待办（id 兼作标题，便于按 id 断言顺序）。
@@ -1594,10 +1702,14 @@ private final class StubConfigHandle: ConfigHandle {
     func set<T: Codable & Sendable>(_ key: String, to value: T) -> Bool { false }
 }
 
+@MainActor
 private final class StubUIHandle: UIHandle {
     var redrawCount = 0
+    /// 收到的瞬时浮层请求（`ttl` 逐条记下，断言夹取/覆盖语义时不必等真实到期）。
+    var presentedTTLs: [TimeInterval] = []
     func requestRedraw() { redrawCount += 1 }
     var isLowPower: Bool { false }
+    func presentTransient(view: AnyView, ttl: TimeInterval) { presentedTTLs.append(ttl) }
 }
 
 @MainActor

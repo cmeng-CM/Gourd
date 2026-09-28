@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import SwiftUI
 import os
 
 /// 构造模块的 `ModuleContext`。
@@ -23,7 +24,7 @@ public enum ModuleContextFactory {
             host: hostInfo(),
             config: ManifestConfigHandle(manifest: manifest, logger: logger),
             logger: logger,
-            ui: RedrawUIHandle(redraw: redraw)
+            ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw)
         )
     }
 
@@ -99,11 +100,15 @@ private final class ManifestConfigHandle: ConfigHandle {
 
 // MARK: - UIHandle 的本批实现
 
-/// 宿主给模块的 UI 能力（06 §3.4 的本批子集：`present(Overlay)` 属 P1-2 的 OverlayHost）。
+/// 宿主给模块的 UI 能力（06 §3.4 的本批子集：`present(Overlay)` 属 P1-2 的 OverlayHost；
+/// 瞬时浮层按 D-22 加回）。`@MainActor` 与协议一致——两个出口都只从主线程可达。
+@MainActor
 private final class RedrawUIHandle: UIHandle {
+    private let moduleID: String
     private let redraw: () -> Void
 
-    init(redraw: @escaping () -> Void) {
+    init(moduleID: String, redraw: @escaping () -> Void) {
+        self.moduleID = moduleID
         self.redraw = redraw
     }
 
@@ -114,4 +119,10 @@ private final class RedrawUIHandle: UIHandle {
 
     /// 低功耗信号属 P1-3，本批恒 false。
     var isLowPower: Bool { false }
+
+    /// 瞬时浮层：转发到注册表（**唯一实现落点**——覆盖与到期清除都在那边，
+    /// 这里只负责补上 moduleID，模块自己不持有浮层的生命周期）。
+    func presentTransient(view: AnyView, ttl: TimeInterval) {
+        ModuleRegistry.shared.presentHUD(moduleID: moduleID, view: view, ttl: ttl)
+    }
 }

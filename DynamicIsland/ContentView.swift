@@ -55,6 +55,10 @@ struct ContentView: View {
     @ObservedObject var localSendService = LocalSendService.shared
     @State private var downloadManager = DownloadManager.shared
     @ObservedObject var shelfState = ShelfStateViewModel.shared
+    /// 模块注册表。**必须观察**（与 S1 给 `TabSelectionView` 加的同一行同源）：关闭态链里
+    /// 瞬时浮层的判据读的是注册表，不观察它 `presentHUD` / `clearHUD` 就不会让这条链重算
+    ///（`ModuleHUDView` 自己观察注册表只能重绘它自己，救不了「判据在父视图里」这一层）。
+    @ObservedObject private var moduleRegistry = ModuleRegistry.shared
     
     @Default(.enableStatsFeature) var enableStatsFeature
     @Default(.showCpuGraph) var showCpuGraph
@@ -952,6 +956,18 @@ struct ContentView: View {
                       } else if vm.notchState == .closed && capsLockManager.isCapsLockActive && Defaults[.enableCapsLockIndicator] && !vm.hideOnClosed && !lockScreenManager.isLocked {
                           InlineHUD(type: .constant(.capsLock), value: .constant(1.0), icon: .constant(""), hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(AnyTransition.move(edge: .trailing).combined(with: .opacity))
+                      } else if vm.notchState == .closed && !vm.hideOnClosed && moduleRegistry.activeHUD != nil {
+                          // 模块的**瞬时浮层**（D-22 / 09 §5.5 呈现 ①）：插在 OSD 类分支
+                          // （音量 / 亮度 / 大小写锁…）**之后**、音乐 / 计时器 / 提醒等 live activity
+                          // **之前**的取舍——系统级反馈是用户**刚按下的键**，必须压过通知；
+                          // 而通知是"刚发生的事"，要盖过常态驻留的 live activity（否则放着音乐时
+                          // 通知永远看不见）。两者都不叠加：与既有各分支共用这一条链，故浮层显示
+                          // 期间被它盖住的活动自动让位、浮层到期即恢复。
+                          // 判据读的是本视图**观察**到的注册表（`moduleRegistry`）而不是
+                          // `ModuleRegistry.shared`——同一个对象，但只有前者能在浮层弹出/到期时
+                          // 让这条链重算（实测：不观察时 `presentHUD` 有日志、分支却永不取到）。
+                          ModuleHUDView()
+                              .transition(.opacity.animation(.smooth(duration: 0.2)))
                       } else if canShowMusicDuringExpansion && musicPairingEligible {
                           MusicLiveActivity(secondary: musicSecondary)
                               .id("closed-music-live-activity")

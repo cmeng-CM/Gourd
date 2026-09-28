@@ -12,6 +12,7 @@
 
 import Combine
 import Foundation
+import SwiftUI
 import os
 
 // MARK: - 运行时状态与 tab 投影
@@ -43,6 +44,22 @@ public struct ModuleTabEntry: Identifiable, Equatable {
     public let order: Int
 }
 
+/// 一条**瞬时浮层**（09 §5.5 呈现 ①：新事件到达时在折叠态刘海上短暂展示）。
+///
+/// 与 `ModuleCompactSlotView` / `ModuleHostView` 的关系：那两处渲染的是**常驻内容**
+/// （模块答什么就显示什么，由模块自己的状态驱动）；浮层是**宿主托管的短命条目**——
+/// 谁先请求谁显示、到期自动消失，模块不持有它的生命周期。
+///
+/// `id` 与模块 id 无关：它是「这一次弹出」的身份，`presentHUD` 的到期任务据此判断
+/// 「我这条还在不在台前」（见 `presentHUD` 的只清自己那一条）。
+public struct ModuleHUD: Identifiable {
+    public let id: UUID
+    public let moduleID: String
+    public let view: AnyView
+    /// 到期时刻（由 `presentHUD` 按夹取后的 ttl 算好，日志与测试读它）。
+    public let expiresAt: Date
+}
+
 // MARK: - ModuleRegistry
 
 /// 模块注册表：注册 → 启用门 → 激活 → 内容转发 → UI 投影。
@@ -58,6 +75,14 @@ public final class ModuleRegistry: ObservableObject {
     @Published public private(set) var states: [String: ModuleRuntimeState] = [:]
     /// 注册表：id → manifest。同 id 只留先注册者（06 §10.1 第 14 步的全局 id 唯一）。
     public private(set) var manifests: [String: ModuleManifest] = [:]
+
+    /// 当前正在展示的瞬时浮层；nil = 无（关闭态自然回落到 live activity 链的其它分支）。
+    @Published public private(set) var activeHUD: ModuleHUD?
+
+    /// 浮层 ttl 的夹取区间（秒）。**下界 1s**：低于它的浮层肉眼看不见（等于没弹）；
+    /// **上界 15s**：09 §5.5 的浮层是「瞬时」的，不能变成常驻占位（那会让关闭态
+    /// 永久让位给一条通知）。模块传什么都会落在这个区间内。
+    public static let hudTTLRange: ClosedRange<TimeInterval> = 1...15
 
     /// 已激活的实例。只在 `activate()` 成功后入驻，失败即摘除。
     private var instances: [String: any GourdModule] = [:]
@@ -143,6 +168,9 @@ public final class ModuleRegistry: ObservableObject {
         states.removeAll()
         manifests.removeAll()
         moduleTypes.removeAll()
+        // 浮层属于「某个模块的一次弹出」：注册表清空后它没有归属，必须一并撤掉
+        //（否则单测之间会串味，退出路径上也会留下一帧孤儿视图）。
+        clearHUD()
     }
 
     /// 已激活的模块实例；未注册 / 未启用 / 已失败 / 尚未 `bootstrap()` → nil。
@@ -236,5 +264,38 @@ public final class ModuleRegistry: ObservableObject {
             return .unavailable(reason: reason)
         }
         return instance.content(for: request)
+    }
+
+    // MARK: - 瞬时浮层（HUD）
+
+    /// 弹出瞬时浮层（模块侧入口是 `UIHandle.presentTransient`）。
+    ///
+    /// **覆盖语义**：已有浮层直接被新的一条替换——不排队、不叠加。理由：刘海关闭态只有
+    /// 一格位置（见 `ContentView` 关闭态优先级链的插入注释），两条浮层同时到达时「后到者
+    /// 就是最新事件」，排队只会让先到的那条在过期后突然冒出来。
+    ///
+    /// `ttl` 一律夹取到 `hudTTLRange`（1…15s）：模块给 0.2s 等于没弹，给 600s 等于常驻。
+    ///
+    /// 到期清除**只清自己那一条**：任务醒来时先比对 `activeHUD?.id`，被后来者替换过就直接返回——
+    /// 否则「先弹 A（短 ttl）、再弹 B（长 ttl）」会让 A 的旧任务把 B 提前清掉。
+    public func presentHUD(moduleID: String, view: AnyView, ttl: TimeInterval) {
+        let clamped = min(max(ttl, Self.hudTTLRange.lowerBound), Self.hudTTLRange.upperBound)
+        let hud = ModuleHUD(id: UUID(), moduleID: moduleID, view: view, expiresAt: Date().addingTimeInterval(clamped))
+        activeHUD = hud
+        log.info("presentHUD：模块 \(moduleID, privacy: .public)，ttl \(clamped, privacy: .public)s")
+
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(clamped))
+            guard let self, self.activeHUD?.id == hud.id else { return }
+            self.clearHUD()
+        }
+    }
+
+    /// 撤掉当前浮层（用户侧无入口；到期任务、模块显式收尾与 `deactivateAll()` 走这里）。
+    ///
+    /// 语义是**幂等**的：没有浮层时是空操作（到期任务的 `guard` 之后可能重复到达）。
+    public func clearHUD() {
+        guard activeHUD != nil else { return }
+        activeHUD = nil
     }
 }
