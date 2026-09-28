@@ -18,6 +18,8 @@
 //  T5 待办模块 todos——分类与计数（今日 / 本周 / 所有三档的成员与 `(已办, 总量)`、
 //  「无到期时间只进所有」、今日与本周的刻意重叠、本周随 `firstWeekday`）、清单排序、
 //  manifest 契约、中央槽位的候选顺序（todos 的 order 20 排在 progress 的 30 之前）。
+//  T6 笔记同步过滤——`AppleNotesTrashFilter.isTrashed` 的语言表命中、表外与空串不命中、
+//  大小写与首尾空白无关（「最近删除」条目按语言名判定，表外语言保持旧行为）。
 //
 
 import AppKit
@@ -1551,5 +1553,38 @@ private final class DualSurfaceProbeModule: ProbeModule {
 private final class CompactLateProbeModule: ProbeModule {
     override class var manifest: ModuleManifest {
         RegistryFixture.manifest(shortID: "probe-compact-late", surfaces: [.compact], order: 40)
+    }
+}
+
+// MARK: - 笔记同步：「最近删除」过滤
+
+/// `AppleNotesTrashFilter` 是纯函数，直接对表测。
+/// 背景：`notes of default account` 会把「最近删除」里的笔记一起枚举出来，被删条目因此
+/// 永远留在 merge 的 `linkedRemoteIds` 里，本地对应项清不掉（岛上残留 / 同名重复）。
+/// 这里只覆盖判定的三条性质：表内命中、表外不命中（含空串）、大小写与首尾空白无关。
+final class AppleNotesTrashFilterTests: XCTestCase {
+
+    /// 表中各语言的「最近删除」名称逐字命中。三例都要留着：本机实测（系统语言 zh-Hans-CN）
+    /// AppleScript 侧返回的其实是英文 `Recently Deleted`，只按 UI 语言准备一条会在真机漏判。
+    func testKnownTrashedFolderNamesAreDetected() {
+        XCTAssertTrue(AppleNotesTrashFilter.isTrashed(containerName: "最近删除"), "zh-Hans")
+        XCTAssertTrue(AppleNotesTrashFilter.isTrashed(containerName: "最近刪除"), "zh-Hant")
+        XCTAssertTrue(AppleNotesTrashFilter.isTrashed(containerName: "Recently Deleted"), "en")
+    }
+
+    /// 普通文件夹名与空串不算垃圾：**空串（旧格式记录 / 取不到容器名）必须保持旧行为**，
+    /// 否则升级后会把所有笔记误判为已删除。
+    func testOrdinaryFolderNamesAreNotTrashed() {
+        XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: "备忘录"), "用户自己的文件夹")
+        XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: "Notes"), "en 普通文件夹")
+        XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: ""), "空容器名 = 不过滤")
+    }
+
+    /// 大小写与首尾空白（含换行）不影响判定。
+    func testMatchIsCaseAndWhitespaceInsensitive() {
+        XCTAssertTrue(AppleNotesTrashFilter.isTrashed(containerName: "  recently DELETED  "))
+        XCTAssertTrue(AppleNotesTrashFilter.isTrashed(containerName: "\n最近删除\t"))
+        XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: "   "))
+        XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: " recently deleted extra"))
     }
 }

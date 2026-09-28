@@ -44,6 +44,60 @@ struct RemoteAppleNote: Sendable {
     let creationDate: Date
     let modificationDate: Date
     let atollId: UUID?
+    /// 笔记所在容器（文件夹）名，用于剔除「最近删除」里的条目；旧格式记录（无该字段）解析为空串。
+    /// 取法必须分两步：`set c to container of n` 再 `name of c`——写成一个式子
+    /// `name of container of n` 会被 Notes 拒（-1728 不能获得）。
+    /// sdef 里 `container` 的类型是 `folder`（cocoa key = `folder`），即文件夹而非账号。
+    let containerName: String
+}
+
+/// 「最近删除」容器名判定。
+///
+/// 已知局限：Apple Notes 的 AppleScript 字典**不暴露**「是否在回收站」的语言无关标识
+/// （`container` 只给容器名，且「最近删除」是随系统语言本地化的）。因此这里按语言枚举已知名称：
+/// 命中即视为已删除；**未命中（含系统语言不在表内、容器名为空）一律按未删除处理**，
+/// 即保持旧行为——宁可漏过滤，也不误删用户仍在的笔记。若新增语言出现同名重复问题，
+/// 按同样格式往 `trashedFolderNames` 里补一条即可。
+///
+/// 实测（macOS 27，本机系统语言 zh-Hans-CN）：AppleScript 侧该文件夹名返回的是**英文**
+/// `Recently Deleted`，而不是 UI 上的「最近删除」。所以 en 与各本地化名都要留着——
+/// 只留 UI 语言对应的那一条会在真机上漏判。
+enum AppleNotesTrashFilter {
+    /// Apple Notes「最近删除」文件夹在各语言下的名称（逐字照抄系统实际显示值）。
+    private static let trashedFolderNames: Set<String> = [
+        "最近删除",              // zh-Hans
+        "最近刪除",              // zh-Hant
+        "Recently Deleted",      // en
+        "最近削除した項目",        // ja
+        "최근 삭제된 항목",        // ko
+        "Zuletzt gelöscht",      // de
+        "Supprimés récemment",   // fr
+        "Eliminadas recientemente", // es
+        "Eliminati di recente",  // it
+        "Excluídos recentemente", // pt
+        "Onlangs verwijderd",    // nl
+        "Недавно удаленные",     // ru
+        "Ostatnio usunięte",     // pl
+        "Son Silinenler",        // tr
+        "Нещодавно видалені",    // uk
+        "Nemrég törölt",         // hu
+        "Nedávno smazané",       // cs
+        "เร็วๆ นี้ถูกลบ",          // th
+        "المحذوفة مؤخرًا",        // ar
+    ]
+
+    /// 大小写不敏感的比较用表（`lowercased()` 与 locale 无关）。
+    private static let normalizedTrashedFolderNames: Set<String> =
+        Set(trashedFolderNames.map { $0.lowercased() })
+
+    /// 容器名是否为「最近删除」。首尾空白与大小写无关；空串（旧格式记录 / 取不到容器名）不算。
+    static func isTrashed(containerName: String) -> Bool {
+        let normalized = containerName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return false }
+        return normalizedTrashedFolderNames.contains(normalized)
+    }
 }
 
 @MainActor
@@ -224,7 +278,10 @@ final class AppleNotesSyncManager: ObservableObject {
                     set notePlain to plaintext of n
                     set notePlain to my sanitizeField(notePlain, fieldSep, recordSep)
                     set atollId to my extractAtollId(body of n)
-                    set chunk to (id of n) & fieldSep & (name of n) & fieldSep & ((creation date of n) - epoch as string) & fieldSep & ((modification date of n) - epoch as string) & fieldSep & notePlain & fieldSep & atollId
+                    -- 必须分两步取容器名：`name of container of n` 一个式子会被 Notes 拒（-1728 不能获得）。
+                    set noteContainerRef to container of n
+                    set noteContainer to my sanitizeField((name of noteContainerRef), fieldSep, recordSep)
+                    set chunk to (id of n) & fieldSep & (name of n) & fieldSep & ((creation date of n) - epoch as string) & fieldSep & ((modification date of n) - epoch as string) & fieldSep & notePlain & fieldSep & atollId & fieldSep & noteContainer
                     set end of chunks to chunk
                 end if
             end repeat
@@ -253,7 +310,18 @@ final class AppleNotesSyncManager: ObservableObject {
         """
 
         let output = try await runScriptReturningString(script)
-        return parseRemoteNotes(output)
+        let fetched = parseRemoteNotes(output)
+
+        // `notes of default account` 连「最近删除」里的笔记一起枚举出来。这些条目若进入 merge，
+        // 会被当作有效远端写进 `linkedRemoteIds`，末尾的 `removeAll` 就永远清不掉它们——
+        // 用户在系统里删掉的笔记会一直留在岛上（且与活跃笔记同名时显示为重复）。
+        // 因此过滤必须发生在 merge **之前**：merge 之后既有的 removeAll 自然会移除本地对应项。
+        let active = fetched.filter { !AppleNotesTrashFilter.isTrashed(containerName: $0.containerName) }
+        let skipped = fetched.count - active.count
+        if skipped > 0 {
+            Logger.log("笔记同步：跳过 \(skipped) 条「最近删除」笔记（本次取回 \(fetched.count) 条）", category: .debug)
+        }
+        return active
     }
 
     private func parseRemoteNotes(_ payload: String) -> [RemoteAppleNote] {
@@ -262,7 +330,9 @@ final class AppleNotesSyncManager: ObservableObject {
         return payload
             .split(separator: Character(Self.recordSeparator), omittingEmptySubsequences: true)
             .compactMap { record in
-                let fields = record.split(separator: Character(Self.fieldSeparator), maxSplits: 5, omittingEmptySubsequences: false)
+                // 字段：id ␟ title ␟ creationDate ␟ modificationDate ␟ plaintext ␟ atollId ␟ containerName
+                // maxSplits = 6 → 至多 7 段，正文里的分隔符已被 AppleScript 侧 sanitizeField 清掉。
+                let fields = record.split(separator: Character(Self.fieldSeparator), maxSplits: 6, omittingEmptySubsequences: false)
                 guard fields.count >= 5 else { return nil }
 
                 let id = String(fields[0])
@@ -274,6 +344,8 @@ final class AppleNotesSyncManager: ObservableObject {
                 let atollId = fields.count > 5
                     ? UUID(uuidString: String(fields[5]))
                     : extractAtollId(from: content)
+                // 旧格式记录（无容器名）给空串：`isTrashed` 对空串返回 false，等价旧行为。
+                let containerName = fields.count > 6 ? String(fields[6]) : ""
 
                 return RemoteAppleNote(
                     id: id,
@@ -281,7 +353,8 @@ final class AppleNotesSyncManager: ObservableObject {
                     content: content,
                     creationDate: created,
                     modificationDate: modified,
-                    atollId: atollId
+                    atollId: atollId,
+                    containerName: containerName
                 )
             }
     }
