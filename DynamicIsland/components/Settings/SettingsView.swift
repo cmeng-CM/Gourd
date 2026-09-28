@@ -842,6 +842,7 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .lockScreen, title: "Show media app icon", keywords: ["app icon", "media"], highlightID: SettingsTab.lockScreen.highlightID(for: "Show media app icon")),
             SettingsSearchEntry(tab: .lockScreen, title: "Show panel border", keywords: ["panel border"], highlightID: SettingsTab.lockScreen.highlightID(for: "Show panel border")),
             SettingsSearchEntry(tab: .lockScreen, title: "Enable media panel blur", keywords: ["blur", "media panel"], highlightID: SettingsTab.lockScreen.highlightID(for: "Enable media panel blur")),
+            SettingsSearchEntry(tab: .lockScreen, title: "Fullscreen video artwork", keywords: ["animated artwork", "apple music", "wallpaper"], highlightID: SettingsTab.lockScreen.highlightID(for: "Fullscreen video artwork")),
             SettingsSearchEntry(tab: .lockScreen, title: "Show lock screen timer", keywords: ["timer widget", "lock screen timer"], highlightID: SettingsTab.lockScreen.highlightID(for: "Show lock screen timer")),
             SettingsSearchEntry(tab: .lockScreen, title: "Timer surface", keywords: ["timer glass", "classic", "blur"], highlightID: SettingsTab.lockScreen.highlightID(for: "Timer surface")),
             SettingsSearchEntry(tab: .lockScreen, title: "Timer glass material", keywords: ["frosted", "liquid", "timer material"], highlightID: SettingsTab.lockScreen.highlightID(for: "Timer glass material")),
@@ -5391,6 +5392,13 @@ struct LockScreenSettings: View {
                     }
                     .disabled(!enableLockScreenMediaWidget || !lockScreenMusicFullscreenArtworkEnabled)
                     .settingsHighlight(id: highlightID("Keep album art visible during fullscreen artwork"))
+                    Defaults.Toggle(key: .lockScreenMusicFullscreenVideoArtwork) {
+                        Text("Fullscreen video artwork")
+                    }
+                    .settingsHighlight(id: highlightID("Fullscreen video artwork"))
+                    Text("Uses Apple Music to fetch animated artwork for the lock screen wallpaper.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Right-click the album art on the lock screen to set it as the wallpaper. Right-click again or click the background to restore the original wallpaper. If a canvas is available, Gourd can also keep the same album art + player layout on top of the live canvas.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
