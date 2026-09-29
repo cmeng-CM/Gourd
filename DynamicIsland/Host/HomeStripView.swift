@@ -382,8 +382,13 @@ struct HomeStripView: View {
                     // 提示位**锚在尾部边缘**（`x = available − droppedHintWidth`，D-01）：**不要用
                     // `plan.leftover` 反推**——它的口径是「未被使用的尾部空间总量」，丢块路径下按缩减后
                     // 的宽度算，拿它算坐标既可能越界也不是对齐依据（docs/17 已知限制 11）。
-                    // `tailReserveUsed` 为真 ⟹ 这份 plan 是按 `available − 34` 分配的 ⟹ 它的总宽
-                    // 不超过 `available − 34`，所以这个 x 恒非负、且提示不与任何可见块重叠。
+                    // `tailReserveUsed` 为真 ⟹ 这份 plan 是按 `max(0, available − 34)` 分配的，于是
+                    // **在 `available >= droppedHintWidth` 这个前提下**（生产路径恒成立：面板宽度有
+                    // 下限，可用宽远大于 34）它的总宽不超过 `available − 34`，x 因此非负、提示也不与
+                    // 任何可见块重叠。**前提不成立时 x 会为负**（可用宽 < 34：分配那一侧被 `max(0, …)`
+                    // 钳到 0，坐标这一侧仍按完整的 `available` 算）——那条路径今天不可达（规则 ③ 对
+                    // 非空 `items` 至少保住第一块，`visibleCount >= 1` 恒成立，见 `HomeStripLayoutMath.plan`
+                    // 的第 ③ 步），写在这里只为别把「非负」读成无条件结论。
                     droppedHint(
                         count: plan.droppedCount,
                         names: droppedNames(blocks, visibleCount: plan.visibleCount)

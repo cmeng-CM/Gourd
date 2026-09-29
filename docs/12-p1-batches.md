@@ -123,6 +123,19 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 待办展开面板四视图左导航 + 右看板 + 行内优先级胶囊（异步写回系统提醒）；首页块顺序可在设置页上移/下移。设计文档 [18](18-p1-todos-and-order.md)。**A2（折叠态左右槽位）未随批落地**：它依赖状态/动作类模块（农历 / 计时器 / 剪贴板 / 启动台，属 P2a），做出来会是空槽位。
 
+### 已交付 · `p2-honesty`（2026-09-30）
+
+两处「界面没说清楚」各修一处，设计 [21](21-strip-honesty.md)（D-01…D-08）。
+
+- **首页丢块不再无声**：条尾 `＋N` 小胶囊（悬停列被丢块名，用户据此知道"把面板拉宽就能看见"）。预留位在**纯函数**里定（`plan(…:tailReserve:)` 第四参 + `Plan.droppedCount` / `tailReserveUsed`，缺省 0 = 改动前行为）；视图与 Layout 的宽度声明**同源**（视图先把每块宽度解析成非可选数组，同一个数组既喂块壳也喂 `HomeStripLayout(items:tailHintWidth:)`，Layout 不再从 subviews 取声明/测量）。**丢块规则一字未动**（仍从尾部丢、不滚动、不压扁，[17](17-nookx-adoption.md) D-02/D-03 不变）；边界处可能因此多丢一块（[21](21-strip-honesty.md) §已知限制 6）。
+- **通知的 × 说实话**：只动文案与文档，**不动取数与关闭实现**（D-04）。列表行 × 的 `.help` 与**新增的 `.accessibilityLabel`**（此前只有 `.help`、读屏读不到）按 `NotificationStore.willAlsoCloseSystemBanner(for:)` 分档——判据与 `dismiss` 内部那条**同一份**（抽成私有 `listRowCloseHandle` 两处共用）：有句柄 → 「同时关掉系统通知」、否则 → 新 key `module.notifications.removeFromList`（中英 `translated`）；`readOnlyNote` 中英同步。四格语义表落在 [09](09-features-and-mechanisms.md) §5.5。
+- **测试**：`DynamicIslandTests` **315 条 0 失败**（`HomeStripLayoutTests` 17 → **21**：新增四组预留位用例——不丢块不预留 / 生产档 702 可见块数不变 / 边界档 660 多丢一块 / 缺省 0 等价）。改动文件新增告警 0。
+- **覆盖审计**：`workflow.py check p2-honesty` 零 ERROR；本条覆盖表五行的产物（`DynamicIslandTests/HomeStripLayoutTests.swift`、`DynamicIsland/Host/HomeStripView.swift`、`DynamicIsland/Modules/NotificationsModule.swift`、`docs/21-strip-honesty.md`）均在；验收 grep 全命中（`blockWidths` / `droppedHintWidth` 在 `HomeStripView.swift`；`removeFromList` 在模块与 xcstrings 各一处；`willAlsoCloseSystemBanner` 有定义 `:422` 与调用点 `:1272`）。
+- **零权限边界**：不新增 TCC 权限、不引入私有 API、不新增出站请求、不新增子进程（与 `p2-home-strip` / `p2-takeover` 同一条）。
+- **遗留**（详见 [21](21-strip-honesty.md) §实际交付）：实机 `＋1` 观感与「点通知 × 之后 `performAndVerify` 的返回」都**没有本批的现场证据**（后者受已装实例的 DB 通道被 TCC 拒绝 + 本机无横幅上屏所限）；两处无自动化断言（`HomeStripLayout` 的 Cache 复用判据、通知谓词与新 key）；浮层 × 的无障碍标签仍是缺口。
+
+提交范围 `682b4bd8..d23ede48`（T1 `8eafb8be`：纯函数预留位 + 同源重构 + 提示视图 + 4 条用例；T2 `d23ede48`：只读谓词分档文案 + `docs/09` §5.5 四格表）。`docs/17` 已知限制 22 已就地改判（"strip 没有 `+N` 提示"那条关闭）。
+
 ### 下一批 · 登记（2026-09-29）
 
 > **2026-09-29 增补**：下一批的完整优先级清单（含本批暴露的缺口）已收在 [16](16-nookx-reference.md) **§4.4**，按 P0 / P1 / P2 分档并给了成本、依赖与判据。**P0 四项**：~~① 通知组件在首页有块~~、~~② 组件卡片说清"开了会看到什么、在哪看"~~、~~③ 待办块窄宽度下也显示清单~~（**三项已在 `p2-p0-visible` 批次落地，2026-09-29**）；**④ 月历入口回归仍待做**（需要先定形态：点日期头进月历 vs 加一个 calendar tab——这是产品选择，等用户拍板）。下面四项属 **P1**。
