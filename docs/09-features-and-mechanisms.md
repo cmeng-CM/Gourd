@@ -345,6 +345,28 @@
 | 测试 | `TodoBucketing` 是纯函数（注入 `Calendar` + `now`）：分类与计数、`0/0` 边界、周区间随 `firstWeekday`、自然日半开区间边界、manifest 契约、本地化 key 可解析。**增删的校验与构造同样是纯函数**（`TodoComposer` / `TodoRingLayout`）：标题去空白后为空 → 拒绝、今天 / 明天 → 当天 00:00 的年月日组件（不带时分 = 全天口径）、无日期 → nil、默认列表为 nil 的兜底、三环直径随可用高度收缩 |
 | 工作量 | 低～中（1～2 天；**已落地**，P1 批次 T5） |
 
+### 5.8 首页 strip（2026-09-29 增补）
+
+展开面板首页从「音乐 + 日历两栏写死」改成**一条横向 strip**（用户定稿的结构，来源 [16](16-nookx-reference.md) §5.1 要点 5「首页 = 已开启组件的横向拼装」）。模块系统由此第一次变成用户可见的产品面：**开关即拼装**。
+
+| 项 | 设计 |
+|---|---|
+| 块的来源 | 两类同构渲染：**宿主内置三块**（音乐 / 日历 / 镜子）+ **声明了 `home` 的模块块**。模块块的名单只有一个权威源：`ModuleRegistry.homeEntries`（`active` 且 `surfaces` 含 `.home`，排序键 `(order, id)`，与 `tabEntries` / `compactEntries` 同一个比较器）；宿主再过滤掉「本次 `content(for: .home)` 答 `.none`」的条目（声明是"愿意占一块"、内容是"这一刻有没有东西可画"，两者分开） |
+| 内置块的门控 | 音乐 = `showStandardMediaControls`（再叠加 `autoHideInactiveNotchMediaPlayer` → `musicManager.hasActiveSession`）；日历 = `showCalendar`；镜子 = `showMirror`（再叠加 `webcamManager.cameraAvailable` 与展开态）。条件不满足的块**根本不生成**（用"有/无"而不是透明度——否则它仍占宽度、仍参与布局） |
+| 块宽 | 固定常量声明（[17](17-nookx-adoption.md) §接口与数据形状 6）：音乐 `300 / 420`、日历 `200 / 260`、镜子 `140 / 160`、**模块块宿主统一 `180 / 240`**。约束经 `HomeBlockWidthKey`（`LayoutValueKey`）**显式声明**，测量只作取不到声明时的回退——含 `GeometryReader` 的视图在 `.unspecified` 测量下只报约 10pt，靠测量会算出约 6pt 的块 |
+| 宽度分配 | 纯函数 `HomeStripLayoutMath.plan(items:available:spacing:)`，三条规则**按序判定**：① **富余不拉伸**——块保持理想宽度、余量留尾部（用户原话"不能强硬拉伸，菜单栏里面的图标都变形了"）；② **不足但够最小宽度和**——按可压缩量比例压缩、向下取整到 0.5pt；③ **连最小宽度和都不够**——从**尾部**逐块丢弃（丢块比压扁更可读）。**不滚动、不分页、不加 `ScrollView`** |
+| 渲染 | `DynamicIsland/Host/HomeStripView.swift`（按分配结果摆放 + 每块画什么）+ `HomeStripLayoutMath.swift`（纯几何、无 SwiftUI，故可被单测穷举）。`sizeThatFits` 与 `placeSubviews` **共用缓存里同一份 plan**（规则② 不幂等，各算一次会得到两组宽度）；被丢弃的块必须**显式 `.zero` 提案**，否则 SwiftUI 会把没被 `place` 的子视图按容器中心叠画到已摆放块之上 |
+| 日历块 | **自建**（不是 `StandaloneCalendarView`）：一行日期头 + hover 展开的 `WheelPicker` 日期轮 + `EventListView` 竖向紧凑多行。理由：`StandaloneCalendarView` 是"双栏月历 + 可滚动事件面板"，塞进 200～260pt 的块里不可用；但**翻日期的能力保留**（日期轮照 `CalendarView` 的收起 / 展开做法），否则"首页日历"只能看今天。**月历 `StandaloneCalendarView` 在展开面板没有入口**——改前它也只在"未开音乐"时作为首页右栏出现，本批之后只剩 `#Preview`（本次唯一的能力收缩，见 [17](17-nookx-adoption.md) 已知限制 8） |
+| 待办块 | `todos` 是唯一声明 `home` 的模块：三环横排（今日 / 本周 / 所有，复用展开 tab 的同一个 `TodoScopeRing`）+ 今日清单前 5 条；**块宽 < 220pt 时只画三环**（判据取放置后的实测宽度）。默认面板宽下三块并列的真实分配约 `[325, 212.5, 192.5]`，待办块 192.5 < 220 → **默认看不到清单**，要出现需面板约 1000pt 宽 |
+| 组件开关 | 设置页新增第 22 个 tab「组件」（`SettingsTab.modules`）：一张卡 = 一个已注册模块（**数据源是 `ModuleRegistry.manifests` 全量**，含未启用——用 `tabEntries` 会让关掉的组件从列表里消失、再也开不回来）。卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关；宿主内置三块**不在此页**（它们由上游 `Defaults` 键门控，卡片页顶部有一行说明作缓解） |
+| 开关的写路径 | **先落盘再改内存**：先写 `Defaults[.moduleEnableOverrides]`（`[String: Bool]`，**缺键 = 用户未表达**，回落 `manifest.defaultEnabled`），再 `await ModuleRegistry.setEnabled(_:for:)`。置开走与启动同一条实例化 + `activate()` 路径；置关 `deactivate()` 后摘实例。activate 失败 → 开关回弹，回弹**只把偏好写回 `false`**、绝不再调 `setEnabled(false)`（`failed` 不可逃逸，见 [13](13-runtime-kernel.md) 本批小节） |
+| 边界 | **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 与 `shouldShowSideLyrics` 两条路径逐字未动，因此"首页 = strip"只在标准路径成立 |
+| 权限与出站 | **本批零新增权限**：没有新 capability、没有新 TCC 授权、没有新出站请求。首页块都是进程内视图，组件开关只写本机偏好（与 [06](06-module-protocol.md) §7.1 的边界一致） |
+| 测试 | `HomeStripLayoutTests`（16 条，三条规则 + 边界 + 不变量）、`ModuleToggleTests`（14 条，`setEnabled` 幂等 / 终态 / 代次作废）、`ModuleKernelTests` 里的 todos 与首页投影断言；`DynamicIslandTests` 合计 **199 条** |
+| 工作量 | 中（5 个实现任务，**已落地**，P2 批次 p2-home-strip，2026-09-29） |
+
+**不做**（与首页 strip 无耦合或需要本批没有的事件源）：折叠态左右槽位的图标网格、待办面板"左导航 + 右看板"重构、前台应用联动、充电瞬浮——四项均已登记为下一批（[12](12-p1-batches.md)）。
+
 ---
 
 ## 6. 路线图映射

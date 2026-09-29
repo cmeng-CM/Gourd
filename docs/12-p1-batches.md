@@ -67,3 +67,39 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 | **壶中天图标** | `AppIcon`（Release）/ `AppIconDev`（Debug，绿色 DEV 角标）十档全换 + 新 `GourdLogo` imageset（菜单/引导页用）；上游 `logo/logo2/ebullioscopic/LinkedIn` imageset 删除；SVG 源存 `tools/icons/` |
 | **启动期主线程阻塞修复 ×2** | ① `DownloadManager`：init 在主线程同步枚举 TCC 保护的 `~/Downloads`，授权弹窗未响应即死锁（本地冷启 + CI headless 双杀）② `BluetoothAudioManager`：`IOBluetoothHostController.default()` 在 XCTest 宿主下 dispatch_once 卡死主队列。两处均已改为后台队列探测；本地单测恢复 **27/27**。**CI "test runner hung" 高度疑似同根因**，推送后观察 |
 | **稳定签名身份 + 本地打包闭环** | ① 自签 10 年期证书 **`Gourd Local`**（`tools/setup-signing.sh`，pw 用户域信任；身份写入 pbxproj app target）——修复「ad-hoc 每次构建都变哈希 → TCC 授权反复弹」：**装一次、授一次，升级不再弹**；② `sh tools/build.sh` 支持 `--install` / `--dmg`（拖拽安装式 DMG 出到 `dist/`，`*.dmg` 已 ignore）——**打包全在本机完成，不依赖 GitHub**（`release.yml` 早已摘 push 触发、仅手动；其内容是上游签名/公证流程，本项目不采用） |
+
+---
+
+## 已交付批次记录
+
+### P2 批次 · `p2-home-strip`（2026-09-29）
+
+**范围**（用户定稿）：首页从「音乐 + 日历两栏写死」改为「已开启组件的横向 strip」（manifest 驱动、富余不拉伸、不滚动），并补上模块运行期开关与设置页「组件」卡片，让"开关即拼装"闭环。设计文档 [17-nookx-adoption.md](17-nookx-adoption.md)（D-01…D-14）。上下文：它是 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组 6 项里**第 1 项与第 3 项**的落地。
+
+提交范围 `1e8c8c0c..5b9c3c8b`（`1e8c8c0c` 是设计文档先行提交，`701452a0`…`5b9c3c8b` 是 5 个实现任务及跟随的文档回写；本批的文档回写提交在其后）。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1 | 内核：`.home` surface + `homeEntries` 投影 + 布局纯函数 | `Surface` 加 `home`（校验规则未变）；注册表加 `ModuleHomeEntry` / `homeEntries`（排序键 `(order, id)`，与另两条投影同一比较器）；`HomeStripLayoutMath.plan` 三条规则（富余不拉伸 / 比例压缩取整 0.5pt / 尾部丢块）落成纯函数，契约与浮点边界写进 [17](17-nookx-adoption.md) 已知限制 10~11 |
+| T2 | 内核：运行期模块开关 | `ModuleRegistry.setEnabled(_:for:)`（幂等；未知 id 记 warning 返回 `.disabled`）＋偏好键 `Defaults[.moduleEnableOverrides]`（**缺键 = 用户未表达**，回落 `manifest.defaultEnabled`）＋组合根启用门 `KernelBootstrap.enablementGate(registry:)`；**`failed` 定为不可逃逸终态**（置开不重试、置关不降级，D-13），`.activating` 期间的异步写回由**全局单调代次**作废 |
+| T3 | 首页 strip 渲染器 + `NotchHomeView` 接缝（内置块） | 新建 `HomeStripView` + `HomeStripLayoutMath`；`NotchHomeView` 的**标准分支**改为渲染 strip，minimalistic UI 与歌词侧栏两条路径未动；内置三块（音乐 `300/420`、日历 `200/260`、镜子 `140/160`）就其位；日历块**自建**（日期头 + hover 日期轮 + 竖向多行），保留翻日期能力；`sizeThatFits`/`placeSubviews` 共用缓存 plan、丢块显式零提案两条硬约束写进 [17](17-nookx-adoption.md) 已知限制 12~15 |
+| T4 | 待办模块的首页块 | `com.cmeng.gourd.todos` 的 `surfaces` 加上 `home`；首页块 = 三环横排（复用同一个 `TodoScopeRing`）+ 今日清单前 5 条，**块宽 < 220pt 时只画三环**（判据取放置后实测宽度）。默认面板宽下只有三环，已知限制 16~19 |
+| T5 | 设置页「组件」卡片（新增 tab） | 新增第 22 个 `SettingsTab.modules`：一张卡 = 一个已注册模块（数据源 `ModuleRegistry.manifests` **全量**）；写路径定死「先落盘 `moduleEnableOverrides` 再 `setEnabled`」，失败回弹只把偏好写回 `false`；卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关 |
+| T6 | 文档回写 | 本表 + [06](06-module-protocol.md)（`home` 入词表）/ [09](09-features-and-mechanisms.md) §5.8（首页 strip）/ [13](13-runtime-kernel.md)（本批小节与已知限制 31~35）/ [14](14-module-manifests.md)（todos 行）/ [16](16-nookx-reference.md)（§4.2 本批状态列） |
+
+**本批边界（零新增权限）**：没有新 capability、没有新 TCC 授权、没有新出站请求。首页块都是进程内视图，组件开关只写本机偏好。
+
+**本批没做**：折叠态左右槽位的图标网格、待办面板"左导航 + 右看板"重构、前台应用联动、充电瞬浮（见下表）。
+
+**测试**：`DynamicIslandTests` **199 条**（本批新增 `HomeStripLayoutTests` 16 条 + `ModuleToggleTests` 14 条，`ModuleKernelTests` 增补 todos 与首页投影断言）。
+
+### 下一批 · 登记（2026-09-29）
+
+四项都来自 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组（"值得参考"6 项）里本批未落地的部分；本批的「明确不做」已逐条给过排除理由（[17](17-nookx-adoption.md)）。
+
+| # | 项 | 来源 |
+|---|---|---|
+| A2 | 折叠态两侧槽位的"可视化图标选择网格" | [16](16-nookx-reference.md) §4.2 A 组第 2 项 |
+| A4 | 待办面板的"左导航 + 右看板"与优先级胶囊 | [16](16-nookx-reference.md) §4.2 A 组第 4 项 |
+| A5 | 前台应用联动显示 | [16](16-nookx-reference.md) §4.2 A 组第 5 项 |
+| A6 | 充电接入时的瞬浮 | [16](16-nookx-reference.md) §4.2 A 组第 6 项 |

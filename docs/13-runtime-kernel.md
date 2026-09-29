@@ -304,6 +304,89 @@ public final class ModuleHUDWindowHost {
 - **P1-2 起手项**：`NotchStateMachine`（纯逻辑 + 四态单测）、`isHovering` 提升为可观测量、模块自报高度、视图超时保护与 `degraded`、`swift-format` 门禁对 `{Kernel,Modules}` 转 blocking
 - **P1-3 起手项**：`EventHandle`（含 `onEvent` 加回，破坏面见已知限制 9）、`ModuleStorage`/`ModuleScheduler`/`SecretHandle`/`PermissionHandle`/`NotchHandle`、完整 `ConfigStore(JSON)` 与 UserDefaults 覆盖值迁移（已知限制 12）、06 §7.1 补三个 capability
 
+---
+
+## 本批（p2-home-strip，2026-09-29）新增 / 变更的口径
+
+> 本批的设计文档是 [17-nookx-adoption.md](17-nookx-adoption.md)（决策编号 D-01…D-14 属**该文件**，与本文 D-01…D-30 **不是同一套编号**，引用时写清文件）。本节只记落到内核面（协议 / 注册表 / 组合根 / 偏好键）的口径；渲染与布局规格见 [09](09-features-and-mechanisms.md) §5.8。
+
+**1. `Surface.home`（协议层，[06](06-module-protocol.md) §6.1 的第四个取值）**
+
+```swift
+public enum Surface: String, Codable, Sendable, CaseIterable { case compact, expanded, lockscreen, home }
+```
+
+- **校验规则不变**：`surfaces` 仍是非空子集；元素合法性由 `Codable` 解码保证，`ModuleManifest.validate()` 仍只管"非空"这一条（它不认识有哪些取值）。
+- **`home` 与 `compact` / `expanded` 并列**：声明它 = "愿意在首页 strip 占一块"，与"有没有展开 tab"互不蕴含。
+- **不新增 `hud` 之类的 surface**：瞬时浮层仍是 `expanded` 的一种呈现方式（06 §6.1 原文，本批未动）。
+
+**2. `ModuleRegistry.homeEntries`（注册表的第三条投影）**
+
+```swift
+public struct ModuleHomeEntry: Identifiable, Equatable {
+    public let id: String
+    public let label: String        // 复用 label(for:) 的解析顺序
+    public let symbolName: String
+    public let order: Int           // defaultPlacement.order，缺省 Int.max
+}
+
+/// active 且 surfaces 含 .home，排序键 (order, id)——与 tabEntries / compactEntries 同一比较器
+public var homeEntries: [ModuleHomeEntry] { get }
+```
+
+- **声明与内容分离**：投影是"声明"（manifest 说愿意占一块），`content(for: .home)` 是"表态"（这一刻有没有东西可画）。宿主侧再过滤一次答 `.none` 的条目——**投影层不做这件事**，否则一次 `.none` 会影响后续刷新。
+- **与另两条投影一样不做缓存**：每次读都现算（`manifests` / `states` 都是 `@Published` 的派生量，缓存会让"注册后 / 激活后 / 停用后"三个时刻的视图不一致）。
+- `defaultPlacement.order` 由此**第三次**被当作排序键（前两次是 expanded tab 与 compact 槽位），双语义现状见已知限制 25；首页块顺序不新增字段（[17](17-nookx-adoption.md) D-04）。
+
+**3. `ModuleRegistry.setEnabled(_:for:)` 的状态机**
+
+```swift
+/// 置开：与 bootstrap() 同一条实例化 + activate 路径；置关：deactivate 后摘除实例。
+/// 幂等；failed 是终态，置开不再重试。返回迁移后的状态（供卡片回弹）。
+@discardableResult
+public func setEnabled(_ enabled: Bool, for id: String) async -> ModuleRuntimeState
+```
+
+| 入口状态 | 置开 | 置关 |
+|---|---|---|
+| 未注册 id（`manifests[id] == nil`） | 记 warning、返回 `.disabled`（不崩、不凭空造状态） | 同左 |
+| `.active` / `.activating` | **原样返回**（幂等，不重复实例化） | `.active` → `deactivate()` + 摘实例 + 落 `.disabled`；`.activating` → 落 `.disabled`（其收尾由**代次比对**拦下，不写回任何状态） |
+| `.failed` | **原样返回**（终态不重试，06 §3.3 硬性规则 1） | **原样返回**（不改状态、不碰实例） |
+| `nil`（已注册未判定）/ `.disabled` | 走 `activateIfNeeded`（返回时通常是 `.active` / `.failed`；并发下可能拿到 `.activating`，调用方按"进行中"处理即可） | 落 `.disabled`（幂等） |
+
+三条硬口径：
+
+- **`failed` 不可逃逸**（[17](17-nookx-adoption.md) D-13）：置关**不把它降级成 `.disabled`**。写成 `disabled` 会让下一次置开真的重试，与 06 §3.3 硬性规则 1「`failed` 不重试」矛盾——也就是说**没有"关一下再打开"这条复活路径**，等价于"要恢复只能重启应用"（原本就写下的口径，现在代码也守它）。设置页的开关在 `.failed` 上同时**禁用点击**，失败回弹只把偏好写回 `false`、绝不再调 `setEnabled(false)`。
+- **代次作废 `.activating` 期间的状态写回**：`activate()` 完成时比对 `activationGeneration[id]`，不匹配就**不写 `states` / `instances`**（只记一条日志）。取号器**全局单调、不回退**，因此同一 id 重新注册也拿不到旧号（无 ABA）。这是"置关之后那条在飞的 `activate()` 不会把状态改回 `.active`"的机制。
+- **只改内存状态、不写偏好**：`Defaults[.moduleEnableOverrides]` 由设置页负责落盘，内核不知道"用户偏好"这一层。每次调用记一条 `os.Logger`（`setEnabled(id:on:from:to:)`），便于排查"关了还在跑"。
+
+**4. `Defaults[.moduleEnableOverrides]` 的缺键语义**
+
+```swift
+// DynamicIsland/models/Constants.swift（// MARK: - Modules 段）
+/// 组件开关的用户显式选择。**缺键 = 用户未表达**（回落到 manifest.defaultEnabled），
+/// 不是 false——升级用户的首次行为必须与升级前一致。
+static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
+```
+
+用**一个字典**而不是"每个模块一个键"：后者会凭空产生 17 个键与第二份真源（[17](17-nookx-adoption.md) D-05）。写入是全字典读改写（与既有字典型 `Defaults` 写入同形），只在用户真的动了开关时写键。
+
+**5. `KernelBootstrap.enablementGate(registry:)`（组合根的启用门）**
+
+```swift
+/// 键在 `moduleEnableOverrides` 里就取键值（用户显式表达，压过 manifest），
+/// 否则取 manifest.defaultEnabled，否则 false
+static func enablementGate(registry: ModuleRegistry) -> (String) -> Bool
+
+registry.register(builtinModules, enabled: enablementGate(registry: registry))
+```
+
+`register` 的签名不变（门仍是注入的闭包），**变化只在组合根传什么闭包**：由"纯 manifest 默认值"改为"先看用户显式选择，再回落 manifest"。偏好键的**消费点唯一**就是这里。
+
+**6. 零新增权限 / 零出站请求**：没有新 capability、没有新 TCC 授权、没有新网络请求。首页块都是进程内视图，组件开关只写本机偏好（06 §7.1 词表 15 项本批未动）。
+
+---
+
 ## 已知限制
 
 1. **`NotchViews` 不能加关联值**：`DynamicIslandViewCoordinator.swift:108/120` 的 `tabOrder.firstIndex(of:)` 与 `ContentView.swift:1113` 的 `.id()` 依赖它可比较、可哈希；本批用「无关联值 case + coordinator 侧 `selectedModuleID`」绕开。
@@ -341,6 +424,14 @@ public final class ModuleHUDWindowHost {
 29. **AX 横幅通道的三条形态约束**（2026-09-28，macOS 27 实测，细节见 [09](09-features-and-mechanisms.md) §5.5「AX 通道形态」）：① **App 名只能从横幅容器的 `AXDescription` 首段剥标题得到**（没有独立元素），剥不出来就给空——浮层左上会退化成通用文案（不猜、不拿标题冒充 App 名）；② **关闭是容器上的自定义动作**（`Name:关闭\nTarget:0x0\nSelector:(null)`），不是 `AXButton`：句柄类型因此是「元素 + 动作名」（`NotificationBannerCloseHandle`）而不是设计稿写的 `AXButton`，动作名必须**原样**回传；对 `AXPress` 只是「显示详细信息」；③ **动作返回值不可信**（传不存在的动作名也返回 `0`），成功判据改成「返回成功 **且** 元素随后失效」——因此「真关闭」是**尽力而为**：失败时按「仅从岛上隐藏」处理，不弹错误。另：AXObserver 本机实测不是每条横幅都触发，**0.5s 轮询是必需的**（不是可选优化）；通知中心进程会被系统重启（实测 `killall NotificationCenter` 后 pid 813 → 44809），观察器按 pid 变化重挂。
 
 30. **拖动把手的四条边界（含一条实测出来的既有缺陷）**（2026-09-29，D-29；① 按用户给的备选写法落地，②③④ 是落地时实测 / 推导出来的口径）：① **极简模式下把手不显示**（判据 `ContentView.showsPanelResizeHandle` = `notchState == .open && !enableMinimalisticUI`）。理由：那一档的尺寸来源是 `minimalisticOpenNotchSize`（固有基准 420×180、非刘海屏药丸 340×144，再叠加歌词 / 提醒 / 计时器的附加高度），`openNotchSize` 与 `Defaults[.openNotchWidth]/[.openNotchHeight]` **完全不参与**——vm 的宽度 sink 自己也带 `!enableMinimalisticUI` 前置；把手若照常出现，拖动只会写进一个**当场没有任何效果**的值（要等切回标准展开态才突然生效），与全篇在避免的「拖了没用」相悖。② **自有高度源的 tab 会盖掉拖动写入的高度**：`timer`（固定 250）、`notes` / `clipboard`（`max(默认高度, preferredHeight)`）、`terminal`（屏高 × `terminalMaxHeightFraction`）、`stats`（基准 + 行数 × 132）这几个分支在 `dynamicNotchSize` / `calculateRequiredNotchSize` 里另有加减法，因此这些 tab 上**宽度照常生效、高度可能看不出变化**（值已写进 `Defaults`，切回首页 / 模块 tab 即按拖动结果生效）。未按 tab 门控把手：判据只留「展开态 + 非极简」一条，避免把手在切 tab 时忽隐忽现。③ **拖动是「半程跟随」**：把手长在面板右下角、会随面板一起移动，`DragGesture` 的 `.local` 坐标系（把手自身）把面板的位移也算进 `translation`——实测比例（鼠标位移 → 尺寸变化）高度方向约 **0.5~1.0**（12 步 × 45ms 的合成拖动下测得 0.5~0.6，个别单步到 1.0），宽度方向约 **0.7~1.5**（面板水平居中，窗口左边界跟着动，放大方向会超过 1）。这是「固定起点 + 累计位移」口径的固有折损，换来的是**不会因窗口实时重排而抖动 / 越拖越快**（取舍见 D-29）。④ **`AppDelegate.shared` 在视图层取不到 → 高度原本没有实时链路**（实测发现，属既有缺陷）：本机注入拖动时，`ContentView.syncWindowSizeAfterPanelResize` 里 `guard let delegate = AppDelegate.shared else { return }` 直接走了 return（`log show` 看不到它之后的任何日志），也就是说**从视图层调 `ensureWindowSize` 是静默 no-op**。因此：**宽度**能实时跟随，靠的是 `DynamicIslandApp` 自己那条 `Defaults.publisher(.openNotchWidth)`（0.15s 防抖后重算窗口尺寸）兜底；**高度**原本无任何实时链路（`notchHeightChanged` 的观察者只做 `positionWindow`，用的是当前 frame 的尺寸，不重算）——设置页的高度滑块同样是「改完要重新展开一次才看得到」。把手上线时按 `AppDelegate.resizeWindow` 的同一口径**在视图层直接改窗口 frame**（+18 阴影与按屏外扩、宽按屏宽夹取、水平居中 + 顶边贴屏顶），高度这才随拖动实时生效。**未逐一验证**：`DynamicIslandViewModel` 里那几处 `AppDelegate.shared?.ensureWindowSize`（打开 / 关闭 / 歌词 / 笔记布局）是否同样失效——宽度与状态切换另有兜底路径，日常看不出问题，若要收敛应单独一笔。附实测得到的面板几何关系（可作为后续判断的尺子）：窗口高 = `addShadowPadding(内容高)`（+18）再按屏补外扩（刘海屏 +4），**面板的实际渲染高 = `min(内容高 + 12, 窗口高 − 22)`**——窗口尺寸正确时面板高 = `openNotchHeight`；窗口偏小时面板被裁（这正是④必须修的原因）。
+
+### 本批（p2-home-strip，2026-09-29）新增
+
+31. **首页 strip 不滚动、会丢块**：可用宽度压到各块最小宽度之和以下时，**尾部的块按 `order` 逐个消失**（丢块比压扁更可读，[17](17-nookx-adoption.md) D-03）。因此面板很窄（如宽度拖到 400pt）时首页只能看到前 1～2 块，且**被丢的块没有任何提示**。不滚动 / 不分页是刻意的：滚动与分页都会让首页"需要操作才能看全"，与"扫一眼就够"的定位相反。相关：`HomeStripLayoutMath.plan` 的浮点边界、丢块必须"显式零提案"、`sizeThatFits` 与 `placeSubviews` 必须复用同一份 plan 三条，见 [17](17-nookx-adoption.md) 已知限制 10/12/13。
+32. **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 走极简播放器、`shouldShowSideLyrics` 走"播放器 + 歌词侧栏"，两条路径逐字未动（[17](17-nookx-adoption.md) D-10）。因此"首页 = 已开启组件的 strip"**只在标准路径成立**。
+33. **宿主内置三块不出现在设置页「组件」页**：音乐 / 日历 / 镜子由上游 `Defaults` 键（`showStandardMediaControls` / `showCalendar` / `showMirror`）门控，不是模块，因此组件页只有模块卡片——用户会看到"组件页只有几张卡，但首页有更多块"的**不一致**。接受理由：提前把接管模块模块化会与上游设置页形成双份真源（[14-module-manifests.md](14-module-manifests.md) T-3）；缓解措施是卡片页顶部那一行说明。
+34. **`failed` 只能"重启应用 + 再打开一次"恢复**：`failed` 不可逃逸（[17](17-nookx-adoption.md) D-13，见本文「本批新增 / 变更的口径」3），开关在 `.failed` 上禁用点击，失败回弹只把偏好写回 `false`。**本次运行内没有任何恢复路径**——不重试、不做指数退避、不提供"重试"按钮；用户要恢复只能重启应用再打开开关。
+35. **待办块有 220pt 阈值，默认面板宽下只画三环**：首页块宽度由 `HomeStripLayoutMath` 分配，三块并列时真实分配约 `[325, 212.5, 192.5]`（770pt 面板 / 可用 754），待办块 192.5 < 220 → **只画三环、不画今日清单**。要让清单出现，面板需约 **1000pt** 宽（或减少并列块）；也就是说默认配置下"首页看到待办清单"这一条**不成立**。这是宽度预算的必然结果而非缺陷，判据取放置后的实测宽度（`GeometryReader`）不是测量值。
 
 ## 验收标准
 
@@ -386,3 +477,4 @@ public final class ModuleHUDWindowHost {
 | D-27 | **面板玻璃去边缘高光 + 顶部黑带取 max(刘海,菜单栏)+1 + 首页音乐区块成组顶部对齐 + 展开高度上限收 850**（2026-09-29，用户反馈驱动，四笔落地）：① **玻璃档两条白带的来源是组件自带的边缘高光**（用户反馈「glass 模式下有两个白条…不需要这个遮罩层」）：`NSGlassEffectView`（`.regular`）会在自己的轮廓上画一条镜面高光（上边最亮、下边次之），面板上表现为紧挨黑带下方一条亮白带 + 面板底部一条；本机实测（`screencapture` 逐行取像素）顶边起 `+0pt` 亮度 167、`+4pt` 136、`+16pt` 128 → 内侧 ~110，高光连着内侧渐变约 16pt。**没有可关闭的开关**（`style = .clear` 能去掉高光但把磨砂变成透明、背后文字变清晰，不用），故改为**几何规避**：`LiquidGlassBackground` 新增 `hidesEdgeHighlight`（默认 `false`，四边约束外扩 `LiquidGlassEdgeHighlight.overhang = 20pt`），只在**主面板这一处**开启；同时 `panelOpaqueTopBand(_:)` 从 `VStack` 改为 `ZStack(alignment: .top)`（黑带画在玻璃**上层**）——否则外扩后浮到黑带区间的上边沿高光仍会压在黑带上。锁屏 / OSD / Vertical HUD 的玻璃用法一字未动。② **顶部不透明带高度**：`panelTopOpaqueBandHeight(safeAreaTop:menuBarHeight:panelTopBleed:)` 从「刘海屏取刘海高度」改为 **`面板顶边相对屏顶的外扩 + max(刘海, 菜单栏) + 1`**（用户反馈「顶部的高度不够，比系统的黑色区域要窄」）——本机内置屏刘海 32 / 菜单栏 33，只取刘海高度时玻璃正好从那 1pt 露出来；且黑带是从**面板框顶边**往下画的、而系统 UI 带是从**屏顶**量的，刘海屏面板框顶边比屏顶高 `notchTopScreenBleedAmount`（4pt）→ 不补这段差额时屏幕上能看到的黑带只有 `高度 − 4`（实测配 34 时只黑到 29.5pt，露出 4pt 玻璃）。补上后本机实测黑带覆盖 0…33.5pt（系统黑区 0…33），严丝合缝。两个输入都 ≤ 0 时仍返回 0（不凭空多出一条黑边）。③ **首页音乐区块成组顶部对齐**（用户反馈「音乐播放的时候控制按钮在最下面，不在播放的区域」）：根因是 `MusicControlsView` 里宽度测量用的 `GeometryReader`（宽高双向贪婪）把「标题+进度」撑满整个面板高度、而控制按钮行是它的**兄弟节点**；改为把按钮行收进同一个 `VStack` 并整体 `.frame(maxHeight: .infinity, alignment: .topLeading)`，按钮紧跟进度条、空白留在下方（封面尺寸 / 圆角 / 进度条 / 按钮外观顺序未动；日历侧本来就是固定 120pt + `.top` 对齐，未改）。④ **展开态高度可配上限 1000 → 850**（用户明确「展开的高度最高是 850」）：只改 `openNotchHeightRange`，设置页滑块与运行时夹取同源（`effectiveOpenNotchHeightUpperBound` = `min(850, 屏 visibleFrame.height × 0.9)`，下界 120 恒定） | 用户（「两个白条 / 不需要这个遮罩层」「顶部比系统黑区窄」「控制按钮在最下面」「展开高度最高 850」）+ agent（实测取证与落点） | **为什么用外扩而不是换 variant 或改 style**：20 个 variant 的差异只在材质浓淡，边缘高光是 `.regular` 玻璃的统一绘制；`.clear` 去除高光的代价是失去磨砂（本机实测背后文字变清晰），与「面板底」的用途相悖。外扩是**纯几何**手段：不依赖任何私有属性，高光随玻璃一起移出宿主可见区（上边沿隐没在黑带区间、下边沿与左右被 `resolvedClipShape` 裁掉），可见区只剩平坦材质，面板形状与圆角完全不变。代价：玻璃视觉上不再有边缘「包边」，且外扩区域仍参与 behindWindow 采样（多采 20pt，无观感影响）。**为什么黑带要压在上层**：外扩后玻璃的上边沿落在黑带区间内，`VStack` 里玻璃后画 → 高光浮在黑带上（白条照旧），只有层级颠倒才压得住。**`+1` 与 `+bleed` 的来历**：`+1` 只补「刘海高度 vs 菜单栏高度」这 1pt 的取整差，面板整体高度与折叠态形态都不变（多盖 1pt 系统黑区，肉眼不可辨但消除了露缝）；`+panelTopBleed` 补的是「黑带从面板框顶边画、系统黑区从屏顶量」这段错位（非刘海屏的浮动药丸没有这段外扩，故取 0）。**黑带用玻璃的顶端 `overlay` 画**（不是 `VStack` 里的兄弟节点）：外扩后的玻璃上边沿落在黑带区间内，只有把黑带放在玻璃上层才压得住；也刻意不用 `ZStack`（背景根由多子视图决定尺寸时，`.background` 的居中摆放会让黑带整体上浮 4pt——实测就是这样）。**为什么上限是 850 而不是继续按屏收敛**：850 之后用户认为「再高只是空白」，收敛到常量后滑块区间、夹取、设置页显示三处同源，不存在拖了没用。**没验证的部分**：① 外扩后玻璃边缘的观感（是否仍像玻璃）需用户实机确认；② 400/850 两档下控制按钮的相对位置由像素截图证明，但**面板内的音乐内容本身**需要用户开着音乐实测 |
 | D-28 | **`UIHandle` 新增 `requestCollapse()`——06 §3.4 `NotchHandle.requestCollapse(reason:)` 的过渡实现**（2026-09-29，通知模块「点消息后刘海要自动收起」驱动）：① 协议加一条 `func requestCollapse()`（`docs/06` §3.4 写了 `requestCollapse(reason:)`，本批**不带 `reason`**——还没有诊断面板消费它，P1-2 的 `NotchStateMachine` 一起补）；② `ModuleContextFactory.make(manifest:redraw:collapse:)` 加第三个形参（**默认 `{}`**，向后最小：既有单测与「注释掉一行」的启动路径都不必改），`RedrawUIHandle` 原样转发；③ `ModuleRegistry.bootstrap(collapse:)`（默认 `{}`）只做透传，`KernelBootstrap.bootstrap(collapse:)`（默认 `{}`）是组合根的注入点；④ 应用侧接线在 `DynamicIslandApp.swift:684` 的 `Task { await KernelBootstrap.bootstrap(collapse:) }`——闭包按既有的 `activeVM` 口径解析「哪块屏」（`showOnAllDisplays` 下取鼠标所在屏的 VM，否则主 VM；与 `toggleNotchOpen` / clipboard 快捷键逐字同一套写法），`notchState == .open` 才 `close()`，**调用时**解析（启动阶段窗口未建好也无妨） | 用户（「点击可以打开应用，这个地方要做下处理，在消息面板点击消息后，刘海要自动收起」）+ agent（落点与取舍） | **为什么不做完整的 `NotchHandle`**：只做「收起」一条是因为**当前唯一消费者**是通知列表行点击（打开 App 后把面板收起来）；`requestExpand` / `phase` / `geometry` 的消费者（模块自己驱动展开、按 phase 分支渲染）本批不存在，提前固化只会让 P1-2 的状态机去适配一个猜出来的形状。**为什么闭包由应用侧注入、内核不做裁决**：06 §3.3 R1 的「模块不得自己碰窗口」在**内核**这一层同样成立——注册表拿不到 `DynamicIslandViewModel`，也拿不到「鼠标在哪块屏」；把闭包从组合根一路透传到 `RedrawUIHandle` 之后，内核只知道「有个模块请求收起」，「哪块屏、能不能收、收起动画」全在应用侧一处裁定，单测注入计数器即可断言转发。**默认 `{}` 的代价**：没有接线时这条请求静默无效（不崩、不降级），这与 D-05 的「未实现面先不给」同口径——但**不是**「先留着以后接」：应用侧的唯一调用点在同一笔改动里已接线。**没验证的部分**：收起动画与「先开应用再收起」的体感需实机确认（单测只钉「顺序是 openApp → collapse」与「闭包被转发」） |
 | D-29 | **展开态右下角拖动把手：一个拖动同时改宽高**（2026-09-29，用户选定方案 B，见「已知限制」30）：① **把手**落在 `ContentView.mainLayoutBase` 的 `.overlay(alignment: .bottomTrailing)`（画在 `clipShape` 之后、`compositingGroup` 之前）——只在 `vm.notchState == .open && !enableMinimalisticUI` 时出现；形态是 9pt 圆点（`Color.white.opacity(0.45)`，拖动中提亮到 `0.85`）+ 20pt 命中框，命中框距面板右下角各 14pt（圆点中心因此落在右下圆角内侧）。② **交互**是 `DragGesture(minimumDistance: 0)` + `.highPriorityGesture`：面板自己带着 `onTapGesture`（点一下展开 / 收起）与四条 `panGesture`，子视图手势本就优先，这里再显式提一档，**这四条既有手势一字未改**；`onChanged` 用**拖动开始时捕获一次的起点尺寸**（第一次 `onChanged` 取当前生效的 `openNotchSize`）+ `value.translation` 算新尺寸，`onEnded` 再算一次并写一遍。③ **写入链路与设置页滑块同源**：`Defaults[.openNotchWidth]` / `[.openNotchHeight]` + post `notchHeightChanged`（值没变不发通知），宽度另有 vm 的 `Defaults.publisher(.openNotchWidth)` sink；④ **夹取复用既有函数**（`currentOpenNotchResizeBounds()`：宽 `max(currentRecommendedMinimumNotchWidth(), sideLyricsRequiredNotchWidth())` … `maxAllowedNotchWidth()`，高 `openNotchHeightRange.lowerBound` … `effectiveOpenNotchHeightUpperBound`），位移 → 新尺寸抽成纯函数 `resizedPanelSize(start:translation:minWidth:maxWidth:minHeight:maxHeight:)`，取整后再用同一组边界复夹一次（上界可能是 0.9×屏高这类分数）；⑤ **读数胶囊**贴在圆点上方（`宽 × 高`，12pt 白字 + 深色半透明底，`allowsHitTesting(false)`），松手 0.8s 后淡出，**不新增本地化 key**（纯数字与 `×`）；⑥ **补一次窗口尺寸同步**（`syncWindowSizeAfterPanelResize` → `AppDelegate.ensureWindowSize(addShadowPadding(to: dynamicNotchSize), animated: false, force: false)`）：宽度本来就有实时链路（vm 的 sink），**高度没有**——`notchHeightChanged` 的观察者只做 `positionWindow`（用当前 frame 尺寸重新定位，不重算尺寸），所以高度是「下次展开才生效」（设置页滑块同样如此），拖动是连续交互等不到下次展开 | 用户（「（这个高度）要可以调，同时看看能否**在刘海打开的情况下，直接拉动调整宽高**」→ 在 A/B 两案里选定 **B：右下角小圆点，一个拖动同时改宽高**）+ agent（落点、取舍与实测） | **为什么是「起点 + 累计位移」而不是每帧读当前值累加**：拖动每一帧都写 `Defaults` 并触发布局 / 窗口重排，把手自己会跟着鼠标跑；用当前值累加时下一帧读到的是「已经追过一次」的尺寸，同一段位移被重复计入（越拖越快 / 抖）。固定起点是唯一稳定口径，代价是**半程跟随**（把手自身在动，`.local` 坐标系把面板位移也计入 `translation`，稳态折损约一半；见「已知限制」30③）。**为什么把手放在 `mainLayoutBase` 的 overlay 而不是 `rootBodyView` 的 ZStack**：overlay 的框就是面板（含 `.padding([.horizontal,.bottom], 12)` 与背景 / 裁剪形状）的框，14pt 内缩即可稳定落在右下圆角内侧；放在根 ZStack 上则要自己减掉 `notchHorizontalPadding` / 阴影 padding / 刘海外扩，屏与模式一变就得重算。**为什么必须在 `clipShape` 之后**：overlay 不被裁剪，圆点与读数不会被圆角切掉；同时它不参与任何尺寸计算（overlay 不改变被贴视图的尺寸）。**为什么补 `ensureWindowSize` 而不是只发通知**：见 ⑥——只发通知等于「拖动时高度看不见变化」，与用户要的「打开的情况下直接拉动」相悖；这一句与 vm 各条 sink 是同一调用口径（`addShadowPadding(to:)` + `animated/force`），`force: false` 让尺寸没变的重复调用是 no-op，宽度那条链路不受影响。**为什么读数只显示数字**：`840 × 400` 是纯数字 + 乘号，不需要任何本地化 key（限制 18 的本地化债不再扩大）。**实测取证（2026-09-29，CGEvent 注入 + `defaults read` + 窗口 frame 列表）**：① 基准 840×850 → 左下拖 (−100,−120) 得 **773×790**，窗口同步为 773×812（= 高 + 22，即面板高确实跟着拖动走）；② 继续向左拖 → 宽度**停在 770**（本机 tab 数 ≥ 6 的推荐最小宽），窗口 770×812；③ 连续上拖 → 高度逐档 690→590→490→390→290→190→**120 停住**，每一档窗口高都 = 高度 + 22；④ 从 700 下拖 → 高度**停在 850**（= `min(850, 屏 949×0.9)`），再拖仍是 850；⑤ 水平拖动 840→1135 / 1135→934，宽度即时跟随。**没验证的部分**：① 拖动过程中宽度那条链路带 `.smooth` 动画（沿用 vm 的既有写法），连续拖动的手感需用户实机确认；② 反向拖动（拉大后立刻反向）的体感需用户确认（单测只钉纯函数的四个方向与夹取）；③ 自有高度源的 tab 上「拖高度看不出变化」是设计取舍（见限制 30②），未按 tab 门控；④ 副屏（1920×1080）窗口同步只做了「逐屏一并改 frame」，未在副屏上实拖验证。 |
+| D-30 | **本批（p2-home-strip，2026-09-29）落进内核面的五条口径**（协议 / 注册表 / 组合根 / 偏好键，逐条见「本批新增 / 变更的口径」）：① `Surface.home`（第四取值，校验规则不变）② `ModuleRegistry.homeEntries` 第三条投影（声明与内容分离、不缓存、排序键复用 `(order, id)`）③ `setEnabled` 状态机：**`failed` 不可逃逸**（置关不降级、无隐藏重试通道）、**全局单调代次**作废 `.activating` 期间的状态写回、只改内存不写偏好 ④ `Defaults[.moduleEnableOverrides]` **缺键 = 用户未表达**（回落 `manifest.defaultEnabled`，不是 `false`）⑤ `KernelBootstrap.enablementGate(registry:)` 作为该偏好键的**唯一消费点**。**本批零新增 capability / TCC 授权 / 出站请求** | 用户（首页 strip + 开关闭环的定稿与「不许硬拉伸」）+ agent（状态机口径与代次机制） | 各条的理由与代价见 [17-nookx-adoption.md](17-nookx-adoption.md) D-02…D-14 与本节各项；`failed` 不可逃逸是对 06 §3.3 硬性规则 1 的守诺（T2 审查实测出"置关→置开"会给 failed 开出一条隐藏的重试通道，与承诺矛盾），代次机制则是"置关后那条在飞的 `activate()` 不能把状态改回 `.active`"的唯一保证。本批不动渲染路径以外的上游布局（minimalistic / 歌词侧栏逐字未动），可回退。 |

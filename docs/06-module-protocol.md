@@ -134,7 +134,7 @@
 | `minHostVersion` | string | 否 | — | 严格 semver；宿主 `CFBundleShortVersionString` 低于此值 → `E_HOST_TOO_OLD`（不加载，设置页可读地提示） |
 | `kind` | enum | 是 | — | `builtin` / `xpc` / `js`。插件必须非 `builtin`；内置必须 == `builtin` |
 | `entry` | EntryPoint | 插件必填 | — | §2.5。`kind == builtin` 时必须缺省（出现则 `E_UNEXPECTED_FIELD`） |
-| `surfaces` | string[] | 是 | — | 非空子集，元素 ∈ `compact` / `expanded` / `lockscreen`。见 §6 |
+| `surfaces` | string[] | 是 | — | 非空子集，元素 ∈ `compact` / `expanded` / `lockscreen` / `home`。见 §6 |
 | `defaultPlacement` | Placement | 否 | 见 §6.2 | `{slot, order}`；仅当 `surfaces` 含 `compact` 时有意义，否则忽略 |
 | `defaultEnabled` | bool | 否 | `false` | 插件声明 `true` → 宿主**忽略并记 warning**（不报错：这不是安全边界，但"装了自动上屏"不可接受，必须用户显式开启）。内置模块可 `true` |
 | `permissions` | string[] | 否 | `[]` | 能力白名单，见 §7。元素必须命中宿主支持集，否则 `E_UNKNOWN_PERMISSION` |
@@ -235,7 +235,7 @@ public protocol GourdModule: AnyObject {
 
 ```swift
 public struct ContentRequest: Sendable {
-    public let surface: Surface              // compact | expanded | lockscreen
+    public let surface: Surface              // compact | expanded | lockscreen | home
     public let phase: NotchPhase              // collapsed | hoverPreview | expanded | dragging
     public let slot: Slot?                    // 仅 surface == .compact 时非 nil
     public let sizeHint: CGSize               // 宿主可提供的目标尺寸（模块可忽略）
@@ -392,15 +392,18 @@ discovered ──parse──▶ parsed ──validate──▶ valid ──compa
 
 ## 6. Surface 与槽位模型
 
-### 6.1 三个 Surface
+### 6.1 四个 Surface
 
 | Surface | 语义 | 承载 | 上游对应（§9） |
 |---|---|---|---|
 | `compact` | 折叠态。刘海两侧图标槽 + 中央主区域 | 槽位（`left`/`right`/`center`） | 上游无独立"槽位"概念；其刘海内 live activity 对应中央区域 |
 | `expanded` | 展开面板（点击/悬停后展开） | 展开区的 tab | `AtollNotchExperienceDescriptor`（tab） |
 | `lockscreen` | 锁屏小组件 | 锁屏上的 widget | `AtollLockScreenWidgetDescriptor` |
+| `home` | 展开面板**首页的一条 strip 块**（P2 批次新增，2026-09-29） | 首页横向 strip（`DynamicIsland/Host/HomeStripView.swift`）里的一块 | 无对应 descriptor；上游首页是写死的两块栏位 |
 
-**不新增 `hud` 之类 surface**：瞬时浮层（HUD）是 `expanded` 的一种**呈现方式**，用内容描述符上的 `presentation: "hud"` + `ttlMs` 表达，避免 surface 数量膨胀。上游 `AtollLiveActivityDescriptor` 的 `estimatedDuration` / `durationHint` 正是这个语义。
+`home` 与 `compact` / `expanded` **并列**：声明它 = "这个模块愿意在首页 strip 里占一块"，与"有没有展开 tab"（`expanded`）互不蕴含。`surfaces` 的校验规则**未变**（仍是 §10.1 的非空子集，元素合法性由解码保证），首页块的顺序仍复用 `defaultPlacement.order` 作排序键（与 `expanded` tab、`compact` 槽位同一个比较器）。
+
+**除 `home` 外不再新增 surface**：瞬时浮层（HUD）是 `expanded` 的一种**呈现方式**，用内容描述符上的 `presentation: "hud"` + `ttlMs` 表达，避免 surface 数量膨胀。上游 `AtollLiveActivityDescriptor` 的 `estimatedDuration` / `durationHint` 正是这个语义。
 
 ### 6.2 Slot 模型
 
@@ -459,6 +462,8 @@ discovered ──parse──▶ parsed ──validate──▶ valid ──compa
 3. 权限**只增不减地**在安装/升级时重算：升级若新增权限 → 状态回到 `needsConsent`，旧授权不自动继承。
 4. 权限撤销是**运行时生效**：宿主停止投递对应能力并通知模块（`module.permissionChanged`），不要求重启。
 5. 内置模块**不经过** capability 授予流程（用户装了就是信任），但其 manifest 仍须如实声明 `permissions`——用于设置页展示与代码审计的一致性检查。
+
+**P2 批次（p2-home-strip，2026-09-29）未新增任何 capability**：首页 strip 的块都是进程内视图，组件开关只写本机偏好（`moduleEnableOverrides`），没有新的 capability、没有新的 TCC 授权、没有新的出站请求。下表 15 项与本节硬性规则逐字未动（`notifications:read` / `network:local` / `calendar:read-titles` 三项仍待落，登记见 [14-module-manifests.md](14-module-manifests.md) §3）。
 
 ---
 

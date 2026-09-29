@@ -11,11 +11,13 @@
 | [13-runtime-kernel.md](13-runtime-kernel.md) | **P1 批次的范围与裁定**（D-07 试点模块、D-09 清单口径、D-12 不声明锁屏、D-14 平台台账口径） |
 | [15-platform-dependencies.md](15-platform-dependencies.md) | 这些模块落到哪条私有 API / 子进程 / 外部域名上 |
 
-**取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的三个取值（本清单只用到 `compact` / `expanded`，锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
+**取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的四个取值（本清单用到 `compact` / `expanded` / `home`——`home` 只由 `todos` 声明，见 §1 表下说明；锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
 
 已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）与 `com.cmeng.gourd.todos`（`DynamicIsland/Modules/TodosModule.swift`，P1 批次 T5）——表内对应行的 `surfaces` / `permissions` / `config` 键名与它们一致；`defaultPlacement` 的**当前值**见各自行注与 T-1（本批 `order` 还被兼作 expanded tab 的排序键，见 [13](13-runtime-kernel.md) 已知限制 25）。
 
 **2026-09-28 增补**：`com.cmeng.gourd.todos`（待办）不在 P1-0 定稿的 16 份 manifest 内——它是用户当日判定「进度无行动价值」后新增的**第 17 份**（模块计 16 个：接管 10 + 新增 6；终端仍是独立条目），并接过 `progress` 空出的折叠态中央槽位（[13](13-runtime-kernel.md) D-20）。下表按模块逐个列出，`todos` 行紧跟 `progress` 之后。
+
+**2026-09-29 变更**：P2 批次 `p2-home-strip` 给 `todos` 加了 `home` surface（首页 strip 的一块）——**模块数与 manifest 份数不变**（仍 **16 个模块 / 17 份 manifest**，因为本批没有新增模块，只是 todos 多了一个 `surfaces` 取值）；`progress` 与 `notifications` 均**不声明** `home`，理由与逐条口径见 §1 表下说明与 [17-nookx-adoption.md](17-nookx-adoption.md)。
 
 ---
 
@@ -38,10 +40,12 @@
 | `com.cmeng.gourd.launcher` | `compact`、`expanded` | `right` / order 30 | `[]` | `pinnedApps`、`showRecents`、`iconSize`、`density`（09 §5.1） | P2b 第 4；全局热键用上游 `KeyboardShortcuts` |
 | `com.cmeng.gourd.lunar` | `compact` | `left` / order 30 | `[]` | `displayFormat`、`showFestivals`（09 §5.2） | P2b 第 1；展开区归属见 T-6 |
 | `com.cmeng.gourd.progress` | `compact`、`expanded`（折叠态形态 = **中央槽位常驻百分比**；展开态 = **剩余量清单**——一行一个尺度：图标 + 标签 + 细进度条 + 剩余量 + 百分比，行悬停显示起止时刻） | `center` / order 30（2026-09-27 落地：`slot` 记 `center`，`order` 同时是 expanded tab 与 compact 槽位候选的排序键，双语义已按 [13](13-runtime-kernel.md) 已知限制 25 的「明确写下」分支处理，见 D-19；与 T-1 早期给折叠态预留的 `left` / order 40 不同——本版**只做中央槽位**，左/右槽位仍推 P2） | `[]` | `visibleScopes`（默认 `day` + `year`）、`style`、`baseCalendar`（09 §5.3；已落地三键） | **默认关（`defaultEnabled = false`，2026-09-28 用户判定「时间进度」无行动价值，见 [13](13-runtime-kernel.md) D-20）**；代码与 manifest 全部保留、可手动开回。落地：P1-4 提前消化 P2b 第 2；折叠态中央槽位 2026-09-27 落地 |
-| `com.cmeng.gourd.todos` | `compact`、`expanded`（折叠态 = 图标 + **今日**的 `已办/总量`；展开态 = 顶部三环「今日 / 本周 / 所有」+ 下方该类别清单，环本身是筛选器） | `center` / order 20 | `[]` | **无（第一版不做配置）** | **已落地（P1 批次 T5，2026-09-28）**；`defaultEnabled: true`——它是折叠态中央槽位的默认内容（`order` 20 < progress 的 30，见 [13](13-runtime-kernel.md) D-20）；依赖提醒 TCC（系统授权，不是模块 capability，故 `permissions` 为空集） |
+| `com.cmeng.gourd.todos` | `compact`、`expanded`、`home`（折叠态 = 图标 + **今日**的 `已办/总量`；展开态 = 顶部三环「今日 / 本周 / 所有」+ 下方该类别清单，环本身是筛选器；**首页块 = 三环横排 + 今日清单前 5 条，块宽 < 220pt 时只画三环**，2026-09-29 加） | `center` / order 20 | `[]` | **无（第一版不做配置）** | **已落地（P1 批次 T5，2026-09-28；`home` 由 P2 批次 `p2-home-strip` 于 2026-09-29 加）**；`defaultEnabled: true`——它是折叠态中央槽位的默认内容（`order` 20 < progress 的 30，见 [13](13-runtime-kernel.md) D-20）；依赖提醒 TCC（系统授权，不是模块 capability，故 `permissions` 为空集） |
 | `com.cmeng.gourd.shortcuts` | `expanded`（折叠态槽位可选，见 T-1） | — | `shortcuts:run` | `pinnedShortcuts`、`showOutput`、`timeoutSeconds`（09 §5.4） | P2b 第 3；依赖 shelf 的文件输入联动（`--input-path`） |
 | `com.cmeng.gourd.notifications` | `expanded`（浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
+
+**2026-09-29 的 `home` 取值（P2 批次 `p2-home-strip`）**：本批**只给 `todos` 声明 `home`**——`progress` 保留代码与 manifest 但**不声明** `home`（它默认关，声明了也没内容；`notifications` 同理不做首页块，通知是瞬时事件不是常驻信息）。因此 `home` 在表内只出现在 todos 一行（[17-nookx-adoption.md](17-nookx-adoption.md) 已知限制 9）。**本批没有新增模块**，模块数与 manifest 份数**不变**（仍是 16 个模块 / 17 份 manifest，含终端独立条目）——变的只是 todos 的 `surfaces` 多了一个取值。
 
 **两处「不是模块」的说明**（避免清单被读成"全部功能都模块化"）：
 
