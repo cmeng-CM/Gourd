@@ -15,7 +15,8 @@
 //    而它的 `states` 仍是 `.active`（可见性与启用是两件事）；
 //  - **写路径**（`ModuleEnablementWrite`）：接管键非 nil → 只写上游键、连 overrides 键都不写出来；
 //    nil → 只写 overrides、上游键一个字节不动；
-//  - **桥幂等**：连调两次 `startTakeoverBridge` → 订阅条数等于接管模块数（不是两倍），
+//  - **桥幂等（进入时先清空）**：`startTakeoverBridge` 进入时先 `removeAll()`，再按当前注册表里的
+//    接管模块逐个建订阅——重复起桥是**替换**不是翻倍，注册表清空后再起桥不会留下上一段的订阅，
 //    非接管模块不建订阅；
 //  - **块宽钩子**：声明 140/160 的模块取值一致、未声明为 nil、未注册 id 为 nil；
 //  - **回弹策略**（`ModuleEnablementRollback`，D-13）：接管模块 nil（什么都不写）、非接管模块 false。
@@ -34,7 +35,8 @@
 //     `enableScreenAssistant`，见派发片段与 `KernelBootstrap.applyFirstLaunchDefaults`）。
 //     用例只调注册表自己的 `bootstrap()`，桥直接调 `KernelBootstrap.startTakeoverBridge`；
 //  3. **偏好卫生**：每个写真实键的用例进入时记下该键的**持久域原值**、`defer` 逐字还原
-//     （原本有键写回原值、原本没键删键）——跑完 `defaults read com.cmeng.gourd <键>` 与跑之前相同。
+//     （原本有键写回原值、原本没键删键）——跑完 `defaults read com.cmeng.gourd.dev <键>`
+//     （测试域是 Debug 域，不是 Release 域 `com.cmeng.gourd`）与跑之前相同。
 //     不写 `Defaults.withoutPropagation`：桥要看的正是「键变了」，屏蔽掉就把被测行为一起屏蔽了。
 //
 
@@ -153,6 +155,7 @@ final class TakeoverEnablementTests: XCTestCase {
         let resynced = await waitUntil { registry.states[id] == .disabled }
         XCTAssertTrue(resynced, "上游键改 false 后注册表状态应跟上（桥的回调不是同帧）")
         XCTAssertNil(registry.instance(for: id), "重同步置关必须摘掉实例")
+        XCTAssertEqual(deactivations(id), 1, "置关真的走到了模块的 deactivate()（不是只改状态 / 只摘实例）")
         XCTAssertTrue(registry.tabEntries.isEmpty, "tab 投影随之消失")
     }
 
@@ -252,13 +255,18 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    // MARK: - 桥幂等
+    // MARK: - 桥幂等（进入时先清空）
 
-    /// 连调两次 `startTakeoverBridge` 不翻倍；且只订阅接管模块（非接管模块不建订阅）。
+    /// 它钉的是 `startTakeoverBridge` **进入时先清空**（`takeoverSubscriptions.removeAll()`）这一条：
+    /// 清掉的是**本用例上一段自己起的桥**，与其它用例在订阅表里留下的残留无关——跑单条也成立。
+    ///
+    /// 两段刻意用**不同 id**：订阅表是 `[String: AnyCancellable]`，同一个 id 重复建桥是「替换」——
+    /// 第二段若还注册第一段的 id，缺 `removeAll()` 也只有 2 条，区分不出「替换」与「先清空」。
     ///
     /// 本用例**不写**任何真实偏好：门只读（`Defaults[takeoverKey]`），判定结果与断言无关。
-    func testBridgeIsIdempotentAndSubscribesOnlyTakeoverModules() {
+    func testStartTakeoverBridgeClearsOnEntryAndSubscribesOnlyTakeoverModules() async {
         let registry = ModuleRegistry.shared
+        // ① 两个接管模块 + 一个非接管基类：只有接管模块建订阅。
         registry.register(
             [TakeoverProbeModule.self, TakeoverHiddenTabProbeModule.self, TakeoverProbeBase.self],
             enabled: KernelBootstrap.enablementGate(registry: registry)
@@ -269,8 +277,27 @@ final class TakeoverEnablementTests: XCTestCase {
         KernelBootstrap.startTakeoverBridge(registry: registry)
         XCTAssertEqual(KernelBootstrap.takeoverSubscriptionCount, 2, "只订阅两个接管模块")
 
+        // ② 注册表清空 → 只注册一个**新 id** 的接管模块再起桥：进入时先清空的话订阅表里只剩这 1 条；
+        //    缺 `removeAll()` 时上一段那 2 条仍挂在同一个字典上（新 id 不覆盖旧键），条数必然 > 1
+        //    （本机单跑实测 4 = 本用例那 2 条 + 宿主进程启动时既有的计时器 1 条）。
+        await registry.deactivateAll()
+        XCTAssertEqual(registry.manifests.count, 0, "前置：注册表已清空（订阅表不随注册表收敛）")
+        registry.register(
+            [TakeoverWideBlockProbeModule.self],
+            enabled: KernelBootstrap.enablementGate(registry: registry)
+        )
+        XCTAssertEqual(
+            registry.takeoverEnableKey(for: wideBlockID)?.name,
+            Defaults.Keys.enableTimerFeature.name,
+            "前置：第二段这个新 id 也是接管模块"
+        )
+
         KernelBootstrap.startTakeoverBridge(registry: registry)
-        XCTAssertEqual(KernelBootstrap.takeoverSubscriptionCount, 2, "重复起桥不得翻倍（进入先 removeAll）")
+        XCTAssertEqual(
+            KernelBootstrap.takeoverSubscriptionCount,
+            1,
+            "重复起桥不得翻倍（进入先 removeAll）：上一段那 2 条订阅必须消失，实到 1"
+        )
     }
 
     // MARK: - 块宽钩子
@@ -348,9 +375,11 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 这一数是刘海最小宽度的唯一输入，错一位就是宽度回归。
     ///
     /// 三点刻意写死（改动前先读）：
-    /// 1. **自己置全夹具**：`enabledStandardTabCount()` 读到的每条上游键都压到 false。
-    ///    否则开发机上恰好开着的项会把基线抬起来，三种组合的期望写不成常数
-    ///    （本机实测 `timerDisplayMode = "popover"`，不置夹具时「① = 1」直接红）；
+    /// 1. **自己置全夹具**：`enabledStandardTabCount()` 读到的每条上游键都压到 false——
+    ///    那一段读的是**测试域**（Debug 域 `com.cmeng.gourd.dev`，不是 Release 域 `com.cmeng.gourd`）
+    ///    盘上的值，不能当常数用。本机测试域此刻是 `enableTimerFeature = 0`、`timerDisplayMode`
+    ///    **缺键**（`defaults read com.cmeng.gourd.dev <键>`；缺键走 Defaults 默认 `.tab`）——
+    ///    不置夹具的话启用真源那条是 0：模块不激活、不进 tab 投影，① 期望 1 实到 0，直接红；
     /// 2. **注册走真门**（`KernelBootstrap.enablementGate`）：接管键是启用的唯一真源——
     ///    旧门（`manifests[$0]?.defaultEnabled` 或用户 overrides）根本读不到上游键；
     /// 3. 三种组合各自**重新注册**（`deactivateAll` → `register` → `bootstrap`）：门只在注册那一刻
@@ -437,6 +466,9 @@ final class TakeoverEnablementTests: XCTestCase {
 
     /// 账本读取：**没记过 = 0**（`TakeoverLedger` 只在第一次调用时落键，直接下标会拿到 nil）。
     private func activations(_ id: String) -> Int { TakeoverLedger.activations[id] ?? 0 }
+
+    /// 账本读取：置关次数（同上）。钉「置关走到了模块的 `deactivate()`」这条。
+    private func deactivations(_ id: String) -> Int { TakeoverLedger.deactivations[id] ?? 0 }
 
     /// 记下两个真实键在**持久域**里的原值（nil = 原本没有这个键）。
     private func snapshotPreferences() -> PreferenceSnapshot {
