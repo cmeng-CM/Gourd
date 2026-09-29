@@ -2416,6 +2416,40 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// **滚动边缘的黑色渐隐遮罩只在纯黑档显示**（2026-09-28 用户反馈，截图是笔记 tab 且面板已切液态玻璃：
+    /// 「这个上面和下面的黑色框是什么，得去掉」）。
+    ///
+    /// 遮罩（`Color.black.opacity(0.65) → .clear` 的 16pt 渐变）是给纯黑面板做的滚动边缘淡出，
+    /// 换到玻璃底上就成了两条突兀的黑带。判据收在 `shouldShowScrollFadeMask`，消费点只有两处：
+    /// 笔记 tab 的滚动网格（`NoteListView`）与计时器预设列表（`NotchTimerView.presetColumn`）。
+    func testScrollFadeMaskOnlyShownForSolidBlackPanel() {
+        XCTAssertTrue(
+            shouldShowScrollFadeMask(panelBackgroundStyle: .solidBlack),
+            "纯黑档：遮罩是它本来要干的事（黑底上的滚动边缘淡出），保持原样"
+        )
+        XCTAssertFalse(
+            shouldShowScrollFadeMask(panelBackgroundStyle: .liquidGlass),
+            "液态玻璃档：用户截图的那一档——黑色渐变必须消失"
+        )
+        XCTAssertFalse(
+            shouldShowScrollFadeMask(panelBackgroundStyle: .frostedGlass),
+            "毛玻璃档同理：黑带在任何玻璃底上都是异物"
+        )
+    }
+
+    /// 判据与**档位数量**同源：给 `NotchPanelBackgroundStyle` 加第四档时，这条会失败并提醒
+    /// 「新档要不要显示遮罩」必须显式表态（而不是默默沿用某个默认）。
+    func testScrollFadeMaskDecisionCoversEveryPanelBackgroundStyle() {
+        let shownStyles = NotchPanelBackgroundStyle.allCases.filter {
+            shouldShowScrollFadeMask(panelBackgroundStyle: $0)
+        }
+        XCTAssertEqual(
+            shownStyles,
+            [.solidBlack],
+            "三档里**只有纯黑档**显示遮罩；新增档位必须在此显式登记"
+        )
+    }
+
     /// 主面板背景键的**声明默认值** + 三档取值词汇表 + **序列化往返**（写盘 → 读回）。
     ///
     /// 默认必须是 `.solidBlack`：改造前主面板底是 `ContentView` 里写死的 `.background(.black)`，

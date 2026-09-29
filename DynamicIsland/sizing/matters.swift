@@ -254,6 +254,24 @@ func notchTerminalBottomCornerRadii(
     return (outerBottom, max(0, outerBottom - p))
 }
 
+// MARK: - 滚动边缘渐隐遮罩的显示判据
+
+/// 滚动容器的**上下边缘渐隐遮罩**是否显示。
+///
+/// 这两条遮罩是为**纯黑面板**做的：`Color.black.opacity(0.65) → .clear` 的 16pt 渐变压在内容上下两端，
+/// 让滚动内容在黑底上"淡出"而不是被硬生生切断。面板底一旦切成玻璃档，同一层黑色渐变就从"保护性淡出"
+/// 变成**两条突兀的黑带**（用户 2026-09-28 反馈，截图是笔记 tab 且面板已切液态玻璃）。
+///
+/// 因此判据只有一条：**只有纯黑档显示遮罩**；玻璃两档一律不显示。
+/// 刻意**不**把遮罩改成玻璃材质——那会在内容与背景之间再引入一层新的对比问题（面板文字一律显式白色，
+/// 任何半透明层都要重算对比度），而"不显示"在任何背景样式下都是安全的。
+///
+/// 消费点（仅这两处，见用户反馈的约束"只改这两个视图"）：
+/// `NoteListView`（笔记 tab 的滚动网格）与 `NotchTimerView.presetColumn`（计时器预设列表）。
+func shouldShowScrollFadeMask(panelBackgroundStyle: NotchPanelBackgroundStyle) -> Bool {
+    panelBackgroundStyle == .solidBlack
+}
+
 func statsAdjustedNotchSize(
     from baseSize: CGSize,
     isStatsTabActive: Bool,

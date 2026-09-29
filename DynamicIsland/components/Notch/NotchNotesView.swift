@@ -459,6 +459,8 @@ struct NoteListView: View {
     @Default(.enableNoteColorFiltering) var enableNoteColorFiltering
     @Default(.enableCreateFromClipboard) var enableCreateFromClipboard
     @Default(.enableAppleNotesSync) var enableAppleNotesSync
+    /// 面板背景样式：决定上下边缘的黑色渐隐遮罩要不要画（见 `shouldShowScrollFadeMask`）。
+    @Default(.notchPanelBackgroundStyle) var notchPanelBackgroundStyle
     
     @State private var searchText = ""
     @State private var selectedColorFilter: Int? = nil
@@ -691,15 +693,19 @@ struct NoteListView: View {
                         .padding(.bottom, 20)
                     }
 
-                    LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .frame(maxHeight: .infinity, alignment: .top)
+                    // 上下渐隐遮罩：**仅纯黑档**（玻璃档下这两条黑渐变会变成两块黑带，见
+                    // `shouldShowScrollFadeMask` 与 2026-09-28 用户反馈）。
+                    if shouldShowScrollFadeMask(panelBackgroundStyle: notchPanelBackgroundStyle) {
+                        LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxHeight: .infinity, alignment: .top)
 
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
             }
         }

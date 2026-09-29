@@ -35,6 +35,8 @@ struct NotchTimerView: View {
     @Default(.timerProgressStyle) private var progressStyle
     @Default(.showTimerPresetsInNotchTab) private var showTimerPresetsInNotchTab
     @Default(.timerInputStyle) private var timerInputStyle
+    /// 面板背景样式：决定预设列表上下边缘的黑色渐隐遮罩要不要画（见 `shouldShowScrollFadeMask`）。
+    @Default(.notchPanelBackgroundStyle) private var notchPanelBackgroundStyle
     
 
     @AppStorage("customTimerDuration") private var customTimerDuration: Double = 600
@@ -133,17 +135,21 @@ struct NotchTimerView: View {
                     .scrollContentBackground(.hidden)
                     .scrollIndicators(.never)
 
-                    LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .alignmentGuide(.top) { d in d[.top] }
-                        .frame(maxHeight: .infinity, alignment: .top)
+                    // 上下渐隐遮罩：**仅纯黑档**（玻璃档下这两条黑渐变会变成两块黑带，见
+                    // `shouldShowScrollFadeMask` 与 2026-09-28 用户反馈）。
+                    if shouldShowScrollFadeMask(panelBackgroundStyle: notchPanelBackgroundStyle) {
+                        LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .alignmentGuide(.top) { d in d[.top] }
+                            .frame(maxHeight: .infinity, alignment: .top)
 
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .alignmentGuide(.bottom) { d in d[.bottom] }
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .alignmentGuide(.bottom) { d in d[.bottom] }
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
                 .frame(height: listHeight)
             }
