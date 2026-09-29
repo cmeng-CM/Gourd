@@ -374,14 +374,28 @@ struct CalendarView: View {
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
 
+    /// 今日列表的可用高度（2026-09-29）：面板高度 − 刘海底座 − 首页内边距 − 收起态日期头。
+    ///
+    /// 口径与独立面板 `StandaloneCalendarView.maxTabContentHeight` 同源（都从 `vm.notchSize`
+    /// 往下减），否则同一个面板高度会算出两套行数。今日列表的行数**只**由这里决定
+    /// （`HomeTodayListLayout.capacity`），不再靠滚动容纳条目。
+    private var availableTodayListHeight: CGFloat {
+        let panelHeight = vm.notchSize.height > 0 ? vm.notchSize.height : openNotchSize.height
+        let closedNotch = max(24, vm.effectiveClosedNotchHeight)
+        // 16 = 首页 `NotchHomeView` 的上下各 8pt 内边距（与独立面板的 −36 不同源，各自留自己的）。
+        let reserved = closedNotch + 16 + HomeTodayListLayout.collapsedHeaderHeight
+        return max(0, panelHeight - reserved)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             // Compact-by-default date header: when collapsed it shows a single
             // small "weekday, month day" line (~20pt) so the event list below
-            // keeps almost the entire 120pt panel. Hovering the header expands
+            // keeps almost the whole height. Hovering the header expands
             // the horizontal date-scroll strip (with edge-fade shadows) — the
             // shadows therefore appear exactly when it is scrollable, matching
             // the maintainer's review #1 intent (not permanently drawn).
+            // (2026-09-29：块本身已不再写死 120pt，日期头省下的高度直接留给「今日」行数。)
             HStack(alignment: .center, spacing: 8) {
                 // Left label: one compact line when collapsed; month + year when expanded.
                 VStack(alignment: .leading, spacing: 1) {
@@ -441,20 +455,29 @@ struct CalendarView: View {
                 hideAllDayEvents: hideAllDayEvents
             )
             if filteredEvents.isEmpty {
+                // 空态：保持既有文案（`EmptyEventsView`），但**不占满高度**——脚本原先跟在
+                // 后面的 `Spacer(minLength: 0)` 已删（2026-09-29 用户反馈：首页日历不允许出现
+                // 「一行内容 + 大片留白」）。
                 EmptyEventsView(selectedDate: selectedDate)
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 6)
             } else {
-                EventListView(events: calendarManager.events, selectedDate: selectedDate)
+                EventListView(
+                    events: calendarManager.events,
+                    selectedDate: selectedDate,
+                    availableHeight: availableTodayListHeight
+                )
+                .padding(.top, 4)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // 整块按**内容高度**收缩（2026-09-29 用户反馈「还有很大留白」）：原先这里写死
+        // `.frame(height: 120)`——当时为了不撑大折叠态窗口，但首页面板早已是 120…850 可配的
+        // 展开态，120pt 的固定块在今日条目少时就是一块空白（且把列表压进 120 里去滚）。
+        // 现在块高 = 日期头 + 今日列表（最多 5 行 + 溢出提示），多余的空白自然留在面板最下方，
+        // 不再夹在日期头与列表之间；顶部对齐由 `NotchHomeView` 的 `HStack(alignment: .top)` 保证。
+        .fixedSize(horizontal: false, vertical: true)
         .listRowBackground(Color.clear)
-        // Restore the original expanded-notch window height (120pt). Bumping this
-        // to 158 grew the whole Dynamic Island window and distorted the music
-        // player's internal spacing — both flagged in review #2. The internal
-        // wins (all-day floating strip + single-line title) remain, so more timed
-        // events are visible at 120 than before, but we no longer enlarge the
-        // window or touch the music player's layout.
-        .frame(height: 120)
         .onChange(of: selectedDate) {
             Task {
                 await calendarManager.updateCurrentDate(selectedDate)
@@ -1029,16 +1052,93 @@ private struct StandaloneEventCardList: View {
     }
 }
 
+// MARK: - 首页「今日」紧凑列表（2026-09-29 用户反馈改造）
+
+/// 首页日历「今日」列表的**行容量**：给定可用高度与条目数 → 显示几行 + 溢出多少条。
+///
+/// **为什么要有它**（2026-09-29 用户反馈：「日历的今日内容不能只是一行，这种情况下还需要滑动，
+/// 然后还有很大留白」）：原先今日内容里，全天条目走一条**横向滚动**的芯片行（只露一行、要左右滑），
+/// 定时条目另走一个竖向 `List`，而整块被写死 120pt——条目一多只能横滑，条目少则是一块空白。
+/// 改成「竖向紧凑多行 + 溢出提示」后，**行数必须由可用高度算准**：算不准就要么截断要么又留白，
+/// 所以把这条算式抽成不读 `Defaults`、不碰 `Calendar` 的纯函数，直接单测（`ModuleKernelTests`）。
+enum HomeTodayListLayout {
+    /// 单行高度（`caption` 正文 + 行内余量）。行高与行距是容量的唯一刻度，视图里逐字使用这两个值。
+    static let rowHeight: CGFloat = 19
+    /// 行间距（与列表 `VStack(spacing:)` 取同一值，否则算出的高度与渲染高度会差一档）。
+    static let rowSpacing: CGFloat = 4
+    /// 条目行数上限：再多也不让日历块抢占面板高度（对齐参考里 Nook X 首页「日历压成小信息条」的做法）。
+    static let maxItemRows: Int = 5
+    /// 时间列宽度：`HH:mm` / `全天` 都要放得下，且各行的标题左边缘对齐。
+    static let timeColumnWidth: CGFloat = 36
+    /// 收起态日期头占用的高度（一行 `subheadline` + 顶部 2pt padding + 与列表之间的 4pt 间距）。
+    static let collapsedHeaderHeight: CGFloat = 26
+
+    /// 行容量：`visibleItemCount` 行内容，外加（若溢出）一行 `+N` 提示。
+    struct Capacity: Equatable {
+        /// 实际渲染的条目行数（**不含**溢出提示行）。
+        let visibleItemCount: Int
+        /// 未显示的条目数；0 表示全部放得下。
+        let overflowCount: Int
+
+        var showsOverflow: Bool { overflowCount > 0 }
+
+        /// 列表内容高度（条目行 + 溢出提示行 + 行距）。块本身按内容收缩，所以这就是块内列表部分的高度。
+        var contentHeight: CGFloat {
+            let lines = visibleItemCount + (showsOverflow ? 1 : 0)
+            guard lines > 0 else { return 0 }
+            return CGFloat(lines) * HomeTodayListLayout.rowHeight
+                + CGFloat(lines - 1) * HomeTodayListLayout.rowSpacing
+        }
+    }
+
+    /// 给定可用高度与条目数，返回「显示几行 + 溢出多少条」。
+    ///
+    /// 口径（三条，都有用例钉住）：
+    /// 1. `itemCount == 0` → 0 行 0 溢出（空态由 `EmptyEventsView` 负责，不占高度）；
+    /// 2. 放得下（且不超过 `maxItemRows`）→ 全部显示、不溢出；
+    /// 3. 放不下 / 超上限 → 让出一行额度给 `+N` 提示行，剩余条目计入溢出。
+    ///
+    /// - Parameters:
+    ///   - availableHeight: 列表可用高度（首页由 `CalendarView` 按面板高度换算）。
+    ///   - itemCount: 今日条目数（全天 + 定时合计，已过 `filteredEvents` 与排序）。
+    static func capacity(availableHeight: CGFloat, itemCount: Int) -> Capacity {
+        guard itemCount > 0 else { return Capacity(visibleItemCount: 0, overflowCount: 0) }
+        guard availableHeight.isFinite else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
+
+        // 可用高度里最多能摆几行：最后一行不需要行距，故先补一个行距再取整。
+        let pitch = rowHeight + rowSpacing
+        let fittingLines = max(0, Int(floor((availableHeight + rowSpacing) / pitch)))
+        guard fittingLines > 0 else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
+
+        if itemCount <= min(fittingLines, maxItemRows) {
+            return Capacity(visibleItemCount: itemCount, overflowCount: 0)
+        }
+        // 需要「+N」提示行 → 条目行让出一行额度，且不超过行数上限。
+        let visible = min(fittingLines - 1, maxItemRows)
+        guard visible > 0 else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
+        return Capacity(visibleItemCount: visible, overflowCount: itemCount - visible)
+    }
+}
+
+/// 首页日历的「今日」列表：**竖向紧凑多行，不横向滚动**（2026-09-29 用户反馈改造）。
+///
+/// 改造前：全天条目走 `AllDayEventsStrip` 那条**横向滚动**的芯片行（只露一行、要左右滑），
+/// 定时条目另走一个竖向 `List`；当天条目全是全天时 `List` 是空的，于是「今日内容只有一行 +
+/// 要在一条细条上左右滑 + 大片留白」三件事同时出现。
+/// 改造后：全天与定时条目**合并成一条竖向列表**（全天在前、各自按开始时间排序），每行
+/// 「时间 + 标题（单行尾部截断）」，行数由 `HomeTodayListLayout.capacity` 按可用高度算准
+/// （条目行最多 5 行 + 必要时一行 `+N`）；高度算得准，因此列表**自身既不同横滚也不同竖滚**。
+///
+/// 说明：`AllDayEventsStrip` 仍服务于独立日历面板（`StandaloneEventCardList`），本视图已不再使用它。
 struct EventListView: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject private var calendarManager = CalendarManager.shared
     let events: [EventModel]
     let selectedDate: Date
-    @Default(.autoScrollToNextEvent) private var autoScrollToNextEvent
-    @Default(.showFullEventTitles) private var showFullEventTitles
+    /// 今日列表可用高度（由 `CalendarView` 按面板高度换算）——决定显示几行 + 是否溢出。
+    let availableHeight: CGFloat
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
-    @State private var initialAutoScrollDone = false
 
     static func filteredEvents(
         events: [EventModel],
@@ -1066,218 +1166,148 @@ struct EventListView: View {
         )
     }
 
-    private var allDayEvents: [EventModel] {
-        partitionEvents(filteredEvents).allDay.sorted { $0.start < $1.start }
+    /// 展示顺序：全天在前、再定时，各自按开始时间升序——与独立面板「顶部芯片条 + 下方时间线」
+    /// 同序，只是这里合成一条竖向列表（时间列里全天显示「全天」，定时显示 `HH:mm`）。
+    private var orderedEvents: [EventModel] {
+        let partitioned = partitionEvents(filteredEvents)
+        return partitioned.allDay.sorted { $0.start < $1.start }
+            + partitioned.timed.sorted { $0.start < $1.start }
     }
 
-    private var timedEvents: [EventModel] {
-        // Sorted by start time so `scrollTargetForTimedEvents` (which uses
-        // `first(where:)` to pick in-progress / next-upcoming) returns the true
-        // nearest-to-now event, and the list renders chronologically. (#566)
-        partitionEvents(filteredEvents).timed.sorted { $0.start < $1.start }
-    }
-
-    private func scrollToRelevantEvent(proxy: ScrollViewProxy) {
-        guard autoScrollToNextEvent else { return }
-        let refTime = scrollReferenceTime(for: selectedDate)
-        guard let target = scrollTargetForTimedEvents(timed: timedEvents, referenceTime: refTime) else { return }
-
-        // Use .center anchor for more reliable positioning with List's internal padding.
-        // DispatchQueue.main.async ensures the scroll fires after List completes its initial layout,
-        // avoiding the race condition where proxy.scrollTo fires before items are measured.
-        let anchor: UnitPoint = .center
-        DispatchQueue.main.async {
-            withTransaction(Transaction(animation: nil)) {
-                proxy.scrollTo(target.id, anchor: anchor)
-            }
-        }
+    private var capacity: HomeTodayListLayout.Capacity {
+        HomeTodayListLayout.capacity(
+            availableHeight: availableHeight,
+            itemCount: orderedEvents.count
+        )
     }
 
     var body: some View {
-        // Timed-events list fills the whole panel; the all-day strip floats as
-        // an overlay on top (zero vertical cost) so the scroll area below keeps
-        // its full height inside the 120pt Dynamic Island panel.  The List
-        // carries a top padding equal to the strip height so that
-        // scrollTo(.top) lands the target event fully below the overlay. (#566)
-        ZStack(alignment: .top) {
-            ScrollViewReader { proxy in
-                ZStack {
-                    List {
-                        ForEach(timedEvents) { event in
-                            Button(action: {
-                                if let url = event.calendarAppURL() {
-                                    openURL(url)
-                                }
-                            }) {
-                                eventRow(event)
-                            }
-                            .id(event.id)
-                            .padding(.leading, -5)
-                            .buttonStyle(PlainButtonStyle())
-                            .listRowSeparator(.automatic)
-                            .listRowSeparatorTint(.gray.opacity(0.2))
-                            .listRowBackground(Color.clear)
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollIndicators(.never)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
-                    // Push list content down so scrollTo(.top) positions the
-                    // target event fully below the floating all-day overlay
-                    // (28pt strip + 1pt separator + 1pt margin = 30pt).
-                    .padding(.top, allDayEvents.isEmpty ? 0 : AllDayStripMetrics.listTopInset)
-
-                    // (Shadows intentionally removed — #566 feedback: the gradient
-                    // overlay was permanently drawn on top of the events.)
-                }
-                .onAppear {
-                    scrollToRelevantEvent(proxy: proxy)
-                    if !timedEvents.isEmpty {
-                        initialAutoScrollDone = true
-                    }
-                }
-                .onChange(of: selectedDate) { _, _ in
-                    scrollToRelevantEvent(proxy: proxy)
-                }
-                .onChange(of: timedEvents.isEmpty) { wasEmpty, isEmpty in
-                    // Retrigger the initial auto-scroll once, when timed events become
-                    // available after the view appeared (e.g. async calendar load).
-                    // Guarded so later data refreshes don't re-scroll. (#566 follow-up)
-                    guard wasEmpty, !isEmpty, !initialAutoScrollDone else { return }
-                    scrollToRelevantEvent(proxy: proxy)
-                    initialAutoScrollDone = true
-                }
-                .onChange(of: calendarManager.events) { _, _ in
-                    // Fallback: re-trigger auto-scroll when events are refreshed (e.g., calendar
-                    // permission granted, calendars re-selected, or external calendar change).
-                    // The initialAutoScrollDone guard prevents unwanted re-scrolling on minor updates.
-                    if !initialAutoScrollDone {
-                        scrollToRelevantEvent(proxy: proxy)
-                    }
-                }
+        VStack(alignment: .leading, spacing: HomeTodayListLayout.rowSpacing) {
+            ForEach(Array(orderedEvents.prefix(capacity.visibleItemCount))) { event in
+                row(for: event)
             }
 
-            if !allDayEvents.isEmpty {
-                AllDayEventsStrip(
-                    events: allDayEvents,
-                    onToggleReminder: { reminderID, completed in
-                        Task {
-                            await calendarManager.setReminderCompleted(
-                                reminderID: reminderID, completed: completed
-                            )
-                        }
-                    }
-                )
-                .background(Color.black.opacity(0.95))
+            if capacity.showsOverflow {
+                overflowRow(hiddenCount: capacity.overflowCount)
             }
         }
-        Spacer(minLength: 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func eventRow(_ event: EventModel) -> some View {
-        if event.type.isReminder {
-            let isCompleted: Bool
-            if case .reminder(let completed) = event.type {
-                isCompleted = completed
-            } else {
-                isCompleted = false
+    /// 一行 = 时间 + 标题。**文字一律显式浅色**（`.white` / `.white.opacity(...)`）：
+    /// 本项目在浅色系统外观下踩过 `.primary` / `.secondary` 变黑的坑，这里不使用环境色。
+    private func row(for event: EventModel) -> some View {
+        let isDimmed = self.isDimmed(event)
+        return HStack(spacing: 8) {
+            timeLabel(for: event, isDimmed: isDimmed)
+                .frame(width: HomeTodayListLayout.timeColumnWidth, alignment: .leading)
+
+            Text(event.title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(isDimmed ? 0.5 : 1))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            // 行内**横向** `Spacer`：只把行尾的提醒勾选圈推到右边，不参与纵向分摊
+            // （2026-09-29：面板里不允许再用会把内容摊开的纵向 `Spacer`）。
+            Spacer(minLength: 0)
+
+            if event.type.isReminder {
+                reminderToggle(for: event)
             }
-            return AnyView(
-                HStack(spacing: 8) {
-                    ReminderToggle(
-                        isOn: Binding(
-                            get: { isCompleted },
-                            set: { newValue in
-                                Task {
-                                    await calendarManager.setReminderCompleted(
-                                        reminderID: event.id, completed: newValue
-                                    )
-                                }
-                            }
-                        ),
-                        color: Color(event.calendar.color)
-                    )
-                    .opacity(1.0)
-                    HStack {
-                        Text(event.title)
-                            .font(.callout)
-                            .foregroundColor(.white)
-                            .lineLimit(showFullEventTitles ? nil : 1)
-                        Spacer(minLength: 0)
-                        VStack(alignment: .trailing, spacing: 4) {
-                            if event.isAllDay {
-                                Text("All-day")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                            } else {
-                                Text(event.start, style: .time)
-                                    .foregroundColor(.white)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                    .opacity(
-                        isCompleted
-                            ? 0.4
-                            : event.start < Date.now && Calendar.current.isDateInToday(event.start)
-                                ? 0.6 : 1.0
-                    )
-                }
-                .padding(.vertical, 4)
-            )
-        } else {
-            return AnyView(
-                HStack(alignment: .top, spacing: 4) {
-                    Rectangle()
-                        .fill(Color(event.calendar.color))
-                        .frame(width: 3)
-                        .cornerRadius(1.5)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title)
-                            .font(.callout)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                            .lineLimit(showFullEventTitles ? nil : 2)
-
-                        if let location = event.location, !location.isEmpty {
-                            Text(location)
-                                .font(.caption)
-                                .foregroundColor(Color(white: 0.65))
-                                .lineLimit(1)
-                        }
-                        
-                        // Show Join button if conference URL is available
-                        if let conferenceURL = event.conferenceURL {
-                            ConferenceJoinButton(url: conferenceURL, event: event)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    VStack(alignment: .trailing, spacing: 4) {
-                        if event.isAllDay {
-                            Text("All-day")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                        } else {
-                            Text(event.start, style: .time)
-                                .foregroundColor(.white)
-                            Text(event.end, style: .time)
-                                .foregroundColor(Color(white: 0.65))
-                        }
-                    }
-                    .font(.caption)
-                    .frame(minWidth: 44, alignment: .trailing)
-                }
-                .opacity(
-                    event.eventStatus == .ended && Calendar.current.isDateInToday(event.start)
-                        ? 0.6 : 1.0)
-            )
         }
+        .padding(.horizontal, 2)
+        .frame(height: HomeTodayListLayout.rowHeight)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            openInCalendar(event)
+        }
+    }
+
+    /// 时间列：有具体时间的显示 `HH:mm`，全天项显示「全天」（`All-day` 已有 19 个语言的译文）。
+    @ViewBuilder
+    private func timeLabel(for event: EventModel, isDimmed: Bool) -> some View {
+        let color = Color.white.opacity(isDimmed ? 0.5 : 0.7)
+        if event.isAllDay {
+            Text("All-day")
+                .font(.caption2)
+                .fontWeight(.medium)
+                .foregroundColor(color)
+                .lineLimit(1)
+        } else {
+            Text(verbatim: Self.clockLabel(for: event.start))
+                .font(.caption2)
+                .fontWeight(.medium)
+                .monospacedDigit()
+                .foregroundColor(color)
+                .lineLimit(1)
+        }
+    }
+
+    /// 溢出提示行 `+N`（N = 没显示的条目数）。
+    ///
+    /// 用 `Text(verbatim:)` 而不是 `Text("+\(n)")`：后者会被当成带 `%lld` 的本地化 key，
+    /// 在 19 个语言的 string catalog 里凭空多出一条待翻译条目（2026-09-29：本改动不新增文案 key）。
+    private func overflowRow(hiddenCount: Int) -> some View {
+        HStack(spacing: 8) {
+            Text(verbatim: "+\(hiddenCount)")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .foregroundColor(.white.opacity(0.55))
+                .frame(width: HomeTodayListLayout.timeColumnWidth, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 2)
+        .frame(height: HomeTodayListLayout.rowHeight)
+    }
+
+    /// 已完成提醒 / 已结束（过期）的日程整行降到 `.white.opacity(0.5)`。
+    private func isDimmed(_ event: EventModel) -> Bool {
+        if case .reminder(let completed) = event.type, completed {
+            return true
+        }
+        return event.eventStatus == .ended
+    }
+
+    /// `HH:mm`（固定 24 小时制）：`Text(_, style: .time)` 与 `DateFormatter` 的默认样式都跟随
+    /// 系统 locale，会变成 `12:10 PM` 这类 12 小时制 + AM/PM，紧凑行放不下。
+    /// 走 `Calendar` 取时分再补零：纯函数、无 locale 依赖，也便于单测。
+    static func clockLabel(for date: Date, calendar: Calendar = .current) -> String {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+    }
+
+    private func openInCalendar(_ event: EventModel) {
+        if let url = event.calendarAppURL() {
+            openURL(url)
+        }
+    }
+
+    /// 提醒的勾选圈（保留首页可勾选完成的能力；勾选写回系统提醒，与独立面板同一条链路）。
+    private func reminderToggle(for event: EventModel) -> some View {
+        let isCompleted: Bool
+        if case .reminder(let completed) = event.type {
+            isCompleted = completed
+        } else {
+            isCompleted = false
+        }
+
+        return ReminderToggle(
+            isOn: Binding(
+                get: { isCompleted },
+                set: { newValue in
+                    Task {
+                        await calendarManager.setReminderCompleted(
+                            reminderID: event.id, completed: newValue
+                        )
+                    }
+                }
+            ),
+            color: Color(event.calendar.color)
+        )
     }
 }
 

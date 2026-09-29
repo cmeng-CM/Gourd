@@ -75,7 +75,7 @@
 
 | 功能 | 动作 | 机制 |
 |---|---|---|
-| 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce） |
+| 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce）。**首页日历为竖向紧凑多行（最多 5 行 + 溢出提示 `+N`），不横向滚动**；块按内容高度收缩、顶部与音乐块对齐（2026-09-29：原先是横向芯片条 + 写死 120pt，导致今日内容只有一行还要横滑、且留白很大） |
 | 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数、左侧三环视图与增删**（写入 / 删除系统提醒） |
 | 日程提前提醒 | ✅ | `reminderLeadTime` + 独立 Live Activity 管理器 |
 | 本地计时器 | 🔧 | `Timer.scheduledTimer` 1s tick → 上游**退出即丢状态、无 UserNotifications** → 补持久化 + 到点通知 |

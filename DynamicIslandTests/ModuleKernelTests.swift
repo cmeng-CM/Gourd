@@ -3830,3 +3830,95 @@ final class AppleNotesTrashFilterTests: XCTestCase {
         XCTAssertFalse(AppleNotesTrashFilter.isTrashed(containerName: " recently deleted extra"))
     }
 }
+
+// MARK: - 首页「今日」紧凑列表：行容量与时间列（2026-09-29 用户反馈）
+
+/// `HomeTodayListLayout.capacity` 是纯函数（不读 `Defaults`、不碰 `Calendar`），直接对算式测。
+///
+/// 背景（用户原话：「日历的今日内容不能只是一行，这种情况下还需要滑动，然后还有很大留白」）：
+/// 首页今日内容原先是「横向芯片条（只露一行、要左右滑）+ 写死 120pt 的块」，改成竖向紧凑多行后
+/// 「显示几行 + 是否溢出」**必须算得准**——算不准要么截断要么又留白。三条覆盖边界：
+/// 0 项、恰好放满、超出一行；另有一条钉住时间列的 `HH:mm` 口径。
+final class HomeTodayListLayoutTests: XCTestCase {
+
+    /// 能摆下 `lines` 行内容所需的高度（最后一行不带行距）。用例用它构造「恰好放满」的高度，
+    /// 与视图渲染共用 `rowHeight` / `rowSpacing` 两个常量，避免算式与渲染各写一套数字。
+    private func height(fittingLines lines: Int) -> CGFloat {
+        CGFloat(lines) * HomeTodayListLayout.rowHeight
+            + CGFloat(max(0, lines - 1)) * HomeTodayListLayout.rowSpacing
+    }
+
+    /// **0 项：不显示行、也不溢出**（空态由 `EmptyEventsView` 负责，不占高度）。
+    /// 顺带钉住退化输入（高度为 0 / 负数 / 非法）：不崩、不返回负数行，条目全部计入溢出。
+    func testCapacityIsEmptyWithoutItems() {
+        for available in [height(fittingLines: 5), 0, -40] {
+            let capacity = HomeTodayListLayout.capacity(availableHeight: available, itemCount: 0)
+            XCTAssertEqual(capacity.visibleItemCount, 0, "可用高度 \(available)：没有条目就不该有行")
+            XCTAssertEqual(capacity.overflowCount, 0, "可用高度 \(available)：没有条目就没有溢出")
+            XCTAssertFalse(capacity.showsOverflow, "0 项不应出现「+N」提示行")
+            XCTAssertEqual(capacity.contentHeight, 0, "0 项时列表内容高度为 0")
+        }
+
+        let degenerate = HomeTodayListLayout.capacity(availableHeight: .nan, itemCount: 3)
+        XCTAssertEqual(degenerate.visibleItemCount, 0, "非法高度下不猜行数")
+        XCTAssertEqual(degenerate.overflowCount, 3, "非法高度下条目全部计入溢出（走「+N」一行）")
+    }
+
+    /// **恰好放满：全部显示、不溢出**，且高度刚好用尽（内容高度 == 可用高度，不多不少）。
+    /// 另外钉住行数上限：高度再富余也不超过 `maxItemRows`（首页日历块不允许无限长）。
+    func testCapacityFitsExactlyWhenHeightIsExactlyEnough() {
+        let lines = HomeTodayListLayout.maxItemRows
+        let available = height(fittingLines: lines)
+
+        let exact = HomeTodayListLayout.capacity(availableHeight: available, itemCount: lines)
+        XCTAssertEqual(exact.visibleItemCount, lines, "5 行高度 + 5 条 = 全部显示")
+        XCTAssertEqual(exact.overflowCount, 0, "恰好放满时不应有溢出")
+        XCTAssertFalse(exact.showsOverflow)
+        XCTAssertEqual(exact.contentHeight, available, accuracy: 0.001, "内容高度应与可用高度相等")
+
+        // 高度富余（面板 683/850 时的真实情形）也停在行数上限上。
+        let generous = HomeTodayListLayout.capacity(availableHeight: height(fittingLines: 30), itemCount: lines)
+        XCTAssertEqual(generous.visibleItemCount, lines, "高度富余时仍以 5 行为上限")
+        XCTAssertEqual(generous.overflowCount, 0, "条目数等于上限时不算溢出")
+    }
+
+    /// **超出一行：让出一行额度给「+N」提示行**——6 条放进「5 行高度」，显示 4 条 + `+2`。
+    /// 同时钉住「高度富余时会因行数上限溢出」（8 条 → 5 行 + `+3`），这正是「不允许再横滑」的兜底：
+    /// 超出部分一定看得见条数，不需要任何滚动。
+    func testCapacityOverflowsByOneRowWhenItemsExceedHeight() {
+        let lines = HomeTodayListLayout.maxItemRows
+        let available = height(fittingLines: lines)
+
+        let overflowByOne = HomeTodayListLayout.capacity(availableHeight: available, itemCount: lines + 1)
+        XCTAssertEqual(overflowByOne.visibleItemCount, lines - 1, "提示行占掉一行额度 → 少显示一条")
+        XCTAssertEqual(overflowByOne.overflowCount, 2, "隐藏条数 = 总数 − 显示行数")
+        XCTAssertTrue(overflowByOne.showsOverflow, "溢出时必须出现「+N」提示行")
+        XCTAssertEqual(overflowByOne.contentHeight, available, accuracy: 0.001, "含提示行后仍应恰好占满可用高度")
+
+        let cappedByMaxRows = HomeTodayListLayout.capacity(
+            availableHeight: height(fittingLines: 30), itemCount: lines + 3
+        )
+        XCTAssertEqual(cappedByMaxRows.visibleItemCount, lines, "高度富余时由行数上限决定显示行数")
+        XCTAssertEqual(cappedByMaxRows.overflowCount, 3, "超出上限的条目计入溢出")
+        XCTAssertTrue(cappedByMaxRows.showsOverflow)
+    }
+
+    /// 时间列口径：**固定 24 小时制 `HH:mm`**，与系统 locale 无关（`Text(_, style: .time)` 会变
+    /// `12:10 PM` 这类 12 小时制 + AM/PM，紧凑行放不下）。用固定时区的日历构造，避免随本机时区漂。
+    func testClockLabelIsFixedTwentyFourHour() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .gmt
+
+        func label(_ hour: Int, _ minute: Int) -> String {
+            let date = calendar.date(
+                from: DateComponents(year: 2026, month: 9, day: 29, hour: hour, minute: minute)
+            )!
+            return EventListView.clockLabel(for: date, calendar: calendar)
+        }
+
+        XCTAssertEqual(label(9, 5), "09:05", "个位数补零")
+        XCTAssertEqual(label(13, 7), "13:07", "下午仍是 24 小时制（不会变成 1:07 PM）")
+        XCTAssertEqual(label(0, 0), "00:00", "零点")
+        XCTAssertEqual(label(23, 59), "23:59", "末班时间")
+    }
+}
