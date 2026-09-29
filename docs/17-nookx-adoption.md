@@ -266,7 +266,7 @@ stateDiagram-v2
 
 已交付（P2 批次 `p2-home-strip`，2026-09-29；工作流提交 `1e8c8c0c`…`dd93ef64` 加本轮回写提交）。
 
-**代码**：`Host/HomeStripLayoutMath.swift`（新，纯几何：`Item` / `Plan` / `plan(items:available:spacing:)` 三条规则、单一口径 `leftover`）；`Host/HomeStripView.swift`（新：`HomeBlockWidth` / `HomeBlockWidthKey` / `HomeStripLayout`（`spacing = 12`、cache 复用、丢块显式零提案）/ `HomeStripBlock` / `HomeStripView`（内置块 300/420、200/260、140/160；模块块统一 180/240）/ 自建日历块（日期头 + hover 展开 `WheelPicker` 50pt + `EventListView`）/ 模块块降级占位）；`Kernel/ModuleTypes.swift` 加 `Surface.home`；`Kernel/ModuleRegistry.swift` 加 `ModuleHomeEntry` / `homeEntries` / `ModuleRegistry.home` / `setEnabled` / `activateIfNeeded` 抽取 + 全局单调代次；`Kernel/KernelBootstrap.swift` 加 `enablementGate(registry:)`；`models/Constants.swift` 加 `moduleEnableOverrides`；`NotchHomeView.swift` 标准分支换成 strip；`SettingsView.swift` + 新文件 `ModuleSettingsSection.swift`（第 21 个 tab「组件」）；`TodosModule.swift` 声明 `.home` 并实现首页块；`Progress/NotificationsModule` 各补一个穷尽分支。
+**代码**：`Host/HomeStripLayoutMath.swift`（新，纯几何：`Item` / `Plan` / `plan(items:available:spacing:)` 三条规则、单一口径 `leftover`）；`Host/HomeStripView.swift`（新：`HomeBlockWidth` / `HomeBlockWidthKey` / `HomeStripLayout`（`spacing = 8`、cache 复用、丢块显式零提案）/ `HomeStripBlock` / `HomeStripView`（内置块 300/420、200/260、140/160；模块块统一 180/240）/ 自建日历块（日期头 + hover 展开 `WheelPicker` 50pt + `EventListView`）/ 模块块降级占位）；`Kernel/ModuleTypes.swift` 加 `Surface.home`；`Kernel/ModuleRegistry.swift` 加 `ModuleHomeEntry` / `homeEntries` / `ModuleRegistry.home` / `setEnabled` / `activateIfNeeded` 抽取 + 全局单调代次；`Kernel/KernelBootstrap.swift` 加 `enablementGate(registry:)`；`models/Constants.swift` 加 `moduleEnableOverrides`；`NotchHomeView.swift` 标准分支换成 strip；`SettingsView.swift` + 新文件 `ModuleSettingsSection.swift`（第 21 个 tab「组件」）；`TodosModule.swift` 声明 `.home` 并实现首页块；`Progress/NotificationsModule` 各补一个穷尽分支。
 
 **测试**：新增 `HomeStripLayoutTests`（16 条）与 `ModuleToggleTests`（14 条，均在 `project.pbxproj` 四处登记），`ModuleKernelTests` 增补首页块与 surfaces 断言；全量 **199 条 0 失败**（终审实跑退出码 0）。跑完 `moduleEnableOverrides` 仍缺键、偏好域 diff 仅 `ClipboardHistory`（应用自管）。
 
@@ -308,11 +308,11 @@ stateDiagram-v2
 **回写期补充（T4，2026-09-29）**：
 
 16. ~~**待办块的清单有 220pt 阈值，默认面板宽下只有三环**~~
-   **2026-09-29 改判（批次 `p2-p0-visible`）**：单阈值改为 **220 / 160 两档**——`>= 220` 完整行（状态圈 + 标题，最多 5 行——**没有时间列**，那是日历块 `EventListView` 的形态，待办块从来不是）、`>= 160` 紧凑行（只标题单行截断，最多 3 行）、`< 160` 只画三环。理由：本机 770pt 面板下待办块实测只分到 180.5pt，默认配置看不到清单（用户很可能因此把待办关掉了）。下面的原始数字与推导保留作核对依据：本机面板 770pt（tab 数 ≥6 时才给到这个宽度）时，胶囊内可用宽 **≈702–703pt**（常量链推导 702：ContentView 的 (19−5) + 12 与 NotchHomeView 的 8，两侧各 34；像素反推 ≈703——**两个口径都小于 704 = 三块最小宽 680 + 2×12**，这就是"间距 12 时第三块在 770pt 下被规则③ 丢弃（实拍）"的算术原因；间距改 8 后 680+16 = 696 ≤ 702，三块齐活）。代入 `plan`（理想 420/260/240、最小 300/200/180、间距 8）：705 → `[300.5, 200, 180]`、706 → `[301, 200.5, 180.5]`——两种取值下三块都压在最小宽度附近，待办块 < 220 → 只画三环。要让清单出现，可用宽需 ≥ 864（面板 ≈930pt，按同一实测内边距 ≈65pt 换算）。**另注意新装默认面板是 690pt**（`openNotchWidth` 默认 640 被最小宽度抬到 tab 数对应的值）→ 可用 ≈625 → 规则③ 直接丢掉待办块，首页只有音乐 + 日历两块（`[300, 200]`）。这两条都是宽度预算的必然结果，不是缺陷，但"首页看到待办清单"在默认配置下**不成立**。（数字由 T6 两轮审查与整体终审用布局常量 + 截图像素量测双路核过；早前误记的"可用 754 / 需 1000pt"已更正。）
+   **2026-09-29 改判（批次 `p2-p0-visible`）**：单阈值改为 **220 / 160 两档**——`>= 220` 完整行（状态圈 + 标题，最多 5 行——**没有时间列**，那是日历块 `EventListView` 的形态，待办块从来不是）、`>= 160` 紧凑行（只标题单行截断，最多 3 行）、`< 160` 只画三环。理由：本机 770pt 面板下待办块实测只分到 180.5pt，默认配置看不到清单（用户很可能因此把待办关掉了）。下面的原始数字与推导保留作核对依据：本机面板 770pt（tab 数 ≥6 时才给到这个宽度）时，胶囊内可用宽 **≈702–703pt**（常量链推导 702：ContentView 的 (19−5) + 12 与 NotchHomeView 的 8，两侧各 34；像素反推 ≈703——**两个口径都小于 704 = 三块最小宽 680 + 2×12**，这就是"间距 12 时第三块在 770pt 下被规则③ 丢弃（实拍）"的算术原因；间距改 8 后 680+16 = 696 ≤ 702，三块齐活）。代入 `plan`（理想 420/260/240、最小 300/200/180、间距 8）：705 → `[300.5, 200, 180]`、706 → `[301, 200.5, 180.5]`——两种取值下三块都压在最小宽度附近，待办块 < 220 → 只画三环。**另注意新装默认面板是 690pt**（`openNotchWidth` 默认 640 被最小宽度抬到 tab 数对应的值）→ 可用 ≈625 → 规则③ 直接丢掉待办块，首页只有音乐 + 日历两块（`[300, 200]`）。这两条都是宽度预算的必然结果，不是缺陷，但"首页看到待办清单"在默认配置下**不成立**。（数字由 T6 两轮审查与整体终审用布局常量 + 截图像素量测双路核过；早前误记的"可用 754 / 需 1000pt"已更正。）
 17. **首页块的三环一律彩色**（`isSelected: true`），与展开 tab"只有当前类别彩色"不同形——首页块没有"当前类别"这个概念，故有意如此。
 18. **未授权提醒时首页块画三个 0/0 空环**，不做授权引导（`content(for: .home)` 恒返回 `.view`，没有"无内容"分支）。
-19. **`HomeStripBlock` 没有 `.clipped()`**：被丢弃的块虽然拿到 `.zero` 提案，但块外框不裁剪，固定尺寸的内容（空态图标 / 降级占位三角）仍可能按固有尺寸溢出到条尾，留下约 40×19pt 残影。**触发前提是"有块被丢弃"**（窄面板 + 镜子开启 / 新装 690pt 面板），当前 770pt 配置不触发。修法是一行 `.clipped()`。
-20. **`deactivateAll()` 的 await 窗口**：该函数在逐个 `deactivate()` 之后才清空代数表，因此在这段 await 里完成的激活仍能匹配自己的号、把实例写回 `instances`/`states`，随后被 `removeAll()` 丢掉——**那个实例不会被 `deactivate()`**。窄窗，且该函数只用于应用退出与测试隔离（进程退出时实例本就消失）。修法是把清代次提到循环之前。
+19. ~~**`HomeStripBlock` 没有 `.clipped()`**~~ **2026-09-29 改判（批次 `p2-p0-visible`）：已证伪"当前不触发"并已修**——770pt 面板下第三块真的会被规则③ 丢弃（可用 ≈702 < 需要 704），而被丢块未裁剪时三环会以"溢出残影"显形（看起来"有块"，其实是残片）。修法：`HomeStripBlock` 内容加 `.clipped()`，并把块间距由 12 改为 8（680+16 = 696 ≤ 702，三块才放得下）。原文如下：20. **`deactivateAll()` 的 await 窗口**：该函数在逐个 `deactivate()` 之后才清空代数表，因此在这段 await 里完成的激活仍能匹配自己的号、把实例写回 `instances`/`states`，随后被 `removeAll()` 丢掉——**那个实例不会被 `deactivate()`**。窄窗，且该函数只用于应用退出与测试隔离（进程退出时实例本就消失）。修法是把清代次提到循环之前。
+22. **770pt 面板最多容三块，被丢的模块块等于"开关没效果"**：todos 与 notifications 同开时（四块：音乐 + 日历 + 两个模块块），四块最小宽和 860 + 3×8 = 884 > 可用 702 → 规则③ 丢尾部（`order` 大的那个，当前是 `order 40` 的 notifications）。此时通知组件虽然开着，首页看不到它的块。缓解：把面板拉宽到 ≈952pt，或只在组件页开一个模块块。**未做**：strip 没有"被丢了几块"的提示（`+N` 之类），属下一批的候选。
 21. **`TodoHomeRow` 是 `TodoRow` 的简化副本**（状态圈 10 vs 13pt、`opacity` 0.35/0.8 vs 0.4/0.9、标题 11 vs 12pt）：常量已分叉，展开 tab 改样式时首页块不会跟随。环本身是复用的（同一 `TodoScopeRing`）。
 
 **回写期补充**：无（尚未实现）。
@@ -501,12 +501,13 @@ struct HomeBlockWidthKey: LayoutValueKey {
 | D-15 | `home` 请求常量落在 `ModuleRegistry.home`（宿主侧），不挂到协议层的 `ContentRequest` 上 | agent | `ContentRequest` 是模块协议的一部分，宿主常量挂上去会把"谁决定请求形状"搅混；与既有 `compactSlotRequest` 同址 |
 | D-16 | 置关侧也领新代次号；`activateIfNeeded` 不自带必要性守卫（跳过规则留在调用方） | agent | 前者是"在飞激活被作废"机制生效的前提，后者是同时满足"`bootstrap()` 行为逐字不变"与"`setEnabled(true)` 能接 `.disabled`"的唯一落法。代价：方法名前缀 `IfNeeded` 与实现不符，靠注释与调用点守卫维持 |
 | D-17 | 首页镜像块用裸 `CameraPreviewView`；模块首页块不加 `requestRedraw` 调用；组件页新 key 用 `settings.modules.*` 前缀 | agent | 那层 opacity/blur 包装只服务关闭态动画；`store` 的 `@Published` 已驱动重绘（与另两个模块同路）；前缀与本批新增 key 的形态一致 |
-| D-18 | `HomeStripBlock` 的 `.clipped()` 与 `deactivateAll()` 的 await 窗口**本批不修**，记入 §已知限制 19/20 | agent | 前者只在"有块被丢弃"时留下观感级残影（当前配置不触发），后者只影响退出/测试路径；两者都属审查判定的 Minor，改动留到下一次动相关文件的批次，避免在收尾期引入未审改动 |
+| D-18 | ~~`HomeStripBlock` 的 `.clipped()` 与 `deactivateAll()` 的 await 窗口本批不修~~ **2026-09-29 改判（`p2-p0-visible`）**：`.clipped()` **已修**（见 §已知限制 19 与 D-23）；`deactivateAll()` 的 await 窗口仍留作后续（§已知限制 20 不变） | agent | 原判据"当前配置不触发"被实测证伪：770pt 下第三块会被丢弃且残影可见 |
 | D-19 | 通知组件**新增首页块**（「通知 · 最近 N 条」+ 最近 3 条，点条目开 App 并收起；不可读时一行权限提示） | 用户 | 用户原话「通知组件打开不管用」；实测管道通，缺的是首页可见性。**改判了 §已知限制 9**（原写"通知是瞬时事件，不做首页块"），理由与证据见该条。代价：首页多一块常驻信息，需要时可在组件页关掉 |
 | D-20 | 组件卡每张加一行「效果 / 出现位置」，`progress` 另标「默认关闭」 | 用户 | 同一条抱怨的另一半：三张卡里只有待办有首页效果（现在通知也有了），卡片必须自己讲清"开它之后会看到什么"，否则用户只能靠猜 |
 | D-21 | 待办块单阈值改 **220 / 160 / 0 三档**（≥220 完整行、≥160 紧凑行、<160 只画环） | agent | 本机 770pt 面板下待办块实测 180.5pt，默认配置看不到清单；分档比"让用户调面板宽"或"给每块加权重"成本低得多。代价：紧凑行只有标题（无时间列），信息更少 |
 | D-22 | 首页通知块显示的是**列表条数**，与折叠态铃铛的「自上次打开面板以来的新增数」是两个口径，**不强行统一** | agent | 铃铛的 `unseenCount` 只在展开 tab 打开时清零（既有行为），统一它要动既有计数语义；改措辞让它说实话成本更低（块头从"未读 N"改成"最近 N 条"，与展开 tab 同词） |
----
+| D-23 | 块间距由 **12 改为 8**；`HomeStripBlock` 内容加 **`.clipped()`** | agent | 实测：770pt 面板可用宽 ≈702 < 704（三块最小宽 680 + 2×12），间距 12 时第三块被规则③ 整块丢弃；而被丢块不裁剪时其固定尺寸内容会以"溢出残影"显形（看起来有块）。改 8 后 696 ≤ 702 三块齐活；裁剪让"丢块"变成真正不可见。教训：**"零提案"只解决摆放，不解决绘制** |
+| D-24 | 770pt 面板**最多容三块**：todos 与 notifications 同开时，`order` 大的那个模块块会被丢弃（当前是 `order 40` 的 notifications） | agent | 四块最小宽和 860 + 3×8 = 884 > 702，需面板 ≈952pt。这是"块数由用户决定 + 面板宽度可调"的必然结果，不是缺陷；**后果**是"通知开关在该配置下仍无可见效果"，缓解是把面板拉宽或在组件页只开一个模块块。已记入 §已知限制 22 |---
 
 ## 附录：改动索引
 
