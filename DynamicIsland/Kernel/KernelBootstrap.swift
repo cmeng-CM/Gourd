@@ -10,7 +10,13 @@
 //  注释掉任意一行后应用仍能启动（A4）——`register` 是逐项独立的，注册表空时
 //  `tabEntries` 为空、展开面板与改动前一致。
 //
+//  P2 接管批次 / T1 增量（docs/20-component-page.md §做法 机制一/机制二 + §接口与数据形状 2）：
+//  启用门改成**三段判定**（接管键 → overrides → manifest 默认），并新增
+//  `startTakeoverBridge(registry:)`——为每个接管模块订阅它那一个上游键，
+//  键被别处（上游设置页）改动时把注册表状态拉回来。
+//
 
+import Combine
 import Defaults
 import Foundation
 import os
@@ -29,7 +35,17 @@ public enum KernelBootstrap {
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
 
-    /// 注册内置模块 + 落首启默认值 + 激活。幂等，可在启动流程里安全重复调用。
+    /// 重同步桥的订阅表：id → 该接管模块那个上游键的订阅（docs/20 §接口与数据形状 2）。
+    ///
+    /// **是字典、不是 `Set<AnyCancellable>`**：`AnyCancellable.store(in:)` 只有 `Set` 与
+    /// `RangeReplaceableCollection<AnyCancellable>` 两个重载，字典两个都不匹配，因此
+    /// `startTakeoverBridge` 里是**显式赋值**；按 id 存也让排查时能看出「哪个模块的订阅在不在」。
+    private static var takeoverSubscriptions: [String: AnyCancellable] = [:]
+
+    /// 当前订阅条数（只为可测性，docs/20 §接口与数据形状 2）：用例据它断言起桥的幂等。
+    static var takeoverSubscriptionCount: Int { takeoverSubscriptions.count }
+
+    /// 注册内置模块 + 落首启默认值 + **起重同步桥** + 激活。幂等，可在启动流程里安全重复调用。
     ///
     /// `collapse` 由**应用侧**在此注入（`UIHandle.requestCollapse()` 的唯一实现落点）：
     /// 组合根本身不认识窗口，只把闭包透传给注册表（docs/13 D-28）。
@@ -39,22 +55,59 @@ public enum KernelBootstrap {
         applyFirstLaunchDefaults()
 
         let registry = ModuleRegistry.shared
-        // 启用门 = `enablementGate`（docs/17 §接口与数据形状 3）：先看用户显式选择，再回落 manifest。
+        // 启用门 = `enablementGate`（docs/17 §接口与数据形状 3）：先看接管真源，再看用户显式选择，最后回落 manifest。
         registry.register(builtinModules, enabled: enablementGate(registry: registry))
+        // 桥在注册之后、激活之前起：激活那一刻的 `states` 由门判定，桥只负责之后的「别处改键」。
+        startTakeoverBridge(registry: registry)
         await registry.bootstrap(collapse: collapse)
     }
 
-    /// 组合根注入的启用门（docs/17 §接口与数据形状 3；D-05）：
-    /// **键在 `moduleEnableOverrides` 里就取键值**（用户显式表达，压过 manifest），
-    /// **缺键回落 `manifest.defaultEnabled`**，未注册的 id 回落 `false`（06 §2.2 缺省 false）。
+    /// 组合根注入的启用门（docs/17 §接口与数据形状 3；docs/20 §接口与数据形状 2 的三段判定）：
+    ///
+    /// 1. **接管键**（`registry.takeoverEnableKey(for:)` 非 nil）→ **直接读它**：
+    ///    `moduleEnableOverrides` 与 `manifest.defaultEnabled` 都不再看（D-01：真源唯一才不会漂）；
+    /// 2. **键在 `moduleEnableOverrides` 里就取键值**（用户显式表达，压过 manifest）；
+    /// 3. **缺键回落 `manifest.defaultEnabled`**，未注册的 id 回落 `false`（06 §2.2 缺省 false）。
     ///
     /// 为什么在组合根而不是注册表：门是「怎么判定启用」，读偏好属组合根职责——注册表只接收
     /// 一个闭包，不知道用户偏好的存在（D-05 / 放 `ModuleRegistry` 上会把偏好读取漏进内核）。
-    /// internal 便于单测直接验两档回落，不必跑整个 `bootstrap()`。
+    /// internal 便于单测直接验三档回落，不必跑整个 `bootstrap()`。
+    ///
+    /// **不写任何偏好**：门只读（写是设置页 / 组件页的事，见 `ModuleEnablementWrite`）。
     static func enablementGate(registry: ModuleRegistry) -> (String) -> Bool {
         { id in
-            Defaults[.moduleEnableOverrides][id] ?? (registry.manifests[id]?.defaultEnabled ?? false)
+            if let takeoverKey = registry.takeoverEnableKey(for: id) {
+                return Defaults[takeoverKey]
+            }
+            return Defaults[.moduleEnableOverrides][id] ?? (registry.manifests[id]?.defaultEnabled ?? false)
         }
+    }
+
+    /// 为每个**接管模块**订阅它那一个上游键，键被改动时把注册表状态拉回来（docs/20 §做法 机制二）。
+    ///
+    /// 为什么需要这条桥：启用真源是上游键以后，**上游设置页也是这个开关的一个入口**——
+    /// 不订阅就会出现「计时器已经关了、tab 还在」。桥走的正是设置页那条同一条路径
+    /// （`ModuleRegistry.setEnabled(_:for:)`），而 `setEnabled` **本身不写偏好**，因此不会自激。
+    ///
+    /// 三条口径（改动前先读）：
+    /// - **幂等**：进入先 `removeAll()`，重复调用不会让订阅翻倍；
+    /// - **`options: []`**（不加 `.initial`）：本项目 `Defaults` 包只有 `.initial` / `.prior` 两个
+    ///   `ObservationOption`，`.initial` 会在**订阅瞬间**发一次当前值、凭空改变激活次序——
+    ///   仓库里既有写法一律 `options: []`（见 `DynamicIslandApp.swift` 的同款订阅）；
+    /// - **只处理「已激活 ↔ 已关闭」这一维**：`failed` 仍是终态（D-13），桥既不救活它、
+    ///   也不把它降级——`setEnabled` 自己就带着这条语义。
+    static func startTakeoverBridge(registry: ModuleRegistry) {
+        takeoverSubscriptions.removeAll()
+
+        // id 升序：订阅建立顺序稳定（便于复现，也让日志可读）。
+        for id in registry.manifests.keys.sorted() {
+            guard let key = registry.takeoverEnableKey(for: id) else { continue }
+            takeoverSubscriptions[id] = Defaults.publisher(key, options: [])
+                .removeDuplicates { $0.newValue == $1.newValue }
+                .sink { change in Task { @MainActor in await registry.setEnabled(change.newValue, for: id) } }
+        }
+
+        log.info("重同步桥已起：\(takeoverSubscriptions.count, privacy: .public) 个接管模块（id：\(takeoverSubscriptions.keys.sorted().joined(separator: ", "), privacy: .public)）")
     }
 
     /// 首启默认值：把不需要的上游功能用**默认值**表达，不改上游源码（09 §8.1 / D-08）。

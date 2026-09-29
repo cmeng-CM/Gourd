@@ -4,10 +4,27 @@
 //
 //  取值词汇表逐字沿用 docs/06-module-protocol.md（§3.1 / §6.1 / §6.2），
 //  唯一增量是 P2 批次加的 `Surface.home`（docs/17-nookx-adoption.md §接口与数据形状 1）；
-//  本文件不含任何行为，只有共享的枚举。
+//  P2 接管批次 / T1 再加 `ModuleHomeBlockWidth`（docs/20-component-page.md §接口与数据形状 1）；
+//  本文件不含任何行为，只有共享的枚举与值类型。
 //
 
+import CoreGraphics
 import Foundation
+
+/// 首页块宽度的**内核侧**取值形态（`min` = 低于它不如不显示，`ideal` = 富余时用它）。
+///
+/// 谁用：接管模块的 `GourdModule.homeBlockWidth` 钩子（docs/20-component-page.md §接口与数据形状 1）
+/// 声明它接住的那一块原本的宽度（镜子 140/160、音乐 300/420）；`ModuleRegistry.homeBlockWidth(for:)`
+/// 原样取给宿主。缺省（钩子答 nil）= 用宿主统一值 180/240（docs/17 D-11）。
+///
+/// **与 Host 的 `HomeBlockWidth` 同形不同名**：那个是渲染层的布局值（`HomeBlockWidthKey`
+/// 也是渲染层的 `LayoutValueKey`），内核不认识它——映射在 `HomeStripView` 一处（3 行）。
+public struct ModuleHomeBlockWidth: Sendable, Equatable {
+    /// 低于它不如不显示（`HomeStripLayoutMath` 判丢块用的下界）。
+    public let min: CGFloat
+    /// 富余时用它。
+    public let ideal: CGFloat
+}
 
 /// 06 §6.1 的 surface：模块内容可以出现在哪里。
 ///

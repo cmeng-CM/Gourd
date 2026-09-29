@@ -9,8 +9,13 @@
 //  06 §3.3 的硬性规则落点：单个模块 `activate()` 抛错**只把自己置为失败**（不崩、不重试），
 //  其余模块照常激活——P1 验收 A6 / docs/13 失败信号「抛错模块不得让 bootstrap() 提前返回」。
 //
+//  P2 接管批次 / T1 增量（docs/20-component-page.md §做法 机制一 / §接口与数据形状 2）：
+//  两个**接管查询**（`takeoverEnableKey(for:)` / `homeBlockWidth(for:)`，都读 `moduleTypes`）
+//  与 `tabEntries` 过滤条件里的 `isTabVisible()`。三者一律**每次读现问一次、不缓存**。
+//
 
 import Combine
+import Defaults
 import Foundation
 import SwiftUI
 import os
@@ -315,13 +320,39 @@ public final class ModuleRegistry: ObservableObject {
         instances[id]
     }
 
+    // MARK: - 接管查询（docs/20 §接口与数据形状 2）
+
+    /// 该模块的**启用真源**键（docs/20 §做法 机制一）：非 nil = 接管模块，组合根的启用门
+    /// 直接读它；nil = 未注册 / 非接管模块。
+    ///
+    /// 读 `moduleTypes`（不是 `manifests`）：钩子挂在**类型**上（`GourdModule` 的静态要求），
+    /// manifest 里没有这一列。**每次读现问一次**（不缓存，同三条投影的口径）。
+    public func takeoverEnableKey(for id: String) -> Defaults.Key<Bool>? {
+        moduleTypes[id]?.takeoverEnableKey
+    }
+
+    /// 该模块声明的**首页块宽度**（docs/20 §做法 机制一「块宽继承」）：nil = 用宿主统一值
+    /// 180/240（`HomeStripLayoutMath` 的 `moduleBlockWidth`）。同样是每次读现问一次。
+    public func homeBlockWidth(for id: String) -> ModuleHomeBlockWidth? {
+        moduleTypes[id]?.homeBlockWidth
+    }
+
     // MARK: - UI 投影
 
     /// 展开面板的 tab 列表：仅 `active` 且 `surfaces` 含 `.expanded`，
     /// 按 `order` 升序、同 `order` 按 id 字典序（`order` 缺省 = `Int.max`，排最后）。
+    ///
+    /// **可见性钩子**（docs/20 §做法 机制一）：过滤条件里还有 `isTabVisible()`（缺省 true）——
+    /// 「启用」不总是等价于「tab 出不出来」（计时器还要求 `timerDisplayMode == .tab`）。
+    /// 与另外两条投影一样**每次读都现问一次**（不缓存），模块因此按当下状态回答。
+    /// 比较器与排序**不动**（order → id 字典序）。
     public var tabEntries: [ModuleTabEntry] {
         manifests.values
-            .filter { states[$0.id] == .active && $0.surfaces.contains(.expanded) }
+            .filter {
+                states[$0.id] == .active
+                    && $0.surfaces.contains(.expanded)
+                    && (moduleTypes[$0.id]?.isTabVisible() ?? true)
+            }
             .map { manifest in
                 ModuleTabEntry(
                     id: manifest.id,
