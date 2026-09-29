@@ -157,10 +157,10 @@ func enabledStandardTabCount() -> Int {
         count += 1
     }
 
-    // Timer tab (only in .tab display mode)
-    if Defaults[.enableTimerFeature] && Defaults[.timerDisplayMode] == .tab {
-        count += 1
-    }
+    // Timer tab：**不再在这里计数**（P2 接管批次 / T2 起）——上游那一条「功能开着 + 显示方式选 tab」
+    // 的 `+1` 已删除，计时器的贡献由下方 `ModuleRegistry.shared.tabEntries` 代为承担
+    // （`TimerModule` 的投影：启用真源 = 上游总开关、可见性 = 显示方式选 tab，一一对应）。
+    // 三种组合下的贡献因此仍是 1 / 0 / 0（docs/20 §做法 机制五），刘海最小宽度不回归。
 
     // Stats tab
     if Defaults[.enableStatsFeature] {

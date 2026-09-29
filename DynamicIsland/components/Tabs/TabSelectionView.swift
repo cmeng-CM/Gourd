@@ -52,10 +52,8 @@ struct TabSelectionView: View {
     @StateObject private var quickShareService = QuickShareService.shared
     @Default(.quickShareProvider) private var quickShareProvider
     @State private var showQuickSharePopover = false
-    @Default(.enableTimerFeature) var enableTimerFeature
     @Default(.enableStatsFeature) var enableStatsFeature
     @Default(.enableColorPickerFeature) var enableColorPickerFeature
-    @Default(.timerDisplayMode) var timerDisplayMode
     @Default(.enableThirdPartyExtensions) private var enableThirdPartyExtensions
     @Default(.enableExtensionNotchExperiences) private var enableExtensionNotchExperiences
     @Default(.enableExtensionNotchTabs) private var enableExtensionNotchTabs
@@ -76,9 +74,9 @@ struct TabSelectionView: View {
             tabsArray.append(TabModel(label: "Shelf", icon: "tray.fill", view: .shelf))
         }
         
-        if enableTimerFeature && timerDisplayMode == .tab {
-            tabsArray.append(TabModel(label: "Timer", icon: "timer", view: .timer))
-        }
+        // Timer tab：**已由模块投影产出**（`TimerModule`，docs/20 §做法 机制一）——
+        // 上游那条「功能开着 + 显示方式选 tab」的分支已删除，不允许与模块并存
+        // （并存就是两个计时器 tab）。下方模块段的条目即计时器页。
 
         // Stats tab only shown when stats feature is enabled
         if Defaults[.enableStatsFeature] {

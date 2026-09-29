@@ -1065,9 +1065,9 @@ final class ModuleKernelTests: XCTestCase {
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
-    /// **这条用例的 `count == 4` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
-    /// 加第五个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
-    /// P2 启动台批次从 3 放宽到 4，都是这一条）。
+    /// **这条用例的 `count == 5` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第六个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
+    /// P2 启动台批次从 3 放宽到 4、P2 接管批次 / T2 从 4 放宽到 5，都是这一条）。
     func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
@@ -1083,10 +1083,39 @@ final class ModuleKernelTests: XCTestCase {
         }
         defaults.set(true, forKey: flagKey)
 
+        // 计时器接管（T2）后，本条用例的期望**不再能由开发机偏好决定**：启用门读上游总开关
+        // （`enableTimerFeature`）、tab 可见性读显示方式（`timerDisplayMode`）——本机显示方式
+        // 实测是 "popover"（不是 manifest 默认的 "tab"），不置夹具的话「计时器进 tab」必红。
+        // 夹具写法与首启闸门键同款：先读持久域现值（nil = 盘上原本没有这个键）→ 置定值 → `defer` 逐字还原
+        // （原本有键写回原值、原本没键删键，不把 Defaults 注册域里的默认值写进持久域）。
+        let timerKeyNames = [
+            Defaults.Keys.enableTimerFeature.name,
+            Defaults.Keys.timerDisplayMode.name,
+        ]
+        let domain = Bundle.main.bundleIdentifier
+        let originalTimerValues = timerKeyNames.reduce(into: [String: Any]()) { table, key in
+            table[key] = domain.flatMap { defaults.persistentDomain(forName: $0)?[key] }
+        }
+        defer {
+            for key in timerKeyNames {
+                if let value = originalTimerValues[key] {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+            // 注：本条用例的 `bootstrap()` 起的重同步桥（订阅上游总开关）在用例结束后仍然挂着——
+            // 与真实应用一致（桥的生命周期 = 应用生命周期）。后续用例若写这个键，回调只会对着
+            // 当时（多半已清空的）注册表调一次 `setEnabled`：未注册 → 记一条 warning、不写状态；
+            // 接管用例自己的 `setUp` 会以空注册表重建订阅表，把它清掉。
+        }
+        Defaults[.enableTimerFeature] = true
+        Defaults[.timerDisplayMode] = .tab
+
         XCTAssertEqual(
             KernelBootstrap.builtinModules.count,
-            4,
-            "A3：内置模块清单 = 四行（progress + todos + notifications + launcher）"
+            5,
+            "A3：内置模块清单 = 五行（progress + todos + notifications + launcher + timer）"
         )
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
@@ -1095,8 +1124,9 @@ final class ModuleKernelTests: XCTestCase {
                 ObjectIdentifier(TodosModule.self),
                 ObjectIdentifier(NotificationsModule.self),
                 ObjectIdentifier(LauncherModule.self),
+                ObjectIdentifier(TimerModule.self),
             ],
-            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule 与 LauncherModule"
+            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule 与 TimerModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1109,20 +1139,27 @@ final class ModuleKernelTests: XCTestCase {
         let todosID = "com.cmeng.gourd.todos"
         let notificationsID = "com.cmeng.gourd.notifications"
         let launcherID = "com.cmeng.gourd.launcher"
+        let timerID = TimerModule.moduleID
 
-        // ① 真启用门逐字取 `defaultEnabled`：todos 与 notifications 默认开、progress 默认关（D-20）
+        // ① 真启用门：非接管模块逐字取 `defaultEnabled`（todos 与 notifications 默认开、
+        // progress 与 launcher 默认关，D-20 / T-12）；**接管模块取上游键**——
+        // 计时器的真源是 `enableTimerFeature`（夹具置 true），因此它过门、进投影。
         XCTAssertEqual(registry.states[todosID], .active)
         XCTAssertEqual(registry.states[notificationsID], .active)
         XCTAssertEqual(registry.states[id], .disabled, "progress 默认关（D-20），启用门不放行")
         XCTAssertNil(registry.instance(for: id), "disabled 的模块不实例化")
         XCTAssertEqual(registry.states[launcherID], .disabled, "launcher 默认关（docs/14 T-12 / D-04）")
         XCTAssertNil(registry.instance(for: launcherID), "默认关的模块不实例化，也不占任何 surface")
+        XCTAssertEqual(registry.states[timerID], .active, "接管模块的启用门读上游键（夹具 true），不看 defaultEnabled")
+        XCTAssertNotNil(registry.instance(for: timerID) as? TimerModule, "过门的计时器照常实例化")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
         XCTAssertNotNil(registry.instance(for: notificationsID) as? NotificationsModule)
 
-        // 投影里只剩已激活的两个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
-        // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID])
+        // 投影里只剩已激活的三个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
+        // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`。
+        // tab 顺序按 `(order, id)`：todos（20）→ notifications（40）→ 计时器（**无 placement
+        // → `Int.max`**，排在所有给了 order 的模块之后）
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID, timerID])
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
         // 首页块投影（P2 / T4 起，T1 加通知块）：声明 `.home` 的已激活模块都进块名单——
         // todos（order 20）在前、notifications（order 40）在后；两者的首页请求都拿到 `.view`
@@ -1161,7 +1198,7 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("未激活的 progress 应降级为 .unavailable")
         }
 
-        // ② 手动全放行（模拟用户显式开启 progress 与 launcher）后重注册：四个模块都 active
+        // ② 手动全放行（模拟用户显式开启 progress 与 launcher）后重注册：五个模块都 active
         await registry.deactivateAll()
         registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
         await registry.bootstrap()
@@ -1171,14 +1208,24 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(registry.states[launcherID], .active, "launcher 声明了 expanded，放行后进 tab 投影")
 
         // tab 候选按 `order` 升序：todos（20）→ progress（30）→ notifications（40）→
-        // launcher（**无 placement → `Int.max`**，排在所有给了 order 的模块之后）
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID, launcherID])
+        // launcher 与计时器（**都无 placement → `Int.max`**，排在所有给了 order 的模块之后；
+        // 同 order 按 id 字典序，故 launcher 在 timer 之前）
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID, launcherID, timerID])
         let launcherEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == launcherID }, "launcher 应进展开面板的 tab 投影")
         XCTAssertEqual(launcherEntry.symbolName, "square.grid.2x2")
         XCTAssertTrue(
             ["Launcher", "启动台"].contains(launcherEntry.label),
             "tab 文案应已本地化（module.launcher.name），实到 \(launcherEntry.label)"
         )
+        let timerEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == timerID }, "计时器应进展开面板的 tab 投影")
+        XCTAssertEqual(timerEntry.symbolName, "timer")
+        XCTAssertTrue(
+            ["Timer", "计时器"].contains(timerEntry.label),
+            "tab 文案应已本地化（module.timer.name），实到 \(timerEntry.label)"
+        )
+        guard case .view = registry.content(for: timerID, request: request(.expanded)) else {
+            return XCTFail("计时器的展开请求应拿到上游那个 NotchTimerView（.view）")
+        }
         let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
@@ -1215,6 +1262,17 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertFalse(
             registry.homeEntries.contains { $0.id == launcherID },
             "launcher 不声明 home → 首页块名单里不得出现它（本批不占首页块）"
+        )
+
+        // **计时器同样只声明 `expanded`**（P2 接管批次 / T2，docs/20 D-09：折叠槽位已降级、
+        // 计时器不占首页块）——两条投影里都不该出现。
+        XCTAssertFalse(
+            registry.compactEntries.contains { $0.id == timerID },
+            "计时器不声明 compact → 不得进折叠槽位候选（D-09：本批不声明任何 compact）"
+        )
+        XCTAssertFalse(
+            registry.homeEntries.contains { $0.id == timerID },
+            "计时器不声明 home → 首页块名单里不得出现它"
         )
     }
 

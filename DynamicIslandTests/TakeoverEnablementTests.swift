@@ -20,6 +20,12 @@
 //  - **块宽钩子**：声明 140/160 的模块取值一致、未声明为 nil、未注册 id 为 nil；
 //  - **回弹策略**（`ModuleEnablementRollback`，D-13）：接管模块 nil（什么都不写）、非接管模块 false。
 //
+//  P2 接管批次 / T2 追加（同一个真模块的声明与计数）：
+//  - **`TimerModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact`）、
+//    `moduleID == manifest.id`、`config` 只登记上游三键、两条取值型钩子（真源键 / 无块宽）；
+//  - **计数回归**（docs/20 §做法 机制五）：上游那条 `+1` 删掉后，计时器对
+//    `enabledStandardTabCount()` 的贡献仍是 1 / 0 / 0（启用 × 显示方式三种组合）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -294,6 +300,123 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    // MARK: - 计时器接管模块（T2）
+
+    /// docs/20 §接口与数据形状 5 的 timer 行：**这个真模块**的 manifest 声明值逐条对齐。
+    ///
+    /// 三条钩子与启用门的**行为**（真源压过 overrides / 可见性过滤 / 重同步）已由本文件上半段的
+    /// 假模块覆盖，这里钉的是真模块的声明：`surfaces` 不含 `.compact`（D-09）、tab 落模块段
+    /// （`defaultPlacement == nil`）、`config` 只登记上游三键（D-03）。
+    func testTimerModuleManifestMatchesTakeoverContract() throws {
+        let manifest = TimerModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, TimerModule.moduleID, "moduleID 与 manifest.id 必须是同一份字面量")
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.timer")
+        XCTAssertEqual(manifest.shortID, "timer")
+        XCTAssertEqual(manifest.name.key, "module.timer.name")
+        XCTAssertEqual(manifest.summary?.key, "module.timer.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "timer"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.expanded], "只声明 expanded（D-09：本批不声明任何 compact）")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "接管模块不占折叠槽位")
+        XCTAssertNil(manifest.defaultPlacement, "tab 落模块段（无 placement → Int.max，docs/20 §已知限制 2）")
+        XCTAssertEqual(manifest.defaultEnabled, true, "= 上游 `enableTimerFeature` 的默认值（接管键读不到时才不生效）")
+        XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属与开关真源：零新增能力请求")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(properties.count, 3, "config 只登记上游三键，不新发明键（D-03）")
+        XCTAssertEqual(properties["enableTimerFeature"]?.type, "boolean")
+        XCTAssertEqual(properties["enableTimerFeature"]?.default, ConfigValue.bool(true))
+        XCTAssertEqual(properties["timerDisplayMode"]?.type, "enum")
+        XCTAssertEqual(properties["timerDisplayMode"]?.values, ["tab", "popover"])
+        XCTAssertEqual(properties["timerDisplayMode"]?.default, ConfigValue.string("tab"))
+        XCTAssertEqual(properties["timerPresets"]?.type, "list")
+        XCTAssertEqual(properties["timerPresets"]?.itemType, "string")
+        XCTAssertNil(properties["timerPresets"]?.default, "预设清单不给 default（结构比 06 §5.3 标量复杂，只登记键名）")
+
+        // 两条取值型钩子：真源 = 上游总开关；本模块不接首页块 → 不声明块宽
+        XCTAssertEqual(TimerModule.takeoverEnableKey?.name, Defaults.Keys.enableTimerFeature.name)
+        XCTAssertNil(TimerModule.homeBlockWidth, "只接展开 tab（宿主统一宽度）")
+
+        // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// 计数回归（docs/20 §做法 机制五 / §验收标准 1）：上游那条「功能开着 + 显示方式选 tab」的 `+1`
+    /// 从 `enabledStandardTabCount()` 删掉后，计时器对它的贡献必须仍是 **1 / 0 / 0**——
+    /// 这一数是刘海最小宽度的唯一输入，错一位就是宽度回归。
+    ///
+    /// 三点刻意写死（改动前先读）：
+    /// 1. **自己置全夹具**：`enabledStandardTabCount()` 读到的每条上游键都压到 false。
+    ///    否则开发机上恰好开着的项会把基线抬起来，三种组合的期望写不成常数
+    ///    （本机实测 `timerDisplayMode = "popover"`，不置夹具时「① = 1」直接红）；
+    /// 2. **注册走真门**（`KernelBootstrap.enablementGate`）：接管键是启用的唯一真源——
+    ///    旧门（`manifests[$0]?.defaultEnabled` 或用户 overrides）根本读不到上游键；
+    /// 3. 三种组合各自**重新注册**（`deactivateAll` → `register` → `bootstrap`）：门只在注册那一刻
+    ///    判过（`setEnabled` 不重读门），重注册走的正是应用启动时 `bootstrap()` 的那条路；
+    ///    运行期改键的路径（重同步桥）由 T1 的用例覆盖。
+    func testTimerModuleKeepsEnabledStandardTabCountParity() async {
+        // 夹具键：`enabledStandardTabCount()` 的上游输入穷举（Home / Shelf / Stats / Notes-Clipboard /
+        // Terminal 五条，加计时器的启用与显示方式两条）。
+        let upstreamKeys = [
+            Defaults.Keys.showStandardMediaControls.name,
+            Defaults.Keys.showCalendar.name,
+            Defaults.Keys.showMirror.name,
+            Defaults.Keys.dynamicShelf.name,
+            Defaults.Keys.enableStatsFeature.name,
+            Defaults.Keys.enableNotes.name,
+            Defaults.Keys.enableClipboardManager.name,
+            Defaults.Keys.enableTerminalFeature.name,
+        ]
+        let keys = upstreamKeys + [
+            Defaults.Keys.enableTimerFeature.name,
+            Defaults.Keys.timerDisplayMode.name,
+        ]
+        let originals = snapshotValues(of: keys)
+        defer { restoreValues(originals, for: keys) }
+
+        Defaults[.showStandardMediaControls] = false
+        Defaults[.showCalendar] = false
+        Defaults[.showMirror] = false
+        Defaults[.dynamicShelf] = false
+        Defaults[.enableStatsFeature] = false
+        Defaults[.enableNotes] = false
+        Defaults[.enableClipboardManager] = false
+        Defaults[.enableTerminalFeature] = false
+
+        let registry = ModuleRegistry.shared
+        let timerID = TimerModule.moduleID
+
+        // ① 功能开 + 显示方式选 tab → 贡献 1（与上游分支删掉之前同一结果）
+        Defaults[.enableTimerFeature] = true
+        Defaults[.timerDisplayMode] = .tab
+        registry.register([TimerModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[timerID], .active, "接管键 true → 启用门放行")
+        XCTAssertTrue(TimerModule.isTabVisible(), "显示方式选 tab → 此刻该在 tab 列表里")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [timerID], "接管的 tab 由模块投影产出（上游分支已删）")
+        XCTAssertEqual(enabledStandardTabCount(), 1, "① 计时器的贡献 = 1")
+
+        // ② 功能开 + 显示方式改选 popover → 贡献 0（模块仍 active：可见性 ≠ 启用）
+        Defaults[.timerDisplayMode] = .popover
+        XCTAssertEqual(registry.states[timerID], .active, "可见性只在投影层过滤，不改模块状态")
+        XCTAssertFalse(TimerModule.isTabVisible(), "显示方式不是 tab → 不该在 tab 列表里")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "投影随之消失")
+        XCTAssertEqual(enabledStandardTabCount(), 0, "② 计时器的贡献 = 0")
+
+        // ③ 功能关 → 贡献 0（门直接读上游键 → 模块不激活）
+        Defaults[.timerDisplayMode] = .tab
+        Defaults[.enableTimerFeature] = false
+        await registry.deactivateAll()
+        registry.register([TimerModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[timerID], .disabled, "接管键 false → 启用门不放行（不看 overrides / manifest 默认）")
+        XCTAssertEqual(enabledStandardTabCount(), 0, "③ 计时器的贡献 = 0")
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。
@@ -336,6 +459,20 @@ final class TakeoverEnablementTests: XCTestCase {
     private func persistedValue(of key: String) -> Any? {
         guard let domain = Bundle.main.bundleIdentifier else { return nil }
         return UserDefaults.standard.persistentDomain(forName: domain)?[key]
+    }
+
+    /// 一次记下若干键的持久域原值（**只装「盘上真有」的键**：缺的键不在表里 → 还原成删键）。
+    private func snapshotValues(of keys: [String]) -> [String: Any] {
+        var table: [String: Any] = [:]
+        for key in keys {
+            if let value = persistedValue(of: key) { table[key] = value }
+        }
+        return table
+    }
+
+    /// 按同一份键表逐字还原（表里没有的键 = 原本没有 → 删键）。
+    private func restoreValues(_ snapshot: [String: Any], for keys: [String]) {
+        for key in keys { restore(snapshot[key], to: key) }
     }
 
     /// 还原一个持久域原值：原本有键写回原值、原本没键删键（写 `[:]` 会在域里留下一个存在的键）。

@@ -15,6 +15,9 @@
 //  `startTakeoverBridge(registry:)`——为每个接管模块订阅它那一个上游键，
 //  键被别处（上游设置页）改动时把注册表状态拉回来。
 //
+//  P2 接管批次 / T2：`builtinModules` 加 `TimerModule`（第一个真接管模块）——上游那条
+//  计时器 tab 分支与其 `+1` 计数同批删除，tab 由模块投影产出（docs/20 §做法 机制一）。
+//
 
 import Combine
 import Defaults
@@ -25,12 +28,13 @@ import os
 @MainActor
 public enum KernelBootstrap {
     /// 内置模块清单。T4 落 `ProgressModule`，T5 落 `TodosModule`，P2c 落 `NotificationsModule`，
-    /// P2 启动台批次落 `LauncherModule`——即「新增模块 = 加一行」的那一行。
+    /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`——即「新增模块 = 加一行」的那一行。
     ///
     /// 顺序与用户可见顺序**无关**（那个由 `defaultPlacement.order` 定，见 `ModuleRegistry.tabEntries`）；
     /// 它只影响 `register` 的落表顺序与日志可读性，这里按批次先后排。
     static let builtinModules: [any GourdModule.Type] = [
         ProgressModule.self, TodosModule.self, NotificationsModule.self, LauncherModule.self,
+        TimerModule.self,
     ]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
