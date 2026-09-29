@@ -25,9 +25,20 @@ import SwiftUI
 /// 不生成——不留空壳、不占高度）。行高是**固定档**：面板高度不足时优先保上排 strip（strip 拿
 /// `max(0, 剩余高度)`），本行不参与「按内容伸缩」的协商。
 struct HomeCalendarRow: View {
-    /// 行高：固定档（可容纳「月份标题 + 星期表头 + 约 3 行日格」+ 右侧多行清单；面板高度不足时
-    /// 优先保 strip 行，见 `NotchHomeView.standardHomeContent`）。
-    static let rowHeight: CGFloat = 190
+    /// 行高：固定档，**按「一屏显示整月」反推**（2026-09-29 复审要求，改自 190）。
+    ///
+    /// 算式（`MonthGridView` 的既有内部刻度，本批未改它）：
+    /// - 网格视口 = `(rowHeight − 4 − 56) − 22` = `rowHeight − 82`
+    ///   （4 = 网格自身 `.padding(.top, 4)`；56 = `pickerViewportHeight` 里让给「月份标题行 + 周标题行」的
+    ///   固定扣减；22 = 周标题行与其下日格之间那段的扣减）；
+    /// - 一周占 `30`（日格 `minHeight`）+ `6`（`LazyVGrid` 行距）= **36pt**；`N` 周需要
+    ///   `36N − 6`（末行不带行距）+ `2`（网格 `.padding(.bottom, 2)`）= `36N − 4`；
+    /// - 于是 `rowHeight ≥ 36N + 78`：3 周 186、5 周 258、**6 周 294**。
+    ///
+    /// **取 6 周（294）**：一个月最多跨 6 周（例：2026 年 8 月 = 7/26–9/5），只有 294 才能让最坏月份
+    /// 也一屏看全、不靠行内滚动——这正是用户要的「显示整月」。294 下网格视口 = 212 = 6 周内容
+    /// （6×30 + 5×6 + 2 = 212），恰好放下。
+    static let rowHeight: CGFloat = 294
 
     /// 本行与上排 strip 之间的间距（接缝里的 `VStack(spacing:)` 取同一个值，两处只有一个数）。
     static let rowSpacing: CGFloat = 8

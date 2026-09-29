@@ -225,6 +225,16 @@ struct HomeStripView: View {
     /// 声明值必须存在——模块块内容多为 `GeometryReader`，测量回退会把它们算成约 6pt。
     private static let moduleBlockWidth = HomeBlockWidth(min: 180, ideal: 240)
 
+    /// strip 的**最小可用高度**：低于它就不生成这条 strip（判据在接缝
+    /// `NotchHomeView.standardHomeContent`，2026-09-29 复审补充——原实现只在「恰好 0」时拦住）。
+    ///
+    /// **来源**：一个块至少要容得下它的最小固定件——模块块降级占位 `HomeStripModulePlaceholder`
+    /// 是 14pt 图标 + 4pt 间距 + 一行 `caption`（约 13pt）≈ 31pt，再加 13pt 顶部余量 = **44pt**；
+    /// 低于此，块里那点内容也只能画成被切一半的残片。既有状态是「strip 高度 0 时 `.clipped()` 在
+    /// 退化尺寸下不生效、块内容溢出画到 strip 之外」（见 `.workflow/p2-calendar-row/reports/T2.md`
+    /// §3.2 的实测与截图），所以「没有可用高度」与「只剩细条」两种情形都不该画。
+    static let minimumUsableHeight: CGFloat = 44
+
     /// 音乐块门控：逐字沿用 `NotchHomeView` 的旧判据（开启 + 非「无会话即隐藏」）。
     private var shouldShowMusicPlayer: Bool {
         showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer || musicManager.hasActiveSession)

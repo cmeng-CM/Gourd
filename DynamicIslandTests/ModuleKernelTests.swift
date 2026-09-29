@@ -4378,11 +4378,12 @@ final class MonthGridLayoutTests: XCTestCase {
 @MainActor
 final class HomeCalendarRowLayoutTests: XCTestCase {
 
-    /// 190（行高）− 26（收起态日期头，含与列表之间的 4pt 间距）= 164 → 今日清单 5 行
-    /// （`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，内容高度仍在行高之内。
+    /// 294（行高，2026-09-29 复审后由 190 改为 294：一屏显示 6 周整月）− 26（收起态日期头，
+    /// 含与列表之间的 4pt 间距）= 268 → 今日清单 5 行（`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，
+    /// 内容高度仍在行高之内。
     func testRowHeightYieldsFiveItemRowsPlusOverflowRow() {
         let listHeight = HomeCalendarRow.rowHeight - HomeTodayListLayout.collapsedHeaderHeight
-        XCTAssertEqual(listHeight, 164, "190 − 26")
+        XCTAssertEqual(listHeight, 268, "294 − 26")
 
         let five = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 5)
         XCTAssertEqual(five.visibleItemCount, 5, "5 条全显示")

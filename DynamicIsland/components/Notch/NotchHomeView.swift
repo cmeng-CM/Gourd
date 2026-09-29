@@ -880,10 +880,11 @@ struct NotchHomeView: View {
     /// 高度分配的口径：日历行拿**固定档**（`HomeCalendarRow.rowHeight`），strip 拿剩下的
     /// ——面板高度不足时优先保 strip 行（`max(0, …)`，不为负），而不是两排各让一半。
     ///
-    /// **strip 高度为 0 时不生成 strip**（2026-09-29 实测）：`HomeStripBlock` 的裁剪在
-    /// 「宽度有值、高度为 0」的退化尺寸下不生效，块内容（专辑封面 / 标题）会按固有尺寸**溢出**画到
-    /// 下排日历行上（`stripHeight = 0` 时肉眼可见封面压住月份标题）。没有高度就不画，比画一层
-    /// 溢出残影更接近「优先保 strip 行」的本意——面板高度 ≈ 240pt 以下才会走到这里。
+    /// **strip 高度不足「最小可用块」时不生成 strip**（判据 = `HomeStripView.minimumUsableHeight`）：
+    /// 2026-09-29 实测，`HomeStripBlock` 的裁剪在退化高度（0）下不生效，块内容（专辑封面 / 标题）
+    /// 会按固有尺寸**溢出**画到下排日历行上（肉眼可见封面压住月份标题）；只剩细条时块内那一行字 /
+    /// 图标同样摆不下，画出来只是残片。没有可用高度就不画，比画一层溢出残影更接近「优先保 strip 行」
+    /// 的本意。
     private var standardHomeContent: some View {
         GeometryReader { geometry in
             let available = max(0, geometry.size.height)
@@ -892,7 +893,7 @@ struct NotchHomeView: View {
                 : available
 
             VStack(spacing: HomeCalendarRow.rowSpacing) {
-                if stripHeight > 0 {
+                if stripHeight >= HomeStripView.minimumUsableHeight {
                     HomeStripView(albumArtNamespace: albumArtNamespace)
                         .frame(height: stripHeight, alignment: .topLeading)
                 }
