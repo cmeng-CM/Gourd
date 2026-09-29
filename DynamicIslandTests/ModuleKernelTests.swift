@@ -1065,9 +1065,9 @@ final class ModuleKernelTests: XCTestCase {
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
-    /// **这条用例的 `count == 5` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
-    /// 加第六个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
-    /// P2 启动台批次从 3 放宽到 4、P2 接管批次 / T2 从 4 放宽到 5，都是这一条）。
+    /// **这条用例的 `count == 6` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第七个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
+    /// P2 启动台批次从 3 放宽到 4、P2 接管批次 / T2 从 4 放宽到 5、T4 从 5 放宽到 6，都是这一条）。
     func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
@@ -1089,36 +1089,40 @@ final class ModuleKernelTests: XCTestCase {
         // 该域此刻是 `enableTimerFeature = 0`、`timerDisplayMode` **缺键**（缺键走 `Defaults` 默认
         // `.tab`），驱动量是前者——不置夹具的话计时器不过门、不进 tab 投影，「计时器进 tab」必红
         // （`defaults read com.cmeng.gourd.dev <键>` 可复核；Release 域里的 `popover` 与本条无关）。
+        // 镜子接管（T4）同理：`showMirror` 也是**测试域**盘上的值（本机曾读到 `0`；上游默认 `false`），
+        // 而「进 homeEntries」要求模块 `.active`——不置夹具的话镜子不激活、块名单里没有它，断言必红。
         // 夹具写法与首启闸门键同款：先读持久域现值（nil = 盘上原本没有这个键）→ 置定值 → `defer` 逐字还原
         // （原本有键写回原值、原本没键删键，不把 Defaults 注册域里的默认值写进持久域）。
-        let timerKeyNames = [
+        let takeoverKeyNames = [
             Defaults.Keys.enableTimerFeature.name,
             Defaults.Keys.timerDisplayMode.name,
+            Defaults.Keys.showMirror.name,
         ]
         let domain = Bundle.main.bundleIdentifier
-        let originalTimerValues = timerKeyNames.reduce(into: [String: Any]()) { table, key in
+        let originalTimerValues = takeoverKeyNames.reduce(into: [String: Any]()) { table, key in
             table[key] = domain.flatMap { defaults.persistentDomain(forName: $0)?[key] }
         }
         defer {
-            for key in timerKeyNames {
+            for key in takeoverKeyNames {
                 if let value = originalTimerValues[key] {
                     defaults.set(value, forKey: key)
                 } else {
                     defaults.removeObject(forKey: key)
                 }
             }
-            // 注：本条用例的 `bootstrap()` 起的重同步桥（订阅上游总开关）在用例结束后仍然挂着——
-            // 与真实应用一致（桥的生命周期 = 应用生命周期）。后续用例若写这个键，回调只会对着
-            // 当时（多半已清空的）注册表调一次 `setEnabled`：未注册 → 记一条 warning、不写状态；
+            // 注：本条用例的 `bootstrap()` 起的重同步桥（两个接管模块各订阅一个上游键）在用例结束后
+            // 仍然挂着——与真实应用一致（桥的生命周期 = 应用生命周期）。后续用例若写这两个键，回调只会
+            // 对着当时（多半已清空的）注册表调一次 `setEnabled`：未注册 → 记一条 warning、不写状态；
             // 接管用例自己的 `setUp` 会以空注册表重建订阅表，把它清掉。
         }
         Defaults[.enableTimerFeature] = true
         Defaults[.timerDisplayMode] = .tab
+        Defaults[.showMirror] = true
 
         XCTAssertEqual(
             KernelBootstrap.builtinModules.count,
-            5,
-            "A3：内置模块清单 = 五行（progress + todos + notifications + launcher + timer）"
+            6,
+            "A3：内置模块清单 = 六行（progress + todos + notifications + launcher + timer + mirror）"
         )
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
@@ -1128,8 +1132,9 @@ final class ModuleKernelTests: XCTestCase {
                 ObjectIdentifier(NotificationsModule.self),
                 ObjectIdentifier(LauncherModule.self),
                 ObjectIdentifier(TimerModule.self),
+                ObjectIdentifier(MirrorModule.self),
             ],
-            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule 与 TimerModule"
+            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule、TimerModule 与 MirrorModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1143,10 +1148,12 @@ final class ModuleKernelTests: XCTestCase {
         let notificationsID = "com.cmeng.gourd.notifications"
         let launcherID = "com.cmeng.gourd.launcher"
         let timerID = TimerModule.moduleID
+        let mirrorID = MirrorModule.moduleID
 
         // ① 真启用门：非接管模块逐字取 `defaultEnabled`（todos 与 notifications 默认开、
         // progress 与 launcher 默认关，D-20 / T-12）；**接管模块取上游键**——
-        // 计时器的真源是 `enableTimerFeature`（夹具置 true），因此它过门、进投影。
+        // 计时器的真源是 `enableTimerFeature`、镜子的真源是 `showMirror`（两个夹具都置 true），
+        // 因此它们过门、进各自的投影。
         XCTAssertEqual(registry.states[todosID], .active)
         XCTAssertEqual(registry.states[notificationsID], .active)
         XCTAssertEqual(registry.states[id], .disabled, "progress 默认关（D-20），启用门不放行")
@@ -1155,20 +1162,43 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertNil(registry.instance(for: launcherID), "默认关的模块不实例化，也不占任何 surface")
         XCTAssertEqual(registry.states[timerID], .active, "接管模块的启用门读上游键（夹具 true），不看 defaultEnabled")
         XCTAssertNotNil(registry.instance(for: timerID) as? TimerModule, "过门的计时器照常实例化")
+        XCTAssertEqual(registry.states[mirrorID], .active, "镜子的真源是 `showMirror`（夹具 true）——不看 `defaultEnabled`（上游默认 false）")
+        XCTAssertNotNil(registry.instance(for: mirrorID) as? MirrorModule, "过门的镜子照常实例化")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
         XCTAssertNotNil(registry.instance(for: notificationsID) as? NotificationsModule)
 
-        // 投影里只剩已激活的三个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
+        // 投影里只剩已激活的四个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`。
         // tab 顺序按 `(order, id)`：todos（20）→ notifications（40）→ 计时器（**无 placement
-        // → `Int.max`**，排在所有给了 order 的模块之后）
+        // → `Int.max`**，排在所有给了 order 的模块之后）；**镜子不进 tab**（它只声明 `.home`，
+        // 不声明 `expanded`——这一条同时是「接管不会凭空多出一个 tab」的判据）
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID, timerID])
+        XCTAssertFalse(registry.tabEntries.contains { $0.id == mirrorID }, "镜子只声明 home → 不进 tab 投影")
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
-        // 首页块投影（P2 / T4 起，T1 加通知块）：声明 `.home` 的已激活模块都进块名单——
-        // todos（order 20）在前、notifications（order 40）在后；两者的首页请求都拿到 `.view`
-        // （不是 `.none`：那意味着首页没有块）。T1 之前 notifications 不声明 home，这条随之加宽。
-        XCTAssertEqual(registry.homeEntries.map(\.id), [todosID, notificationsID], "首页块名单 = 声明 .home 的已激活模块")
-        XCTAssertEqual(registry.homeEntries.map(\.order), [20, 40], "块顺序与 tab / 槽位同一比较器")
+        XCTAssertFalse(registry.compactEntries.contains { $0.id == mirrorID }, "镜子不声明 compact（D-09）")
+        // 首页块投影（P2 / T4 起，T1 加通知块、T4 加镜子块）：声明 `.home` 的已激活模块都进块名单——
+        // 镜子（`order` 2，= 被它取代的内置块的默认序号）在前、todos（20）在中、notifications（40）在后；
+        // 两者的首页请求都拿到 `.view`（不是 `.none`：那意味着首页没有块）。
+        // 镜子的**内容**另有运行期判据（`showMirror && cameraAvailable`，docs/20 §做法 机制一末段），
+        // 摄像头可不可用随机器而变，因此这里按同一个纯函数分档断言，而不是写死 `.view`。
+        XCTAssertEqual(registry.homeEntries.map(\.id), [mirrorID, todosID, notificationsID], "首页块名单 = 声明 .home 的已激活模块")
+        XCTAssertEqual(registry.homeEntries.map(\.order), [2, 20, 40], "块顺序与 tab / 槽位同一比较器")
+        let mirrorEntry = try XCTUnwrap(registry.homeEntries.first { $0.id == mirrorID }, "镜子应进首页块投影")
+        XCTAssertEqual(mirrorEntry.symbolName, "camera")
+        XCTAssertTrue(
+            ["Mirror", "镜子"].contains(mirrorEntry.label),
+            "块文案应已本地化（module.mirror.name），实到 \(mirrorEntry.label)"
+        )
+        let mirrorHome = registry.content(for: mirrorID, request: ModuleRegistry.home)
+        if MirrorModule.isVisible(showMirror: Defaults[.showMirror], cameraAvailable: WebcamManager.shared.cameraAvailable) {
+            guard case .view = mirrorHome else {
+                return XCTFail("判据成立时镜子的首页请求应是 .view（判据：showMirror && cameraAvailable）")
+            }
+        } else {
+            guard case .none = mirrorHome else {
+                return XCTFail("判据不成立时镜子的首页请求应是 .none（不占位），而是 \(mirrorHome)")
+            }
+        }
         guard case .view = registry.content(for: notificationsID, request: ModuleRegistry.home) else {
             return XCTFail("notifications 声明了 home，首页块内容应是 .view")
         }

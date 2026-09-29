@@ -18,6 +18,10 @@
 //  P2 接管批次 / T2：`builtinModules` 加 `TimerModule`（第一个真接管模块）——上游那条
 //  计时器 tab 分支与其 `+1` 计数同批删除，tab 由模块投影产出（docs/20 §做法 机制一）。
 //
+//  P2 接管批次 / T4：`builtinModules` 加 `MirrorModule`（第二个真接管模块）——上游首页 strip 里
+//  那条写死的镜子块分支（判据 + 分支 + 块宽 + `@Default(.showMirror)`）同批删除，首页块由模块
+//  投影 + `content(for: .home)` 产出，块宽由 `homeBlockWidth` 钩子继承（docs/20 §做法 机制一）。
+//
 
 import Combine
 import Defaults
@@ -28,13 +32,14 @@ import os
 @MainActor
 public enum KernelBootstrap {
     /// 内置模块清单。T4 落 `ProgressModule`，T5 落 `TodosModule`，P2c 落 `NotificationsModule`，
-    /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`——即「新增模块 = 加一行」的那一行。
+    /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`、T4 落 `MirrorModule`
+    /// ——即「新增模块 = 加一行」的那一行。
     ///
     /// 顺序与用户可见顺序**无关**（那个由 `defaultPlacement.order` 定，见 `ModuleRegistry.tabEntries`）；
     /// 它只影响 `register` 的落表顺序与日志可读性，这里按批次先后排。
     static let builtinModules: [any GourdModule.Type] = [
         ProgressModule.self, TodosModule.self, NotificationsModule.self, LauncherModule.self,
-        TimerModule.self,
+        TimerModule.self, MirrorModule.self,
     ]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")

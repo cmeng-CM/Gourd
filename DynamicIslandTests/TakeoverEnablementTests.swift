@@ -33,6 +33,15 @@
 //    （今天唯一的生产形态：悬浮聚焦 / 点预设 / `startCustomTimer` 三条路径都走它）都答 true；
 //    `.module` + 别的模块 id、以及 `.home`（哪怕 `selectedModuleID` 残留着计时器 id）答 false。
 //
+//  P2 接管批次 / T4 追加（镜子接管模块 + 首页块顺序表的历史键映射）：
+//  - **`MirrorModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
+//    `defaultPlacement == Placement(slot: nil, order: 2)`、真源键 `showMirror`、块宽 140/160、
+//    `config` 只登记上游三键；
+//  - **`MirrorModule.isVisible(showMirror:cameraAvailable:)`** 四组：两段是「且」；
+//  - **`HomeBlockOrdering.migratingLegacyIDs`** 四组：旧键 → 新 id、新键优先、非映射键逐字保留、
+//    空表恒等；另有一条**经 `sorted(...)` 走一遍**的用例（映射是 `sorted` 的第一步——只测纯函数的话
+//    「映射没接上」不会红）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -521,6 +530,180 @@ final class TakeoverEnablementTests: XCTestCase {
         coordinator.currentView = .home
         XCTAssertEqual(coordinator.selectedModuleID, TimerModule.moduleID, "前置：首页上仍挂着计时器 id（残留选择）")
         XCTAssertFalse(coordinator.isTimerSurfaceSelected(), "③ `.home` 不是计时器页")
+    }
+
+    // MARK: - 镜子接管模块（T4）
+
+    /// docs/20 §接口与数据形状 5 的 mirror 行：**这个真模块**的 manifest 声明值逐条对齐。
+    ///
+    /// 与 `testTimerModuleManifestMatchesTakeoverContract` 同款：三条钩子的**行为**（真源压过
+    /// overrides / 可见性过滤 / 重同步）由本文件上半段的假模块覆盖，这里钉的是真模块的声明——
+    /// `surfaces == [.home]`（不声明 tab、不占折叠槽位）、`order 2`（= 被接管的内置块的默认序号，
+    /// 接管前后首页顺序一致）、真源键 `showMirror`、块宽 140/160（D-10）。
+    ///
+    /// 本用例**不写**任何真实偏好（只读钩子与常量）。
+    func testMirrorModuleManifestMatchesTakeoverContract() throws {
+        let manifest = MirrorModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, MirrorModule.moduleID, "moduleID 与 manifest.id 必须是同一份字面量")
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.mirror")
+        XCTAssertEqual(manifest.shortID, "mirror")
+        XCTAssertEqual(manifest.name.key, "module.mirror.name")
+        XCTAssertEqual(manifest.summary?.key, "module.mirror.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "camera"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.home], "只声明首页块（D-09：本批不声明任何 compact）")
+        XCTAssertFalse(manifest.surfaces.contains(.expanded), "不声明 expanded → 不进 tab 投影")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "接管模块不占折叠槽位")
+        XCTAssertEqual(
+            manifest.defaultPlacement,
+            Placement(slot: nil, order: 2),
+            "slot 只在含 compact 时有意义；order 2 = 被它取代的内置镜子块的默认序号"
+        )
+        XCTAssertEqual(
+            manifest.defaultPlacement?.order,
+            HomeBlockOrdering.BuiltinBlock.mirror.defaultOrder,
+            "接管前后的默认序号必须相同（否则未调过顺序的用户会看到块跳位）"
+        )
+        XCTAssertEqual(manifest.defaultEnabled, false, "= 上游 `showMirror` 的默认值（接管键读不到时才不生效）")
+        XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属与开关真源：零新增能力请求（含摄像头 TCC）")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(properties.count, 3, "config 只登记上游三键，不新发明键（D-03）")
+        XCTAssertEqual(properties["showMirror"]?.type, "boolean")
+        XCTAssertEqual(properties["showMirror"]?.default, ConfigValue.bool(false))
+        XCTAssertEqual(properties["mirrorShape"]?.type, "enum")
+        XCTAssertEqual(properties["mirrorShape"]?.values, ["Rectangular", "Circular"])
+        XCTAssertEqual(properties["mirrorShape"]?.default, ConfigValue.string("Rectangular"))
+        XCTAssertEqual(properties["selectedCameraID"]?.type, "string")
+        XCTAssertEqual(properties["selectedCameraID"]?.default, ConfigValue.string(""), "空串 = 跟随第一台（上游键的默认值）")
+        XCTAssertNil(properties["selectedCameraID"]?.values, "设备 id 是运行期发现的值，不列可选值")
+
+        // 两条取值型钩子：真源 = 上游总开关；块宽 = 被接管块原本的那一档
+        XCTAssertEqual(MirrorModule.takeoverEnableKey?.name, Defaults.Keys.showMirror.name)
+        XCTAssertEqual(MirrorModule.homeBlockWidth, ModuleHomeBlockWidth(min: 140, ideal: 160))
+
+        // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// 镜子块的**存在性判据**（docs/20 §做法 机制一末段）：`showMirror && cameraAvailable`——
+    /// 两段是「且」，且**不含展开态**（`.home` 块只在展开面板首页渲染，旧内置块重复判一次
+    /// `notchState == .open` 的写法本批一并删除）。
+    ///
+    /// 本用例**不写**任何真实偏好（判据是纯函数，两个入参都是形参）。
+    func testMirrorVisibilityPredicate() {
+        XCTAssertTrue(
+            MirrorModule.isVisible(showMirror: true, cameraAvailable: true),
+            "功能开 + 有摄像头 → 块在"
+        )
+        XCTAssertFalse(
+            MirrorModule.isVisible(showMirror: true, cameraAvailable: false),
+            "有开关但没摄像头 → 块消失（答 .none 不占位，不是画一个空壳）"
+        )
+        XCTAssertFalse(
+            MirrorModule.isVisible(showMirror: false, cameraAvailable: true),
+            "摄像头在但功能关着 → 块消失（与接管前的 `showMirror && …` 同序）"
+        )
+        XCTAssertFalse(
+            MirrorModule.isVisible(showMirror: false, cameraAvailable: false),
+            "两段都不成立 → 块消失"
+        )
+    }
+
+    /// 注册表侧的接管查询对**真模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
+    /// 取回 140/160（`HomeStripView` 就靠它让镜子块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
+    /// 取回 `showMirror`（启用真源）。
+    ///
+    /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
+    /// 本用例不写任何真实偏好（镜子当前的启用状态与断言无关）。
+    func testMirrorModuleHooksReadThroughTheRegistry() {
+        let registry = ModuleRegistry.shared
+        registry.register(
+            [MirrorModule.self],
+            enabled: KernelBootstrap.enablementGate(registry: registry)
+        )
+
+        XCTAssertEqual(
+            registry.homeBlockWidth(for: MirrorModule.moduleID),
+            ModuleHomeBlockWidth(min: 140, ideal: 160),
+            "镜子块宽度声明经注册表原样取给宿主（140/160，与接管前同一档）"
+        )
+        XCTAssertEqual(
+            registry.takeoverEnableKey(for: MirrorModule.moduleID)?.name,
+            Defaults.Keys.showMirror.name,
+            "镜子的启用真源 = 上游 `showMirror` 键"
+        )
+    }
+
+    // MARK: - 首页块顺序表的历史键映射（T4）
+
+    /// `migratingLegacyIDs` 的四组口径（docs/20 §做法 机制四 / §接口与数据形状 4）：
+    /// ① 旧键 → 新 id（新 id 缺席时生效）；② 新键优先（用户在新版里表达过）；③ 两个旧键都映射、
+    /// 表里其它键（含不迁移的 `builtin.calendar`）逐字保留；④ 空表 / 无旧键 → 恒等。
+    ///
+    /// 新 id 一律用 `MirrorModule.moduleID` / 字面量查表：`HomeBlockOrdering` 是纯逻辑文件、
+    /// 不认识模块类型（那边写的是字面量），两处一致由本用例钉住——id 任一处漂了这里就红。
+    ///
+    /// 本用例**不写**任何真实偏好（纯函数，入参是字典）。
+    func testMigratingLegacyIDsMapsOnlyWhenNewIDIsAbsent() {
+        let mirrorID = MirrorModule.moduleID
+
+        // ① 旧键 → 新 id：老用户排过的位置跟着搬到改名后的块上
+        let mapped = HomeBlockOrdering.migratingLegacyIDs(["builtin.mirror": -1])
+        XCTAssertEqual(mapped[mirrorID], -1, "builtin.mirror 的值要落到镜子模块 id 上")
+        XCTAssertEqual(mapped["builtin.mirror"], -1, "旧键**保留**在返回的表里（设置页顺序节仍有 builtin.* 行）")
+
+        // ② 新键优先：新 id 已有自己的值 → 旧值不覆盖它
+        let newWins = HomeBlockOrdering.migratingLegacyIDs(["builtin.mirror": -1, mirrorID: 3])
+        XCTAssertEqual(newWins[mirrorID], 3, "只在新 id 缺席时才搬旧值")
+        XCTAssertEqual(newWins["builtin.mirror"], -1, "旧键自身不动（它只是没人再查）")
+
+        // ③ 两个旧键同时映射；非映射键（日历 / 模块 id / 任意键）逐字保留
+        let mixed = HomeBlockOrdering.migratingLegacyIDs([
+            "builtin.music": 1,
+            "builtin.calendar": 0,
+            "com.cmeng.gourd.todos": 5,
+        ])
+        XCTAssertEqual(mixed["com.cmeng.gourd.music"], 1, "builtin.music 同样映射（T5 接管音乐前先就位）")
+        XCTAssertEqual(mixed["builtin.calendar"], 0, "日历不迁移（今天已不在任何名单里，迁移它没有接收者）")
+        XCTAssertEqual(mixed["com.cmeng.gourd.todos"], 5, "表里的模块 id 逐字保留")
+        XCTAssertEqual(mixed.count, 4, "只多出一条（新 id），不清理、不改写旧键")
+
+        // ④ 空表与「没有旧键的表」恒等
+        XCTAssertEqual(HomeBlockOrdering.migratingLegacyIDs([:]), [:], "空表 → 空表")
+        let untouched = ["com.cmeng.gourd.progress": 2, "com.cmeng.gourd.todos": 0]
+        XCTAssertEqual(HomeBlockOrdering.migratingLegacyIDs(untouched), untouched, "没有旧键 → 原样返回")
+    }
+
+    /// 映射是 **`sorted(...)` 的第一步**（docs/20 §接口与数据形状 4 末句）：只钉纯函数的话，
+    /// 「映射没接上排序」不会红——这条用例整条经 `sorted` 走一遍。
+    ///
+    /// 输入表用的是**老表**（只有 `builtin.mirror`），名单用的是**接管后的名单**（镜子是模块 id）：
+    /// 判据就是「老用户排过镜子 → 重启后镜子仍在最前」。
+    ///
+    /// 本用例**不写**任何真实偏好（`sorted` 是纯函数，覆盖表是形参）。
+    func testSortedAppliesLegacyMigrationBeforeRanking() {
+        let mirrorID = MirrorModule.moduleID
+        let blocks: [(id: String, order: Int)] = [
+            (id: "builtin.music", order: 0),
+            (id: mirrorID, order: 2),
+            (id: "com.cmeng.gourd.todos", order: 20),
+        ]
+
+        let sorted = HomeBlockOrdering.sorted(
+            blocks,
+            defaultOrder: { $0.order },
+            id: { $0.id },
+            overrides: ["builtin.mirror": -1]
+        ).map(\.id)
+
+        XCTAssertEqual(
+            sorted,
+            [mirrorID, "builtin.music", "com.cmeng.gourd.todos"],
+            "老表里的 builtin.mirror = -1 要把镜子模块块提到最前（映射没接上时它按默认 2 排，会红）"
+        )
     }
 
     // MARK: - 工具

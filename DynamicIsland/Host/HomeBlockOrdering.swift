@@ -10,8 +10,11 @@
 //  本文件是**纯逻辑**：没有 SwiftUI / Defaults 依赖（`overrides` 由调用方读盘后注入），
 //  因此 `sorted` / `moved` / `table` 都能用固定输入单测（docs/18 §接口与数据形状 1）。
 //
+//  P2 接管批次 / T4 增量：`migratingLegacyIDs(_:)`（历史键 → 模块 id 的读取时映射，
+//  docs/20-component-page.md §做法 机制四 / §接口与数据形状 4），`sorted(...)` 第一步先过它。
+//
 //  规格：docs/18-p1-todos-and-order.md §接口与数据形状 1/2、§改动点设计 3/4、
-//  §兼容迁移与回滚「旧数据语义」。
+//  §兼容迁移与回滚「旧数据语义」；docs/20-component-page.md §做法 机制四。
 //
 
 import Foundation
@@ -27,6 +30,11 @@ enum HomeBlockOrdering {
     /// `HomeCalendarRow` 承担，见 `HomeStripView` 文件头）：`.calendar` 只保留 id 与默认序号的
     /// **既有含义**（老用户表里可能已有这个键，它的名字不能被别的块占用），
     /// **任何名单都不再生成它**——别复活它。
+    ///
+    /// **镜子块已由模块 id 取代**（P2 接管批次 / T4）：首页的镜子块今天是模块块
+    /// `com.cmeng.gourd.mirror`（`MirrorModule`），条里**不再生成** `builtin.mirror`；
+    /// 旧键只在 `migratingLegacyIDs` 里被读取一次（老用户排过的位置跟着搬到新 id 上）。
+    /// 音乐同理（`builtin.music`），它的模块块由 T5 落地。
     enum BuiltinBlock: String, CaseIterable {
         case music
         case calendar
@@ -55,7 +63,8 @@ enum HomeBlockOrdering {
     ///   - defaultOrder: 该块的默认序号（内置块给 `BuiltinBlock.defaultOrder`，模块块给
     ///     `ModuleHomeEntry.order`）。
     ///   - id: 该块的稳定 id（覆盖表的键）。
-    ///   - overrides: 覆盖表（`Defaults[.homeBlockOrder]`）。
+    ///   - overrides: 覆盖表（`Defaults[.homeBlockOrder]`）——**先过 `migratingLegacyIDs`**：
+    ///     老表里的 `builtin.music` / `builtin.mirror` 因此对改名后的模块 id 同样生效。
     ///
     /// **未知 id 不参与排序**：表里出现、而 `items` 里没有的键（模块被移除 / 改名 / 日历块这类
     /// 不再生成的块）不产生任何效果——既不占位、也不报错、更不会让某个块消失。
@@ -69,11 +78,53 @@ enum HomeBlockOrdering {
         id: (T) -> String,
         overrides: [String: Int]
     ) -> [T] {
-        items
+        // **第一步先过历史键映射**（docs/20 §做法 机制四）：块改名（内置块 → 模块）后，老用户表里
+        // 的旧键要落到新 id 上，否则「排过的顺序」在屏幕上看不出效果。映射是纯读，不改入参。
+        let overrides = migratingLegacyIDs(overrides)
+        return items
             .map { (element: $0, rank: overrides[id($0)] ?? defaultOrder($0), id: id($0)) }
             .sorted { ($0.rank, $0.id) < ($1.rank, $1.id) }
             .map(\.element)
     }
+
+    // MARK: - 历史键迁移
+
+    /// 历史键 → 模块 id 的映射（docs/20-component-page.md §做法 机制四 / §接口与数据形状 4）：
+    /// `builtin.music` → `com.cmeng.gourd.music`、`builtin.mirror` → `com.cmeng.gourd.mirror`。
+    ///
+    /// 音乐与镜子从内置块变成模块块以后，块 id 从 `builtin.*` 变成模块 id——表里存着旧键的用户
+    /// （点过上移 / 下移的人）会突然发现顺序回到默认，因此**读取时映射一次**，让「用户排过的顺序」
+    /// 在接管前后看起来一样。
+    ///
+    /// 三条口径（改动前先读）：
+    /// 1. **只读不写**：函数是纯的，映射结果只活在这一次调用里；盘上的旧键**一个字节都不动**
+    ///    （不写回、也不需要迁移记录——读时映射是幂等的，重复调用得到同一结果）；
+    /// 2. **新键优先**：仅当新 id 在表里**没有自己的值**时才把旧键的值搬过去——用户若在新版里
+    ///    重新排过顺序（盘上已有新 id 的键），那次表达压过历史值；
+    /// 3. **旧键保留在返回的表里**（是「加一条」不是「换一条」）：`sorted` 的另一个消费点
+    ///    （设置页的顺序节，`ModuleSettingsSection.orderRows`）今天仍有 `builtin.*` 行——
+    ///    映射若把旧键删掉，那一页就会丢掉用户的位置，而**两处显示的必须是同一份顺序**；
+    ///    留下的旧键对已改名的块无害（`sorted` 只查名单里出现过的 id，未知 id 不参与排序）。
+    ///
+    /// **日历不在此列**：`builtin.calendar` 今天已不在任何名单里，迁移它没有接收者
+    ///（`docs/20` §做法 机制四末句）。
+    static func migratingLegacyIDs(_ overrides: [String: Int]) -> [String: Int] {
+        var table = overrides
+        for (legacyID, moduleID) in legacyIDToModuleID where table[moduleID] == nil {
+            if let value = overrides[legacyID] { table[moduleID] = value }
+        }
+        return table
+    }
+
+    /// 旧块 id → 接管后的模块 id（映射表的**唯一取值处**）。
+    ///
+    /// 模块 id 在这里**写字面量**：本文件是纯逻辑（文件头：无 SwiftUI / Defaults 依赖），
+    /// 不认识模块类型；两个 id 的「唯一字面量」在各自的模块里（`MirrorModule.moduleID`），
+    /// 用例负责钉住两处一致（`TakeoverEnablementTests` 的迁移组直接拿 `MirrorModule.moduleID` 查表）。
+    private static let legacyIDToModuleID: [String: String] = [
+        BuiltinBlock.music.id: "com.cmeng.gourd.music",
+        BuiltinBlock.mirror.id: "com.cmeng.gourd.mirror",
+    ]
 
     // MARK: - 上移 / 下移
 

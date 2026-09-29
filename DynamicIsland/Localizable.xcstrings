@@ -81965,6 +81965,38 @@
         }
       }
     },
+    "module.mirror.name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mirror"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "镜子"
+          }
+        }
+      }
+    },
+    "module.mirror.summary" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live camera preview in a home block"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页块里的摄像头实时画面"
+          }
+        }
+      }
+    },
     "module.timer.name" : {
       "localizations" : {
         "en" : {
