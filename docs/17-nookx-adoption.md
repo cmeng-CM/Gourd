@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 草稿 |
+| 状态 | **已实现**（2026-09-29；用户本人的目视确认尚未取得，见 §实际交付 遗留项） |
 | 设计分级 | **档 2 · 标准**（改动落在内核协议 + 首页 + 设置页三处，含新增接口与新增持久化键；不改外部契约、无数据迁移） |
 | 最后更新 | 2026-09-29 |
 | 关联来源 | [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组、§5（首页专节）；[13-runtime-kernel.md](13-runtime-kernel.md)（模块内核现状与已知限制）；[14-module-manifests.md](14-module-manifests.md)（17 份 manifest 清单）；[06-module-protocol.md](06-module-protocol.md)（字段级契约） |
