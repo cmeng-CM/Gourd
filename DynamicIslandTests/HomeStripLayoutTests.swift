@@ -44,7 +44,9 @@ final class HomeStripLayoutTests: XCTestCase {
     private static let mirror = HomeStripLayoutMath.Item(min: 140, ideal: 160)
     private static let moduleBlock = HomeStripLayoutMath.Item(min: 180, ideal: 240)
 
-    /// 块间距：宿主恒定值（`HomeStripView` 的实现常量），用例与算式共用同一个数。
+    /// 块间距：本文件**改动前**口径的宿主恒定值（`HomeStripView` 曾为 12）。既有用例的数字都按
+    /// 这个值算过，因此保留不动；宿主**现值**走 `HomeStripLayout.spacing`（2026-09-29 改为 8），
+    /// 由 `testThreeRealBlocksFitAtDefaultPanelBudget` 读它并钉住。
     private static let spacing: CGFloat = 12
 
     private func gaps(_ visibleCount: Int, spacing: CGFloat) -> CGFloat {
@@ -211,6 +213,47 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(plan.widths, [300, 200])
         XCTAssertEqual(plan.visibleCount, 2)
         assertInvariants(plan, available: 512, spacing: Self.spacing)
+    }
+
+    /// **770pt 面板的三块预算**（2026-09-29 修复轮，实测发现）：块间距 12 → 8 之后，
+    /// 音乐 / 日历 / 模块块的最小宽度和 + 两个间隙 = `680 + 16 = 696 ≤ 702`（样本面板 770pt 减去
+    /// `ContentView` 两侧各 34pt 的内边距）——三块全部保住；模块块 ≥ 160，待办首页块因此能进
+    /// `.compact` 档显示今日标题。改动前 `680 + 24 = 704 > 702`：第三块被规则 ③ 丢掉
+    ///（且当时外框不裁剪，屏上留下溢出残影）。
+    ///
+    /// **注意口径**：`702 > 696` 落在规则 ②，那 6pt 余量**按可压缩量等比分摊**，因此每块略高于
+    /// 自己的 `min`（min 是下界、不是取值）；「每块恰好取 `min`」只在可用 = 696 时成立（本用例两段都钉）。
+    func testThreeRealBlocksFitAtDefaultPanelBudget() {
+        // 宿主现值（`HomeStripView` 的常量；12 → 8 是本次修复的一部分）
+        let hostSpacing = HomeStripLayout.spacing
+        XCTAssertEqual(hostSpacing, 8, "宿主块间距现值为 8（770pt 三块预算的唯一余量来源）")
+
+        let items = [Self.music, Self.calendar, Self.moduleBlock]  // min 300 / 200 / 180
+        let available: CGFloat = 702  // 770pt 面板 − 两侧各 34
+
+        // ① 默认面板：三块都保住（规则 ② 等比分摊余量，逐字钉住分配结果）
+        let plan = HomeStripLayoutMath.plan(items: items, available: available, spacing: hostSpacing)
+        XCTAssertEqual(plan.visibleCount, 3, "三块都要在默认面板里（改动前是 2）")
+        XCTAssertEqual(plan.widths, [303, 201.5, 181.5], "6pt 余量按可压缩量等比分摊；各自 ≥ min、不放大到 ideal")
+        XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9, "702 − (303 + 201.5 + 181.5 + 16) = 0")
+        XCTAssertGreaterThanOrEqual(plan.widths[2], 160, "第三块 181.5 ≥ 160 → 待办首页块走 .compact 档")
+        XCTAssertGreaterThanOrEqual(plan.widths[2], Self.moduleBlock.min, "不得低于声明的最小宽度")
+        assertInvariants(plan, available: available, spacing: hostSpacing)
+
+        // ② 恰好等于「最小宽度和 + 间隙」的预算（696）：这里每块**恰好**取自己的 min
+        let exact: CGFloat = 696
+        let tight = HomeStripLayoutMath.plan(items: items, available: exact, spacing: hostSpacing)
+        XCTAssertEqual(tight.visibleCount, 3)
+        XCTAssertEqual(tight.widths, [300, 200, 180], "恰好在最小和上：各块取各自 min")
+        XCTAssertEqual(tight.leftover, 0, accuracy: 1e-9)
+        assertInvariants(tight, available: exact, spacing: hostSpacing)
+
+        // ③ 同一预算下的**四块**（再开一个模块）：容不下 → 尾部那块被规则 ③ 丢弃（设计行为，不是故障）
+        let fourBlocks = [Self.music, Self.calendar, Self.moduleBlock, Self.moduleBlock]
+        let cramped = HomeStripLayoutMath.plan(items: fourBlocks, available: available, spacing: hostSpacing)
+        XCTAssertEqual(cramped.visibleCount, 3, "770pt 只容得下三块（内置两块 + 一个模块块）")
+        XCTAssertEqual(cramped.widths, [300, 200, 180], "规则 ③ 路径下留下的三块取各自 min")
+        assertInvariants(cramped, available: available, spacing: hostSpacing)
     }
 
     /// 继续不足时逐块丢到只剩第一块；单块的 `min` 仍放得下就取该 `min`（不走兜底）。
