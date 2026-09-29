@@ -399,8 +399,9 @@ func isTimerSurfaceSelected() -> Bool {
 
 ## 实际交付
 
-**已交付**（工作流 `p2-takeover`，2026-09-30；提交 `1de20d4d`…`423e0918`，`1de20d4d` 是设计文档先行的
-方案门提交，其后 7 个提交是本批的实现与回写）。
+**已交付**（工作流 `p2-takeover`，2026-09-30；提交 `1de20d4d`…`6e70fc23`，`1de20d4d` 是设计文档先行的
+方案门提交，其后 9 个提交是本批的实现、回写与两次任务级修复——T1 修复 `32bb840d`（幂等用例自足 + 置关断言）、
+T6 修复 `6e70fc23`（映射表补断言 + 测试锁定语言）。**另有终审修复波提交紧随其后**，见下表之后的说明）。
 
 | 类 | 落点 | 交付物 |
 |---|---|---|
@@ -414,7 +415,12 @@ func isTimerSurfaceSelected() -> Bool {
 | 计时器第二入口 | `DynamicIslandViewCoordinator.swift`、`ContentView.swift`、`DynamicIslandApp.swift`、`components/Notch/NotchTimerView.swift` | 新增 `isTimerSurfaceSelected()`；三处赋值点改走 `selectModule(TimerModule.moduleID)`；两处 250pt 高度档改判据 |
 | 组件页两段 | `components/Settings/ModuleSettingsSection.swift` | 第一段**七张卡**（四张既有 + 计时器 / 镜子 / 音乐，各多一行 `settings.modules.effect.*`）；第二段「功能」**七张卡**（段头 `settings.features.title` + 脚注 `.footer` + 七条 `effectKey`）；写路径改调 `ModuleEnablementWrite`、回弹改问 `ModuleEnablementRollback`；顺序节删掉 `builtin.music` / `builtin.mirror` 两行与两个 `@Default`，只剩模块块 |
 | 文案 | `DynamicIsland/Localizable.xcstrings` | 新增 **18 条**（`module.{timer,mirror,music}.{name,summary}` 六条 + `settings.features.title` / `.footer` / 七条 `effect` + 三条 `settings.modules.effect.*`），中英双语 `state = translated`；键数 **1520 → 1538**。另改写 `settings.modules.builtinHint` 中英两值 |
-| 测试 | `DynamicIslandTests/TakeoverEnablementTests.swift`（T1 新建）、`DynamicIslandTests/ModuleKernelTests.swift` | 新文件 9 → **26** 条用例（启用真源 read-through、桥的幂等与 `failed` 终态、`isTabVisible`、三模块 manifest 契约、判据纯函数、迁移与排序、计数 1·0·0、`homeBlockWidth` 与回落、环境键缺省、文案可解析）；`ModuleKernelTests` 内置清单四行 → 七行并补三模块的 `states` / 投影期望；`project.pbxproj` 四处登记新测试文件。**全量 293 → 310 条，0 失败** |
+| 测试 | `DynamicIslandTests/TakeoverEnablementTests.swift`（T1 新建）、`DynamicIslandTests/ModuleKernelTests.swift` | 新文件 9 → **27** 条用例（启用真源 read-through、桥的幂等与 `failed` 终态、`isTabVisible`、三模块 manifest 契约、判据纯函数、迁移与排序、计数 1·0·0、`homeBlockWidth` 与回落、环境键缺省、文案可解析；第 27 条是 T6 修复补的 `testModuleEffectKeysMatchTableAndCatalog`）；`ModuleKernelTests` 内置清单四行 → 七行并补三模块的 `states` / 投影期望；`project.pbxproj` 四处登记新测试文件。**全量 293 → 311 条，0 失败**（311 = 本批最后一次全量结果，出在 T6 修复提交 `6e70fc23` 上，终审修复波复跑同值） |
+
+**终审修复波**（本行所在提交，父提交 `6e70fc23`）：M1 观测源 + 文档事实校正（I1 / I2 / M2~M6）——
+提交 sha 无法自指，范围 = 本批最后一条提交（`git log -1 --format=%H`）；绑定关系是：**这一波的验证记录**
+（`xcodebuild test` 全量 **311 条 0 失败** + `workflow.py check p2-takeover` 零 ERROR）**就是上表交付清单的
+最终状态**，两处说的同一棵树（跑测的那棵树 = 提交的树，`git diff HEAD` 为空）。
 
 **与计划的偏离及原因**：
 
@@ -435,11 +441,16 @@ func isTimerSurfaceSelected() -> Bool {
 1. **日历行 / 锁屏天气 / 剪贴板 / 统计 / 文件架 / 终端 / 便签七项的渲染接管**——本批只给功能卡（§明确不做）。
 2. **tab 排序机制 / tab 拖动**——接管后计时器 tab 落模块段（§已知限制 2；要做精确定位得先有排序机制）。
 3. **`config` 写路径接管**——登记与真源仍是「只登记、读写走上游键」（§已知限制 1，属 P1-3 的 ConfigStore）。
-4. **四处接线 / 赋值点没有自动化断言**（变异实测「改坏不红」）：卡片回弹接线、`settings.modules.effect.*`
-   三条映射、`homeAlbumArtNamespace` 的环境注入、三条赋值点与两处高度档（§已知限制 12）。
-5. **三处保留 / 过时项，本批刻意不动**：`.timer` 枚举与 `case .timer` 分支（§已知限制 10）；
-   `HomeStripView` 的 `@EnvironmentObject var vm`（已无读点，改动前既有）；`HomeBlockOrdering.migratingLegacyIDs`
-   注释里「设置页顺序节仍有 `builtin.*` 行」的理由（顺序节已收敛，该理由已过时，行为不受影响）。
+4. **接线 / 赋值点里仍有三处没有自动化断言**（变异实测「改坏不红」）：卡片回弹接线、
+   `homeAlbumArtNamespace` 的环境注入、三条赋值点与两处高度档（§已知限制 12）。
+   **原列的 `settings.modules.effect.*` 三条映射已不在这一列**——T6 修复把它提成 internal 静态表
+   `ModuleSettingsSection.effectKeysByModuleID`（`:183-190`，取值点 `:441`）并补了
+   `testModuleEffectKeysMatchTableAndCatalog`（变异：表里值写错 → 3 条红、`showCalendar` 写错 → 2 条红；
+   改前两处都是全绿）。
+5. **两处保留项，本批刻意不动**：`.timer` 枚举与 `case .timer` 分支（§已知限制 10）；
+   `HomeStripView` 的 `@EnvironmentObject var vm`（已无读点，改动前既有）。
+   （原列的第三项——`HomeBlockOrdering.migratingLegacyIDs` 注释里「设置页顺序节仍有 `builtin.*` 行」
+   的理由——**已由 T6 修复删除**，见 §已知限制 11。）
 6. **UI 层未目视**：组件页三段顺序、功能卡拨动方向、接管卡落点不写 `moduleEnableOverrides`、顺序节内容、
    悬浮聚焦的 tab 高亮与 250pt 档——人工验收清单见本批各任务报告。
 
@@ -456,8 +467,15 @@ func isTimerSurfaceSelected() -> Bool {
    封面配对动画静默失效（不崩、不空白）。这是兜底而非正确形态——契约在 §接口与数据形状 6。
 5. **功能卡不搬运上游设置**：卡上只有开关与一行效果说明；上游设置页里的细项（显示方式、预设、来源等）不在卡上，
    卡面文案必须显式指向那些页面。
-6. **旧顺序键只在读取时映射**：`homeBlockOrder` 里 `builtin.music` / `builtin.mirror` 的旧值不会被改写或清理，
-   一直保留在盘上（读取时映射一次生效）。将来清理它需要一次写回，本批不做。
+6. **旧顺序键只在读取时映射，且只在第一次重排之前还留在盘上**：`migratingLegacyIDs` 是纯读（不写回），
+   所以「用户排过的顺序」在接管后照旧生效；但盘上那张表**一旦被重排写过就是整表覆盖**
+   （`ModuleSettingsSection.move(_:direction:)` → `Defaults[.homeBlockOrder] = HomeBlockOrdering.table(for: moved)`，
+   写的是那一刻名单的 `0…n-1`），`builtin.music` / `builtin.mirror` 两个旧键**随第一次上移 / 下移从盘上消失**，
+   此后读取时的映射无事可做。同一机制还有第二个代价：整表只写「那一刻可见的名单」
+   （= 已激活且声明 `home` 的模块块），因此那一刻**关着的**模块块若在表里有过名次，它的历史值也会被这次覆盖
+   抹掉（再开回来只剩 `manifest.defaultPlacement.order`）。换句话说：「排过的顺序在接管前后看起来一样」
+   只在本批之后**没点过重排**的机器上成立；点过一次之后盘上只剩模块 id（[18](18-p1-todos-and-order.md)
+   §接口与数据形状 2 的「键只剩两类」是同一条事实）。将来清理旧键需要一次写回，本批不做。
 7. **接管模块的 `failed` 仍是终态**：重同步桥不会重试失败模块（[17](17-nookx-adoption.md) D-13 不变）。
    若某个接管模块 `activate()` 抛错，用户重启应用仍走同一条路径（同一份上游键、同一段代码）。
 8. **功能卡的开关是裸 `Binding`（不是 `@Default`）**：本页开着时，从**别处**（上游设置页）改同一个键，
@@ -472,20 +490,25 @@ func isTimerSurfaceSelected() -> Bool {
 **回写期补充（2026-09-30，实现期真正踩到的边界）**：
 
 11. **旧顺序键保留在映射结果里（别名语义）**：`migratingLegacyIDs` 是「加一条」不是「换一条」——
-    返回的表里 `builtin.music` / `builtin.mirror` 仍在（盘上也从不写回）。今天唯一的消费者 `HomeStripView`
-    按名单里的 id 查表、未知 id 不参与排序，故无害；代价是表里长期多两条对已改名块无效的键
-    （`HomeBlockOrdering.swift:111-117`，查表在 `:83-87`）。**同一函数注释里「设置页顺序节仍有 `builtin.*` 行」
-    这条理由已过时**（T6 顺序节收敛成只剩模块块行），行为不受影响——下次动该文件时顺手删那半句。
-12. **四处接线 / 赋值点没有自动化断言**（各由变异实测证实「改坏仍全绿」，不是推测）：
+    返回的表里 `builtin.music` / `builtin.mirror` 仍在（这个纯函数不写盘；盘上那两条只在第一次重排
+    之前还在，见第 6 条）。今天唯一的消费者 `HomeStripView` 按名单里的 id 查表、未知 id 不参与排序，
+    故无害；代价是映射结果里长期多两条对已改名块无效的键
+    （`HomeBlockOrdering.swift:113-119`，映射调用在 `:83`）。**该函数注释里「设置页顺序节仍有
+    `builtin.*` 行」这条理由已由 T6 修复删除**（顺序节收敛成只剩模块块行，注释改以「纯读、不加修剪语义」
+    为保留的正当性），这里不再记「下次顺手删那半句」。
+12. **接线 / 赋值点里仍有三处没有自动化断言**（各由变异实测证实「改坏仍全绿」，不是推测）：
     ① **卡片回弹的接线**——策略函数 `ModuleEnablementRollback.preferenceToWrite` 有用例，但视图里那句
-    「回弹时去问策略、而不是无条件写 `false`」（`ModuleSettingsSection.swift:482-485`）跑在 `Binding` 闭包
+    「回弹时去问策略、而不是无条件写 `false`」（`ModuleSettingsSection.swift:522-523`）跑在 `Binding` 闭包
     的 `Task` 里、且需要一次 `activate()` 失败才触发，测试进程里没有可驱动路径；
-    ② **`settings.modules.effect.*` 三条映射**（`ModuleSettingsSection.swift:522` 的 `effectKey(for:)`）——
-    `ModuleSettingsCard` 是 `private struct`，用例够不到，映射里打错字只能靠组件页肉眼；
-    ③ **宿主的环境注入**——`HomeStripView` 上那条 `.environment(\.homeAlbumArtNamespace, …)` 被注释掉
+    ② **宿主的环境注入**——`HomeStripView` 上那条 `.environment(\.homeAlbumArtNamespace, …)` 被注释掉
     仍是全绿（测试进程里没有宿主视图树，任何「读回刚写的环境值」的断言都只是把修饰符抄进用例）；
-    ④ **计时器的三条赋值点与两处 250pt 高度档**——它们位于 SwiftUI 闭包与 `NSSize` 计算里，单测驱动不到，
+    ③ **计时器的三条赋值点与两处 250pt 高度档**——它们位于 SwiftUI 闭包与 `NSSize` 计算里，单测驱动不到，
     现有护栏是 `grep -rn "currentView = .timer" DynamicIsland/` 无命中 + 人工验收。
+    **这一列原来还有一条「`settings.modules.effect.*` 三条映射」——T6 修复后它已有断言**：映射提成
+    `ModuleSettingsSection.swift:183-190` 的 internal 静态表 `effectKeysByModuleID`（取值点 `:441`；
+    `effectKey(for:)` 在 `:551` 只做一次查表，未命中返回 nil = 整行不显示），
+    `TakeoverEnablementTests.testModuleEffectKeysMatchTableAndCatalog` 直接迭代这张**生产表**——
+    变异实测：表里值写错 → 3 条红、`showCalendar` 的效果 key 写错 → 2 条红（T6 修复前两处都是全绿）。
 13. **七条功能卡名称在英语宿主下判据退化**：`nameKey` 逐字取上游设置页字面量，而这七个 key 在
     `Localizable.xcstrings` 里只有 `ko` / `nl` / `ru` / `th` / `tr` / `zh-Hans` / `zh-Hant`（**没有 `en`**）。
     `testFeatureCardKeysResolve` 的判据是 `Bundle.main.localizedString(forKey:value:nil,table:) != key`——
@@ -500,6 +523,14 @@ func isTimerSurfaceSelected() -> Bool {
     `["Rectangular", "Circular"]`，与上游设置页 Picker 的展示顺序相反（config 不参与渲染，见 §接口与数据形状 5）；
     ② `ModuleHomeBlockWidth` 没有显式 `public init`，memberwise init 是 internal——只能在 app target 内构造
     （当前三个接管模块与 `HomeStripView` 的映射都满足），将来要出到独立 target 就得补一个 `public init`。
+16. **最小宽度重算的时序没有护栏**（终审修复波补记）：计时器的 tab 贡献改由 `tabEntries` 承担，而它是注册表
+    `states` 这一份**异步**状态（桥：`Defaults.publisher` → `Task { await registry.setEnabled }`）；重算的触发
+    却只有「tab 相关 `Defaults` 订阅 + 100ms debounce」这一条链（`DynamicIslandViewCoordinator` 的
+    `MergeMany(...).debounce(for: .milliseconds(100))` → `enforceMinimumNotchWidth()` →
+    `currentRecommendedMinimumNotchWidth()` → `enabledStandardTabCount()`）。**实测该 `Task` 在 100ms 内完成**
+    （接管模块的 `activate()` 只写一条日志），故计数 1 / 0 / 0 不回归；但**「异步状态赶得上 debounce 窗口」
+    这件事本身没有断言**（第 12 条那组计数用例是同步直接置状态，跑不出这个窗口）——将来若某个接管模块的
+    `activate()` 变重、或桥的调度变慢，宽度会按旧计数算一次（下一次触发再纠正）。
 
 ## 验收标准
 
@@ -509,7 +540,9 @@ func isTimerSurfaceSelected() -> Bool {
    （`TabSelectionView.tabs` 是私有计算属性，拿不到「条数一一对应」的直接断言——那一半由
    `enabledStandardTabCount()` 的用例与三条 `grep`（上游分支已删）共同承担。）
 2. `TabSelectionView` / `HomeStripView` 里**不再有**计时器 tab、镜子块、音乐块的上游分支（一对一替换，不并存）。
-3. 组件页第一段出现计时器 / 镜子 / 音乐三张卡、第二段出现七张功能卡，每张卡都有一行效果说明。
+3. 组件页第一段出现计时器 / 镜子 / 音乐三张卡、第二段出现七张功能卡；**凡在
+   `ModuleSettingsSection.effectKeysByModuleID` 表内的模块卡**都有一行效果说明——表外的模块卡
+   （如启动台）**不显示**这一行（`effectKey(for:)` 未命中原样返回 nil，整行不渲染，不是空白行）。
 4. 在组件页关掉计时器 → 上游设置页的「计时器」开关也是关的；在上游设置页改 → 组件页跟着变（重启前后都不漂）。
 5. 首页 strip 的可见块名单与顺序在接管前后一致（含用户排过顺序的场景，靠 §接口与数据形状 4 的映射）。
 6. 面板宽度足够时，首页同时能看到音乐块与镜子块（与改动前同一门控条件下的同一结果）。

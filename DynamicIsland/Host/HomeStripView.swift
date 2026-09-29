@@ -19,6 +19,9 @@
 //  「`content(for: .home)` 答不答 `.none`」这一道内容表态（口径见 `resolvedHomeBlocks()`）；
 //  音乐块还要的那条 matchedGeometry 命名空间由本文件**注入**（`.environment(\.homeAlbumArtNamespace,…)`，
 //  D-08 / docs/20 §接口与数据形状 6）——它本来就是这条命名空间的持有者。
+//  **终审修复波（2026-09-30）**：`autoHideInactiveNotchMediaPlayer` 的 `@Default` 以**观测源**身份
+//  回到本视图——它不是判据（判据在 `MusicModule.isVisible(...)`），只是「上游拨了这个开关要有人
+//  叫醒 strip 重画」的那个观察者（见属性上的注释）。
 //
 //  规格：docs/17-nookx-adoption.md §做法 机制三（宽度 = 声明 + 收敛）、§接口与数据形状 6
 //  （块宽声明与固定取值）、§改动点设计 1/2/3（接缝、渲染器、内置块）；
@@ -250,6 +253,11 @@ struct HomeStripView: View {
     /// 除了这个观察者没人会叫醒本视图，块就既不会出现也不会消失（顺序表随之重排）。
     /// 拨开关那条路径由 `@Default(.homeBlockOrder)` / 注册表驱动，与这里无关。
     @ObservedObject private var webcamManager = WebcamManager.shared
+    /// **保留观察「无会话自动隐藏音乐块」**（P2 接管批次 / T5 起，本视图已不再直接读它）：
+    /// 音乐块的存在性判据里有一段是 `Defaults[.autoHideInactiveNotchMediaPlayer]`
+    /// （判据本身在 `MusicModule.isVisible(...)`，这里不重复一份）；在上游设置页拨这个开关时
+    /// 除了这个观察者没人会叫醒本视图，块就既不会出现也不会消失（顺序表随之不重排）。
+    @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
     /// 用户排序覆盖（P1 / T3）：`@Default` 是 `DynamicProperty`——设置页写盘后**这里立即重绘**，
     /// 不需要注册表发通知（顺序与 `moduleEnableOverrides` 的开关路径同形：偏好一个源）。
     @Default(.homeBlockOrder) private var homeBlockOrder

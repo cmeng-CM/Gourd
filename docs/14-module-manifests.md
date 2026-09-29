@@ -1,6 +1,20 @@
-# 内置模块清单（15 个模块 + 终端条目；2026-09-28 增补 `todos` → 16 个模块 + 终端条目）
+# 内置模块清单（15 个模块 + 终端条目；2026-09-28 增补 `todos` → 16 个模块 + 终端条目；2026-09-30 增补 `music` → 17 个模块 + 终端条目）
 
-这份文档回答一件事：**15 个内置模块（接管 10 + 新增 5）与终端条目，各自的 manifest 声明什么。** 它是 P1-0 前置清障第 3 项（[12-p1-batches.md](12-p1-batches.md) §P1-0）的产物，也是 [09-features-and-mechanisms.md](09-features-and-mechanisms.md) §8.1 已拍板模块化边界的逐项落地。**2026-09-28**：新增第 6 个新增模块 `com.cmeng.gourd.todos`（见 §1 的 todos 行与开头说明），本文的「16 份 manifest」相应变成 17 份。
+这份文档回答一件事：**17 个内置模块（接管 10 + 新增 7）与终端条目，各自的 manifest 声明什么。** 它是 P1-0 前置清障第 3 项（[12-p1-batches.md](12-p1-batches.md) §P1-0）的产物，也是 [09-features-and-mechanisms.md](09-features-and-mechanisms.md) §8.1 已拍板模块化边界的逐项落地。**2026-09-28**：新增第 6 个新增模块 `com.cmeng.gourd.todos`（见 §1 的 todos 行与开头说明），本文的「16 份 manifest」相应变成 17 份。**2026-09-30**：`p2-takeover` 批次落地的音乐块用的是**新增模块 id `com.cmeng.gourd.music`**（不是 §1 原清单里的 `nowplaying`，见 §1 的 music 行与表下说明）——「17 份 manifest」相应变成 18 份。
+
+> **计数口径（2026-09-30 起，读这份文档前先读这一段）**：本文的清单是**计划口径**——§1 表里每一行都是「打算声明什么」，其中大部分**还没落地**。**今天真正已落地的 manifest 只有 7 份**，按实测取数（`grep -c` 按文件逐行打印，七个 `1` 之和 = 7）：
+> ```
+> $ grep -c "static let manifest = ModuleManifest" DynamicIsland/**/*.swift | grep -v ':0$'
+> DynamicIsland/Modules/Launcher/LauncherModule.swift:1
+> DynamicIsland/Modules/NotificationsModule.swift:1
+> DynamicIsland/Modules/ProgressModule.swift:1
+> DynamicIsland/Modules/Takeover/MirrorModule.swift:1
+> DynamicIsland/Modules/Takeover/MusicModule.swift:1
+> DynamicIsland/Modules/Takeover/TimerModule.swift:1
+> DynamicIsland/Modules/TodosModule.swift:1
+> ```
+> 这七份是 `progress` / `todos` / `notifications` / `launcher` / `timer` / `mirror` / `music`（等价写法：`grep -rn "static let manifest = ModuleManifest" DynamicIsland/ | wc -l` → `7`）。**凡本文出现「16 个模块 / 17 份 manifest」这类写死的总数，一律按实测口径读**（那是各批当时的计划数，不是今天的落地数）；要核对「报的模块到底在不在」，以 `grep` 与 §1 各行状态为准。
+
 
 与其它文档的分工：
 
@@ -11,13 +25,13 @@
 | [13-runtime-kernel.md](13-runtime-kernel.md) | **P1 批次的范围与裁定**（D-07 试点模块、D-09 清单口径、D-12 不声明锁屏、D-14 平台台账口径） |
 | [15-platform-dependencies.md](15-platform-dependencies.md) | 这些模块落到哪条私有 API / 子进程 / 外部域名上 |
 
-**取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的四个取值（本清单用到 `compact` / `expanded` / `home`——`home` 只由 `todos` 声明，见 §1 表下说明；锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
+**取值一律逐字引 06 号与 09 号文档**：`surfaces` 取 06 §2.2 的四个取值（本清单用到 `compact` / `expanded` / `home`——`home` 今天出现在 `todos` / `notifications` / `mirror` / `music` 四行，见 §1 表下说明；锁屏取值见 T-5）；`slot` 取 06 §6.2 的 `left` / `right` / `center`；`permissions` 取 06 §7.1 的白名单词；`config` 键名取 09 §5 原文（新增模块）或上游 `Defaults` 键（接管模块）。本文**不新造字段名、不新造取值词汇**。
 
 已有落地样本：`com.cmeng.gourd.progress`（`DynamicIsland/Modules/ProgressModule.swift`，P1 批次 T4）与 `com.cmeng.gourd.todos`（`DynamicIsland/Modules/TodosModule.swift`，P1 批次 T5）——表内对应行的 `surfaces` / `permissions` / `config` 键名与它们一致；`defaultPlacement` 的**当前值**见各自行注与 T-1（本批 `order` 还被兼作 expanded tab 的排序键，见 [13](13-runtime-kernel.md) 已知限制 25）。
 
 **2026-09-28 增补**：`com.cmeng.gourd.todos`（待办）不在 P1-0 定稿的 16 份 manifest 内——它是用户当日判定「进度无行动价值」后新增的**第 17 份**（模块计 16 个：接管 10 + 新增 6；终端仍是独立条目），并接过 `progress` 空出的折叠态中央槽位（[13](13-runtime-kernel.md) D-20）。下表按模块逐个列出，`todos` 行紧跟 `progress` 之后。
 
-**2026-09-29 变更**：P2 批次 `p2-home-strip` 给 `todos` 加了 `home` surface（首页 strip 的一块）——**模块数与 manifest 份数不变**（仍 **16 个模块 / 17 份 manifest**，因为本批没有新增模块，只是 todos 多了一个 `surfaces` 取值）；`progress` 与 `notifications` 均**不声明** `home`，理由与逐条口径见 §1 表下说明与 [17-nookx-adoption.md](17-nookx-adoption.md)。
+**2026-09-29 变更**：P2 批次 `p2-home-strip` 给 `todos` 加了 `home` surface（首页 strip 的一块）——**该批没有新增模块**（只是 `todos` 多了一个 `surfaces` 取值；`notifications` 的 `home` 由次日的 `p2-p0-visible` 批次补上，故「`progress` 与 `notifications` 均不声明 `home`」这句**只在 2026-09-29 当天成立**）；`progress` **不声明** `home`（默认关、声明了也没内容），理由与逐条口径见 §1 表下说明与 [17-nookx-adoption.md](17-nookx-adoption.md)。**当时写的「仍 16 个模块 / 17 份 manifest」是按当时的计划清单说的**——2026-09-30 起模块数与落地数以开头「计数口径」段与 §1 各行状态为准（实测已落地 manifest **7 份**）。
 
 ---
 
@@ -27,7 +41,8 @@
 
 | id | surfaces | slot | permissions | config 关键项 | 优先级/依赖 |
 |---|---|---|---|---|---|
-| `com.cmeng.gourd.nowplaying` | `compact`、`expanded` | `center` / order 10 | `media:read`、`media:control`、`network:itunes.apple.com` | `playerColorTinting`、`useMusicVisualizer`、`visualizerBarCount`、`enableWaveformScrubber`（接管映射，见 T-3） | P2a 首批；依赖 15 号文档 §1 的 `MediaRemote.framework` / `MediaRemoteAdapter.framework`。**本批（`p2-takeover`，2026-09-30）先落它的 `home` 形态 = 首页音乐块**：`surfaces` 收敛为 **`[.home]`**、`defaultPlacement: Placement(slot: nil, order: 0)`、`defaultEnabled: true`（= `showStandardMediaControls` 上游默认）、`permissions: []`、`config` 只登记 `playerColorTinting` / `useMusicVisualizer`（读写仍走上游键）；启用真源 = `showStandardMediaControls`，块宽继承 300 / 420——**`compact` / `expanded` 与 `media:read` / `media:control` / `network:itunes.apple.com`、`visualizerBarCount` / `enableWaveformScrubber` 两键均待后续批次** |
+| `com.cmeng.gourd.nowplaying` | `compact`、`expanded` | `center` / order 10 | `media:read`、`media:control`、`network:itunes.apple.com` | `playerColorTinting`、`useMusicVisualizer`、`visualizerBarCount`、`enableWaveformScrubber`（接管映射，见 T-3） | P2a 首批；依赖 15 号文档 §1 的 `MediaRemote.framework` / `MediaRemoteAdapter.framework`。**注（2026-09-30）**：它的 `home` 形态（首页音乐块）**已由下一行的 `com.cmeng.gourd.music` 落地**——本行**不动**（那是另一个模块 id）：`compact` / `expanded`、`media:read` / `media:control` / `network:itunes.apple.com` 三个 capability 与 `visualizerBarCount` / `enableWaveformScrubber` 两键**均待后续批次** |
+| `com.cmeng.gourd.music` | `home` | — | `[]` | `playerColorTinting`、`useMusicVisualizer`（接管映射，见 T-3） | **已落地（2026-09-30，批次 `p2-takeover`）**：首页音乐块（渲染点 = 上游 `MusicPlayerView(albumArtNamespace:)`，判据 = `showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer \|\| hasActiveSession)`）；`surfaces` = **`[.home]`**、`defaultPlacement: Placement(slot: nil, order: 0)`（= 被接管的内置音乐块原本的默认序号）、`defaultEnabled: true`（= `showStandardMediaControls` 上游默认）、`permissions: []`、块宽继承 300 / 420；启用真源 = `showStandardMediaControls`（接管模块，口径见 T-12）。**本批真正新增的模块 id 是它**（原清单里没有这一行：本批只落「首页音乐块」这一处渲染点，因此没有占用 `nowplaying` 的 id）；`compact` / `expanded` 不声明（本批不占折叠槽位），后台播放会话仍由上游 `MusicManager` 承担 |
 | `com.cmeng.gourd.lyrics` | `compact`、`expanded` | `center` / order 20 | `media:read`、`events:subscribe:media.playbackChanged`、`network:lrclib.net` | `enableLyrics`、`lyricsPanelWidth`、`lyricsPanelOffset` + 歌词磁盘缓存开关（09 §2 A 的 🔧 缺陷修复） | P2a；曲目变化经 EventBus 订阅，不做模块间直接引用（06 §3.3 R4） |
 | `com.cmeng.gourd.stats` | `compact`、`expanded` | `left` / order 10 | `system:metrics` | `statsUpdateInterval`、`statsStopWhenNotchCloses`、`enableStatsFeature`（接管映射） | P2a；依赖 15 号文档 §1 的 AppleSMC（温度）/ `IOReport.framework`（频率） |
 | `com.cmeng.gourd.calendar` | `expanded` | — | `[]`（事件标题/地点的细粒度读取另需 `calendar:read-titles`，**待落 06 号文档 §7.1**，见 T-8 / §3） | `showCalendar`、`hideCompletedReminders`、`hideAllDayEvents`（接管映射） | P2a；事件与提醒读取走 EventKit，依赖日历 / 提醒 TCC 授权 |
@@ -45,13 +60,13 @@
 | `com.cmeng.gourd.notifications` | `expanded`、`compact`、`home`（2026-09-29 起声明首页块；浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
 
-**2026-09-30 的三行落地（批次 `p2-takeover`）**：`timer` / `mirror` / `nowplaying` 三行都标了「已落地」，
-但**落地的粒度不同**，别读成「这三个模块做完了」：
+**2026-09-30 的三行落地（批次 `p2-takeover`）**：`timer` / `mirror` 两行标了「已落地」，音乐那一处渲染点落在
+**新增的 `music` 行**（`nowplaying` 行只留了一条指向它的注记），三处的**落地粒度不同**，别读成「这些模块都做完了」：
 
-- **音乐 = `nowplaying` 行的 `home` 形态**（首页音乐块）——本行其余 surface（`compact` / `expanded`）与
-  `media:read` / `media:control` / `network:itunes.apple.com` 三个 capability、`visualizerBarCount` /
-  `enableWaveformScrubber` 两个 config 键**都待后续批次**；后台的播放会话仍由上游 `MusicManager` 承担
-  （本批只搬渲染归属与开关真源）。
+- **音乐 = `music` 行的 `home` 形态**（首页音乐块）——`nowplaying` 本行**一行未动**：它的 surface（`compact` /
+  `expanded`）与 `media:read` / `media:control` / `network:itunes.apple.com` 三个 capability、
+  `visualizerBarCount` / `enableWaveformScrubber` 两个 config 键**都待后续批次**；后台的播放会话仍由上游
+  `MusicManager` 承担（本批只搬渲染归属与开关真源）。
 - **`timer` 只落了 `expanded`**（展开 tab）：`compact` / `slot: right` 与 `timers` / `notifications`
   两个 capability 待折叠态左右槽位落地时再声明；到点提醒仍是上游 `TimerManager` 的行为。
 - **`mirror` 落的是 `home`**（首页块）：它本来就只有这一处渲染点，故这一行最接近「做完」；
@@ -59,11 +74,11 @@
 
 三行的 `config` 都**只登记键名与上游默认值**（读侧仍读上游键，见 T-3 的 2026-09-30 落地行）。
 
-**2026-09-29 的 `home` 取值（P2 批次 `p2-home-strip`，后由 `p2-p0-visible` 增补）**：`home` 目前出现在 **todos 与 notifications 两行**——`todos` 是首批（三环横排 + 今日清单前 N 条），`notifications` 在 2026-09-29 的 `p2-p0-visible` 批次补上（「通知 · 最近 N 条」+ 最近 3 条，点条目开 App 并收起）。**`progress` 保留代码与 manifest 但不声明 `home`**（它默认关、声明了也没内容，组件卡已标注"暂不出现在首页"）。原说明（17-nookx-adoption.md](17-nookx-adoption.md) 已知限制 9）。**本批没有新增模块**，模块数与 manifest 份数**不变**（仍是 16 个模块 / 17 份 manifest，含终端独立条目）——变的是 todos 与 notifications 各多了一个 `home` 取值。**2026-09-30 补充**：本批之后 `home` 还出现在 `mirror` 与 `nowplaying`（音乐块）两行，同样是「**没有新增模块**」（仍是 16 个模块 / 17 份 manifest）——接管只是把已实现的三处渲染点搬进模块。
+**2026-09-29 的 `home` 取值（P2 批次 `p2-home-strip`，后由 `p2-p0-visible` 增补）**：`home` 目前出现在 **todos 与 notifications 两行**——`todos` 是首批（三环横排 + 今日清单前 N 条），`notifications` 在 2026-09-29 的 `p2-p0-visible` 批次补上（「通知 · 最近 N 条」+ 最近 3 条，点条目开 App 并收起）。**`progress` 保留代码与 manifest 但不声明 `home`**（它默认关、声明了也没内容，组件卡已标注"暂不出现在首页"）。原说明（17-nookx-adoption.md](17-nookx-adoption.md) 已知限制 9）。**本批没有新增模块**（`todos` / `notifications` 各只是多了一个 `home` 取值）——那一批的「16 个模块 / 17 份 manifest」是**当时的计划数**。**2026-09-30 补充**：本批之后 `home` 出现在四行（上述两行 + `mirror` 与 `music`），而这一批**确实新增了一个模块 id**——`com.cmeng.gourd.music`（见 §1 的 music 行），因为本批把接管的音乐块落在一个新 id 上而不是 `nowplaying`；**今天的落地数按开头的「计数口径」段读（实测已落地 manifest 7 份）**，写死的总数一律以那份口径为准。
 
 **两处「不是模块」的说明**（避免清单被读成"全部功能都模块化"）：
 
-- **终端是独立条目**：它不是 `GourdModule` 的渲染单元，而是上游终端功能的"外部 App 模式"配置载体（09 §5.6）；列在表内是为了让 16 份 manifest 的边界闭合（D-09），落地时按同一份 manifest 模型声明。
+- **终端是独立条目**：它不是 `GourdModule` 的渲染单元，而是上游终端功能的"外部 App 模式"配置载体（09 §5.6）；列在表内是为了让清单的模块边界闭合（D-09），落地时按同一份 manifest 模型声明。
 - **锁屏五面板群不在表内**：音乐 / 天气 / 日历 / 提醒 / 计时器的锁屏面板维持上游现状（09 §0 原则 P4），不归入任何模块，见 T-5。
 
 ---
@@ -130,10 +145,11 @@
 
 ### T-12 内置 manifest 取值口径
 
-- **结论**：16 份 manifest 统一取 `manifestVersion` 1、`version` `"1.0.0"`、`apiVersion` = `HostInfo.currentAPIVersion`（当前 `1.0`）、`kind` `builtin`、`entry` 缺省、`icon.type` 取 `symbol`、`name`/`summary` 用 `LocalizedText` 的 `key` 形态（`module.<shortID>.name` / `module.<shortID>.summary`）；`defaultEnabled` 接管模块映射上游开关默认值，新增模块除 progress 外取 `false`。
+- **结论**：清单里的每一份 manifest（计划 17 个模块 + 终端条目 = 18 份；**已落地实测 7 份**，见开头「计数口径」）统一取 `manifestVersion` 1、`version` `"1.0.0"`、`apiVersion` = `HostInfo.currentAPIVersion`（当前 `1.0`）、`kind` `builtin`、`entry` 缺省、`icon.type` 取 `symbol`、`name`/`summary` 用 `LocalizedText` 的 `key` 形态（`module.<shortID>.name` / `module.<shortID>.summary`）；`defaultEnabled` 接管模块映射上游开关默认值，新增模块除 progress 外取 `false`。
 - **理由**：前六项是 06 §2.2/§2.3/§2.4/§2.5 对内置的强制约束（`kind == builtin`、`entry` 出现即 `E_UNEXPECTED_FIELD`、内置 `icon` 必须 `symbol`），progress 已按此落地（D-11）；`defaultEnabled` 取保守值，与 06 §2.2「装了自动上屏不可接受」的取向一致。
 - **2026-09-28 修订**：`progress` 由 `true` 改 `false`（用户判定「时间进度」无行动价值，[13](13-runtime-kernel.md) D-20）；新增的 `todos` 取 `true`——它是折叠态中央槽位的默认内容，上屏是它的存在理由（同为 D-20）。因此本批 `defaultEnabled` 的实际判据收敛成一条：**占中央槽位者取 `true`（现为 `todos`），其余一律 `false`（含被替换下来的 `progress`）**。
 - **2026-09-30 补充（批次 `p2-takeover`）**：**接管模块**的 `defaultEnabled` 映射为**各自上游键的默认值**——`timer` = `enableTimerFeature` 默认 `true`、`mirror` = `showMirror` 默认 `false`、`music` = `showStandardMediaControls` 默认 `true`。它只在「接管键读不到」时才被见到（启用门直接读上游键，见 [20](20-component-page.md) §接口与数据形状 2），填它的唯一作用是把「默认开启 / 关闭」如实写在 manifest 与卡片上。**上一段那条判据（占中央槽位者 `true`、其余 `false`）只适用于新增模块**，不覆盖接管模块。
+- **2026-09-30 计数口径同步**：本条的「份数」不改变上面任何取值的正确性——**「7 份已落地」与「清单 18 份」是两件事**（`music` 是接管批次新增的模块 id，见 §1 的 music 行），要数「今天有几份 manifest 真在代码里」用开头那段实测命令，不要用本文任何写死的总数。
 
 ### T-13 只有字段名没有类型/默认值的项
 

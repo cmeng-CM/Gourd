@@ -682,7 +682,7 @@ final class TakeoverEnablementTests: XCTestCase {
         // ① 旧键 → 新 id：老用户排过的位置跟着搬到改名后的块上
         let mapped = HomeBlockOrdering.migratingLegacyIDs(["builtin.mirror": -1])
         XCTAssertEqual(mapped[mirrorID], -1, "builtin.mirror 的值要落到镜子模块 id 上")
-        XCTAssertEqual(mapped["builtin.mirror"], -1, "旧键**保留**在返回的表里（设置页顺序节仍有 builtin.* 行）")
+        XCTAssertEqual(mapped["builtin.mirror"], -1, "旧键**保留**在返回的表里（别名语义：设置页顺序节只列模块 id，旧键今天没有消费者，盘上那一条只在第一次重排前还在）")
 
         // ② 新键优先：新 id 已有自己的值 → 旧值不覆盖它
         let newWins = HomeBlockOrdering.migratingLegacyIDs(["builtin.mirror": -1, mirrorID: 3])
