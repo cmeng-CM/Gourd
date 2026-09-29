@@ -100,7 +100,7 @@
 
 | 功能 | 动作 | 机制 |
 |---|---|---|
-| **快捷启动（Launcher）** | 🆕 | **零私有 API**：扫描 App 目录 + `NSWorkspace.openApplication` + 自建使用频次。细节见 §5.1 |
+| **快捷启动（Launcher）** | 🆕 | **零私有 API**：扫描 App 目录 + `NSWorkspace.openApplication` + 自建使用频次（**实现未采用**：改用 Spotlight 的 `kMDItemUseCount`）。细节见 §5.1 |
 | **系统 Shortcuts 上岛** | 🆕 | **零私有 API**：`/usr/bin/shortcuts list --show-identifiers` 枚举 + `shortcuts run` 执行（支持输入输出）。细节见 §5.4 |
 | 音量 | ✅ | CoreAudio `kAudioHardwareServiceDeviceProperty_VirtualMainVolume` |
 | 音量/亮度媒体键拦截 | ✅ | CGEventTap 解析 `NX_SYSDEFINED`（需辅助功能权限） |
@@ -243,9 +243,9 @@
 | 图标 | `NSWorkspace.shared.icon(forFile:)`，异步预热 + 缓存（首次全量约百毫秒级，可接受） |
 | 搜索 | 名称子串匹配 + 拼音首字母（`CFStringTransform` 转拼音，成本低）；结果按"使用频次 × 最近使用"排序 |
 | 启动 | `NSWorkspace.shared.openApplication(at:configuration:)`（`activates = true`） |
-| 常用/最近 | **自建使用计数**（记录从岛上启动的次数与时间）。不读 `com.apple.LSSharedFileList` 的 `.sfl3` 私有格式——私有格式随版本变，而我们只需要"我自己常用" |
-| 呈现 | 折叠态槽位图标（点击展开）+ 展开面板一个 tab（网格 + 搜索框 + 固定区） |
-| 热键 | KeyboardShortcuts 全局热键唤出（默认留空，避免与系统冲突） |
+| 常用/最近 | **自建使用计数**（**未做**：只用 Spotlight 的 `kMDItemUseCount`，见 [19](19-launcher.md) D-01）（记录从岛上启动的次数与时间）。不读 `com.apple.LSSharedFileList` 的 `.sfl3` 私有格式——私有格式随版本变，而我们只需要"我自己常用" |
+| 呈现 | 折叠态槽位图标（**未做**：只声明 `expanded`，见 [19](19-launcher.md) D-02）（点击展开）+ 展开面板一个 tab（网格 + 搜索框 + 固定区） |
+| 热键 | KeyboardShortcuts 全局热键（**未做**：本批无全局热键）唤出（默认留空，避免与系统冲突） |
 | 配置 | `pinnedApps`（appPicker 列表）、`showRecents`（bool）、`iconSize`、`density` |
 | 权限 | **无**（全部公开 API） |
 | 工作量 | 中（3～5 天） |
