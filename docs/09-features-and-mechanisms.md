@@ -235,6 +235,8 @@
 
 ### 5.1 快捷启动 `launcher`
 
+> **2026-09-30 落地（`p2-launcher`）**：扫 `/Applications`、`~/Applications`、`/System/Applications` **一层** 的 `.app`（按 url 去重、跳过 `.app` 内嵌套包、显示名三级回落 `CFBundleDisplayName` → `CFBundleName` → 文件名）+ **Spotlight 使用数据**（`kMDItemLastUsedDate` / `kMDItemUseCount`）排序（固定优先 → 最近使用 → 使用次数 → 名称）；展开面板一个 tab：搜索框 + 自适应应用网格（图标按可见项惰性取并缓存），点图标 `NSWorkspace.openApplication(activates: true)` 后 `requestCollapse()` 收起；右键固定/取消固定（键 = bundle id 优先、无 id 用路径，落 `pinnedApps`）。**只声明 `expanded`**（不占折叠槽位与首页块）、`defaultEnabled = false`、零权限零私有 API。设计见 [19](19-launcher.md)。
+
 | 项 | 设计 |
 |---|---|
 | 数据源 | 扫描 `/Applications`、`/System/Applications`（含 `Utilities`）、`~/Applications`（含子目录两层）找 `.app`；`Bundle(url:)` 读 `CFBundleDisplayName` / `CFBundleName` / `CFBundleIdentifier` |
