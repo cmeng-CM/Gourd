@@ -87,7 +87,7 @@ sequenceDiagram
 
 无（本批不新增状态机；待办面板的"当前视图"是纯 UI 局部状态，不需要跨模块一致）。
 
-**并发与幂等**：优先级写回是 `EKEventStore.save`，重复点击同一档位时先比对当前值、相同则不写（幂等）；写回在后台任务里做，失败只记日志不改 UI 状态（下一次读取会自然纠正）。
+**并发与幂等**：优先级写回是 `EKEventStore.save`，重复点击同一档位时先比对当前值、相同则不写（幂等）；写回走 `nonisolated async` + `Task.detached`（**离开主线程**），UI 侧先乐观更新、`await Task.yield()` 之后才发起写回（保证新档位先上屏）；**失败回滚**并在 UI 上纠正，同时记模块日志。
 
 ## 横切关注点
 
@@ -113,7 +113,17 @@ sequenceDiagram
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）。
+**已交付**（工作流 `p2-todos-facelift`，2026-09-29；提交 `cc98aee8`…`46827fea`）。
+
+**代码**：`Modules/TodoBucketing.swift` 加 `TodoViewKind` 与 `items(in:from:now:calendar:)`（既有三环零改动）；`Modules/TodosModule.swift` 展开面板改四视图左导航 + 右看板、新增 `TodoPriority` / `TodoPriorityOverlay` / `TodoViewSource` / `TodoDueLabel`；`managers/CalendarManager.swift` + `Providers/CalendarServiceProviding.swift` 加 `setReminderPriority`（`nonisolated async`，`save` 进 `Task.detached`）；`Host/HomeBlockOrdering.swift`（新，排序纯函数）；`Host/HomeStripView.swift` 合成名单后排序；`components/Settings/ModuleSettingsSection.swift` 加上移/下移；`models/Constants.swift` 加 `homeBlockOrder`。
+
+**测试**：新增 24 条，全量 **253 条 0 失败**。
+
+**文档**：本文 + `docs/09` §5.8、`docs/14` todos 行、`docs/16` §4.4、`docs/12`。
+
+**与计划的偏离及原因**：① 优先级写回落在 `CalendarService`（不新开第二条写回链）；② 排序按钮恒显示 / 单块置灰；③ 枚举嵌在 `TodoBucketing` 内、形参用既有 `Item`（计划里的 `TodoItem` 是笔误）；④ 目视只做了"进程内渲染生产视图"的替代证据（本机长时间锁屏）。
+
+**遗留**：屏上点击（切视图 / 点胶囊循环并重启保持 / 调顺序）待用户确认；`TodoRingPicker` 现无生产调用者（保留）；跨零点瞬间徽标与行数可能差 1。
 
 ## 已知限制
 
@@ -122,7 +132,11 @@ sequenceDiagram
 3. **"最近 7 天"按到期日算**，不包含"已过期但未完成"的条目——后者在"清单"视图里。
 4. 四视图的计数与首页块三环的口径**不同**（一个按视图过滤、一个按聚合），同名不同数是设计如此。
 
-**回写期补充**：无（尚未实现）。
+**回写期补充（`p2-todos-facelift`，2026-09-29）**：
+
+5. **设置页的排序按钮恒显示**（单块时置灰），与设计期写的"多于 1 个块才出现"不同——裁定接受（置灰比隐藏更好发现）。
+6. **「已完成」只覆盖近 7 天**（`completedWindowDays = 7`）：文案已改为「已完成（近 7 天）」与实现一致；更早完成的历史条目当前不可见。
+7. **顺序改变会连带改变"谁被丢"**：被规则③ 丢弃的是排好序之后的尾部（算法一行未改）。
 
 ## 验收标准
 
@@ -221,6 +235,9 @@ func setReminderPriority(_ reminderID: String, priority: Int) -> Bool
 | D-02 | 优先级**写回 EventKit** `priority`（点击胶囊循环 无/低/中/高） | agent | 只显示不写回等于假功能；写回的是既有字段、不新增权限。代价：会在用户的系统提醒里留下我们写的优先级 |
 | D-03 | 首页顺序用 **`homeBlockOrder` 覆盖表 + manifest 默认值**，界面只给上移/下移 | agent | 覆盖表缺键即回落，升级用户行为不变；不引入拖拽（见备选） |
 | D-04 | 本批**不做** P1 第 5 项（折叠态左右槽位 + 图标网格） | agent | 左右槽位是给状态类/动作类模块（农历 / 计时器 / 剪贴板 / 启动台）用的，那些模块属 P2a 尚未落地——现在做出来是**空槽位**，看不见效果。应与左右模块同批落地（已登记进 [12](12-p1-batches.md)） |
+| D-05 | 优先级写回落在 `CalendarService`（`nonisolated async`），不在 `CalendarManager` 内另开一条链 | agent | `CalendarManager` 只有 `calendarService` 一条提醒写回路径（`setReminderCompleted` 同路）；新开一条会产生两条写同一库的链 |
+| D-06 | 写回**真异步**（`Task.detached` 里 `save`），UI 先乐观更新并 `await Task.yield()` 后发起写回；**失败回滚** | agent | 复审实测原实现是主线程同步 save（乐观值不先上屏 + 磁盘 I/O 压主线程）；宁可回滚也不要让 UI 停在错误值 |
+| D-07 | 排序按钮**恒显示、单块时置灰**；「已完成」文案限定为「近 7 天」 | agent | 置灰比隐藏更好发现；文案必须与 `completedWindowDays = 7` 一致 |
 
 ---
 
