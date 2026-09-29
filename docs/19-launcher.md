@@ -133,7 +133,10 @@ sequenceDiagram
 3. **不做拖拽排序 / 分组 / 文件夹**：只做搜索 + 固定。
 4. **折叠态与首页都不出现**：`compact` surface 与本批无关（左右槽位未落地）。
 
-**回写期补充**：无（尚未实现）。
+**回写期补充（`p2-launcher`，2026-09-30）**：
+
+8. **使用数据每次模块激活只取一次**：`hasLoadedUsage` 闸门（`LauncherModule.swift`）使 `showRecents` 从 false 改成 true 需要**关开一次模块**才生效（改 config 不会自动重取）。
+9. **空壳包也会被列出**：扫描只按 `.app` 扩展名筛，不校验包是否可执行；名称回落链走到文件名。
 
 ## 验收标准
 
@@ -224,6 +227,8 @@ static let pinnedApps = Key<[String]>("pinnedApps", default: [])
 // defaultEnabled: false                              ← 新增模块一律默认关（docs/14 T-12）
 // permissions: []                                    ← 零权限
 // config: {"type":"object","properties":{"iconSize":…,"density":…,"showRecents":…}}
+// config 语义（回写校正）：iconSize = 格子目标宽、density = 间距倍率，越界值**静默夹取**；
+// showRecents 只在本模块激活时读一次（见 §已知限制 8）
 ```
 
 ### 改动点设计
