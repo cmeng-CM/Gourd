@@ -336,6 +336,11 @@ stateDiagram-v2
 15. **日历列表的高度口径**：~~从"按 `vm.notchSize` 的**面板高度换算**"变为"**块自身实测高度**"（`GeometryReader`）。`HomeTodayListLayout.capacity` 与 `EventListView.availableHeight` 的文档串已在 T3 修复轮同步改成"两个调用方各自换算"（`CalendarView` 按面板高度 / `HomeStripCalendarBlock` 按块实测高度）。~~
     **2026-09-29 晚 `p2-calendar-row` 改判（调用方换人，口径写死成两条）**：`HomeTodayListLayout.capacity` 与 `EventListView.availableHeight` 的文档串现在写的是**两个新调用方**——`CalendarView` 按**面板高度**（`vm.notchSize` 减刘海底座与内边距、再减收起态日期头）/ `HomeCalendarRow` 按**行高常量**（`rowHeight − collapsedHeaderHeight` = 294 − 26 = **268**）。原先那句"`HomeStripCalendarBlock` 按块实测高度"随该块移除而失效（全仓已无此类型，**按高度实测那条路径也不存在**了——`HomeCalendarRow` 里的 `GeometryReader` 现在只用于左栏宽度分配，列表高度取常量）。
 
+**回写期补充（`p2-resize-ux` + 日历行终审修复，2026-09-29 深夜）**：
+
+25. **把手的三条已知取舍**（改动后实测）：① 横向拖动时**白点会落后光标 Δx/2**——面板是居中摆位、扩宽时右边缘只走位移一半（窗口摆位模型所致，本批未改）；② 命中框放大到 32pt（有效约 46×46）后**右下角有一块区域被它吞掉**，与本批给今日清单加的 36pt 右内边距配合避让；③ 快甩手（松手前 <100ms 才离开 hover）时那条已排程的 100ms 收起任务仍可能在松手后约 30ms 触发一次收起。
+26. **月历事件标记是"按月快照"**：`CalendarManager.monthEvents` 在**翻月**时才抓一次（不是事件驱动的实时刷新），所以当月内新增/删除事件后回到该月才会更新；`events`（单日窗口）与它并存，各管一处。
+
 **回写期补充（T4，2026-09-29）**：
 
 16. ~~**待办块的清单有 220pt 阈值，默认面板宽下只有三环**~~
@@ -546,7 +551,8 @@ struct HomeBlockWidthKey: LayoutValueKey {
 | D-25 | 首页 = 「**strip 一排 + 全宽日历行**」，日历**不再作为 strip 的一块**（原日历块整体移除） | 用户 | 用户 2026-09-29 在三个候选（单独一排 / 与其它块同排 / 点一下展开成整排）里拍板「日历单独一排」：7 列月历需要宽度（塞进 200–260pt 的块里格子约 26pt，只能"日期头 + 几点内容"），且顺带把月历入口补回展开面板（关闭 D-14 的能力收缩）。代价：面板高度不足时上排 strip 整体不画（阈值 152），面板只剩日历行 |
 | D-26 | 整月网格**抽取复用**（`MonthGridView` + 纯函数 `MonthGridLayout.days(forMonth:calendar:)`），不写第二份月历 | agent | 那份实现已含月份标题 / 翻月 / 今天与选中高亮 / 事件标记 / 按选中日居中；重写必然与它漂移（同 `TodoHomeRow` 副本的教训，§已知限制 21）。抽取后 `StandaloneCalendarView` 改为调用它、**行为不变**（`monthNavigationMovesSelection: true`），首页日历行传 `false`（§已知限制 24） |
 | D-27 | 月历**自绘**，不用系统的 `NSDatePicker(.clockAndCalendar)` | 用户 | 用户问过"直接取系统的日历显示不可以吗"，说明后选择继续自绘（2026-09-29）。事实基础：macOS 没有公开 API 把日历 App 的月视图嵌进别的 App（`EKEventViewController` 只管单个事件、`EKCalendarChooser` 只是日历选择器、WidgetKit 组件不能嵌视图）；唯一可嵌的系统控件是 `NSDatePicker(.clockAndCalendar)`，但它的配色 / 字号 / 圆角几乎不可调、不能给日期加事件标记、也接不上右侧清单联动 |
-
+| D-28 | 月历的「有事件的日期打标记」用**独立按月数据路径**（`CalendarManager.monthEvents`），不改 `events` 的单日窗口 | agent | 复核实测：`events` 只装 `[选中日, +1d)` 的事件，用它打标记等于"只有选中日有点"（月历等于白打）；单日窗口是今日清单与旧日历面板的既有契约，不能动，故新增按月快照 |
+| D-29 | 放大把手命中框后，给今日清单加 36pt 右内边距让开 | agent | 命中框 32pt（有效约 46×46）贴右下角，会盖住清单最后一行的行尾；缩回把手等于回到"很费劲"，让开更划算 |
 ## 附录：改动索引
 
 > 下表是 `p2-home-strip`（2026-09-29）的改动索引。**`p2-calendar-row`（2026-09-29 晚）的增量**见 §实际交付 §追加交付：新增 `DynamicIsland/Host/HomeCalendarRow.swift`；`DynamicIsland/components/Calendar/DynamicIslandCalendar.swift` 抽出 `MonthGridLayout` + `MonthGridView`（`StandaloneCalendarView` 改调用）；`DynamicIsland/Host/HomeStripView.swift` 移除 `HomeStripCalendarBlock` 与 `calendarBlockWidth`、加 `minimumUsableHeight = 152`、日期轮容器去 `.clipped()`；`DynamicIsland/components/Notch/NotchHomeView.swift` 改成两排接缝；`DynamicIslandTests/ModuleKernelTests.swift` +11 用例（`WheelPickerIndexMath` 5 / `MonthGridLayoutTests` 5 / `HomeCalendarRowLayoutTests` 1）。
