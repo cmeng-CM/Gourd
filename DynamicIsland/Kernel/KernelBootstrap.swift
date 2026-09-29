@@ -32,14 +32,14 @@ import os
 @MainActor
 public enum KernelBootstrap {
     /// 内置模块清单。T4 落 `ProgressModule`，T5 落 `TodosModule`，P2c 落 `NotificationsModule`，
-    /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`、T4 落 `MirrorModule`
-    /// ——即「新增模块 = 加一行」的那一行。
+    /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`、T4 落 `MirrorModule`、
+    /// T5 落 `MusicModule`——即「新增模块 = 加一行」的那一行。
     ///
     /// 顺序与用户可见顺序**无关**（那个由 `defaultPlacement.order` 定，见 `ModuleRegistry.tabEntries`）；
     /// 它只影响 `register` 的落表顺序与日志可读性，这里按批次先后排。
     static let builtinModules: [any GourdModule.Type] = [
         ProgressModule.self, TodosModule.self, NotificationsModule.self, LauncherModule.self,
-        TimerModule.self, MirrorModule.self,
+        TimerModule.self, MirrorModule.self, MusicModule.self,
     ]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")

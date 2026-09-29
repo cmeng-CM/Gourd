@@ -42,6 +42,18 @@
 //    空表恒等；另有一条**经 `sorted(...)` 走一遍**的用例（映射是 `sorted` 的第一步——只测纯函数的话
 //    「映射没接上」不会红）。
 //
+//  P2 接管批次 / T5 追加（音乐接管模块 + 命名空间环境键的默认值半边）：
+//  - **`MusicModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
+//    `defaultPlacement == Placement(slot: nil, order: 0)`（= 被接管的内置音乐块的默认序号）、
+//    真源键 `showStandardMediaControls`、块宽 300/420、`config` 只登记上游两键；
+//  - **`MusicModule.isVisible(showStandardMediaControls:autoHideInactive:hasActiveSession:)`** 四组：
+//    两段是「且」（表达式逐字沿用上游那个 `shouldShowMusicPlayer`）；
+//  - **`EnvironmentValues().homeAlbumArtNamespace == nil`**（D-08 的默认值一半：没人注入时是 nil，
+//    模块侧据此退回自带 `@Namespace`）。**注入那一半没有自动化断言**——注入点是 SwiftUI 视图修饰符
+//    （`HomeStripView` 的 `.environment(\.homeAlbumArtNamespace, …)`），起作用与否只能人工验收
+//    （封面配对动画：折叠态播放器 ↔ 展开态音乐块）；为它造一条「读回自己刚写的环境值」的断言
+//    只是把修饰符抄进用例，不证明宿主真的注入了，故不写（见 T5 报告 §4）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -56,6 +68,7 @@
 //
 
 import Defaults
+import SwiftUI
 import XCTest
 
 @testable import Gourd
@@ -703,6 +716,148 @@ final class TakeoverEnablementTests: XCTestCase {
             sorted,
             [mirrorID, "builtin.music", "com.cmeng.gourd.todos"],
             "老表里的 builtin.mirror = -1 要把镜子模块块提到最前（映射没接上时它按默认 2 排，会红）"
+        )
+    }
+
+    // MARK: - 音乐接管模块（T5）
+
+    /// docs/20 §接口与数据形状 5 的 music 行：**这个真模块**的 manifest 声明值逐条对齐。
+    ///
+    /// 与 `testTimerModuleManifestMatchesTakeoverContract` / `testMirrorModuleManifestMatchesTakeoverContract`
+    /// 同款：三条钩子的**行为**（真源压过 overrides / 可用性过滤 / 重同步）由本文件上半段的假模块覆盖，
+    /// 这里钉的是真模块的声明——`surfaces == [.home]`（不声明 tab、不占折叠槽位）、`order 0`
+    /// （= 被接管的内置音乐块的默认序号，接管前后首页顺序一致）、真源键 `showStandardMediaControls`、
+    /// 块宽 300/420（D-10）。
+    ///
+    /// `config` 两个键的默认值**取上游键的默认值**（D-03 / docs/20 §已知限制 1：登记值必须等于真源值，
+    /// 否则这份登记就是假的）：`playerColorTinting` 与 `useMusicVisualizer` 在上游
+    /// （`Constants.swift` 的 `Defaults.Keys`）**都是 `true`**——后者的名字带「可视化」，容易按直觉
+    /// 记成默认关，本用例把它钉在真值上。
+    ///
+    /// 本用例**不写**任何真实偏好（只读钩子与常量），因此没有夹具与还原。
+    func testMusicModuleManifestMatchesTakeoverContract() throws {
+        let manifest = MusicModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, MusicModule.moduleID, "moduleID 与 manifest.id 必须是同一份字面量")
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.music")
+        XCTAssertEqual(manifest.shortID, "music")
+        XCTAssertEqual(manifest.name.key, "module.music.name")
+        XCTAssertEqual(manifest.summary?.key, "module.music.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "music.note"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.home], "只声明首页块（D-09：本批不声明任何 compact）")
+        XCTAssertFalse(manifest.surfaces.contains(.expanded), "不声明 expanded → 不进 tab 投影")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "接管模块不占折叠槽位")
+        XCTAssertEqual(
+            manifest.defaultPlacement,
+            Placement(slot: nil, order: 0),
+            "slot 只在含 compact 时有意义；order 0 = 被它取代的内置音乐块的默认序号"
+        )
+        XCTAssertEqual(
+            manifest.defaultPlacement?.order,
+            HomeBlockOrdering.BuiltinBlock.music.defaultOrder,
+            "接管前后的默认序号必须相同（否则未调过顺序的用户会看到块跳位）"
+        )
+        XCTAssertEqual(
+            manifest.defaultEnabled,
+            Defaults.Keys.showStandardMediaControls.defaultValue,
+            "= 上游 `showStandardMediaControls` 的默认值（接管键读不到时才不生效）"
+        )
+        XCTAssertEqual(
+            manifest.defaultEnabled,
+            true,
+            "上游这个开关默认是开的（方向也要钉住，避免它被悄悄改成保守值）"
+        )
+        XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属与开关真源：零新增能力请求")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(properties.count, 2, "config 只登记上游两键，不新发明键（D-03）")
+        XCTAssertEqual(properties["playerColorTinting"]?.type, "boolean")
+        XCTAssertEqual(properties["playerColorTinting"]?.default, ConfigValue.bool(true))
+        XCTAssertEqual(properties["useMusicVisualizer"]?.type, "boolean")
+        XCTAssertEqual(
+            properties["useMusicVisualizer"]?.default,
+            ConfigValue.bool(Defaults.Keys.useMusicVisualizer.defaultValue),
+            "登记值必须等于上游键的默认值（上游为 true——不按「可视化默认关」的直觉填 false）"
+        )
+
+        // 两条取值型钩子：真源 = 上游总开关；块宽 = 被接管块原本的那一档（300/420，不是宿主统一值）
+        XCTAssertEqual(MusicModule.takeoverEnableKey?.name, Defaults.Keys.showStandardMediaControls.name)
+        XCTAssertEqual(MusicModule.homeBlockWidth, ModuleHomeBlockWidth(min: 300, ideal: 420))
+
+        // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// 音乐块的**存在性判据**（docs/20 §做法 机制一末段 / §接口与数据形状 5 的 music 行）：
+    /// `showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer || hasActiveSession)`
+    /// ——表达式**逐字沿用**改动前的 `HomeStripView.shouldShowMusicPlayer`，且**不含展开态**。
+    ///
+    /// 四组：两段各自都能单独把结论翻成 false（总开关、运行期条件），第三组单独证明**第二段是「或」**
+    /// （关掉「无会话即隐藏」后没有会话也该显示——这正是「显示占位元数据」那一档的语义）。
+    ///
+    /// 本用例**不写**任何真实偏好（判据是纯函数，三个入参都是形参）。
+    func testMusicVisibilityPredicate() {
+        XCTAssertTrue(
+            MusicModule.isVisible(showStandardMediaControls: true, autoHideInactive: true, hasActiveSession: true),
+            "总开关开 + 无会话即隐藏 + 真有会话 → 块在"
+        )
+        XCTAssertFalse(
+            MusicModule.isVisible(showStandardMediaControls: true, autoHideInactive: true, hasActiveSession: false),
+            "总开关开但没有会话（且选了「无会话即隐藏」）→ 块消失（答 .none 不占位）"
+        )
+        XCTAssertTrue(
+            MusicModule.isVisible(showStandardMediaControls: true, autoHideInactive: false, hasActiveSession: false),
+            "关掉「无会话即隐藏」后没有会话也显示（第二段是「或」：显示占位元数据那一档）"
+        )
+        XCTAssertFalse(
+            MusicModule.isVisible(showStandardMediaControls: false, autoHideInactive: false, hasActiveSession: true),
+            "总开关关着 → 会话在放也不显示（第一段是「且」的前置，与接管前的判据同序）"
+        )
+    }
+
+    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
+    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
+    /// 取回 `showStandardMediaControls`（启用真源）。
+    ///
+    /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
+    /// 本用例不写任何真实偏好（音乐当前的启用状态与断言无关）。
+    func testMusicModuleHooksReadThroughTheRegistry() {
+        let registry = ModuleRegistry.shared
+        registry.register(
+            [MusicModule.self],
+            enabled: KernelBootstrap.enablementGate(registry: registry)
+        )
+
+        XCTAssertEqual(
+            registry.homeBlockWidth(for: MusicModule.moduleID),
+            ModuleHomeBlockWidth(min: 300, ideal: 420),
+            "音乐块宽度声明经注册表原样取给宿主（300/420，与接管前同一档）"
+        )
+        XCTAssertEqual(
+            registry.takeoverEnableKey(for: MusicModule.moduleID)?.name,
+            Defaults.Keys.showStandardMediaControls.name,
+            "音乐的启用真源 = 上游 `showStandardMediaControls` 键"
+        )
+        XCTAssertNotEqual(
+            registry.takeoverEnableKey(for: MusicModule.moduleID)?.name,
+            Defaults.Keys.autoHideInactiveNotchMediaPlayer.name,
+            "「无会话即隐藏」是**运行期条件**（判据的第二段），不是本模块的启用真源"
+        )
+    }
+
+    /// 命名空间环境键的**默认值半边**（D-08 / docs/20 §接口与数据形状 6）：没有注入者时读到 `nil`，
+    /// 模块侧据此退回自带 `@Namespace`（配对静默失效，不崩不空白）。
+    ///
+    /// **注入那一半没有自动化断言**：注入点是一条 SwiftUI 视图修饰符
+    /// （`HomeStripView` 的 `.environment(\.homeAlbumArtNamespace, albumArtNamespace)`），
+    /// 起作用与否只能靠人工验收（折叠态播放器 ↔ 展开态封面那对 matchedGeometry 动画）；
+    /// 「读回自己刚写的环境值」那种断言只是把修饰符抄进用例，不证明宿主真的注入了，故不写。
+    func testHomeAlbumArtNamespaceDefaultsToNil() {
+        XCTAssertNil(
+            EnvironmentValues().homeAlbumArtNamespace,
+            "没人注入时缺省 nil（模块此时用自带 @Namespace 兜底）"
         )
     }
 

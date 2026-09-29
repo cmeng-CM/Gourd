@@ -3,20 +3,26 @@
 //  Gourd 宿主 · 首页 strip 渲染器 + 块封装（P2 批次 / T3）
 //
 //  展开面板首页从「音乐 + 日历两栏写死」改成**一条横向 strip**：块由模块 manifest 的 `home`
-//  投影（`ModuleRegistry.homeEntries`）与宿主内置块（今天的唯一一个是音乐）共同提供，宽度按声明
-//  自适应、**富余时不拉伸**（D-02），放不下时按最小宽度收敛、仍不足则按 `order` 从尾部丢块
-//  （D-03：不滚动、不分页、不加 `ScrollView`）。分配算术全在 `HomeStripLayoutMath`（纯函数、
-//  已单测）；本文件只做「取宽度声明 → 交给纯函数 → 按结果摆放」，以及每个块里画什么。
+//  投影（`ModuleRegistry.homeEntries`）产出，宽度按声明自适应、**富余时不拉伸**（D-02），
+//  放不下时按最小宽度收敛、仍不足则按 `order` 从尾部丢块（D-03：不滚动、不分页、不加
+//  `ScrollView`）。分配算术全在 `HomeStripLayoutMath`（纯函数、已单测）；本文件只做
+//  「取宽度声明 → 交给纯函数 → 按结果摆放」，以及把模块给的内容套进块壳里。
 //
 //  P2 接管批次 / T4 增量：**镜子块搬到了模块侧**（`DynamicIsland/Modules/Takeover/MirrorModule.swift`）
 //  ——本文件里那条写死的分支（内联可见性判据 + `case .mirror` 载荷 + 块宽常量 +
 //  `@Default(.showMirror)`）同批删除，镜子块今天由 `homeEntries` 投影产出（一对一替换，不并存）；
 //  模块块的宽度因此改问 `registry.homeBlockWidth(for:)`（接管模块继承被接管块的宽度，D-10）。
-//  音乐块的接管是 T5 的事，它今天仍是内置块。
+//
+//  P2 接管批次 / T5 增量：**音乐块同样搬到了模块侧**（`MusicModule`），本文件里最后一块内置块
+//  的痕迹（会话判据那条私有计算属性、`case .music` 分支、420 那档的块宽常量、两个
+//  `@Default`）同批删除。**因此今天这里没有任何宿主内置块**：块名单 = `homeEntries` 投影 +
+//  「`content(for: .home)` 答不答 `.none`」这一道内容表态（口径见 `resolvedHomeBlocks()`）；
+//  音乐块还要的那条 matchedGeometry 命名空间由本文件**注入**（`.environment(\.homeAlbumArtNamespace,…)`，
+//  D-08 / docs/20 §接口与数据形状 6）——它本来就是这条命名空间的持有者。
 //
 //  规格：docs/17-nookx-adoption.md §做法 机制三（宽度 = 声明 + 收敛）、§接口与数据形状 6
 //  （块宽声明与固定取值）、§改动点设计 1/2/3（接缝、渲染器、内置块）；
-//  docs/20-component-page.md §做法 机制一（渲染点归属 / 块宽继承）。
+//  docs/20-component-page.md §做法 机制一（渲染点归属 / 块宽继承）、§接口与数据形状 6（命名空间注入）。
 //
 //  块的**存在性**用「是/否」而不是透明度：条件不满足的块根本不生成——否则它仍占宽度、
 //  仍参与布局（本批裁决 1）。块的**名单**只有一个权威源：`homeEntries` 投影（机制二）。
@@ -30,9 +36,10 @@ import SwiftUI
 /// 一块的宽度约束：`min` 是「低于它不如不显示」的下界，`ideal` 是「富余时就用它」的期望值。
 ///
 /// 取值来源有两处（docs/17 §接口与数据形状 6 + docs/20 §做法 机制一「块宽继承」）：
-/// 音乐 `300 / 420` 仍是宿主内置块的常量，**镜子 `140 / 160` 已搬到模块侧**
-/// （`MirrorModule.homeBlockWidth`，宿主经 `ModuleRegistry.homeBlockWidth(for:)` 取回），
-/// 模块块（宿主统一声明）`180 / 240`。
+/// **接管模块声明被接管块原本的那一档**——音乐 `300 / 420`、镜子 `140 / 160`（T4 / T5 已先后
+/// 搬到 `MirrorModule` / `MusicModule` 的 `homeBlockWidth`，宿主经
+/// `ModuleRegistry.homeBlockWidth(for:)` 取回）；**新增模块**用宿主统一声明的 `180 / 240`
+/// （D-11 的口径收窄为「新增模块不参与宽度决策」）。
 struct HomeBlockWidth: Equatable {
     let min: CGFloat
     let ideal: CGFloat
@@ -209,12 +216,13 @@ struct HomeStripBlock<Content: View>: View {
 
 /// 展开面板首页（标准路径）的那一条横向 strip。
 ///
-/// 块顺序 = **内置块与模块块合成一张名单**，再按 `HomeBlockOrdering` 排序（覆盖值优先 → 缺键回落
-/// 默认序号 → 同值按 id 字典序，P1 / T3；覆盖表先过历史键映射，P2 / T4）；默认序号下音乐块（0）
-/// 在前、镜子模块块（2）在后，模块块按 `homeEntries` 顺序排——**未调过顺序的用户看到的就是
-/// 改动前的那条 strip**（镜子块的默认序号与被它取代的内置块同为 2）。
-/// 内置的音乐块由上游 `Defaults` 键门控，模块块由 manifest 的 `surfaces` 含 `home` + 用户开关
-/// （接管模块就是那个上游开关）共同决定：名单来自投影，用户没开就不会出现在投影里。
+/// 块顺序 = 模块块的名单按 `HomeBlockOrdering` 排序（覆盖值优先 → 缺键回落默认序号 → 同值按 id
+/// 字典序，P1 / T3；覆盖表先过历史键映射，P2 / T4）。默认序号下音乐块（0）在前、镜子块（2）在后
+/// ——两个序号都等于**被它们取代的内置块**当年的默认序号，**未调过顺序的用户看到的就是
+/// 改动前的那条 strip**。
+/// 名单来自 `homeEntries` 投影（manifest 的 `surfaces` 含 `home` + 已激活），块在不在还要看
+/// `content(for: .home)` 的表态：接管模块的门控就是**上游那个总开关**（音乐
+/// `showStandardMediaControls`、镜子 `showMirror`），用户没开就不会出现在投影里。
 ///
 /// **丢块规则不变**（D-03）：宽度不够时仍按**排好序的**尾部丢——顺序改了，丢的对象随之改，
 /// 这是排序生效的正常结果（docs/18 §改动点设计 4 的陷阱栏）。
@@ -224,28 +232,28 @@ struct HomeStripBlock<Content: View>: View {
 /// （哪些块在条里，`showCalendar` 不再参与）；`builtin.calendar` 这个 id 只在
 /// `HomeBlockOrdering.BuiltinBlock` 里保留语义，见那里的注释。
 ///
-/// **镜子不在本文件里**（P2 接管批次 / T4 起）：它已是一块模块块（`MirrorModule`），
-/// 条里的内置块只剩音乐（`builtin.music` 这个 id 也只剩历史含义，T5 会一并接管）。
+/// **本文件不再有内置块**（P2 接管批次 / T4 镜子、T5 音乐先后搬走）：条里的每一块都是模块块
+/// （`MirrorModule` / `MusicModule` / 待办 / 通知 …），`builtin.music` 与 `builtin.mirror` 这两个 id
+/// 只剩历史含义（只在 `HomeBlockOrdering.migratingLegacyIDs` 里被读一次）。
 struct HomeStripView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var registry = ModuleRegistry.shared
+    /// **保留观察音乐会话**（P2 接管批次 / T5 起，本视图已不再直接读它）：音乐块今天是模块块
+    /// （`MusicModule`），它的**存在性**由 `content(for: .home)` 答不答 `.none` 决定，而那条判据里
+    /// 有一段是 `MusicManager.shared.hasActiveSession`——起播 / 停播时除了这个观察者没人会叫醒本视图，
+    /// 块就既不会出现也不会消失（顺序表随之不重排）。拨开关那条路径由 `@Default(.homeBlockOrder)` /
+    /// 注册表驱动，与这里无关。
     @ObservedObject private var musicManager = MusicManager.shared
     /// **保留观察摄像头可用性**（P2 接管批次 / T4 起，`webcamManager` 已不再被本视图直接读）：
     /// 镜子块今天是模块块（`MirrorModule`），它的**存在性**由 `content(for: .home)` 答不答 `.none`
     /// 决定，而那条判据里有一段是 `WebcamManager.shared.cameraAvailable`——摄像头插上 / 拔掉时
-    /// 除了这个观察者没人会叫醒本视图，块就既不会出现也不会消失（顺序表随之不重排）。
+    /// 除了这个观察者没人会叫醒本视图，块就既不会出现也不会消失（顺序表随之重排）。
     /// 拨开关那条路径由 `@Default(.homeBlockOrder)` / 注册表驱动，与这里无关。
     @ObservedObject private var webcamManager = WebcamManager.shared
-    @Default(.showStandardMediaControls) private var showStandardMediaControls
-    @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
     /// 用户排序覆盖（P1 / T3）：`@Default` 是 `DynamicProperty`——设置页写盘后**这里立即重绘**，
     /// 不需要注册表发通知（顺序与 `moduleEnableOverrides` 的开关路径同形：偏好一个源）。
     @Default(.homeBlockOrder) private var homeBlockOrder
     let albumArtNamespace: Namespace.ID
-
-    /// 内置音乐块的宽度声明（docs/17 §接口与数据形状 6 的取值，不得另取一套）。
-    /// 镜子块的那一档（140/160）随接管搬到模块侧，见 `blockWidth(for:)`。
-    private static let musicBlockWidth = HomeBlockWidth(min: 300, ideal: 420)
 
     /// 模块块的**缺省**宽度由宿主统一声明（模块不参与「我在首页占多宽」的决策，D-11）：
     /// 声明值必须存在——模块块内容多为 `GeometryReader`，测量回退会把它们算成约 6pt。
@@ -256,22 +264,17 @@ struct HomeStripView: View {
     /// `NotchHomeView.standardHomeContent`）——**判据是「画不满就不画」**（2026-09-29 复审裁决）：
     /// 高度不足以**完整渲染**条内的块时，整条不画，而不是画一条被切一半的封面。
     ///
-    /// **数值来源（同一批实测截图，见 `.workflow/p2-calendar-row/reports/` 的 §6.5）**：音乐块（当前
-    /// 唯一的内置块）从上到下需要 `18`（块内顶部偏移，封面起点）+ `133`（封面边长，受块宽 420 下的
-    /// 宽度份额约束）≈ **151.5pt**，留半 pt 取整 = **152**：
+    /// **数值来源（同一批实测截图，见 `.workflow/p2-calendar-row/reports/` 的 §6.5）**：音乐块（今天
+    /// 最矮的那一档仍是它——宽 300/420 的块，T5 接管后宽度不变）从上到下需要 `18`（块内顶部偏移，
+    /// 封面起点）+ `133`（封面边长，受块宽 420 下的宽度份额约束）≈ **151.5pt**，留半 pt 取整 = **152**：
     /// - 面板 544 → strip 174：封面下沿 + 角标 + 控制三键全在，完整 ✓（留 ~22pt 余量）；
     /// - 面板 522 → strip 152：按此阈值刚好画满；
     /// - 面板 504 → strip 134：封面下沿被切、角标只剩半个（`strip-hidden-panel460.png` 之前的
     ///   `strip-clipped-panel460.png` 是同一现象的更矮一档）→ 因此 134 **不够**，阈值取 152。
     ///
-    /// 低于阈值即整条不画（面板只剩日历行、干净）；模块块比音乐块矮，本阈值对它们偏保守——宁可
+    /// 低于阈值即整条不画（面板只剩日历行、干净）；其它模块块比音乐块矮，本阈值对它们偏保守——宁可
     /// 少画一条，不画残片。
     static let minimumUsableHeight: CGFloat = 152
-
-    /// 音乐块门控：逐字沿用 `NotchHomeView` 的旧判据（开启 + 非「无会话即隐藏」）。
-    private var shouldShowMusicPlayer: Bool {
-        showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer || musicManager.hasActiveSession)
-    }
 
     /// 模块块的宽度：**接管模块继承被接管块的宽度**（D-10 / docs/20 §做法 机制一「块宽继承」），
     /// 非接管模块用宿主统一值——内核的 `ModuleHomeBlockWidth` 与渲染层的 `HomeBlockWidth`
@@ -282,23 +285,21 @@ struct HomeStripView: View {
     }
 
     var body: some View {
-        // 名单在本轮渲染里**只取一次**：内置块的开关判据、模块块的 `content(for:request:)`（它同时
-        // 决定「有没有块」——答 `.none` 的不生成块、不留空壳）与排序都在 `resolvedHomeBlocks()`
-        // 里算完；`ForEach` 只按结果摆放，不二次请求（本批裁决 5）。
+        // 名单在本轮渲染里**只取一次**：模块块的 `content(for:request:)`（它同时决定「有没有块」——
+        // 答 `.none` 的不生成块、不留空壳）与排序都在 `resolvedHomeBlocks()` 里算完；
+        // `ForEach` 只按结果摆放，不二次请求（本批裁决 5）。
         let blocks = resolvedHomeBlocks()
 
         HomeStripLayout {
             ForEach(blocks) { block in
-                switch block.payload {
-                case .music:
-                    HomeStripBlock(width: Self.musicBlockWidth) {
-                        MusicPlayerView(albumArtNamespace: albumArtNamespace)
-                    }
-                case .module(let moduleID, let content):
-                    HomeStripBlock(width: blockWidth(for: moduleID)) {
-                        moduleBlockContent(content)
-                    }
+                HomeStripBlock(width: blockWidth(for: block.id)) {
+                    moduleBlockContent(block.content)
                 }
+                // 音乐块要的那条 matchedGeometry 命名空间在这里注入（D-08 / docs/20 §接口与数据形状 6）：
+                // 宿主（本文件）持有折叠态播放器共享的那一条，模块拿不到它；读不到时模块用自带
+                // `@Namespace` 兜底（配对静默失效，不崩不空白）。注入**只加在模块块上**——块壳与它
+                // 所在的环境由宿主给，块里画什么由模块说。
+                .environment(\.homeAlbumArtNamespace, albumArtNamespace)
             }
         }
         // 条本身**不铺满**：`HomeStripLayout` 报出的宽度就是「各块分配宽度 + 间隙」，
@@ -308,53 +309,43 @@ struct HomeStripView: View {
 
     // MARK: 块名单
 
-    /// 名单里的一项：内置块或模块块，**同构**地放在一张表里（docs/18 §改动点设计 4）。
+    /// 名单里的一项：模块（`homeEntries` 投影里的一条）**加上**它这一刻的内容表态。
+    ///
+    /// 两层分开是刻意的（`ModuleRegistry.homeEntries` 的函数注释同口径）：投影是**声明**
+    /// （manifest 说愿意在首页占一块），内容是**表态**（这一刻有没有东西可画）——两者分开才不会让
+    /// 一次 `.none` 影响后续刷新。
+    ///
+    /// **今天这里只剩模块块**（P2 / T4 镜子、T5 音乐接管完毕后，宿主侧已没有内置块）：名单里那条
+    /// 「内置块」分支的代码随最后一次接管一并删除，留下的 `id` / `defaultOrder` 两元组仍由本层持有
+    /// ——排序（`HomeBlockOrdering.sorted`）要的就是它们，摆放要的宽度按 `id` 查模块钩子（D-10）。
     private struct HomeBlock: Identifiable {
-        /// 覆盖表的键：内置块 = `HomeBlockOrdering.BuiltinBlock.id`，模块块 = 模块 id。
-        /// **模块 id 在 `payload` 里再带一份**：摆放时要按它查 `homeBlockWidth` 钩子（D-10）。
+        /// 覆盖表的键与摆放时的宽度查询键：模块 id。
         let id: String
-        /// 缺键时的默认序号（内置块 = `BuiltinBlock.defaultOrder`，模块块 = `entry.order`）。
+        /// 缺键时的默认序号（= `entry.order`，`manifest.defaultPlacement.order`）。
         let defaultOrder: Int
-        let payload: Payload
-
-        enum Payload {
-            case music
-            /// 模块块：`id` 是模块 id（= 上面那个 `id`，一并带上是为了让宽度查得到钩子）。
-            case module(id: String, content: ModuleContent)
-        }
+        /// 该模块这一刻答的首页内容（`.view` / `.descriptor` / `.unavailable`；`.none` 已被过滤掉，
+        /// 不会走到这里）。
+        let content: ModuleContent
     }
 
-    /// 把内置块与模块块**合成一张名单**，交给 `HomeBlockOrdering` 排序后返回本轮真的要画的块。
+    /// 把 `homeEntries` 投影里**这一刻真的有内容**的模块块列成一张名单，交给 `HomeBlockOrdering`
+    /// 排序后返回本轮真的要画的块。
     ///
-    /// 内置块的生成判据是**开关 + 运行期条件**（音乐要有会话），与改动前逐字同序；模块块仍是
-    /// 「`homeEntries` 里 `content(for: .home)` 不答 `.none`」的那几条（投影是**声明**、内容是
-    /// **表态**，两者分开才不会让一次 `.none` 影响后续刷新）——**镜子块走的就是这条路**
-    /// （P2 接管批次 / T4 起，`MirrorModule` 的判据里含摄像头可用性）。
+    /// 块的存在判据 = 投影里有它（声明 + 已激活）**且** `content(for: .home)` 不答 `.none`
+    /// （表态，见 `HomeBlock` 的注释）——**接管模块的运行期门控就在这一答里**：音乐看
+    /// `showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer || hasActiveSession)`、
+    /// 镜子看 `showMirror && cameraAvailable`（两条判据都在各自模块里，本文件不重复一份）。
     ///
     /// 顺序的**唯一权威源**是这一层（覆盖值 + 默认序号，后者先过历史键映射），设置页展示用的是
     /// 同一条算式。
     private func resolvedHomeBlocks() -> [HomeBlock] {
         var blocks: [HomeBlock] = []
 
-        if shouldShowMusicPlayer {
-            blocks.append(
-                HomeBlock(
-                    id: HomeBlockOrdering.BuiltinBlock.music.id,
-                    defaultOrder: HomeBlockOrdering.BuiltinBlock.music.defaultOrder,
-                    payload: .music
-                )
-            )
-        }
-
         for entry in registry.homeEntries {
             let content = registry.content(for: entry.id, request: ModuleRegistry.home)
             if case .none = content { continue }
             blocks.append(
-                HomeBlock(
-                    id: entry.id,
-                    defaultOrder: entry.order,
-                    payload: .module(id: entry.id, content: content)
-                )
+                HomeBlock(id: entry.id, defaultOrder: entry.order, content: content)
             )
         }
 

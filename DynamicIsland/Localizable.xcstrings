@@ -81997,6 +81997,38 @@
         }
       }
     },
+    "module.music.name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Music"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐"
+          }
+        }
+      }
+    },
+    "module.music.summary" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now-playing with album art and controls in a home block"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页块里的正在播放：封面与播放控制"
+          }
+        }
+      }
+    },
     "module.timer.name" : {
       "localizations" : {
         "en" : {
