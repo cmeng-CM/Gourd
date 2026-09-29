@@ -1525,6 +1525,19 @@ extension Defaults.Keys {
     /// 只改内存状态，持久化属用户偏好那一层（D-05）。
     static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
 
+    /// 启动台（`com.cmeng.gourd.launcher`）的**固定项**（P2 批次，docs/19-launcher.md §接口与数据形状 3）。
+    ///
+    /// 键 = `LauncherApp.id`（`CFBundleIdentifier` 优先、缺失时用 `.app` 的绝对路径）——
+    /// 与使用数据的键**同源**，避免同一个 App 用两种键写两次而让"是否固定"的判据分裂。
+    ///
+    /// **缺键 = 没有固定项**（不是"未表达"：空表与无固定项语义相同，因此 `default: []` 就是终态，
+    /// 升级用户 / 装完没固定过的用户读到的都是空表）。表里出现**未知 id**（App 已卸载 / 已移动）
+    /// 一律忽略：`LauncherRanking.rank` 只认"清单里真的有这一项"，既不崩也不把清单挤乱。
+    ///
+    /// 消费点两处、读的是同一份：`LauncherModule` 的 `LauncherStore`（排序与右键菜单）与
+    /// 设置页之外的任何读者都走 `LauncherPins`（唯一读写接缝，**先落盘再刷新**）。
+    static let pinnedApps = Key<[String]>("pinnedApps", default: [])
+
     /// 首页块的**用户排序覆盖**（P1 / T3，docs/18-p1-todos-and-order.md §接口与数据形状 2）：
     /// 键 = 块 id（内置块 `builtin.music` / `builtin.calendar` / `builtin.mirror`，模块块 = 模块 id），
     /// 值 = 序号（升序，越小越靠左）。

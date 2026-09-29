@@ -1065,8 +1065,9 @@ final class ModuleKernelTests: XCTestCase {
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
-    /// **这条用例的 `count == 2` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
-    /// 加第三个内置模块时会红，按该条的口径一并放宽。
+    /// **这条用例的 `count == 4` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第五个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
+    /// P2 启动台批次从 3 放宽到 4，都是这一条）。
     func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
@@ -1082,15 +1083,20 @@ final class ModuleKernelTests: XCTestCase {
         }
         defaults.set(true, forKey: flagKey)
 
-        XCTAssertEqual(KernelBootstrap.builtinModules.count, 3, "A3：内置模块清单 = 三行（progress + todos + notifications）")
+        XCTAssertEqual(
+            KernelBootstrap.builtinModules.count,
+            4,
+            "A3：内置模块清单 = 四行（progress + todos + notifications + launcher）"
+        )
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
             [
                 ObjectIdentifier(ProgressModule.self),
                 ObjectIdentifier(TodosModule.self),
                 ObjectIdentifier(NotificationsModule.self),
+                ObjectIdentifier(LauncherModule.self),
             ],
-            "builtinModules 里应是 ProgressModule、TodosModule 与 NotificationsModule"
+            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule 与 LauncherModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1102,16 +1108,19 @@ final class ModuleKernelTests: XCTestCase {
         let id = "com.cmeng.gourd.progress"
         let todosID = "com.cmeng.gourd.todos"
         let notificationsID = "com.cmeng.gourd.notifications"
+        let launcherID = "com.cmeng.gourd.launcher"
 
         // ① 真启用门逐字取 `defaultEnabled`：todos 与 notifications 默认开、progress 默认关（D-20）
         XCTAssertEqual(registry.states[todosID], .active)
         XCTAssertEqual(registry.states[notificationsID], .active)
         XCTAssertEqual(registry.states[id], .disabled, "progress 默认关（D-20），启用门不放行")
         XCTAssertNil(registry.instance(for: id), "disabled 的模块不实例化")
+        XCTAssertEqual(registry.states[launcherID], .disabled, "launcher 默认关（docs/14 T-12 / D-04）")
+        XCTAssertNil(registry.instance(for: launcherID), "默认关的模块不实例化，也不占任何 surface")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
         XCTAssertNotNil(registry.instance(for: notificationsID) as? NotificationsModule)
 
-        // 投影里只剩已激活的两个（未激活的 progress 不进 tab、不进槽位候选），
+        // 投影里只剩已激活的两个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID])
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
@@ -1152,16 +1161,24 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("未激活的 progress 应降级为 .unavailable")
         }
 
-        // ② 手动全放行（模拟用户显式开启 progress）后重注册：三个模块都 active
+        // ② 手动全放行（模拟用户显式开启 progress 与 launcher）后重注册：四个模块都 active
         await registry.deactivateAll()
         registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
         await registry.bootstrap()
 
         XCTAssertEqual(registry.states[id], .active)
         XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
+        XCTAssertEqual(registry.states[launcherID], .active, "launcher 声明了 expanded，放行后进 tab 投影")
 
-        // tab / 槽位候选都按 `order` 升序：todos（20）→ progress（30）→ notifications（40）
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID])
+        // tab 候选按 `order` 升序：todos（20）→ progress（30）→ notifications（40）→
+        // launcher（**无 placement → `Int.max`**，排在所有给了 order 的模块之后）
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID, launcherID])
+        let launcherEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == launcherID }, "launcher 应进展开面板的 tab 投影")
+        XCTAssertEqual(launcherEntry.symbolName, "square.grid.2x2")
+        XCTAssertTrue(
+            ["Launcher", "启动台"].contains(launcherEntry.label),
+            "tab 文案应已本地化（module.launcher.name），实到 \(launcherEntry.label)"
+        )
         let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
@@ -1188,6 +1205,17 @@ final class ModuleKernelTests: XCTestCase {
         guard case .view = registry.compactSlotContent() else {
             return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }
+
+        // **launcher 即使被放行也不占折叠态与首页**（P2 启动台批次的核心契约 / docs/19 D-02）：
+        // 它只声明 `expanded`，两条投影里都不该出现——"首页与折叠态没有多出东西"就是这一条。
+        XCTAssertFalse(
+            registry.compactEntries.contains { $0.id == launcherID },
+            "launcher 不声明 compact → 不得进折叠槽位候选（否则会与待办抢中央槽位）"
+        )
+        XCTAssertFalse(
+            registry.homeEntries.contains { $0.id == launcherID },
+            "launcher 不声明 home → 首页块名单里不得出现它（本批不占首页块）"
+        )
     }
 
     /// 折叠态中央槽位的投影：只含 `active` 且声明 `.compact` 的模块（**只有 `expanded` 的不得入选**，
@@ -5815,6 +5843,489 @@ final class LauncherScannerRankingTests: XCTestCase {
         XCTAssertEqual(LauncherRanking.filter(apps, query: "备忘").map(\.id), ["notes"])
         XCTAssertEqual(LauncherRanking.filter(apps, query: " 备忘录 ").map(\.id), ["notes"])
         XCTAssertEqual(LauncherRanking.filter(apps, query: "照片").map(\.id), ["photos"])
+    }
+}
+
+
+// MARK: - 启动台：模块 / 固定 / 配置 / 使用数据（P2 / T2）
+
+/// `LauncherModule` 与它的三个注入点（`LauncherPins` / `LauncherSettings` / `LauncherUsageQuery`）
+/// 的口径（docs/19-launcher.md §接口与数据形状 3、§改动点设计 2/3/4、§验收标准）。
+///
+/// **不碰真实 `Defaults` 域**：固定项的用例一律走 `LauncherPins` 的注入式假体（内存表 + 写盘计数），
+/// 只有 `pinnedApps` 键的往返用例用一个**临时 suite**（同 `homeBlockOrder` 的既有口径）。
+/// 扫描用例一律用**临时目录树** fixture，绝不扫真实 `/Applications`。
+@MainActor
+final class LauncherModuleTests: XCTestCase {
+
+    // MARK: 夹具
+
+    /// 固定项的**内存假体**：一对读 / 写闭包 + 写盘计数（用例据此断言幂等与"先落盘再刷新"）。
+    private final class PinDisk {
+        private(set) var table: [String] = []
+        private(set) var writes = 0
+
+        var pins: LauncherPins {
+            LauncherPins(
+                read: { self.table },
+                write: { self.table = $0; self.writes += 1 }
+            )
+        }
+    }
+
+    /// 按字典给值的配置假体（同文件的 `StubConfigHandle` 只返回 nil；这里要验「用户覆盖生效」）。
+    private final class ConfigStub: ConfigHandle {
+        private let values: [String: Any]
+
+        init(values: [String: Any] = [:]) { self.values = values }
+
+        func get<T: Codable & Sendable>(_ key: String, as: T.Type) -> T? { values[key] as? T }
+        func set<T: Codable & Sendable>(_ key: String, to value: T) -> Bool { false }
+    }
+
+    private func fixtureRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-launcher-module-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    /// 造一个 `.app` 目录：`<root>/<folderName>/Contents/Info.plist`（`Bundle(url:)` 读的就是这一级）。
+    @discardableResult
+    private func makeApp(in root: URL, folderName: String, bundleID: String) throws -> URL {
+        let app = root.appendingPathComponent(folderName, isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: String] = [
+            "CFBundleIdentifier": bundleID,
+            "CFBundleName": folderName.replacingOccurrences(of: ".app", with: ""),
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        return app
+    }
+
+    private func logger() -> ModuleLogger {
+        ModuleLogger(moduleID: LauncherModule.manifest.id, shortID: "launcher")
+    }
+
+    /// 模块的 `ModuleContext` 假体（config 全是 nil → 走 `LauncherConfigDefaults`）。
+    private func context(config: ConfigHandle? = nil) -> ModuleContext {
+        ModuleContext(
+            moduleID: LauncherModule.manifest.id,
+            host: HostInfo(appVersion: "0", apiVersion: HostInfo.currentAPIVersion, macOSVersion: "15.0"),
+            config: config ?? ConfigStub(),
+            logger: logger(),
+            ui: StubUIHandle()
+        )
+    }
+
+    private func request(_ surface: Surface = .expanded) -> ContentRequest {
+        ContentRequest(surface: surface, phase: .expanded, reason: .initial)
+    }
+
+    // MARK: manifest 契约
+
+    /// manifest 逐字段对齐 docs/19 §接口与数据形状 4：**只声明 `expanded`**（不声明 compact / home /
+    /// lockscreen）、默认关、零权限、无 placement、config 三个键；文案 key 都能从宿主 bundle 解析。
+    func testLauncherManifestContract() throws {
+        let manifest = LauncherModule.manifest
+        XCTAssertNoThrow(try manifest.validate(), "真模块的 manifest 必须过校验（含 symbol 可解析性）")
+
+        XCTAssertEqual(manifest.manifestVersion, 1)
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.launcher")
+        XCTAssertEqual(manifest.shortID, "launcher")
+        XCTAssertEqual(manifest.name.key, "module.launcher.name")
+        XCTAssertEqual(manifest.summary?.key, "module.launcher.summary")
+        XCTAssertEqual(manifest.icon.type, "symbol")
+        XCTAssertEqual(manifest.icon.name, "square.grid.2x2")
+        XCTAssertEqual(manifest.version, "1.0.0")
+        XCTAssertEqual(manifest.apiVersion, HostInfo.currentAPIVersion)
+        XCTAssertEqual(manifest.kind, "builtin")
+
+        XCTAssertEqual(manifest.surfaces, [.expanded], "只声明 expanded（D-02）")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "折叠态不占（控制器裁决 1：左右槽位未落地）")
+        XCTAssertFalse(manifest.surfaces.contains(.home), "首页块不占（控制器裁决 1：用户没要求）")
+        XCTAssertFalse(manifest.surfaces.contains(.lockscreen))
+
+        XCTAssertEqual(manifest.defaultEnabled, false, "新增模块一律默认关（docs/14 T-12 / D-04）")
+        XCTAssertEqual(manifest.permissions, [], "零权限（扫目录 + 启动 App 都不需要 TCC）")
+        XCTAssertNil(manifest.defaultPlacement, "placement 只在含 compact 时有意义，本批不给")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(Set(properties.keys), ["iconSize", "density", "showRecents"], "config 只有这三个键")
+        XCTAssertEqual(properties["iconSize"]?.type, "number")
+        XCTAssertEqual(properties["density"]?.type, "number")
+        XCTAssertEqual(properties["showRecents"]?.type, "boolean")
+        // 默认值只有一个来源：`LauncherConfigDefaults`（这里同时把数值钉在文档口径上）
+        XCTAssertEqual(LauncherConfigDefaults.iconSize, 44)
+        XCTAssertEqual(LauncherConfigDefaults.density, 1)
+        XCTAssertEqual(LauncherConfigDefaults.showRecents, true)
+        XCTAssertEqual(properties["iconSize"]?.default, .double(LauncherConfigDefaults.iconSize))
+        XCTAssertEqual(properties["density"]?.default, .double(LauncherConfigDefaults.density))
+        XCTAssertEqual(properties["showRecents"]?.default, .bool(LauncherConfigDefaults.showRecents))
+
+        // 文案 key 可解析（06 §3.3 R5：视图内不写字面量文案；catalog 没编进宿主 bundle 时这里会红）
+        for key in [
+            "module.launcher.name",
+            "module.launcher.summary",
+            "module.launcher.searchPlaceholder",
+            "module.launcher.pin",
+            "module.launcher.unpin",
+            "module.launcher.empty",
+            "module.launcher.noMatch",
+            "module.launcher.loading",
+        ] {
+            let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+            XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
+            XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
+        }
+
+        // manifest 可导出为 JSON 且往返不丢字段。**比 JSON 字节而不是比 `ConfigValue`**：
+        // `iconSize` 的默认值 `.double(44)` 走 JSON 是 `44`，回来按 T1 的解码规则是 `.int(44)`
+        //（`ConfigValue.init(from:)` 里整数先于浮点），两个值对象不相等但语义逐字相同。
+        // 编码用 `.sortedKeys`：`config.properties` 是字典，不排序的话两次编码的键序会不同。
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(manifest)
+        let decoded = try ModuleManifest.decode(from: encoded)
+        XCTAssertEqual(try encoder.encode(decoded), encoded, "manifest 往返（编 → 解 → 再编）逐字节一致")
+    }
+
+    /// 内容分发：`expanded` 给 `.view`；**`.compact` / `.lockscreen` / `.home` 一律 `.none`**
+    /// （不占位、不算失败——本批的契约，也是"首页与折叠态没有多出东西"的判据）。
+    func testLauncherModuleServesOnlyExpandedSurface() async throws {
+        let module = LauncherModule(context: context())
+        try await module.activate()
+
+        guard case .view = module.content(for: request(.expanded)) else {
+            return XCTFail("expanded 请求应拿到应用网格的 .view")
+        }
+        for surface in [Surface.compact, .lockscreen, .home] {
+            guard case .none = module.content(for: request(surface)) else {
+                return XCTFail("\(surface.rawValue) 未声明 → 必须答 .none（不占位）")
+            }
+        }
+
+        await module.deactivate()
+    }
+
+    // MARK: 固定（幂等 + 先落盘再刷新）
+
+    /// 固定 / 取消固定的**幂等**（docs/19 §验收标准「重复固定 / 取消不产生重复项」）：
+    /// 走 `LauncherPins` 的内存假体，**不碰真实 `Defaults` 域**；写盘计数同时钉住"表没变就不写盘"。
+    ///
+    /// 三个动作的语义要分清（右键菜单只用到第三个）：
+    /// - `pin` = 固定（已在表里 → 不变）；
+    /// - `unpin` = 取消（不在表里 → 不变）；
+    /// - `toggle` = **取反**（连点两次回到原状态——这是"固定 / 取消固定"菜单项的语义，不是幂等动作）。
+    func testLauncherPinToggleIsIdempotent() {
+        let disk = PinDisk()
+        let pins = disk.pins
+
+        XCTAssertEqual(pins.load(), [], "缺键 = 没有固定项")
+
+        // `pin`：重复固定不产生重复项、也不重复落盘
+        XCTAssertEqual(pins.pin("com.example.alpha"), ["com.example.alpha"])
+        XCTAssertEqual(disk.writes, 1, "固定一次落盘一次")
+        XCTAssertEqual(disk.table, pins.load(), "返回值就是盘上的值（先落盘再刷新）")
+        XCTAssertTrue(LauncherPinning.isPinned("com.example.alpha", in: pins.load()))
+        XCTAssertEqual(pins.pin("com.example.alpha"), ["com.example.alpha"], "重复固定：表不变")
+        XCTAssertEqual(disk.writes, 1, "重复固定不再落盘（幂等）")
+
+        // `unpin`：重复取消 / 取消一个不在表里的 id 都是空操作
+        XCTAssertEqual(pins.unpin("com.example.alpha"), [], "取消固定")
+        XCTAssertEqual(disk.writes, 2, "取消固定落盘一次")
+        XCTAssertEqual(pins.unpin("com.example.alpha"), [], "重复取消：表不变")
+        XCTAssertEqual(pins.unpin("com.example.never-pinned"), [], "取消一个不在表里的 id 也是幂等空操作")
+        XCTAssertEqual(disk.writes, 2, "两种空操作都不落盘")
+
+        // `toggle`：取反（右键菜单的唯一入口），两次回到原状态
+        XCTAssertEqual(pins.toggle("com.example.beta"), ["com.example.beta"], "点一下：固定")
+        XCTAssertEqual(pins.toggle("com.example.beta"), [], "再点一下：取消固定")
+        XCTAssertEqual(disk.writes, 4, "两次取反都真的改了表（各落盘一次）")
+        XCTAssertEqual(pins.load(), [])
+
+        // 顺序：表尾追加、一次只动一项（`rank` 只把这张表当集合用，顺序只为可读）
+        XCTAssertEqual(pins.pin("a"), ["a"])
+        XCTAssertEqual(pins.pin("b"), ["a", "b"])
+        XCTAssertEqual(pins.unpin("a"), ["b"])
+        XCTAssertEqual(disk.table, ["b"])
+    }
+
+    /// 纯函数口径（`LauncherPinning`）：加 / 删 / 取反，含**同 id 的脏数据**（手改 UserDefaults 塞重复项）。
+    func testLauncherPinningPureFunctions() {
+        XCTAssertTrue(LauncherPinning.isPinned("a", in: ["b", "a"]))
+        XCTAssertFalse(LauncherPinning.isPinned("a", in: []))
+
+        XCTAssertEqual(LauncherPinning.adding("a", to: []), ["a"])
+        XCTAssertEqual(LauncherPinning.adding("a", to: ["a", "b"]), ["a", "b"], "已在表里 → 原样返回")
+        XCTAssertEqual(LauncherPinning.removing("a", from: ["a", "a", "b"]), ["b"], "同 id 的重复项一并清掉")
+        XCTAssertEqual(LauncherPinning.removing("a", from: ["b"]), ["b"])
+        XCTAssertEqual(LauncherPinning.toggled("b", in: []), ["b"])
+        XCTAssertEqual(LauncherPinning.toggled("b", in: ["b"]), [])
+    }
+
+    /// `pinnedApps` 键的**声明默认值**（空表 = 没有固定项）+ **序列化往返**（写盘 → 读回）。
+    ///
+    /// 往返走一个**临时 suite**（不碰开发机 `com.cmeng.gourd` 域，同 `homeBlockOrder` /
+    /// `notificationHUDBackgroundStyle` 的既有口径）；断言盘上真的出现**字符串数组**而不只是内存值——
+    /// 「固定项落盘、重启保持」靠的就是这一层。
+    func testPinnedAppsKeyDefaultsAndRoundTrip() {
+        XCTAssertEqual(Defaults.Keys.pinnedApps.name, "pinnedApps")
+        XCTAssertEqual(Defaults.Keys.pinnedApps.defaultValue, [], "缺键 = 没有固定项")
+
+        let suiteName = "com.cmeng.gourd.tests.pinnedApps"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("建不出临时 suite（\(suiteName)）")
+        }
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let key = Defaults.Key<[String]>("pinnedApps", default: [], suite: suite)
+
+        XCTAssertEqual(Defaults[key], [], "没写过时读回空表")
+
+        // 生产形态的读写接缝（`LauncherPins`）接在这个临时键上：走的就是模块的写路径
+        let pins = LauncherPins(read: { Defaults[key] }, write: { Defaults[key] = $0 })
+        XCTAssertEqual(pins.load(), [])
+
+        pins.pin("com.example.alpha")
+        pins.pin("com.example.beta")
+        XCTAssertEqual(
+            Defaults[key],
+            ["com.example.alpha", "com.example.beta"],
+            "写盘 → 读回同一张表（顺序 = 动作顺序）"
+        )
+        XCTAssertEqual(
+            suite.stringArray(forKey: key.name),
+            ["com.example.alpha", "com.example.beta"],
+            "盘上存的是字符串数组（不是 JSON 串 / 不是字典）"
+        )
+
+        pins.unpin("com.example.alpha")
+        XCTAssertEqual(Defaults[key], ["com.example.beta"])
+        XCTAssertEqual(pins.load(), ["com.example.beta"], "重启后读到的就是盘上这份")
+
+        Defaults[key] = []
+        XCTAssertEqual(Defaults[key], [], "清空同样往返（回到「没有固定项」）")
+    }
+
+    // MARK: 排序接入（先名称、后 Spotlight、固定恒优先）
+
+    /// 取数全链（临时目录 fixture + 内存固定表 + 注入的使用数据）：
+    /// ① 没有使用数据 → 按名称；② 使用数据回来 → 最近使用优先；③ **固定项恒在最前**；
+    /// ④ 取消固定 → 回到使用数据 / 名称序。
+    func testLauncherStoreRankingWithPinnedAndUsage() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, folderName: "Zebra.app", bundleID: "com.example.zebra")
+        try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+
+        let disk = PinDisk()
+        let store = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: disk.pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: true) },
+            // 空样本 = Spotlight 没数据（docs/19 §已知限制 2 的回落）
+            fetchUsage: { _ in [:] }
+        )
+        store.prepare()
+        await store.load()
+
+        XCTAssertEqual(store.apps.count, 2, "临时目录里就两个 `.app`")
+        XCTAssertEqual(store.ranked.map(\.name), ["Alpha", "Zebra"], "没有使用数据 → 按名称（固定项也没有）")
+        XCTAssertTrue(store.usage.isEmpty, "空样本 → 使用数据表为空（不是「全部 0 次」）")
+
+        // ② 使用数据（注入样本，键 = 路径）回来 → 直接重排：最近使用的在前
+        let zebra = try XCTUnwrap(store.apps.first { $0.name == "Zebra" })
+        let alpha = try XCTUnwrap(store.apps.first { $0.name == "Alpha" })
+        let withUsage = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: disk.pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: true) },
+            fetchUsage: { _ in
+                [zebra.url.path: LauncherUsageSample(path: zebra.url.path, lastUsed: Date(), useCount: 1)]
+            }
+        )
+        await withUsage.load()
+        XCTAssertEqual(withUsage.ranked.map(\.name), ["Zebra", "Alpha"], "有使用数据 → 最近使用的排前面")
+
+        // ③ 固定恒优先：固定那个"没被用过"的，它照样排到最前；盘上立刻可见（先落盘再刷新）
+        withUsage.togglePin(alpha)
+        XCTAssertEqual(withUsage.ranked.map(\.name), ["Alpha", "Zebra"], "固定项恒在未固定项之前")
+        XCTAssertEqual(disk.table, ["com.example.alpha"], "固定项已经落盘")
+        XCTAssertEqual(disk.writes, 1, "固定一次只落盘一次（幂等）")
+
+        // ④ 取消固定 → 回到使用数据决定的顺序
+        withUsage.togglePin(alpha)
+        XCTAssertEqual(withUsage.ranked.map(\.name), ["Zebra", "Alpha"], "取消固定后按使用数据排")
+        XCTAssertEqual(disk.table, [])
+    }
+
+    /// `showRecents = false`：**不查 Spotlight**（注入的取数器一次都不该被调到），
+    /// 顺序仍是 固定 → 名称。
+    func testLauncherStoreSkipsSpotlightWhenRecentsDisabled() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, folderName: "Zebra.app", bundleID: "com.example.zebra")
+        try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+
+        let disk = PinDisk()
+        var fetchCount = 0
+        let store = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: disk.pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: false) },
+            fetchUsage: { _ in
+                fetchCount += 1
+                return [:]
+            }
+        )
+        await store.load()
+
+        XCTAssertEqual(fetchCount, 0, "showRecents = false → 不发起 Spotlight 查询")
+        XCTAssertEqual(store.ranked.map(\.name), ["Alpha", "Zebra"], "顺序 = 固定（空）→ 名称")
+    }
+
+    /// 使用数据的映射：**键 = `LauncherApp.id`**（与固定项同源）；清单里没有的路径忽略；
+    /// 同一个 bundle id 的两份拷贝合并（最近使用取更晚、次数取更大）。
+    func testLauncherUsageMappingUsesAppIDAsKey() throws {
+        let alpha = LauncherApp(
+            id: "com.example.alpha",
+            name: "Alpha",
+            url: URL(fileURLWithPath: "/fixture/Alpha.app")
+        )
+        let twin = LauncherApp(
+            id: "com.example.alpha",
+            name: "Alpha Twin",
+            url: URL(fileURLWithPath: "/other/Alpha.app")
+        )
+        let shell = LauncherApp(
+            id: "/fixture/Shell.app",
+            name: "Shell",
+            url: URL(fileURLWithPath: "/fixture/Shell.app")
+        )
+        let samples = [
+            "/fixture/Alpha.app": LauncherUsageSample(
+                path: "/fixture/Alpha.app",
+                lastUsed: Date(timeIntervalSince1970: 100),
+                useCount: 3
+            ),
+            "/other/Alpha.app": LauncherUsageSample(
+                path: "/other/Alpha.app",
+                lastUsed: Date(timeIntervalSince1970: 300),
+                useCount: 1
+            ),
+            "/fixture/Shell.app": LauncherUsageSample(path: "/fixture/Shell.app", lastUsed: nil, useCount: nil),
+            "/not-in-list.app": LauncherUsageSample(
+                path: "/not-in-list.app",
+                lastUsed: Date(timeIntervalSince1970: 900),
+                useCount: 99
+            ),
+        ]
+
+        let usage = LauncherUsageQuery.usageByID(for: [alpha, twin, shell], samples: samples)
+
+        XCTAssertEqual(
+            Set(usage.keys),
+            ["com.example.alpha", "/fixture/Shell.app"],
+            "键 = LauncherApp.id（无 bundle id 的包用路径）；清单里没有的路径忽略"
+        )
+        XCTAssertEqual(
+            usage["com.example.alpha"]?.lastUsed,
+            Date(timeIntervalSince1970: 300),
+            "同 id 的两份拷贝：最近使用取更晚的一次"
+        )
+        XCTAssertEqual(usage["com.example.alpha"]?.useCount, 3, "使用次数取更大的一个")
+        XCTAssertNil(usage["/fixture/Shell.app"]?.lastUsed)
+        XCTAssertNil(usage["/fixture/Shell.app"]?.useCount, "两个字段都缺 = 无数据（不是 0）")
+    }
+
+    /// 图标的**惰性缓存**：同路径第二次不再读盘（返回同一个对象）。
+    func testLauncherIconCacheReadsEachPathOnce() throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let appURL = try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+        let app = LauncherApp(id: "com.example.alpha", name: "Alpha", url: appURL.standardizedFileURL)
+
+        let cache = LauncherIconCache()
+        XCTAssertEqual(cache.cachedCount, 0, "没画到就不取（惰性的判据）")
+
+        let first = cache.icon(for: app)
+        XCTAssertEqual(cache.cachedCount, 1)
+        let second = cache.icon(for: app)
+        XCTAssertTrue(first === second, "同路径命中缓存，不第二次读盘")
+        XCTAssertEqual(cache.cachedCount, 1)
+    }
+
+    // MARK: 配置
+
+    /// config 的三个键：**用户覆盖生效**、缺值兜到 `LauncherConfigDefaults`（= manifest 默认值）。
+    func testLauncherSettingsReadsConfigWithFallback() {
+        XCTAssertEqual(
+            LauncherSettings.read(from: ConfigStub()),
+            LauncherSettings(
+                iconSize: LauncherConfigDefaults.iconSize,
+                density: LauncherConfigDefaults.density,
+                showRecents: LauncherConfigDefaults.showRecents
+            ),
+            "config 给不出值（schema 缺键）时兜到 manifest 默认值"
+        )
+
+        let overridden = LauncherSettings.read(from: ConfigStub(values: [
+            "iconSize": 64.0,
+            "density": 1.4,
+            "showRecents": false,
+        ]))
+        XCTAssertEqual(overridden, LauncherSettings(iconSize: 64, density: 1.4, showRecents: false))
+    }
+
+    /// 网格尺寸口径：`iconSize` / `density` 越界（用户直接改 UserDefaults）时**夹取到区间端点**，
+    /// 不除以零、也不画出一个 1000pt 的图标。
+    func testLauncherGridMetricsClampsBoundaries() {
+        let normal = LauncherGridMetrics.metrics(iconSize: 44, density: 1)
+        XCTAssertEqual(normal.iconSide, 44)
+        XCTAssertEqual(normal.itemSpacing, LauncherGridMetrics.baseSpacing)
+        XCTAssertEqual(normal.minimumItemWidth, 44 + LauncherGridMetrics.labelMargin)
+        XCTAssertEqual(normal.labelFontSize, 10)
+
+        let tiny = LauncherGridMetrics.metrics(iconSize: 1, density: 0)
+        XCTAssertEqual(tiny.iconSide, LauncherGridMetrics.iconSizeRange.lowerBound)
+        XCTAssertEqual(tiny.itemSpacing, LauncherGridMetrics.baseSpacing * CGFloat(LauncherGridMetrics.densityRange.lowerBound))
+        XCTAssertEqual(tiny.labelFontSize, 9, "小图标配小字")
+
+        let huge = LauncherGridMetrics.metrics(iconSize: 1000, density: 9)
+        XCTAssertEqual(huge.iconSide, LauncherGridMetrics.iconSizeRange.upperBound)
+        XCTAssertEqual(huge.itemSpacing, LauncherGridMetrics.baseSpacing * CGFloat(LauncherGridMetrics.densityRange.upperBound))
+    }
+
+    // MARK: 取数器（Spotlight）
+
+    /// 取数器**必须在主 actor 上被主 run loop 推进**（`LauncherUsageQuery` 的类型级 `@MainActor`
+    /// 就是这条）：`NSMetadataQuery` 由调用线程的 run loop 驱动，在协作线程池上它永远收集不完，
+    /// 表现为"等满超时 → 使用数据永远为空 → 排序永远按名称"（P2 / T2 取证时实测踩到过一次）。
+    ///
+    /// 判据用**耗时**而不是结果条数：临时目录不会被 Spotlight 收录（结果必定为空），但"**收集结束**"
+    /// 这件事与有没有结果无关——挂住的那一版一定等满 `timeout`。所以"远早于超时返回"正好钉住这条回归，
+    /// 且与本机装了什么 App、索引开没开都无关。
+    func testLauncherUsageFetchIsPumpedByMainRunLoop() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let timeout: TimeInterval = 4
+        let startedAt = Date()
+        let samples = await LauncherUsageQuery.fetch(rootURLs: [root], timeout: timeout)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertTrue(samples.isEmpty, "临时目录里没有 `.app`（Spotlight 也不收录它）")
+        XCTAssertLessThan(elapsed, timeout / 2, "收集结束即返回（挂住的表现是等满 \(timeout)s 超时）")
+
+        let emptyStartedAt = Date()
+        let empty = await LauncherUsageQuery.fetch(rootURLs: [], timeout: timeout)
+        XCTAssertTrue(empty.isEmpty, "空根目录直接返回空表")
+        XCTAssertLessThan(Date().timeIntervalSince(emptyStartedAt), 0.1, "空根目录不发起查询")
     }
 }
 
