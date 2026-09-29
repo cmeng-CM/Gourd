@@ -48,7 +48,7 @@
 | 播放控制（播放/暂停/上下曲/跳转/随机/循环） | ✅ | `dlopen` 私有 `MediaRemote.framework` → `MRMediaRemoteSendCommand` |
 | **媒体数据源** | ✅ | **只用系统 Now Playing 一路**（P3）。它覆盖所有走系统媒体键的播放器 |
 | 其余 6 个播放器适配器（Apple Music / Spotify / YouTube Music / Amazon / TIDAL / Cider） | ⬜️ | 代码保留（AppleScript / 逆向 cookie 的 Web API / AXUIElement / 本地 HTTP），默认不启用 |
-| 逐行歌词 | ✅ | LRCLIB（主）→ NetEase（备）；匹配打分 + 版本标记过滤 + 精确 sleep 到下一行时间戳（clamp 0.05–0.25s）+ 行内高亮扫过 + 间奏识别（5s） |
+| 逐行歌词 | ✅ | LRCLIB **单源**；匹配打分 + 版本标记过滤 + 精确 sleep 到下一行时间戳（clamp 0.05–0.25s）+ 行内高亮（**静态渐变整行填充**，非动画扫过）+ 内存 LRU（80 首）。**未做**：NetEase 备源、间奏识别、磁盘缓存（2026-09-29 逐行审计更正） |
 | 歌词缓存 | 🔧 | 上游**纯内存 LRU 80 条、不落盘** → 补磁盘缓存（离线可用） |
 | 逐字歌词 / 简繁转换 | ⬜️ | 上游无（只有逐行两级）→ 不在本轮范围 |
 
@@ -108,7 +108,7 @@
 | 键盘背光 | ✅ | 私有 `CoreBrightness` 反射 + IORegistry |
 | 防休眠 | ✅ | IOKit `IOPMAssertionCreateWithName`（退出自动释放） |
 | 音频输出切换 | ✅ | CoreAudio 枚举 + 设默认设备 |
-| 每 App 音量 | ✅ | CoreAudio `CATapDescription` 进程 tap + 私有 stacked aggregate device |
+| 进程级音频 tap | ✅ | CoreAudio `CATapDescription` 进程 tap + 私有 stacked aggregate device——**只喂音频可视化（FFT 频谱），不是"每 App 音量控制"**（全仓 `perApp\|appVolume` 0 命中；2026-09-29 逐行审计更正） |
 | 勿扰（Focus）状态 | ✅ 只读 | 读 `~/Library/DoNotDisturb/DB/Assertions.json` + `log stream`；上游无法切换 |
 | 蓝牙开关状态 | ✅ 只读 | IOBluetooth `powerState` |
 | 外接屏亮度 | ✅ | 经第三方 App（Lunar TCP 23803 / BetterDisplay），上游不发 DDC |
