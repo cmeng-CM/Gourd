@@ -16,7 +16,15 @@
 //  - store：缓存非空时进 tab **不取数** / 缓存为空时自动拉一次且只有那一次；
 //    `refresh()` **先写回原始行再发布** / `togglePin` 先落盘再刷新 / `run` 的并发闸门。
 //
-//  三条刻意写死的口径（改动前先读）：
+//  T3 段（`FrontAppHistory`，§接口与数据形状 3 的纯函数侧；store 的订阅与图标取值不进单测）：
+//
+//  - `updated` 三组：去重移前（含"应用重启后 pid 变了仍是同一条历史"）/ 截到上限 / 空表 +
+//    `limit: 1` 时**纯函数严格按 1 截断**（夹取只在 store 那一次，见 `clampedLimit`）；
+//  - `excludingSelf` 两组：自身被滤掉 / 自身不在表里（或本应用没有 bundleID）→ 原样；
+//  - 身份 `id` 的 pid 兜底（无 bundleID 的进程）；
+//  - 夹取区间本身：`clampedLimit(1) == 3` / `(99) == 8` / `(5) == 5`。
+//
+//  四条刻意写死的口径（改动前先读）：
 //
 //  1. **样本行全是合成的**：本机 `/usr/bin/shortcuts list --show-identifiers` 恰两行
 //     （形如 `外观-浅色 (24D4F870-…)`），identifier 是**这台机器独有的**——把它写进用例
@@ -24,7 +32,9 @@
 //  2. **不跑真命令**：`parse` / `visible` 是纯函数；T2 的 store 用例一律给**注入点假体**
 //     （`RecordingRunner` + 构造的行），因此不依赖本机装了什么快捷指令、也不起子进程；
 //  3. **假体不写任何真实域**：`RecordingConfigHandle` 只落在内存字典里，**不碰**
-//     `com.cmeng.gourd.module.shortcuts`（那是开发机的真实域，真 `ManifestConfigHandle` 会写它）。
+//     `com.cmeng.gourd.module.shortcuts`（那是开发机的真实域，真 `ManifestConfigHandle` 会写它）；
+//  4. **前台应用的样本全是手造快照**（T3）：不订阅真 `NSWorkspace` 通知、不读当下真实的前台应用
+//     ——跑测试时前台是 Xcode / 终端，把任何真名字写进断言都必红，且会让用例互相污染。
 //
 
 import Foundation
@@ -481,6 +491,169 @@ final class ShortcutsFrontAppTests: XCTestCase {
         XCTAssertNil(config.get("cachedShortcuts", as: [Int].self), "类型不符 → nil（同真句柄的回落口径）")
         XCTAssertFalse(config.set("cachedShortcuts2", to: ["x"]), "schema 之外的键不落盘")
         XCTAssertNil(config.stringList("cachedShortcuts2"), "schema 之外的键读不出来")
+    }
+
+    // MARK: - T3：前台应用历史（纯函数）
+
+    /// `updated` ① **去重移前**：同一个应用再切换回来只有一行、且排在最前。
+    ///
+    /// 去重是**按 `id`**（不是按对象相等）：同一个 bundleID、pid 变了的两次快照是同一条历史
+    /// （应用重启后 pid 会变，那不该变成两行）。
+    func testFrontAppHistoryUpdatedDedupesAndMovesToFront() {
+        let safari = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 101)
+        let xcode = FrontAppSnapshot(bundleID: "com.apple.dt.Xcode", name: "Xcode", pid: 202)
+        let notes = FrontAppSnapshot(bundleID: "com.apple.Notes", name: "备忘录", pid: 303)
+
+        XCTAssertEqual(
+            FrontAppHistory.updated([], activating: safari, limit: 5).map(\.id),
+            ["com.apple.Safari"],
+            "空表 + 一条 → 就是它"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.updated([safari], activating: xcode, limit: 5).map(\.id),
+            ["com.apple.dt.Xcode", "com.apple.Safari"],
+            "新来的排最前"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.updated([xcode, safari], activating: safari, limit: 5).map(\.id),
+            ["com.apple.Safari", "com.apple.dt.Xcode"],
+            "切回 Safari：只有一行（不是两行）+ 移到最前"
+        )
+
+        let relaunched = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 999)
+        let afterRelaunch = FrontAppHistory.updated([safari, xcode, notes], activating: relaunched, limit: 5)
+        XCTAssertEqual(afterRelaunch.map(\.id), ["com.apple.Safari", "com.apple.dt.Xcode", "com.apple.Notes"])
+        XCTAssertEqual(afterRelaunch.first?.pid, 999, "同 id 留下的是这一份新快照（pid 跟着更新）")
+        XCTAssertEqual(afterRelaunch.count, 3, "不是并列两条")
+
+        // 去重是全局的：表里被手改成两份的同一个 id 也并成一条
+        XCTAssertEqual(
+            FrontAppHistory.updated([xcode, xcode, safari], activating: notes, limit: 5).map(\.id),
+            ["com.apple.Notes", "com.apple.dt.Xcode", "com.apple.Safari"],
+            "同 id 的重复项并成一条（保留最先出现的那份）"
+        )
+    }
+
+    /// `updated` ② **截到上限**：只留最新的 `limit` 条，最旧的从尾部挤掉；不足上限时不补东西。
+    func testFrontAppHistoryUpdatedTruncatesToLimit() {
+        let six = (0..<6).map {
+            FrontAppSnapshot(bundleID: "com.example.app\($0)", name: "应用 \($0)", pid: pid_t(100 + $0))
+        }
+        let recent = six.reduce(into: [FrontAppSnapshot]()) { list, item in
+            list = FrontAppHistory.updated(list, activating: item, limit: 3)
+        }
+
+        XCTAssertEqual(recent.count, 3, "截到 limit 条")
+        XCTAssertEqual(
+            recent.map(\.id),
+            ["com.example.app5", "com.example.app4", "com.example.app3"],
+            "留下的是最新的三条（新在前）"
+        )
+        XCTAssertFalse(recent.contains { $0.id == "com.example.app0" }, "最旧的被挤出")
+
+        XCTAssertEqual(
+            FrontAppHistory.updated([six[0], six[1]], activating: six[2], limit: 8).count,
+            3,
+            "不足上限时不补占位、也不报错"
+        )
+    }
+
+    /// `updated` ③ **空表**与 `limit` 的严格截断：纯函数**不夹取**。
+    ///
+    /// 「夹到 3…8」是 **store 读 config 之后那一次**的事（`clampedLimit`），`updated` 只认传进来的
+    /// `limit`——两处各夹一遍，"到底哪个值说了算"就没有唯一答案（口径 3）。
+    func testFrontAppHistoryUpdatedOnEmptyTableAndStrictLimit() {
+        let lone = FrontAppSnapshot(bundleID: "com.example.lone", name: "独苗", pid: 7)
+        let alpha = FrontAppSnapshot(bundleID: "com.example.a", name: "甲", pid: 1)
+        let beta = FrontAppSnapshot(bundleID: "com.example.b", name: "乙", pid: 2)
+
+        XCTAssertEqual(
+            FrontAppHistory.updated([], activating: lone, limit: 5),
+            [lone],
+            "空表 → 只有这一条（不造占位行）"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.updated([lone], activating: alpha, limit: 1).map(\.id),
+            ["com.example.a"],
+            "`limit: 1` → 严格只留 1 条（纯函数不抬到 3）"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.updated([alpha, beta], activating: lone, limit: 0),
+            [],
+            "`limit` 非正 → 空表（不崩、不越界）"
+        )
+
+        XCTAssertEqual(FrontAppHistory.defaultLimit, 5, "默认 5")
+        XCTAssertEqual(FrontAppHistory.limitRange, 3...8, "可配区间 3…8")
+        XCTAssertEqual(FrontAppHistory.clampedLimit(1), 3, "夹取：小于下界取下界")
+        XCTAssertEqual(FrontAppHistory.clampedLimit(99), 8, "夹取：大于上界取上界")
+        XCTAssertEqual(FrontAppHistory.clampedLimit(5), 5, "区间内原样")
+    }
+
+    /// 身份 `id`：有 bundleID 用它（跨重启稳定）；没有（命令行工具、裸可执行文件）退到 `pid:pid`。
+    func testFrontAppSnapshotIdentityFallsBackToPID() {
+        XCTAssertEqual(
+            FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 101).id,
+            "com.apple.Safari"
+        )
+        XCTAssertEqual(
+            FrontAppSnapshot(bundleID: nil, name: "swift-frontend", pid: 4242).id,
+            "pid:4242",
+            "无 bundleID 的进程用 pid 兜底"
+        )
+
+        let bare = FrontAppSnapshot(bundleID: nil, name: "swift-frontend", pid: 4242)
+        XCTAssertEqual(
+            FrontAppHistory.updated([bare], activating: bare, limit: 5).count,
+            1,
+            "pid 兜底的身份同样参与去重"
+        )
+    }
+
+    /// `excludingSelf` ① **自身被滤掉**，其余保持顺序（含只剩自己 → 空表）。
+    ///
+    /// 失败信号的正面对应：没排除自身时，每次点开刘海都会把壶中天自己记成"最近应用"。
+    func testFrontAppHistoryExcludingSelfDropsSelf() {
+        let selfApp = FrontAppSnapshot(bundleID: "com.cmeng.gourd", name: "壶中天", pid: 1)
+        let safari = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 101)
+        let xcode = FrontAppSnapshot(bundleID: "com.apple.dt.Xcode", name: "Xcode", pid: 202)
+
+        XCTAssertEqual(
+            FrontAppHistory.excludingSelf([selfApp, safari, xcode], selfBundleID: "com.cmeng.gourd").map(\.id),
+            ["com.apple.Safari", "com.apple.dt.Xcode"],
+            "自己被滤掉，其余顺序不变"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.excludingSelf([selfApp], selfBundleID: "com.cmeng.gourd"),
+            [],
+            "只剩自己 → 空表"
+        )
+    }
+
+    /// `excludingSelf` ② **自身不在表里**（或本应用没有 bundleID）→ 原样返回。
+    ///
+    /// 后两条是"没有判据就不猜"的边界：`selfBundleID` 为 nil 时不能拿 nil 去比（否则会把所有
+    /// 无 bundleID 的进程一起误伤）；无 bundleID 的条目也不能被某个具体 bundleID 误伤。
+    func testFrontAppHistoryExcludingSelfKeepsListWhenSelfAbsent() {
+        let safari = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 101)
+        let xcode = FrontAppSnapshot(bundleID: "com.apple.dt.Xcode", name: "Xcode", pid: 202)
+        let bare = FrontAppSnapshot(bundleID: nil, name: "swift-frontend", pid: 4242)
+
+        XCTAssertEqual(
+            FrontAppHistory.excludingSelf([safari, xcode], selfBundleID: "com.cmeng.gourd").map(\.id),
+            ["com.apple.Safari", "com.apple.dt.Xcode"],
+            "自身不在表里 → 一条都不动"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.excludingSelf([safari, bare], selfBundleID: nil).map(\.id),
+            ["com.apple.Safari", "pid:4242"],
+            "本应用没有 bundleID → 没有可排除的对象，原样返回（含无 bundleID 的条目）"
+        )
+        XCTAssertEqual(
+            FrontAppHistory.excludingSelf([bare], selfBundleID: "com.cmeng.gourd").map(\.id),
+            ["pid:4242"],
+            "无 bundleID 的条目不被某个具体 bundleID 误伤"
+        )
     }
 
     // MARK: - 夹具（T2）
