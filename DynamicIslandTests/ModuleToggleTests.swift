@@ -12,11 +12,15 @@
 //    （没有第二次 `deactivate()`）；
 //  - **三投影同步**：置关后 `homeEntries` / `tabEntries` / `compactEntries` 同时不含该 id，
 //    内容请求降级为 `.unavailable`（docs/17 §验收标准「首页块消失、展开 tab 消失、折叠槽位让位」）；
-//  - **`failed` 是终态**：`activate()` 抛错 → `.failed(reason:)` 且不留实例；再置开仍 `.failed`
-//    且 `activateCount` 不增（06 §3.3 硬性规则 1：不重试）；
+//  - **`failed` 是终态且不可逃逸**：`activate()` 抛错 → `.failed(reason:)` 且不留实例；再置开仍 `.failed`
+//    且 `activateCount` 不增（06 §3.3 硬性规则 1：不重试）；**置关也不把它降级**（D-13：没有
+//    「关一下再打开」这条复活路径），置关 / 置开对 `.failed` 都不做实例动作；
 //  - **未注册 id**：置开 / 置关都返回 `.disabled`、不崩、也不凭空造状态；
 //  - **`activating` 期间被置关**：在飞的 `activate()` 收尾（代次比对不匹配）不把状态写回
 //    `.active`、不留实例、只对自己 `deactivate()`——「关了还在跑」的判据；
+//  - **代次失效的失败收尾不碰注册表**（修复 1 的判据）：gen1 悬挂 → 置关 → 置开（新实例 B 入驻
+//    `.active`）→ 放行 gen1 让它**抛错**：`instances` 里必须还是 B、状态仍 `.active`、
+//    B 不得被 `deactivate()`，内容请求也不得降级 `.unavailable`；
 //  - **`setEnabled` 的模块拿到注入的 collapse**：`bootstrap(collapse:)` 存下的闭包直达
 //    `setEnabled` 激活的模块 context（`setEnabled` 因此不需要 collapse 形参）；
 //  - **`KernelBootstrap.enablementGate`**：overrides 有键压过 manifest 的 `defaultEnabled`、
@@ -44,6 +48,7 @@ final class ModuleToggleTests: XCTestCase {
     private let defaultOnID = "com.cmeng.gourd.probe-toggle-default-on"
     private let failingID = "com.cmeng.gourd.probe-toggle-failing"
     private let slowID = "com.cmeng.gourd.probe-toggle-slow"
+    private let slowFailingID = "com.cmeng.gourd.probe-toggle-slow-failing"
     private let ghostID = "com.cmeng.gourd.probe-toggle-ghost"
 
     // MARK: - 隔离
@@ -174,7 +179,7 @@ final class ModuleToggleTests: XCTestCase {
         }
     }
 
-    // MARK: - failed 是终态（不重试）
+    // MARK: - failed 是终态（不重试、不可逃逸）
 
     /// `activate()` 抛错 → `.failed`、不留实例；再置开仍 `.failed` 且不再调 `activate()`。
     func testFailedIsTerminalAndEnableDoesNotRetry() async {
@@ -199,6 +204,37 @@ final class ModuleToggleTests: XCTestCase {
         }
         XCTAssertEqual(activations(failingID), 1, "终态不重试：activate() 不得被第二次调用")
         XCTAssertEqual(deactivations(failingID), 1, "第二次置开是空操作，不再兜底 deactivate()")
+    }
+
+    /// **终态不可逃逸**（D-13）：置关遇到 `.failed` 原样返回、不改状态、不做实例动作——
+    /// 若被写成 `.disabled`，「关一下再打开」就会真的重试，与 06 §3.3 硬性规则 1 矛盾。
+    func testFailedSurvivesDisableAndCannotBeRevivedByToggle() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([ToggleFailingProbeModule.self])
+        await registry.bootstrap()
+
+        let first = await registry.setEnabled(true, for: failingID)
+        guard case .failed = first else {
+            return XCTFail("前置失败：期望 .failed，实到 \(first)")
+        }
+
+        let off = await registry.setEnabled(false, for: failingID)
+
+        guard case .failed = off else {
+            return XCTFail("置关不得把 failed 降级成别的状态，实到 \(off)")
+        }
+        guard case .failed? = registry.states[failingID] else {
+            return XCTFail("置关后 states 必须仍是 .failed，实到 \(String(describing: registry.states[failingID]))")
+        }
+        XCTAssertEqual(deactivations(failingID), 1, "置关对 failed 不做实例动作（这 1 次来自失败路径自己的兜底）")
+
+        // 关一下再打开：仍是 .failed、不重试（没有复活路径）
+        let revived = await registry.setEnabled(true, for: failingID)
+        guard case .failed = revived else {
+            return XCTFail("failed 不得被开关复活，实到 \(revived)")
+        }
+        XCTAssertEqual(activations(failingID), 1, "终态：activate() 全程只被调用一次")
+        XCTAssertNil(registry.instance(for: failingID))
     }
 
     // MARK: - 未注册 id
@@ -253,6 +289,56 @@ final class ModuleToggleTests: XCTestCase {
         XCTAssertEqual(registry.states[slowID], .disabled, "收尾不得把状态写回 .active")
         XCTAssertNil(registry.instance(for: slowID), "作废的激活不得留实例")
         XCTAssertEqual(deactivations(slowID), 1, "作废路径必须自己 deactivate() 收尾")
+    }
+
+    /// **代次失效的那一次失败收尾，对注册表的任何写入都不许发生**（修复 1 的判据）。
+    ///
+    /// 交错：gen1 悬挂 → 置关（作废 gen1）→ 置开（新实例 B 入驻 `.active`）→ 放行 gen1 让它**抛错**。
+    /// 若失败分支在代次比对之外摘 `instances[id]`，这里会把 B 抹掉且不调 `B.deactivate()`：
+    /// `states` 停在 `.active`、`instances` 为空——内容永久降级、`setEnabled(true)` 又因「已 active」
+    /// 提前返回，不自愈。断言因此钉住四件事：B 还在、状态没被改写、B 没被 deactivate、内容仍转发。
+    func testStaleActivationFailureDoesNotWipeTheNewInstance() async throws {
+        let registry = ModuleRegistry.shared
+        registerProbes([ToggleSlowFailingProbeModule.self])
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[slowFailingID], .disabled, "前置：默认关")
+
+        // gen1：悬挂在 activate() 里
+        let pending = Task { await registry.setEnabled(true, for: slowFailingID) }
+        var waited = 0
+        while !ProbeGate.isSuspended, waited < 1_000 {
+            await Task.yield()
+            waited += 1
+        }
+        guard ProbeGate.isSuspended else {
+            ProbeGate.release?()
+            XCTFail("前置失败：gen1 未悬挂住（waited \(waited)）")
+            return
+        }
+
+        // 置关作废 gen1 → 再置开：B 的 activate() 不再悬挂，立刻入驻 `.active`
+        _ = await registry.setEnabled(false, for: slowFailingID)
+        let second = await registry.setEnabled(true, for: slowFailingID)
+        XCTAssertEqual(second, .active, "第二个实例 B 应成功入驻")
+        let instanceB = try XCTUnwrap(registry.instance(for: slowFailingID) as? ToggleSlowFailingProbeModule)
+        XCTAssertEqual(activations(slowFailingID), 2, "前置：gen1 与 B 各调了一次 activate()")
+
+        // 放行 gen1：它以抛错收尾，但代次已失效 → 只收自己的尾
+        ProbeGate.release?()
+        ProbeGate.release = nil
+        let staleResult = await pending.value
+
+        XCTAssertTrue(
+            registry.instance(for: slowFailingID) === instanceB,
+            "代次失效的失败收尾不得摘掉后来者 B"
+        )
+        XCTAssertEqual(registry.states[slowFailingID], .active, "状态不得被 gen1 的失败改写为 .failed / .disabled")
+        XCTAssertEqual(deactivations(slowFailingID), 1, "只准 deactivate 自己那个悬挂实例，不得碰 B")
+        XCTAssertEqual(staleResult, .active, "作废的那次置开返回现值（注册表此刻的真实状态）")
+        guard case .none = registry.content(for: slowFailingID, request: ModuleRegistry.home) else {
+            return XCTFail("B 仍在册时内容请求应转发给它（夹具答 .none），而不是降级 .unavailable")
+        }
+        XCTAssertEqual(registry.homeEntries.map(\.id), [slowFailingID], "投影仍含该模块（B 是 active）")
     }
 
     // MARK: - collapse 闭包的来源
@@ -473,5 +559,25 @@ private final class ToggleSlowProbeModule: ToggleProbeModule {
             ProbeGate.release = { continuation.resume() }
             ProbeGate.isSuspended = true
         }
+    }
+}
+
+/// **只让第一次** `activate()` 悬挂、且放行后**抛错**的假模块：制造「gen1 在飞 → 新实例 B 入驻 →
+/// gen1 失败收尾」这条交错（修复 1 的判据）。第二次激活不再悬挂（照常返回成功），好让 B 真的入驻。
+private final class ToggleSlowFailingProbeModule: ToggleProbeModule {
+    override class var manifest: ModuleManifest {
+        ToggleFixture.manifest(shortID: "probe-toggle-slow-failing", surfaces: [.home])
+    }
+
+    override func activate() async throws {
+        let attempt = ProbeLedger.activations[Self.manifest.id, default: 0] + 1
+        ProbeLedger.activations[Self.manifest.id] = attempt
+        guard attempt == 1 else { return }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            ProbeGate.release = { continuation.resume() }
+            ProbeGate.isSuspended = true
+        }
+        throw ToggleFailingProbeModule.ActivationFailure()
     }
 }
