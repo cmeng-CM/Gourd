@@ -68322,6 +68322,70 @@
         }
       }
     },
+    "settings.modules.defaultOff" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭"
+          }
+        }
+      }
+    },
+    "settings.modules.effect.notifications" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bell in the collapsed island + notifications block on the home strip + notification list in the expanded panel (new ones also flash briefly on the notch)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠态铃铛 + 首页通知块 + 展开面板通知列表（新通知还会在刘海上短暂浮现）"
+          }
+        }
+      }
+    },
+    "settings.modules.effect.progress" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapsed center slot + progress page in the expanded panel — not on the home strip yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠态中央槽位 + 展开面板进度页——暂不出现在首页"
+          }
+        }
+      }
+    },
+    "settings.modules.effect.todos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapsed center slot + to-dos block on the home strip + to-do page in the expanded panel"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠态中央槽位 + 首页块 + 展开面板待办页"
+          }
+        }
+      }
+    },
     "settings.modules.failed" : {
       "localizations" : {
         "en" : {

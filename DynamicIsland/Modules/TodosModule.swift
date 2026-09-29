@@ -9,8 +9,9 @@
 //    2026-09-28 第二轮反馈「三个圈不要在最上面，占用可视区域太大的，放在左侧」：从顶部横排改到左列。
 //  - 折叠态 = 图标 + **今日**的 `已办/总量`（自带 60s `TimelineView`，宿主不起定时器，与 progress 同口径）；
 //  - **首页块**（P2 / T4）= **三环横排**（今日 / 本周 / 所有，复用展开 tab 的同一个 `TodoScopeRing`，
-//    只把排布从竖排改成横排）+ **今日清单前 5 条**；块宽 < 220pt 时只画三环
-//    （块宽由宿主 `HomeStripLayoutMath` 分配，本批 180 ～ 240pt；见 `TodosHomeBlockLayout`）；
+//    只把排布从竖排改成横排）+ 今日清单；清单按块宽**分档**（P2 / T3 改判：单阈值 220 → 三档
+//    `>= 220` 完整行 / `>= 160` 紧凑行（只标题）/ `< 160` 只画三环，见 `TodosHomeBlockLayout`）；
+//    块宽由宿主 `HomeStripLayoutMath` 分配（本批 180 ～ 240pt）；
 //  - 分类与计数口径全在 `TodoBucketing`（纯函数，单测覆盖）——**三个 surface 共用同一份聚合**。
 
 //
@@ -421,7 +422,7 @@ final class TodosModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
     /// - `surfaces`：`expanded`（三环 + 清单）+ `compact`（折叠态中央槽位：图标 + 今日 `已办/总量`）
-    ///   + `home`（**首页块** = 三环横排 + 今日清单前 N 条，块宽 < 220pt 时只画三环）；
+    ///   + `home`（**首页块** = 三环横排 + 今日清单，行数按块宽分档，见 `TodosHomeBlockLayout`）；
     /// - `defaultPlacement`：`slot == .center`、`order == 20`——与 progress（order 30）同槽位时排在它前面
     ///   （`ModuleRegistry` 的候选按 `(order, id)` 升序，只取第一个），即中央槽位的默认内容；
     /// - `defaultEnabled: true`：待办是新的中央槽位默认内容（用户定稿）；
@@ -642,36 +643,68 @@ private struct TodoScopeRing: View {
 
 // MARK: - 首页块（三环横排 + 今日前 N 条）
 
-/// 首页块的**尺寸与取舍**（纯函数，无 SwiftUI 依赖，单测覆盖阈值两侧）。
+/// 首页块的**尺寸与取舍**（纯函数，无 SwiftUI 依赖，单测覆盖三条边界）。
 ///
-/// 规格（[17](../../docs/17-nookx-adoption.md) §改动点设计 4）：块内容 = 三环横排（今日 / 本周 / 所有）
-/// + 今日清单前 5 条；**块宽 < 220pt 时只画三环**。块宽由宿主 `HomeStripLayoutMath` 分配
-/// （本批模块块统一声明 180 / 240），模块自己**不声明宽度、不读 `.layoutValue`**。
+/// 规格（[17](../../docs/17-nookx-adoption.md) §已知限制 16 的 2026-09-29 改判）：块内容 = 三环横排
+/// （今日 / 本周 / 所有）+ 今日清单；清单按块宽**分三档**——`>= 220` 完整行（最多 5 行）、
+/// `>= 160` 紧凑行（只标题单行、最多 3 行）、`< 160` 只画三环。块宽由宿主 `HomeStripLayoutMath`
+/// 分配（本批模块块统一声明 180 / 240），模块自己**不声明宽度、不读 `.layoutValue`**。
+///
+/// 分档的由来：单阈值（220）下本机 770pt 面板实测只分给待办块 180.5pt，默认配置里永远只画三环
+/// （用户很可能因此把这个组件关掉）。分档比"让用户调面板宽"或"给每块加权重"成本低得多；
+/// 代价是紧凑档每行信息更少（只有标题）。
 enum TodosHomeBlockLayout {
-    /// 画今日清单的最小块宽（规格：220）。判据取**放置后**的宽度（`GeometryReader`），不用测量。
-    static let listMinimumWidth: CGFloat = 220
-    /// 今日清单最多画几行（规格：前 5 条；超出的不显示）。
+    /// 清单的档位。**纯值**：视图只按它取行数与行形态，档位切换就是布局切换（无动画）。
+    enum Tier: Equatable {
+        /// `>= fullListWidth`：完整行（状态圈 + 标题 + 已过期红字），最多 `maxListRows` 行。
+        case full
+        /// `>= compactListWidth` 且 `< fullListWidth`：紧凑行（只标题单行尾部截断），最多 `compactListRows` 行。
+        case compact
+        /// 更窄（或宽度取不到）：只画三环。
+        case ringsOnly
+    }
+
+    /// 完整行的最小块宽（规格：220）。判据取**放置后**的宽度（`GeometryReader`），不用测量。
+    static let fullListWidth: CGFloat = 220
+    /// 紧凑行的最小块宽（规格：160）。本机 770pt 面板下的块宽 180.5 落在这一档。
+    static let compactListWidth: CGFloat = 160
+    /// 完整行最多画几行（规格：前 5 条；超出的不显示）。
     static let maxListRows = 5
+    /// 紧凑行最多画几行（规格：3）。
+    static let compactListRows = 3
     /// 三环**横排**的环间距（竖排的间距是 `TodoRingLayout.ringSpacing`）。
     static let ringSpacing: CGFloat = 8
     /// 三环直径：横排不受块高约束，用设计定稿的 52（与展开 tab 同源，不另取一套尺寸）。
     static let ringDiameter: CGFloat = TodoRingLayout.maximumDiameter
 
-    /// 是否画今日清单：**放置后宽度 ≥ 220** 才画。
+    /// 块宽 → 档位。边界口径：`>= 220` → `.full`；`>= 160` 且 `< 220` → `.compact`；
+    /// `< 160` 或非有限数（首帧 0 / NaN）→ `.ringsOnly`。
     ///
-    /// 宽度取不到（首帧给 0）或非有限数时返回 false（只画环）——环一定放得下（3 × 52 + 2 × 8 = 172
+    /// 宽度取不到时退到最保守的档（只画环）：环一定放得下（3 × 52 + 2 × 8 = 172
     /// ≤ 模块块最小宽 180），清单要按宽度取舍，因此宁可少画一段也不让标题溢出块宽。
-    static func showsList(blockWidth: CGFloat) -> Bool {
-        blockWidth >= listMinimumWidth
+    static func listTier(forWidth width: CGFloat) -> Tier {
+        guard width.isFinite else { return .ringsOnly }
+        if width >= fullListWidth { return .full }
+        if width >= compactListWidth { return .compact }
+        return .ringsOnly
     }
 
-    /// 清单要画的条目：今日的**前 5 条**。顺序沿用 `TodoBucketing` 的排序（不在这里另排一遍）。
-    static func listedItems(_ items: [TodoBucketing.Item]) -> [TodoBucketing.Item] {
-        Array(items.prefix(maxListRows))
+    /// 该档最多画几行清单（`.ringsOnly` 为 0：一行都不画）。
+    static func listRows(for tier: Tier) -> Int {
+        switch tier {
+        case .full: return maxListRows
+        case .compact: return compactListRows
+        case .ringsOnly: return 0
+        }
+    }
+
+    /// 清单要画的条目：按档取前 N 条。顺序沿用 `TodoBucketing` 的排序（不在这里另排一遍）。
+    static func listedItems(_ items: [TodoBucketing.Item], tier: Tier) -> [TodoBucketing.Item] {
+        Array(items.prefix(listRows(for: tier)))
     }
 }
 
-/// 首页块：**横排三环 + 今日清单前 5 条**（[17](../../docs/17-nookx-adoption.md) §改动点设计 4）。
+/// 首页块：**横排三环 + 今日清单**（[17](../../docs/17-nookx-adoption.md) §已知限制 16）。
 ///
 /// 与展开 tab **同源**：聚合是同一个 `TodoBucketing.classify`（**不另写一套统计**），环是同一个
 /// `TodoScopeRing`（只把排布从竖排换成横排——180 ～ 240pt 的块里竖排练三环放不下）。
@@ -679,7 +712,8 @@ enum TodosHomeBlockLayout {
 /// **只读**（控制器裁决 2）：勾选 / 新增 / 删除都留在展开 tab，这里不挂任何手势——首页块是
 /// 「一眼看进度」，不是第二个操作台。
 ///
-/// 宽度用 `GeometryReader` 读**放置后**的尺寸（不是测量）：`< 220pt` 时只画三环。
+/// 宽度用 `GeometryReader` 读**放置后**的尺寸（不是测量）：按 `listTier(forWidth:)` 分档——
+/// `>= 220` 完整行（最多 5 行）、`>= 160` 紧凑行（只标题单行、最多 3 行）、`< 160` 只画三环。
 /// 未授权时 `store.items` 为空 → 画三个 `0/0` 的空环，**不在这里引导授权**（授权入口在展开 tab，
 /// 首页块没有交互面）。今日 0 条时同样只留三环（控制器裁决 3：不做空态文案）。
 ///
@@ -693,11 +727,15 @@ private struct TodosHomeBlockView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            // 档位与条目都在**同一层**算：档位决定行数上限，行数决定清单画不画（只画环时清单为空）。
+            let tier = TodosHomeBlockLayout.listTier(forWidth: proxy.size.width)
+            let rows = TodosHomeBlockLayout.listedItems(summary.today.items, tier: tier)
+
             VStack(alignment: .leading, spacing: 8) {
                 TodoHomeRingRow(summary: summary)
 
-                if TodosHomeBlockLayout.showsList(blockWidth: proxy.size.width) {
-                    TodoHomeTodayList(items: TodosHomeBlockLayout.listedItems(summary.today.items))
+                if !rows.isEmpty {
+                    TodoHomeTodayList(items: rows, tier: tier)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -732,16 +770,33 @@ private struct TodoHomeRingRow: View {
 ///
 /// 画的是 `TodoBucketing` 的「今日」类别——含过期未完成 / 今天完成的，与展开 tab 的今日环
 /// **同一份成员**；空清单不画空态文案（上游已保证今天数不为 0，这里不做二次判定）。
+///
+/// 行形态按档（`TodosHomeBlockLayout.Tier`）：完整行 = 状态圈 + 标题 + 已过期红字；
+/// 紧凑行 = **只标题单行尾部截断**（窄块里先牺牲固定宽度的状态圈与红字）。
 private struct TodoHomeTodayList: View {
     let items: [TodoBucketing.Item]
+    /// 当前档位（`.ringsOnly` 时调用方根本不画这个清单；这里把它也当空列表处理）。
+    let tier: TodosHomeBlockLayout.Tier
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(items) { item in
-                TodoHomeRow(item: item)
+                row(for: item)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func row(for item: TodoBucketing.Item) -> some View {
+        switch tier {
+        case .full:
+            TodoHomeRow(item: item)
+        case .compact:
+            TodoHomeCompactRow(item: item)
+        case .ringsOnly:
+            EmptyView()
+        }
     }
 }
 
@@ -774,6 +829,26 @@ private struct TodoHomeRow: View {
                     .fixedSize()
             }
         }
+    }
+}
+
+/// 首页块**紧凑档**（块宽 160 ～ 220）的一行：**只标题**，单行尾部截断。
+///
+/// 比完整行再省两种元素——状态圈（10pt 图标 + 6pt 间距）与「已过期」红字（`fixedSize` 不缩）：
+/// 它们各占一段**不会被压缩**的宽度，窄块里先牺牲它们，把宽度全留给标题。
+/// 「已完成」的线索只靠标题本身的样式（置灰 + 删除线），不另加元素。
+/// 条目的成员与顺序与完整档**同一份**（`TodoBucketing` 的今日类别，不在这里筛）。
+private struct TodoHomeCompactRow: View {
+    let item: TodoBucketing.Item
+
+    var body: some View {
+        Text(item.title)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
+            .strikethrough(item.isCompleted, color: .white.opacity(0.4))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

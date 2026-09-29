@@ -15,6 +15,11 @@
 //  规格：docs/17-nookx-adoption.md §改动点设计 5（卡片页）、§接口与数据形状 3/4（`setEnabled`
 //  语义与偏好键语义）、§已知限制 5（内置块不在此页——页面顶部那行说明是它的缓解措施）。
 //
+//  P2 批次 / T2 增量：卡片在 surfaces 徽标下方多两行说明——「效果 / 出现位置」
+//  （`settings.modules.effect.<shortID>`，按模块 id 映射、只覆盖内置三块）与
+//  「默认关闭」（`manifest.defaultEnabled == false` 时；`progress` 的形态）。
+//  这两行只加文案，不动图标 / 名称 / 摘要 / 徽标 / 开关。
+//
 
 import Defaults
 import SwiftUI
@@ -72,6 +77,26 @@ private struct ModuleSettingsCard: View {
                     ForEach(manifest.surfaces, id: \.rawValue) { surface in
                         surfaceChip(surface)
                     }
+                }
+
+                // 「效果 / 出现位置」——**徽标正下方**的一行（P2 / T2，docs/17 §已知限制 16 同批改判）：
+                // 三个组件里只有待办有首页效果，卡片必须自己讲清「开它之后会在哪看到什么」，
+                // 否则「打开开关但界面没变化」看起来就是坏的。文案按模块 id 映射（不是通用模板）。
+                if let effectKey = Self.effectKey(for: manifest) {
+                    Text(LocalizedStringKey(effectKey))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // `defaultEnabled == false` 的模块另标一行「默认关闭」：它的开关本来就是关的，
+                // 而「卡片开着但首页/槽位没效果」是它**默认**的合法形态，不是故障。
+                // 判据取 manifest 字段（不写死 id——将来默认关的模块也自动拿到这一行）；
+                // `nil`（manifest 没写这个键）不标——缺失不是「默认关闭」的证据。
+                if manifest.defaultEnabled == false {
+                    Text(LocalizedStringKey("settings.modules.defaultOff"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let summary = Self.summary(for: manifest) {
@@ -176,6 +201,29 @@ private struct ModuleSettingsCard: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(Capsule().fill(Color.secondary.opacity(0.15)))
+    }
+
+    /// 「效果 / 出现位置」一行的本地化 key：**按模块 id 逐块映射**，不是通用模板。
+    ///
+    /// 只覆盖内置三块——这三行写的是**本项目里这三个组件实际的渲染点**（以 manifest 的
+    /// `surfaces` 与实际视图为准），不是从 manifest 推导出来的通用句子：
+    /// - `todos`：`[.expanded, .compact, .home]` → 折叠态中央槽位 + 首页块 + 展开面板待办页；
+    /// - `notifications`：`[.expanded, .compact, .home]` → 折叠态铃铛 + 首页通知块 + 展开面板通知列表
+    ///   （另有 HUD：新通知在刘海上短暂浮现，`presentHUD` 那条链，受浮层总开关控制）；
+    /// - `progress`：`[.compact, .expanded]`（**无 `home`**）→ 折叠态中央槽位 + 展开面板进度页。
+    ///
+    /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
+    private static func effectKey(for manifest: ModuleManifest) -> String? {
+        switch manifest.id {
+        case "com.cmeng.gourd.todos":
+            return "settings.modules.effect.todos"
+        case "com.cmeng.gourd.notifications":
+            return "settings.modules.effect.notifications"
+        case "com.cmeng.gourd.progress":
+            return "settings.modules.effect.progress"
+        default:
+            return nil
+        }
     }
 
     /// 摘要的解析顺序与 `ModuleRegistry.label(for:)` **逐字同序**：key 形态查 `Bundle.main`
