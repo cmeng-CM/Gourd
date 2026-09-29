@@ -538,16 +538,69 @@ struct CalendarView: View {
     }
 }
 
-struct StandaloneCalendarView: View {
-    @EnvironmentObject var vm: DynamicIslandViewModel
-    @ObservedObject private var calendarManager = CalendarManager.shared
-    @State private var selectedDate = Date()
-    @State private var displayedMonth = Date()
-    @State private var datePickerScrollTarget: Date?
-    @Default(.hideAllDayEvents) private var hideAllDayEvents
-    @Default(.hideCompletedReminders) private var hideCompletedReminders
+// MARK: - 整月网格（抽取复用：独立面板左栏 + 首页日历行左栏）
+
+/// 整月网格的**纯几何**：`MonthGridView` 日格的唯一来源，由 `StandaloneCalendarView` 的 `monthDays`
+/// 逐字抽出（口径不变）——
+///
+/// 首格 = **当月首日所在那一周的起点**、末格 = **当月末日所在那一周的终点**，逐日 +1 展开，
+/// 因此两端都含跨月补格（补格来自相邻月份），总天数恒为 7 的整数倍。周起点跟着
+/// `calendar.firstWeekday` 走（与 `MonthGridView` 的星期表头同一来源）。
+///
+/// 不读 `Defaults`、不碰「今天」，因此可以用固定 `Calendar` + 固定月份直接单测
+/// （`ModuleKernelTests` 的 `MonthGridLayoutTests`）。
+enum MonthGridLayout {
+    static func days(forMonth month: Date, calendar: Calendar = .current) -> [Date] {
+        guard let monthInterval = calendar.dateInterval(of: .month, for: month),
+              let firstWeekInterval = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start),
+              let lastDay = calendar.date(byAdding: .day, value: -1, to: monthInterval.end),
+              let lastWeekInterval = calendar.dateInterval(of: .weekOfMonth, for: lastDay)
+        else { return [] }
+
+        var days: [Date] = []
+        var current = firstWeekInterval.start
+        while current < lastWeekInterval.end {
+            days.append(current)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
+            current = next
+        }
+        return days
+    }
+}
+
+/// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（今天 / 选中高亮）+ 按选中日居中**。
+///
+/// 从 `StandaloneCalendarView` 左栏**逐字抽出**（只抽不重写）：独立日历面板与首页的整行日历共用这
+/// 一份实现——月历逻辑只有一处，不再复制第二份（复制必然漂移）。
+///
+/// 视图只负责「显示哪个月 + 选中哪天」：选中日的写回方（调用方）自己决定要不要拉那一天的日程
+/// （独立面板与首页日历行都走 `CalendarManager.updateCurrentDate`）。
+struct MonthGridView: View {
+    /// 选中日：日格读它做高亮、点日格写它。
+    @Binding var selectedDate: Date
+    /// 「把日格滚到某日」的请求通道（原 `StandaloneCalendarView.datePickerScrollTarget` 的那套）：
+    /// 置值即滚一次、滚完清回 `nil`。
+    @Binding var scrollTarget: Date?
+    /// 翻月时是否把选中日一并挪到**新月份首日**：独立面板的既有行为是 `true`；
+    /// 首页日历行传 `false`（翻月只改显示月份，选中日不动）。
+    var monthNavigationMovesSelection: Bool
+
+    /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
+    @State private var displayedMonth: Date
 
     private let calendar = Calendar.current
+
+    init(
+        selectedDate: Binding<Date>,
+        scrollTarget: Binding<Date?>,
+        monthNavigationMovesSelection: Bool = false
+    ) {
+        _selectedDate = selectedDate
+        _scrollTarget = scrollTarget
+        self.monthNavigationMovesSelection = monthNavigationMovesSelection
+        // 初值取选中日所在月（而不是 `Date()`）：`onChange` 不会为首帧补发，初值必须自己对齐。
+        _displayedMonth = State(initialValue: selectedDate.wrappedValue.startOfMonth)
+    }
 
     private var weekdaySymbols: [String] {
         let symbols = calendar.veryShortStandaloneWeekdaySymbols
@@ -567,201 +620,107 @@ struct StandaloneCalendarView: View {
         displayedMonth.formatted(.dateTime.year())
     }
 
-    private var monthDays: [Date] {
-        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth),
-              let firstWeekInterval = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start),
-              let lastDay = calendar.date(byAdding: .day, value: -1, to: monthInterval.end),
-              let lastWeekInterval = calendar.dateInterval(of: .weekOfMonth, for: lastDay)
-        else { return [] }
-
-        var days: [Date] = []
-        var current = firstWeekInterval.start
-        while current < lastWeekInterval.end {
-            days.append(current)
-            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
-            current = next
-        }
-        return days
-    }
-
-    private var filteredEvents: [EventModel] {
-        EventListView.filteredEvents(
-            events: calendarManager.events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-    }
-
-    private var resolvedNotchHeight: CGFloat {
-        let height = vm.notchSize.height
-        return height > 0 ? height : openNotchSize.height
-    }
-
-    private var headerHeight: CGFloat {
-        max(24, vm.effectiveClosedNotchHeight)
-    }
-
-    private var maxTabContentHeight: CGFloat {
-        let available = resolvedNotchHeight - headerHeight - 36
-        return max(130, available)
-    }
-
     var body: some View {
-        GeometryReader { geometry in
-            let paneSpacing: CGFloat = 12
-            let paneWidth = max((geometry.size.width - paneSpacing) / 2, 0)
-            let paneHeight = max(0, geometry.size.height)
-
-            HStack(alignment: .top, spacing: paneSpacing) {
-                leftPickerPane
-                    .frame(width: paneWidth, alignment: .topLeading)
-                    .frame(height: paneHeight, alignment: .topLeading)
-                    .layoutPriority(1)
-
-                rightEventsPane
-                    .frame(width: paneWidth, alignment: .topLeading)
-                    .frame(height: paneHeight, alignment: .topLeading)
-                    .layoutPriority(1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
-        }
-        .frame(height: maxTabContentHeight)
-        .clipped()
-        .onAppear {
-            selectedDate = Date.now
-            displayedMonth = selectedDate.startOfMonth
-            requestDatePickerCenterOnCurrentDate()
-            Task {
-                await calendarManager.updateCurrentDate(selectedDate)
-            }
-        }
-        .onChange(of: selectedDate) { _, newDate in
-            withAnimation(.smooth(duration: 0.22)) {
-                displayedMonth = newDate.startOfMonth
-            }
-            Task {
-                await calendarManager.updateCurrentDate(newDate)
-            }
-        }
-        .onChange(of: vm.notchState) { _, newState in
-            guard newState == .open else { return }
-            selectedDate = Date.now
-            displayedMonth = selectedDate.startOfMonth
-            requestDatePickerCenterOnCurrentDate()
-            Task {
-                await calendarManager.updateCurrentDate(selectedDate)
-            }
-        }
-    }
-
-    private var leftPickerPane: some View {
         GeometryReader { geometry in
             let pickerViewportHeight = max(96, geometry.size.height - 56)
 
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(monthTitle)
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white)
-                        Text(yearTitle)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundStyle(Color(white: 0.65))
-                    }
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Button(action: showPreviousMonth) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 11, weight: .bold))
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button(action: showNextMonth) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .bold))
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .foregroundStyle(.white)
-                }
-
-                ScrollViewReader { proxy in
-                    VStack(spacing: 6) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
-                            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
-                                Text(symbol.prefix(1))
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(Color(white: 0.55))
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-
-                        ZStack {
-                            ScrollView(.vertical, showsIndicators: false) {
-                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
-                                    ForEach(monthDays, id: \.self) { day in
-                                        dayCell(for: day)
-                                            .id(calendar.startOfDay(for: day))
-                                    }
-                                }
-                                .padding(.bottom, 2)
-                            }
-                            .onChange(of: datePickerScrollTarget) { _, target in
-                                guard let target else { return }
-                                centerDatePicker(on: target, proxy: proxy)
-                            }
-
-                            LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                                .frame(height: 16)
-                                .allowsHitTesting(false)
-                                .frame(maxHeight: .infinity, alignment: .top)
-
-                            LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                                .frame(height: 16)
-                                .allowsHitTesting(false)
-                                .frame(maxHeight: .infinity, alignment: .bottom)
-                        }
-                        .frame(height: max(0, pickerViewportHeight - 22))
-                        .clipped()
-                    }
+                header
+                datePicker(viewportHeight: pickerViewportHeight)
                     .frame(height: pickerViewportHeight)
-                }
-                .frame(height: pickerViewportHeight)
-                .clipped()
+                    .clipped()
             }
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .padding(.horizontal, 6)
         .padding(.top, 4)
         .clipped()
-    }
-
-    private var rightEventsPane: some View {
-        Group {
-            if filteredEvents.isEmpty {
-                EmptyEventsView(selectedDate: selectedDate)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                StandaloneEventCardList(
-                    events: filteredEvents,
-                    selectedDate: selectedDate,
-                    showFullEventTitles: Defaults[.showFullEventTitles],
-                    onToggleReminder: { reminderID, completed in
-                        Task {
-                            await calendarManager.setReminderCompleted(reminderID: reminderID, completed: completed)
-                        }
-                    }
-                )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 选中日一变（点日格 / 调用方换选中日）→ 显示月份跟到那一天所在月。
+        .onChange(of: selectedDate) { _, newDate in
+            withAnimation(.smooth(duration: 0.22)) {
+                displayedMonth = newDate.startOfMonth
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 月份标题 + ‹ › 翻月（原 `leftPickerPane` 的第一段，逐字抽出）。
+    private var header: some View {
+        HStack(alignment: .center) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(monthTitle)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                Text(yearTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Color(white: 0.65))
+            }
+            Spacer()
+            HStack(spacing: 6) {
+                Button(action: showPreviousMonth) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: showNextMonth) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+            }
+            .foregroundStyle(.white)
+        }
+    }
+
+    /// 星期表头 + 日格网格（原 `leftPickerPane` 的中下两段，逐字抽出）。
+    private func datePicker(viewportHeight: CGFloat) -> some View {
+        ScrollViewReader { proxy in
+            VStack(spacing: 6) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+                    ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                        Text(symbol.prefix(1))
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color(white: 0.55))
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+
+                ZStack {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+                            ForEach(MonthGridLayout.days(forMonth: displayedMonth, calendar: calendar), id: \.self) { day in
+                                dayCell(for: day)
+                                    .id(calendar.startOfDay(for: day))
+                            }
+                        }
+                        .padding(.bottom, 2)
+                    }
+                    .onChange(of: scrollTarget) { _, target in
+                        guard let target else { return }
+                        centerDatePicker(on: target, proxy: proxy)
+                    }
+
+                    LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 16)
+                        .allowsHitTesting(false)
+                        .frame(maxHeight: .infinity, alignment: .top)
+
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 16)
+                        .allowsHitTesting(false)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+                .frame(height: max(0, viewportHeight - 22))
+                .clipped()
+            }
+            .frame(height: viewportHeight)
+        }
+        .frame(height: viewportHeight)
         .clipped()
     }
 
@@ -803,7 +762,9 @@ struct StandaloneCalendarView: View {
         guard let newMonth = calendar.date(byAdding: .month, value: -1, to: displayedMonth) else { return }
         withAnimation(.smooth(duration: 0.22)) {
             displayedMonth = newMonth.startOfMonth
-            selectedDate = newMonth.startOfMonth
+            if monthNavigationMovesSelection {
+                selectedDate = newMonth.startOfMonth
+            }
         }
     }
 
@@ -811,12 +772,10 @@ struct StandaloneCalendarView: View {
         guard let newMonth = calendar.date(byAdding: .month, value: 1, to: displayedMonth) else { return }
         withAnimation(.smooth(duration: 0.22)) {
             displayedMonth = newMonth.startOfMonth
-            selectedDate = newMonth.startOfMonth
+            if monthNavigationMovesSelection {
+                selectedDate = newMonth.startOfMonth
+            }
         }
-    }
-
-    private func requestDatePickerCenterOnCurrentDate() {
-        datePickerScrollTarget = calendar.startOfDay(for: selectedDate)
     }
 
     private func centerDatePicker(on target: Date, proxy: ScrollViewProxy) {
@@ -825,10 +784,121 @@ struct StandaloneCalendarView: View {
             withAnimation(.smooth(duration: 0.24)) {
                 proxy.scrollTo(normalizedTarget, anchor: .center)
             }
-            if datePickerScrollTarget == normalizedTarget {
-                datePickerScrollTarget = nil
+            if scrollTarget == normalizedTarget {
+                scrollTarget = nil
             }
         }
+    }
+}
+
+struct StandaloneCalendarView: View {
+    @EnvironmentObject var vm: DynamicIslandViewModel
+    @ObservedObject private var calendarManager = CalendarManager.shared
+    @State private var selectedDate = Date()
+    @State private var datePickerScrollTarget: Date?
+    @Default(.hideAllDayEvents) private var hideAllDayEvents
+    @Default(.hideCompletedReminders) private var hideCompletedReminders
+
+    private let calendar = Calendar.current
+
+    private var filteredEvents: [EventModel] {
+        EventListView.filteredEvents(
+            events: calendarManager.events,
+            hideCompletedReminders: hideCompletedReminders,
+            hideAllDayEvents: hideAllDayEvents
+        )
+    }
+
+    private var resolvedNotchHeight: CGFloat {
+        let height = vm.notchSize.height
+        return height > 0 ? height : openNotchSize.height
+    }
+
+    private var headerHeight: CGFloat {
+        max(24, vm.effectiveClosedNotchHeight)
+    }
+
+    private var maxTabContentHeight: CGFloat {
+        let available = resolvedNotchHeight - headerHeight - 36
+        return max(130, available)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let paneSpacing: CGFloat = 12
+            let paneWidth = max((geometry.size.width - paneSpacing) / 2, 0)
+            let paneHeight = max(0, geometry.size.height)
+
+            HStack(alignment: .top, spacing: paneSpacing) {
+                // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
+                // 翻月把选中日一并挪到新月份首日）。
+                MonthGridView(
+                    selectedDate: $selectedDate,
+                    scrollTarget: $datePickerScrollTarget,
+                    monthNavigationMovesSelection: true
+                )
+                    .frame(width: paneWidth, alignment: .topLeading)
+                    .frame(height: paneHeight, alignment: .topLeading)
+                    .layoutPriority(1)
+
+                rightEventsPane
+                    .frame(width: paneWidth, alignment: .topLeading)
+                    .frame(height: paneHeight, alignment: .topLeading)
+                    .layoutPriority(1)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+        }
+        .frame(height: maxTabContentHeight)
+        .clipped()
+        .onAppear {
+            // 显示月份由 `MonthGridView` 自持（随选中日同步），这里只钉选中日与滚动落点。
+            selectedDate = Date.now
+            requestDatePickerCenterOnCurrentDate()
+            Task {
+                await calendarManager.updateCurrentDate(selectedDate)
+            }
+        }
+        .onChange(of: selectedDate) { _, newDate in
+            Task {
+                await calendarManager.updateCurrentDate(newDate)
+            }
+        }
+        .onChange(of: vm.notchState) { _, newState in
+            guard newState == .open else { return }
+            selectedDate = Date.now
+            requestDatePickerCenterOnCurrentDate()
+            Task {
+                await calendarManager.updateCurrentDate(selectedDate)
+            }
+        }
+    }
+
+    private var rightEventsPane: some View {
+        Group {
+            if filteredEvents.isEmpty {
+                EmptyEventsView(selectedDate: selectedDate)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                StandaloneEventCardList(
+                    events: filteredEvents,
+                    selectedDate: selectedDate,
+                    showFullEventTitles: Defaults[.showFullEventTitles],
+                    onToggleReminder: { reminderID, completed in
+                        Task {
+                            await calendarManager.setReminderCompleted(reminderID: reminderID, completed: completed)
+                        }
+                    }
+                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
+    private func requestDatePickerCenterOnCurrentDate() {
+        datePickerScrollTarget = calendar.startOfDay(for: selectedDate)
     }
 }
 
@@ -1139,9 +1209,9 @@ enum HomeTodayListLayout {
     /// 3. 放不下 / 超上限 → 让出一行额度给 `+N` 提示行，剩余条目计入溢出。
     ///
     /// - Parameters:
-    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView` 按**面板高度**
-    ///     （`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），`HomeStripCalendarBlock`
-    ///     按**块自身的实测高度**（放置后的 `GeometryReader` 高度减去日期头，展开日期轮时再减 50pt）。
+    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView`（收起态首页日历栏）按
+    ///     **面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
+    ///     `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
     ///   - itemCount: 今日条目数（全天 + 定时合计，已过 `filteredEvents` 与排序）。
     static func capacity(availableHeight: CGFloat, itemCount: Int) -> Capacity {
         guard itemCount > 0 else { return Capacity(visibleItemCount: 0, overflowCount: 0) }
@@ -1177,9 +1247,9 @@ struct EventListView: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     let events: [EventModel]
     let selectedDate: Date
-    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView` 按**面板高度**
-    /// （`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），`HomeStripCalendarBlock`
-    /// 按**块自身的实测高度**（放置后的 `GeometryReader` 高度减去日期头，展开日期轮时再减 50pt）。
+    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView`（收起态首页日历栏）
+    /// 按**面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
+    /// `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
     let availableHeight: CGFloat
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents

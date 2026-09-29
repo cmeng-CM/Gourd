@@ -4259,3 +4259,140 @@ final class HomeTodayListLayoutTests: XCTestCase {
         )
     }
 }
+
+// MARK: - 首页日历行 · 整月网格（P2 批次 / T2）
+
+/// `MonthGridLayout.days(forMonth:calendar:)` 是纯函数（不读 `Defaults`、不碰「今天」）：
+/// 用例全部用**固定 `Calendar`（固定时区 + 固定 `firstWeekday`）与固定月份**，不依赖运行时的今天。
+@MainActor
+final class MonthGridLayoutTests: XCTestCase {
+
+    /// 固定日历：格里高利 + GMT（不受本机时区影响）+ `en_US_POSIX`（`veryShortStandaloneWeekdaySymbols`
+    /// / 周起点判定都随 locale，钉住才可复现）。
+    private func gridCalendar(firstWeekday: Int) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.firstWeekday = firstWeekday
+        calendar.minimumDaysInFirstWeek = 1
+        return calendar
+    }
+
+    /// 当天的 **00:00**：网格的每一格都是「那天零点」（`dateInterval(of:.weekOfMonth).start` 的
+    /// 口径），补格与首末格都按同一口径比较。
+    private func gridDay(_ calendar: Calendar, year: Int, month: Int, day: Int) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    private func gridMonth(_ calendar: Calendar, year: Int, month: Int) -> Date {
+        gridDay(calendar, year: year, month: month, day: 1)
+    }
+
+    /// 网格首格是**当周起点**（`firstWeekday = 1` = 周日）、末格是**当周末日所在那一周的终点**，
+    /// 总格数是 7 的整数倍、逐格 +1 天。用例取 2026 年 9 月（9/1 是周二、9/30 是周三）。
+    func testDaysStartOnFirstWeekdayAndEndOnWeekEnd() throws {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let days = MonthGridLayout.days(forMonth: gridMonth(calendar, year: 2026, month: 9), calendar: calendar)
+
+        XCTAssertEqual(days.count, 35, "2026 年 9 月落在 5 周里（8/30 周日 → 10/3 周六）")
+        XCTAssertEqual(try XCTUnwrap(days.first), gridDay(calendar, year: 2026, month: 8, day: 30), "首格 = 当月首日所在周的起点")
+        XCTAssertEqual(try XCTUnwrap(days.last), gridDay(calendar, year: 2026, month: 10, day: 3), "末格 = 当月末日所在周的终点")
+        XCTAssertEqual(calendar.component(.weekday, from: days[0]), calendar.firstWeekday, "首格落在周起点上")
+        XCTAssertEqual(days.count % 7, 0, "整月网格恒为整周数")
+
+        for (index, pair) in zip(days.indices, zip(days, days.dropFirst())) {
+            XCTAssertEqual(
+                calendar.dateComponents([.day], from: pair.0, to: pair.1).day, 1,
+                "第 \(index) 格与下一格应相差 1 天"
+            )
+        }
+    }
+
+    /// 网格**完整覆盖当月**：1 号与月末都在里面，且每个日子只出现一次（跨月补格是别月的日期，
+    /// 不会与当月日期重复）。
+    func testDaysCoverWholeMonthExactlyOnce() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let days = MonthGridLayout.days(forMonth: gridMonth(calendar, year: 2026, month: 9), calendar: calendar)
+        let stamps = Set(days.map { calendar.startOfDay(for: $0) })
+
+        XCTAssertEqual(days.count, stamps.count, "同一格不应重复")
+        XCTAssertTrue(stamps.contains(calendar.startOfDay(for: gridDay(calendar, year: 2026, month: 9, day: 1))), "含当月 1 号")
+        XCTAssertTrue(stamps.contains(calendar.startOfDay(for: gridDay(calendar, year: 2026, month: 9, day: 30))), "含当月最后一天")
+        XCTAssertEqual(
+            stamps.filter { calendar.component(.month, from: $0) == 9 }.count, 30,
+            "9 月 30 天全部在内"
+        )
+    }
+
+    /// 周起点跟着 `firstWeekday` 走（与星期表头同一来源）：同一月份换 `firstWeekday = 2`（周一）
+    /// 后首格从 8/30 变 8/31、末格从 10/3 变 10/4。
+    func testDaysFollowFirstWeekday() throws {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let days = MonthGridLayout.days(forMonth: gridMonth(calendar, year: 2026, month: 9), calendar: calendar)
+
+        XCTAssertEqual(days.count, 35, "换周起点不改变格数（本月恰好仍占 5 周）")
+        XCTAssertEqual(try XCTUnwrap(days.first), gridDay(calendar, year: 2026, month: 8, day: 31), "周一起点：首格 = 8/31 周一")
+        XCTAssertEqual(try XCTUnwrap(days.last), gridDay(calendar, year: 2026, month: 10, day: 4), "末格 = 10/4 周日")
+        XCTAssertEqual(calendar.component(.weekday, from: days[0]), calendar.firstWeekday)
+    }
+
+    /// **恰好四周**的月份没有补格：2026 年 2 月（2/1 是周日、2/28 是周六）在周日起点下＝28 格，
+    /// 每一格都在当月内。
+    func testExactFourWeekMonthHasNoPadding() throws {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let days = MonthGridLayout.days(forMonth: gridMonth(calendar, year: 2026, month: 2), calendar: calendar)
+
+        XCTAssertEqual(days.count, 28, "2026 年 2 月恰好 4 周")
+        XCTAssertEqual(try XCTUnwrap(days.first), gridDay(calendar, year: 2026, month: 2, day: 1), "首格 = 2/1（周日）")
+        XCTAssertEqual(try XCTUnwrap(days.last), gridDay(calendar, year: 2026, month: 2, day: 28), "末格 = 2/28（周六）")
+        XCTAssertTrue(
+            days.allSatisfy { calendar.component(.month, from: $0) == 2 && calendar.component(.year, from: $0) == 2026 },
+            "没有补格：每一格都在当月"
+        )
+    }
+
+    /// 跨月补格**来自相邻月份**（且没有多算一格）：2026 年 9 月的网格 = 8/30、8/31 + 9 月 30 天 + 10/1~10/3。
+    func testPaddingCellsComeFromAdjacentMonths() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let days = MonthGridLayout.days(forMonth: gridMonth(calendar, year: 2026, month: 9), calendar: calendar)
+        XCTAssertEqual(days.count, 35, "先钉住格数，下面的下标才有意义")
+
+        let leading = days.prefix(2).map { calendar.component(.month, from: $0) }
+        XCTAssertEqual(leading, [8, 8], "前两格是 8 月的补格")
+        XCTAssertEqual(calendar.component(.month, from: days[2]), 9, "第 3 格才是当月 1 号")
+        XCTAssertEqual(calendar.component(.day, from: days[2]), 1, "第 3 格 = 9/1")
+
+        let trailing = days.suffix(3).map { calendar.component(.month, from: $0) }
+        XCTAssertEqual(trailing, [10, 10, 10], "后三格是 10 月的补格")
+        XCTAssertEqual(calendar.component(.month, from: days[31]), 9, "下标 31 仍是当月")
+        XCTAssertEqual(calendar.component(.day, from: days[31]), 30, "下标 31 是当月最后一天（9/30）")
+        XCTAssertEqual(calendar.component(.day, from: days[32]), 1, "下标 32 进入 10 月")
+    }
+}
+
+// MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）
+
+/// 日历行是**固定行高**：行高与「今日清单显示几行」是同一组数字，算错就会出现
+/// 「清单溢出到行外」或「行内留白」——这里把这条算术钉住（`HomeCalendarRow` 与
+/// `HomeTodayListLayout` 共用常量，不在两处各写一套）。
+@MainActor
+final class HomeCalendarRowLayoutTests: XCTestCase {
+
+    /// 190（行高）− 26（收起态日期头，含与列表之间的 4pt 间距）= 164 → 今日清单 5 行
+    /// （`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，内容高度仍在行高之内。
+    func testRowHeightYieldsFiveItemRowsPlusOverflowRow() {
+        let listHeight = HomeCalendarRow.rowHeight - HomeTodayListLayout.collapsedHeaderHeight
+        XCTAssertEqual(listHeight, 164, "190 − 26")
+
+        let five = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 5)
+        XCTAssertEqual(five.visibleItemCount, 5, "5 条全显示")
+        XCTAssertFalse(five.showsOverflow, "5 条不溢出")
+        XCTAssertLessThanOrEqual(five.contentHeight, listHeight, "5 行必须放进行高里")
+
+        let six = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 6)
+        XCTAssertEqual(six.visibleItemCount, 5, "第 6 条起让出一行给 +N，条目行仍封顶 5 行")
+        XCTAssertEqual(six.overflowCount, 1)
+        XCTAssertTrue(six.showsOverflow)
+        XCTAssertLessThanOrEqual(six.contentHeight, listHeight, "「5 行 + +N」也必须放进行高里")
+    }
+}

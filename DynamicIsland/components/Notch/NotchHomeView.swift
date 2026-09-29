@@ -860,11 +860,12 @@ struct NotchHomeView: View {
             } else if shouldShowSideLyrics {
                 sideLyricsContent
             } else {
-                // 标准路径（2026-09-29 起）：首页是一条横向 strip——块由模块 manifest 的 `home`
-                // 投影与宿主内置块（音乐 / 日历 / 镜子）共同提供，宽度按声明自适应且富余不拉伸。
-                // 块的名单、门控与排版全在 `HomeStripView` 内，本视图不再拼装首页内容
+                // 标准路径（2026-09-29 起）：首页是**两排**——上排一条横向 strip（块由模块 manifest 的
+                // `home` 投影与宿主内置块（音乐 / 镜子）共同提供，宽度按声明自适应且富余不拉伸），
+                // 下排一条全宽日历行（左整月网格 / 右今日清单，由 `showCalendar` 门控）。
+                // 块与行的名单、门控与排版都在各自视图内，本视图只做两排的接缝与高度分配
                 // （docs/17-nookx-adoption.md §改动点设计 1）。
-                HomeStripView(albumArtNamespace: albumArtNamespace)
+                standardHomeContent
             }
         }
         .transition(.opacity.animation(.smooth.speed(0.9))
@@ -872,6 +873,36 @@ struct NotchHomeView: View {
             .combined(with: .move(edge: .top)))
         .blur(radius: vm.notchState == .closed ? 30 : 0)
         .padding(Defaults[.enableMinimalisticUI] ? 0 : 8) //Putting the main padding for home view here for consistency
+    }
+
+    /// 标准路径首页的两排接缝：上排 strip + （`showCalendar` 开启时）下排全宽日历行。
+    ///
+    /// 高度分配的口径：日历行拿**固定档**（`HomeCalendarRow.rowHeight`），strip 拿剩下的
+    /// ——面板高度不足时优先保 strip 行（`max(0, …)`，不为负），而不是两排各让一半。
+    ///
+    /// **strip 高度为 0 时不生成 strip**（2026-09-29 实测）：`HomeStripBlock` 的裁剪在
+    /// 「宽度有值、高度为 0」的退化尺寸下不生效，块内容（专辑封面 / 标题）会按固有尺寸**溢出**画到
+    /// 下排日历行上（`stripHeight = 0` 时肉眼可见封面压住月份标题）。没有高度就不画，比画一层
+    /// 溢出残影更接近「优先保 strip 行」的本意——面板高度 ≈ 240pt 以下才会走到这里。
+    private var standardHomeContent: some View {
+        GeometryReader { geometry in
+            let available = max(0, geometry.size.height)
+            let stripHeight = showCalendar
+                ? max(0, available - HomeCalendarRow.rowHeight - HomeCalendarRow.rowSpacing)
+                : available
+
+            VStack(spacing: HomeCalendarRow.rowSpacing) {
+                if stripHeight > 0 {
+                    HomeStripView(albumArtNamespace: albumArtNamespace)
+                        .frame(height: stripHeight, alignment: .topLeading)
+                }
+
+                if showCalendar {
+                    HomeCalendarRow()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
     }
 
     private var sideLyricsContent: some View {

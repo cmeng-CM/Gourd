@@ -200,9 +200,13 @@ struct HomeStripBlock<Content: View>: View {
 
 /// 展开面板首页（标准路径）的那一条横向 strip。
 ///
-/// 块顺序固定为「内置块：音乐 → 日历 → 镜子」+「模块块：`homeEntries` 顺序」；内置块由上游
-/// `Defaults` 键门控（机制二：本批不把接管模块模块化），模块块由 manifest 的 `surfaces` 含
-/// `home` + 用户开关共同决定（名单来自投影，用户没开就不会出现在投影里）。
+/// 块顺序固定为「内置块：音乐 → 镜子」+「模块块：`homeEntries` 顺序」；内置块由上游 `Defaults`
+/// 键门控（机制二：本批不把接管模块模块化），模块块由 manifest 的 `surfaces` 含 `home` + 用户开关
+/// 共同决定（名单来自投影，用户没开就不会出现在投影里）。
+///
+/// **日历不在 strip 里**（2026-09-29 起）：整月网格需要宽度，塞进块里格子只有约 26pt——首页的日历
+/// 改由 strip 下面那条**全宽日历行**（`HomeCalendarRow`）承担。因此本视图不再生成日历块，条里的
+/// 内置块只剩音乐与镜子（哪些块在条里，`showCalendar` 不再参与）。
 struct HomeStripView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var registry = ModuleRegistry.shared
@@ -210,13 +214,11 @@ struct HomeStripView: View {
     @ObservedObject private var webcamManager = WebcamManager.shared
     @Default(.showStandardMediaControls) private var showStandardMediaControls
     @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
-    @Default(.showCalendar) private var showCalendar
     @Default(.showMirror) private var showMirror
     let albumArtNamespace: Namespace.ID
 
-    /// 内置三块的宽度声明（docs/17 §接口与数据形状 6 的取值，不得另取一套）。
+    /// 内置两块的宽度声明（docs/17 §接口与数据形状 6 的取值，不得另取一套）。
     private static let musicBlockWidth = HomeBlockWidth(min: 300, ideal: 420)
-    private static let calendarBlockWidth = HomeBlockWidth(min: 200, ideal: 260)
     private static let mirrorBlockWidth = HomeBlockWidth(min: 140, ideal: 160)
 
     /// 模块块的宽度由**宿主统一声明**（模块不参与「我在首页占多宽」的决策，D-11）：
@@ -243,12 +245,6 @@ struct HomeStripView: View {
             if shouldShowMusicPlayer {
                 HomeStripBlock(width: Self.musicBlockWidth) {
                     MusicPlayerView(albumArtNamespace: albumArtNamespace)
-                }
-            }
-
-            if showCalendar {
-                HomeStripBlock(width: Self.calendarBlockWidth) {
-                    HomeStripCalendarBlock()
                 }
             }
 
@@ -302,144 +298,6 @@ struct HomeStripView: View {
             HomeStripModulePlaceholder(reason: reason)
         case .none:
             EmptyView()
-        }
-    }
-}
-
-// MARK: - 内置块：日历
-
-/// 日历块：**一行日期头 + 悬停展开的日期轮 + 所选日期的竖向紧凑多行**（三个部件都复用上游声明）。
-///
-/// 为什么自建而不挂 `StandaloneCalendarView`：后者是「双栏月历 + 可滚动事件面板」（顶层
-/// `GeometryReader` 宽度对半、高度取 `vm.notchSize`、右栏是滚动 `List`），塞进 200–260pt 的块里
-/// 既横滚又撑高（docs/17 §改动点设计 3）。
-///
-/// **翻日期的能力保留在本块内**：日期轮（`WheelPicker`）照 `CalendarView` 的收起 / 展开做法
-/// （收起高度 0、悬停展开 50pt、`.easeInOut(duration: 0.18)`）挂回块里，选中的日期同时驱动
-/// 日期头、`EventListView` 与 `CalendarManager.updateCurrentDate`——否则「首页日历」只能看今天，
-/// 而月历 `StandaloneCalendarView` 在本批没有入口（已记入 docs/17 已知限制 8）。
-private struct HomeStripCalendarBlock: View {
-    @EnvironmentObject var vm: DynamicIslandViewModel
-    @ObservedObject private var calendarManager = CalendarManager.shared
-    @State private var selectedDate = Date()
-    @State private var dateExpanded = false
-    @Default(.hideCompletedReminders) private var hideCompletedReminders
-    @Default(.hideAllDayEvents) private var hideAllDayEvents
-
-    /// 日期轮展开时占用的高度：`WheelPicker` 的自然高度（照 `CalendarView` 的 `50`）。
-    private static let dateStripHeight: CGFloat = 50
-
-    /// 与 `CalendarView` 完全同一套过滤（已完成提醒 / 全天条目按偏好隐藏），
-    /// 空态判据因此与首页日历栏一致。
-    private var filteredEvents: [EventModel] {
-        EventListView.filteredEvents(
-            events: calendarManager.events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-    }
-
-    /// 与 `CalendarView` 收起态逐字同形的一行日期头；显示**选中**的日期（与日期轮、列表同源）。
-    private var headerText: String {
-        selectedDate.formatted(.dateTime.weekday(.abbreviated))
-            + ", " + selectedDate.formatted(.dateTime.month(.abbreviated))
-            + " " + selectedDate.formatted(.dateTime.day())
-    }
-
-    var body: some View {
-        // `GeometryReader` 取的是**放置后**的真实分配尺寸（不是测量值）：块拿到的是整条 strip
-        // 的高度，减去日期头（与展开后的日期轮）就是列表能用的高度。
-        GeometryReader { geo in
-            let listHeight = max(
-                0,
-                geo.size.height - HomeTodayListLayout.collapsedHeaderHeight
-                    - (dateExpanded ? Self.dateStripHeight : 0)
-            )
-
-            VStack(alignment: .leading, spacing: 0) {
-                // 日期头与日期轮在**同一个 hover 容器**里（照 `CalendarView`）：光标从日期头移进
-                // 展开后的日期轮时 hover 不退出，轮子才用得住。
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(headerText)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .padding(.top, 2)
-                        .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ZStack {
-                        WheelPicker(selectedDate: $selectedDate, config: Config())
-                            .frame(maxWidth: .infinity)
-                        // 边侧渐隐：提示这一条日期可以横向拨动（与 `CalendarView` 同形，随展开一起出现）。
-                        LinearGradient(colors: [Color.black.opacity(0.45), .clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: 16)
-                            .allowsHitTesting(false)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        LinearGradient(colors: [.clear, Color.black.opacity(0.45)], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: 16)
-                            .allowsHitTesting(false)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    // 收起 = 0 高（不占位）、悬停 = 日期轮的 50pt 自然高度，中间走同一条 0.18s 缓动。
-                    .frame(height: dateExpanded ? Self.dateStripHeight : 0)
-                    .opacity(dateExpanded ? 1 : 0)
-                    .allowsHitTesting(dateExpanded)
-                    // 这里**不能**加 `.clipped()`（2026-09-29 实测定位，T1 修「hover 展开的日期轮是
-                    // 空条」）：`WheelPicker` 里是 AppKit 背书的 `ScrollView`（`NSScrollView`），而
-                    // `.clipped()` 在容器还是零高时就被求值/缓存成「全裁掉」，容器长到 50pt 之后也
-                    // 不刷新——滚动视图的布局与绘制**都正确**（应用内 `cacheDisplay` 渲染能看到日期），
-                    // 只是永远合成不到屏幕上：空条、只剩两侧渐隐。对照实验（三种容器写法并排，见
-                    // `.workflow/p2-calendar-row/reports/`）：A 现状（带 clipped）= 空条；B 去掉
-                    // clipped = 日期正常；C 展开才挂载、仍带 clipped = 日期正常。
-                    // 收起态的不可见由上面两行保证（0 高 + 透明），不依赖裁剪。
-                }
-                .contentShape(Rectangle())
-                .onHover { inside in
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        dateExpanded = inside
-                    }
-                }
-
-                if filteredEvents.isEmpty {
-                    EmptyEventsView(selectedDate: selectedDate)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 6)
-                } else {
-                    // 不再给列表加 4pt 顶部间距：`HomeTodayListLayout.collapsedHeaderHeight`（26pt）
-                    // 的构成里**已经含**「与列表之间的 4pt 间距」，再加一次会让列表越出块底 4pt。
-                    EventListView(
-                        events: calendarManager.events,
-                        selectedDate: selectedDate,
-                        availableHeight: listHeight
-                    )
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .top)
-        }
-        // 首次出现时确保日历数据是**今天**的：与 `CalendarView` / `StandaloneCalendarView` 的
-        // `.onAppear` 同一条口径（块随面板展开而创建，因此每次展开都会对齐一次今天）。
-        .onAppear {
-            Task {
-                await calendarManager.updateCurrentDate(Date.now)
-            }
-        }
-        // 拨动日期轮（或点某一天）→ 换到那一天的日程：口径照 `CalendarView` 的 `.onChange(of: selectedDate)`。
-        .onChange(of: selectedDate) {
-            Task {
-                await calendarManager.updateCurrentDate(selectedDate)
-            }
-        }
-        // 悬停遮罩（沿用旧 `NotchHomeView` 日历栏的 `onHover`，覆盖整块：日期头 + 日期轮 + 列表）：
-        // `ContentView` 用它抑制「向下滚动收起面板」与横向切歌手势，避免用户在日历上操作时面板被误收起。
-        .onHover { isHovering in
-            vm.isHoveringCalendar = isHovering
-        }
-        // 块被销毁（切 tab / 面板收起）时 `onHover` 不会再补发一次 false，必须显式归位——
-        // 否则 `vm.isHoveringCalendar` 悬空为 true，面板之后再也收不起来（同一个坑见 `ModuleHostView`）。
-        .onDisappear {
-            vm.isHoveringCalendar = false
         }
     }
 }
