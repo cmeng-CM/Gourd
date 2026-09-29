@@ -405,32 +405,45 @@ struct MusicControlsView: View {
     private let seekInterval: TimeInterval = 10
     private let skipMagnitude: CGFloat = 6
 
+    /// 音乐区块（封面对侧的「标题 + 进度 + 控制按钮」）。
+    ///
+    /// **成组、顶部对齐**（2026-09-29 用户反馈「音乐播放的时候，控制按钮在最下面，不在播放的区域」）：
+    /// 改造前这里是一个 `GeometryReader`（宽高双向贪婪）包住「标题 + 进度」，控制按钮行是它**外面**
+    /// 的兄弟节点——面板高 400～850 时 `GeometryReader` 吃掉全部剩余高度，按钮行就被推到面板最底部，
+    /// 与封面/标题之间隔出一大片空白。现在把控制按钮行**收进同一区块内的 `VStack`**、整个区块
+    /// 顶部对齐（`maxHeight: .infinity, alignment: .topLeading`）：按钮紧跟进度条，未使用的空间
+    /// 留在区块**下方**。
+    ///
+    /// 封面尺寸 / 圆角 / 进度条样式 / 按钮外观与顺序一概未动；`GeometryReader` 仍是宽度来源
+    /// （只把读数上移一层，宽度换算见 `songInfo(width:)`）。
     var body: some View {
-        VStack(alignment: .leading) {
-            songInfoAndSlider
-            if shouldShowControlHUDRow {
-                controlHUDRow
-            } else {
-                playbackControls
+        GeometryReader { geo in
+            VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    songInfo(width: max(0, geo.size.width - Self.songInfoLeadingInset))
+                        .zIndex(1) // Ensure it draws above the waveform scrubber
+                    musicSlider
+                        .zIndex(0)
+                }
+                // 与原 `songInfoAndSlider` 的留白一致（`GeometryReader` 的读数比内容宽 5pt：
+                // 这段 leading 内边距在读数里已经扣掉，见上面的 `- Self.songInfoLeadingInset`）。
+                .padding(.top, 10)
+                .padding(.leading, Self.songInfoLeadingInset)
+
+                if shouldShowControlHUDRow {
+                    controlHUDRow
+                } else {
+                    playbackControls
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .buttonStyle(PlainButtonStyle())
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var songInfoAndSlider: some View {
-        GeometryReader { geo in
-            VStack(alignment: .leading, spacing: 4) {
-                songInfo(width: geo.size.width)
-                    .zIndex(1) // Ensure it draws above the waveform scrubber
-                musicSlider
-                    .zIndex(0)
-            }
-        }
-        .padding(.top, 10)
-        .padding(.leading, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    /// 「标题 / 歌手」文字区相对音乐区块的 leading 内边距（pt）——宽度换算要用同一个值。
+    private static let songInfoLeadingInset: CGFloat = 5
 
     private func songInfo(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
