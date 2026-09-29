@@ -6,11 +6,12 @@
 //  全量 manifest，不是 `tabEntries`（那份只有已激活的；用它会让「关掉的组件从列表里消失」，
 //  用户就再也开不回来）。
 //
-//  **写路径的顺序是定死的**（docs/17 §处理链路）：先把用户选择落到
-//  `Defaults[.moduleEnableOverrides]`，再 `await ModuleRegistry.setEnabled(_:for:)` 改内存状态。
-//  activate 失败时状态是终态 `failed`、开关回弹——回弹**只把偏好写回 `false`**，绝不再调
-//  `setEnabled(false)`：那会把 `failed` 降级成 `.disabled`，等于给 failed 开出一条隐藏的
-//  「关一下再打开」重试通道，与 D-13（failed 不可逃逸）矛盾。
+//  **写路径的顺序是定死的**（docs/17 §处理链路）：先把用户选择落到它该落的那一份偏好
+//  （`ModuleEnablementWrite`——接管模块写上游键，其余写 `Defaults[.moduleEnableOverrides]`），
+//  再 `await ModuleRegistry.setEnabled(_:for:)` 改内存状态。
+//  activate 失败时状态是终态 `failed`、开关回弹——回弹**只把偏好写回**（接管模块连偏好都不写，
+//  见 D-13），绝不再调 `setEnabled(false)`：那会把 `failed` 降级成 `.disabled`，等于给 failed
+//  开出一条隐藏的「关一下再打开」重试通道，与 D-13（failed 不可逃逸）矛盾。
 //
 //  规格：docs/17-nookx-adoption.md §改动点设计 5（卡片页）、§接口与数据形状 3/4（`setEnabled`
 //  语义与偏好键语义）、§已知限制 5（内置块不在此页——页面顶部那行说明是它的缓解措施）。
@@ -24,6 +25,18 @@
 //  下移），写 `Defaults[.homeBlockOrder]`。名单是「内置块（按开关）+ 模块块（按 `homeEntries`）」
 //  合成的一张表，排序算式与首页 strip **逐字同一条**（`HomeBlockOrdering.sorted`）——
 //  这一页显示的顺序就是首页渲染的顺序，不存在第二套口径。
+//
+//  P2 接管批次 / T6 增量（接管卡的写路径与文案 + 功能卡段 + 顺序节收敛）：
+//  - **写路径改走唯一入口**：开关落盘调 `ModuleEnablementWrite.write(_:for:takeoverKey:)`——
+//    接管模块写的是**上游那个总开关**，非接管模块写 `moduleEnableOverrides`（本文件不再自己
+//    读改写字典）；activate 失败的回弹值由 `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)`
+//    给出：返回 `nil`（接管模块）**什么都不写**——它的偏好就是上游总开关，回弹等于「因为模块
+//    激活失败，把用户的功能关了」；返回 `false`（非接管）才把用户的开关拨回去（D-13）。
+//  - **新增「功能」段**：七个**尚未模块化**的上游功能各一行（图标 + 名称 + 一行效果 + 开关），
+//    开关直接读写那一个 `Defaults` 键——纯登记，不改渲染归属；详细设置仍在上游那一页，
+//    卡面文案（段脚注）写明这一点（docs/20 §做法 机制三 / D-07）。
+//  - **顺序节收敛**：接管后首页块只认模块 id，内置块里只剩首页日历行且它**不在 strip 里**
+//    （全宽日历行，不进顺序表），因此不再生成 `builtin.music` / `builtin.mirror` 两行。
 //
 
 import Defaults
@@ -40,9 +53,8 @@ struct ModuleSettingsSection: View {
     /// 「先落盘再刷新」因此是**一次写操作**，不存在两份状态对不上的窗口。
     @Default(.homeBlockOrder) private var homeBlockOrder
 
-    /// 内置块的**开关级**门控（这一页只看开关，不看运行期条件，理由见 `orderRows`）。
-    @Default(.showStandardMediaControls) private var showStandardMediaControls
-    @Default(.showMirror) private var showMirror
+    // 内置块的开关级门控（`showStandardMediaControls` / `showMirror`）在 T6 收敛后**不再需要**：
+    // 音乐与镜子已是模块块，顺序名单里只有模块块（详见 `orderRows`）。
 
     /// 数据源 = 注册表**全量** manifest（含未启用），按 `id` 升序（docs/17 §改动点设计 5）。
     private var manifests: [ModuleManifest] {
@@ -51,8 +63,8 @@ struct ModuleSettingsSection: View {
 
     var body: some View {
         Form {
-            // 「宿主内置块（音乐 / 日历 / 镜子）在各自的设置项里开关」——docs/17 §已知限制 5 的
-            // 缓解措施：它们不是模块，由上游 `Defaults` 键门控，因此不在这份名单里。
+            // 内置块里只剩首页日历行不在这份卡片名单里（音乐 / 镜子已是模块卡片）——docs/17
+            // §已知限制 5 的缓解措施：日历行由上游 `Defaults` 键门控，开关在下方「功能」段。
             Section {
                 Text(LocalizedStringKey("settings.modules.builtinHint"))
                     .font(.caption)
@@ -66,11 +78,90 @@ struct ModuleSettingsSection: View {
                 }
             }
 
-            // 顺序节**放在卡片之后**：上面那行提示说「内置块不出现在这里的卡片里」，顺序节却要列出
-            // 内置块（它们也能排）——放最后 + 脚注说明「开关在各自的设置项里」，两句话才不会互相打架。
+            // 「功能」段**紧跟组件卡之后**（D-07：先看得见模块、再看得见还没模块化的上游功能），
+            // 顺序节放最后（它只列模块块，见 `orderRows`）。
+            featuresSection
+
             orderSection
         }
         .navigationTitle(Text(LocalizedStringKey("settings.modules.title")))
+    }
+
+    // MARK: 功能（上游总开关的登记表）
+
+    /// 七张功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
+    ///
+    /// `nameKey` **逐字沿用上游设置页那一项的名称字面量**（在 `SettingsView.swift` 里那一项
+    /// 旁边取证）——用户在别处认识的词与这里看到的必须是同一个 key，不另起说法
+    /// （docs/20 §接口与数据形状 7）。
+    ///
+    /// **不是 `private`**（文档 §7 写的是 `private struct FeatureCard`）：解析用例直接读这张表
+    /// （`TakeoverEnablementTests.testFeatureCardKeysResolve`），表侧把键写错才会红——测试另抄
+    /// 一份键表的话，「表写错、文案对」这条谁都发现不了。
+    static let featureCards: [FeatureCard] = [
+        FeatureCard(
+            id: "enableClipboardManager",
+            nameKey: "Enable Clipboard Manager",
+            symbolName: "clipboard",
+            key: .enableClipboardManager,
+            effectKey: "settings.features.effect.enableClipboardManager"
+        ),
+        FeatureCard(
+            id: "showCalendar",
+            nameKey: "Show calendar",
+            symbolName: "calendar",
+            key: .showCalendar,
+            effectKey: "settings.features.effect.showCalendar"
+        ),
+        FeatureCard(
+            id: "enableLockScreenWeatherWidget",
+            nameKey: "Show lock screen weather",
+            symbolName: "cloud.sun.fill",
+            key: .enableLockScreenWeatherWidget,
+            effectKey: "settings.features.effect.enableLockScreenWeatherWidget"
+        ),
+        FeatureCard(
+            id: "enableStatsFeature",
+            nameKey: "Enable system stats monitoring",
+            symbolName: "chart.xyaxis.line",
+            key: .enableStatsFeature,
+            effectKey: "settings.features.effect.enableStatsFeature"
+        ),
+        FeatureCard(
+            id: "dynamicShelf",
+            nameKey: "Enable shelf",
+            symbolName: "tray.and.arrow.down",
+            key: .dynamicShelf,
+            effectKey: "settings.features.effect.dynamicShelf"
+        ),
+        FeatureCard(
+            id: "enableTerminalFeature",
+            nameKey: "Enable terminal",
+            symbolName: "apple.terminal",
+            key: .enableTerminalFeature,
+            effectKey: "settings.features.effect.enableTerminalFeature"
+        ),
+        FeatureCard(
+            id: "enableNotes",
+            nameKey: "Enable Notes",
+            symbolName: "note.text",
+            key: .enableNotes,
+            effectKey: "settings.features.effect.enableNotes"
+        ),
+    ]
+
+    private var featuresSection: some View {
+        Section {
+            ForEach(Self.featureCards) { card in
+                FeatureCardRow(card: card)
+            }
+        } header: {
+            Text(LocalizedStringKey("settings.features.title"))
+        } footer: {
+            Text(LocalizedStringKey("settings.features.footer"))
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: 首页块顺序
@@ -83,39 +174,19 @@ struct ModuleSettingsSection: View {
         let defaultOrder: Int
     }
 
-    /// 顺序行的名单：**只列当前会出现在首页的块**——内置块按开关（`showStandardMediaControls` /
-    /// `showMirror`），模块块按 `homeEntries`（= 已激活且声明 `home` 的模块）。
+    /// 顺序行的名单：**只列模块块**（`homeEntries` = 已激活且声明 `home` 的模块）。
     ///
-    /// **判据比首页少一档、是刻意的**：首页还叠加运行期条件（音乐要有会话、镜子要在展开态且摄像头
-    /// 可用、模块块要 `content(for: .home)` 不答 `.none`）。这一页只用**配置级判据**，否则列表会随
-    /// 「有没有在放歌」「面板是不是展开着」抖动，用户刚点的行会跳走。代价：列表里可能出现此刻首页
+    /// **T6 收敛**：接管之后首页块只认模块 id（音乐 / 镜子已是模块块），因此这里不再生成
+    /// `builtin.music` / `builtin.mirror` 两条内置行（它们点不动了：块 id 已经换成模块 id）；
+    /// 内置块里只剩**首页日历行**，它不在 strip 里（`NotchHomeView` 的下排全宽行），本来就不进
+    /// 顺序表——所以这一节现在只有模块块。
+    ///
+    /// **判据比首页少一档、是刻意的**：首页还叠加运行期条件（音乐要有会话、镜子要摄像头可用、
+    /// 模块块要 `content(for: .home)` 不答 `.none`）。这一页只用**配置级判据**，否则列表会随
+    /// 「有没有在放歌」「摄像头在不在」抖动，用户刚点的行会跳走。代价：列表里可能出现此刻首页
     /// 看不到的块（音乐没会话时），反之首页也可能画出这里没列的块（模块答 `.none` 的那个不在此列）。
     private var orderRows: [OrderRow] {
         var rows: [OrderRow] = []
-
-        // 内置块的名称沿用它自己的设置项文案（"Music" / "Mirror"）——与用户在设置里认识的词一致，
-        // 不另起一套说法。日历块已移除（首页日历走全宽日历行），这里**不生成**它。
-        if showStandardMediaControls {
-            rows.append(
-                OrderRow(
-                    id: HomeBlockOrdering.BuiltinBlock.music.id,
-                    name: String(localized: "Music"),
-                    symbolName: "music.note",
-                    defaultOrder: HomeBlockOrdering.BuiltinBlock.music.defaultOrder
-                )
-            )
-        }
-
-        if showMirror {
-            rows.append(
-                OrderRow(
-                    id: HomeBlockOrdering.BuiltinBlock.mirror.id,
-                    name: String(localized: "Mirror"),
-                    symbolName: "camera",
-                    defaultOrder: HomeBlockOrdering.BuiltinBlock.mirror.defaultOrder
-                )
-            )
-        }
 
         for entry in registry.homeEntries {
             rows.append(
@@ -173,6 +244,68 @@ struct ModuleSettingsSection: View {
         let moved = HomeBlockOrdering.moved(ids, moving: row.id, direction: direction)
         guard moved != ids else { return }
         Defaults[.homeBlockOrder] = HomeBlockOrdering.table(for: moved)
+    }
+}
+
+// MARK: - 功能卡（上游键的登记行）
+
+/// 一段上游功能的登记行：**开关就是那个 `Defaults` 键**，没有模块、没有内核状态
+/// （docs/20 §接口与数据形状 7）。
+///
+/// **本类型不是 `private`**（文档 §7 的片段写的是 `private struct FeatureCard`）：解析用例
+/// 直接读 `ModuleSettingsSection.featureCards`（同一张表），表侧把键写错才会红——测试另抄一份
+/// 键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
+struct FeatureCard: Identifiable {
+    /// 上游键名，同时是效果文案 key 的后缀。
+    let id: String
+    /// 上游设置页里的同一个名称（`String(localized:)` 同源）；**本段不另起说法**。
+    let nameKey: String
+    /// SF Symbol 名（与上游那一项所在设置页的图标同一套：剪贴板 / 日历 / 天气 / 统计 / 架子 /
+    /// 终端 / 便签）。
+    let symbolName: String
+    /// 这个功能的总开关——裸 `Binding` 直读写它（动态键无法用 `@Default`，§已知限制 8）。
+    let key: Defaults.Key<Bool>
+    /// `settings.features.effect.<id>`。
+    let effectKey: String
+}
+
+/// 功能卡的一行：图标 chip + 名称 + 一行「效果 / 出现位置」+ 开关。
+///
+/// 排版与组件卡逐字同形（chip 在左、开关在右、行内边距一致），但**没有 surfaces 徽标、
+/// 没有摘要、没有失败态**：这里没有模块，也就没有「激活 / 失败」这一维（D-07）。
+private struct FeatureCardRow: View {
+    let card: FeatureCard
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ModuleSymbolChip(symbolName: card.symbolName)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey(card.nameKey))
+                    .fontWeight(.medium)
+
+                // 「效果 / 出现位置」：这一段只登记上游总开关，卡面必须写清「拨下去会看到什么」，
+                // 否则又是「打开开关但界面没变化」的错觉（docs/20 §做法 机制三）。
+                Text(LocalizedStringKey(card.effectKey))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            // **裸 `Binding`，不是 `@Default`**：`Defaults.Key` 是运行期取值，`@Default` 装不上；
+            // 为七行各挂一个订阅不值当。代价见 docs/20 §已知限制 8：本页开着时从上游设置页改同键，
+            // 这张卡不即时刷新（关掉重开本页即可）。
+            Toggle(isOn: Binding(
+                get: { Defaults[card.key] },
+                set: { Defaults[card.key] = $0 }
+            )) {
+                Text(LocalizedStringKey(card.nameKey))
+            }
+            .labelsHidden()
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -328,33 +461,32 @@ private struct ModuleSettingsCard: View {
         return false
     }
 
-    /// set：**先落盘再改内存**（docs/17 §处理链路）。
+    /// set：**先落盘再改内存**（docs/17 §处理链路）。落盘只经 `ModuleEnablementWrite.write`——它是
+    /// 组件页写开关的**唯一入口**：接管模块写的是上游那个总开关（`enableTimerFeature` /
+    /// `showStandardMediaControls` / `showMirror`），非接管模块写 `moduleEnableOverrides`。
     private var toggle: Binding<Bool> {
         Binding(
             get: { isOn },
             set: { newValue in
-                Self.writeOverride(newValue, for: manifest.id)
+                let takeoverKey = registry.takeoverEnableKey(for: manifest.id)
+                ModuleEnablementWrite.write(newValue, for: manifest.id, takeoverKey: takeoverKey)
                 Task {
                     let state = await registry.setEnabled(newValue, for: manifest.id)
-                    // 启动失败 → 开关回弹为关：**只把偏好写回 false**，不碰内核状态
-                    // （`setEnabled(false)` 会把 failed 降级成 `.disabled`，D-13 禁止）。
+                    // 启动失败 → 开关回弹：**只把偏好写回**（不碰内核状态——`setEnabled(false)` 会把
+                    // failed 降级成 `.disabled`，D-13 禁止）。写什么由策略给出（D-13 的**两档**）：
+                    // 非接管模块 → `false`（把用户的开关拨回去）；接管模块 → `nil`，**什么都不写**
+                    //（它的偏好就是上游总开关，回弹等于「因为模块激活失败，把用户的功能关了」）。
                     // 界面刷新不需要额外触发：这一路必然伴随 `states` 的真变化
                     //（`nil` / `.disabled` → 写入 `.failed`），`@Published` 会重绘；
                     // 而「已是 failed」时开关本来就不可点。
                     if case .failed = state {
-                        Self.writeOverride(false, for: manifest.id)
+                        if let rollback = ModuleEnablementRollback.preferenceToWrite(takeoverKey: takeoverKey) {
+                            ModuleEnablementWrite.write(rollback, for: manifest.id, takeoverKey: takeoverKey)
+                        }
                     }
                 }
             }
         )
-    }
-
-    /// 写 `Defaults[.moduleEnableOverrides]`（整字典读改写，与既有字典型 `Defaults` 写入同形）。
-    /// **缺键 = 用户未表达**（回落 manifest）——因此这里只在用户真的动了开关时写键。
-    private static func writeOverride(_ enabled: Bool, for id: String) {
-        var overrides = Defaults[.moduleEnableOverrides]
-        overrides[id] = enabled
-        Defaults[.moduleEnableOverrides] = overrides
     }
 
     // MARK: 呈现
@@ -374,12 +506,17 @@ private struct ModuleSettingsCard: View {
 
     /// 「效果 / 出现位置」一行的本地化 key：**按模块 id 逐块映射**，不是通用模板。
     ///
-    /// 只覆盖内置三块——这三行写的是**本项目里这三个组件实际的渲染点**（以 manifest 的
+    /// 覆盖**六个**已注册模块——这六行写的是**本项目里这些组件实际的渲染点**（以 manifest 的
     /// `surfaces` 与实际视图为准），不是从 manifest 推导出来的通用句子：
     /// - `todos`：`[.expanded, .compact, .home]` → 折叠态中央槽位 + 首页块 + 展开面板待办页；
     /// - `notifications`：`[.expanded, .compact, .home]` → 折叠态铃铛 + 首页通知块 + 展开面板通知列表
     ///   （另有 HUD：新通知在刘海上短暂浮现，`presentHUD` 那条链，受浮层总开关控制）；
     /// - `progress`：`[.compact, .expanded]`（**无 `home`**）→ 折叠态中央槽位 + 展开面板进度页。
+    ///
+    /// 接管三块（P2 / T6）：它们的渲染点由模块拥有，且都带自己的运行期门控，因此这一行要写清
+    /// 「什么时候看得到」：
+    /// - `timer` → 展开面板的计时器 tab（**仅当**「显示方式 = 标签页」，`isTabVisible()` 的口径）；
+    /// - `mirror` / `music` → 首页块（镜子要摄像头可用；音乐要有播放会话，除非关掉了无会话即隐藏）。
     ///
     /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
     private static func effectKey(for manifest: ModuleManifest) -> String? {
@@ -390,6 +527,12 @@ private struct ModuleSettingsCard: View {
             return "settings.modules.effect.notifications"
         case "com.cmeng.gourd.progress":
             return "settings.modules.effect.progress"
+        case "com.cmeng.gourd.timer":
+            return "settings.modules.effect.timer"
+        case "com.cmeng.gourd.mirror":
+            return "settings.modules.effect.mirror"
+        case "com.cmeng.gourd.music":
+            return "settings.modules.effect.music"
         default:
             return nil
         }

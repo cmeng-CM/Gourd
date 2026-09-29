@@ -54,6 +54,14 @@
 //    （封面配对动画：折叠态播放器 ↔ 展开态音乐块）；为它造一条「读回自己刚写的环境值」的断言
 //    只是把修饰符抄进用例，不证明宿主真的注入了，故不写（见 T5 报告 §4）。
 //
+//  P2 接管批次 / T6 追加（组件页的文案解析——功能卡段 + 接管卡的效果行）：
+//  - **七张功能卡的键解析**：数据源是生产表本身（`ModuleSettingsSection.featureCards`，为了这条
+//    用例它没写成 `private`）——`id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红；
+//  - **三个接管模块的名称 / 效果行 key 解析**：名称 key 取自真模块的 manifest（与 `label(for:)`
+//    同源）；**效果行三条在用例里是字面量**（映射函数是 `private`），映射侧写错这条不会红——
+//    覆盖缺口如实记在 T6 报告里；
+//  - **回弹两档**用三个真模块的真源键再钉一遍（钉的是策略函数，不是视图接线——同见报告）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -861,6 +869,91 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
+
+    /// 七张功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
+    /// 七条效果行 key + 七条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
+    ///
+    /// **数据源是生产表本身**（`ModuleSettingsSection.featureCards`——为了这条用例它没有写成
+    /// `private`）：表里把 `id` / `effectKey` / `nameKey` 写错、或文案没写进 catalog，这条都会红。
+    /// 测试另抄一份键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
+    ///
+    /// **语言依赖**：七条名称 key 是上游那几个字面量（en 在 catalog 里以 key 自身为值），
+    /// `!= key` 只在宿主解析出非英语译文时成立（本机是 zh-Hans-CN）——这是「逐字沿用上游字面量」
+    /// 的必然结果，不是本用例的疏漏（见报告 §遗留）。
+    func testFeatureCardKeysResolve() {
+        let cards = ModuleSettingsSection.featureCards
+
+        XCTAssertEqual(
+            cards.map(\.id),
+            [
+                "enableClipboardManager", "showCalendar", "enableLockScreenWeatherWidget",
+                "enableStatsFeature", "dynamicShelf", "enableTerminalFeature", "enableNotes",
+            ],
+            "七行 = docs/20 §接口与数据形状 7 的七个上游键名，顺序与取值都不改"
+        )
+
+        for card in cards {
+            XCTAssertEqual(
+                card.effectKey,
+                "settings.features.effect.\(card.id)",
+                "\(card.id) 的效果行 key 必须是 `settings.features.effect.<键名>` 这一形态"
+            )
+            XCTAssertResolves(card.effectKey)
+            XCTAssertResolves(card.nameKey)
+        }
+
+        XCTAssertResolves("settings.features.title")
+        XCTAssertResolves("settings.features.footer")
+    }
+
+    /// 三个接管模块的卡片文案也能解析：名称 key 取**真模块的 manifest**（卡片上那行名称走
+    /// `ModuleRegistry.label(for:)`，读的就是它），效果行是 T6 新增的那三条。
+    ///
+    /// 效果行那三条**在用例里是字面量**（映射函数 `ModuleSettingsCard.effectKey(for:)` 是
+    /// `private`，用例拿不到，也没有为它开内部口子）：映射侧把某一条写错时**这条不会红**——
+    /// 覆盖缺口如实记在 T6 报告里（验收靠组件页肉眼一条 + 本节其余断言）。
+    func testTakeoverModuleCardKeysResolve() throws {
+        for manifest in [TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest] {
+            let nameKey = try XCTUnwrap(manifest.name.key, "\(manifest.id) 的名称 key 必须写成 Localizable key")
+            XCTAssertEqual(nameKey, "module.\(manifest.shortID).name", "名称 key 形态与 label(for:) 同源")
+            XCTAssertResolves(nameKey)
+        }
+
+        for key in [
+            "settings.modules.effect.timer",
+            "settings.modules.effect.mirror",
+            "settings.modules.effect.music",
+        ] {
+            XCTAssertResolves(key)
+        }
+    }
+
+    /// 回弹两档仍成立（D-13 / docs/20 §做法 机制七），这里用**三个真模块的真源键**再钉一遍：
+    /// 组件卡把它们的真源键交给 `preferenceToWrite` 时必须拿到 `nil`（**什么都不写**）。
+    ///
+    /// 注意这条钉的是**策略函数**，不是视图接线：卡里「回弹时去问策略、而不是无条件写 false」
+    /// 那一句没有自动化断言（视图的 `Binding` 闭包不可直接驱动——见 T6 报告的变异记录 ①）。
+    func testRollbackStaysNilForRealTakeoverKeys() {
+        for key in [
+            TimerModule.takeoverEnableKey,
+            MirrorModule.takeoverEnableKey,
+            MusicModule.takeoverEnableKey,
+        ] {
+            XCTAssertNotNil(key, "三个接管模块必须声明真源键（声明缺失时它就不是接管模块了）")
+            XCTAssertNil(
+                ModuleEnablementRollback.preferenceToWrite(takeoverKey: key),
+                "接管模块的回弹是空操作——写回偏好等于因为激活失败把用户的功能关了"
+            )
+        }
+
+        XCTAssertEqual(
+            ModuleEnablementRollback.preferenceToWrite(takeoverKey: nil),
+            false,
+            "非接管模块照旧回弹（把用户的开关拨回去）"
+        )
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。
@@ -960,6 +1053,18 @@ final class TakeoverEnablementTests: XCTestCase {
         } else {
             UserDefaults.standard.removeObject(forKey: key)
         }
+    }
+
+    /// 本地化 key 在**宿主 bundle**里解析得出文案（查不到时 `Bundle` 原样返回 key，据此判定；
+    /// 判定口径与 `ModuleKernelTests` 的同类断言逐字相同：`Bundle.main.localizedString` + `!= key`）。
+    private func XCTAssertResolves(
+        _ key: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+        XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）", file: file, line: line)
+        XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串", file: file, line: line)
     }
 }
 
