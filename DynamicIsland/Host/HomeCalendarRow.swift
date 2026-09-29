@@ -90,7 +90,11 @@ struct HomeCalendarRow: View {
                     scrollTarget: $monthScrollTarget,
                     // 翻月只改显示月份、不动选中日（首页这一排的月历是「浏览」用的；
                     // 选中日只由点某一天改，右侧清单与高亮因此只在点日期时变）。
-                    monthNavigationMovesSelection: false
+                    monthNavigationMovesSelection: false,
+                    // 有事件的日期给日格画小圆点：传**已过滤**的条目（与右侧清单同一份
+                    // `filteredEvents`，同一套偏好口径）——已完成提醒 / 被隐藏的全天条目不会有点。
+                    // 按月切片由 `MonthGridView` 自己按它持有的 `displayedMonth` 做（翻月后标记要跟着变）。
+                    events: filteredEvents
                 )
                 .frame(width: monthGridWidth(in: max(0, geometry.size.width)), alignment: .topLeading)
 

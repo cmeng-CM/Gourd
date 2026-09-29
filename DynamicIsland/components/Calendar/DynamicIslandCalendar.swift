@@ -540,14 +540,14 @@ struct CalendarView: View {
 
 // MARK: - 整月网格（抽取复用：独立面板左栏 + 首页日历行左栏）
 
-/// 整月网格的**纯几何**：`MonthGridView` 日格的唯一来源，由 `StandaloneCalendarView` 的 `monthDays`
-/// 逐字抽出（口径不变）——
+/// 整月网格的**纯几何 + 纯标记**：`MonthGridView` 日格与事件标记的唯一来源，由 `StandaloneCalendarView`
+/// 的 `monthDays` 逐字抽出（口径不变）——
 ///
 /// 首格 = **当月首日所在那一周的起点**、末格 = **当月末日所在那一周的终点**，逐日 +1 展开，
 /// 因此两端都含跨月补格（补格来自相邻月份），总天数恒为 7 的整数倍。周起点跟着
 /// `calendar.firstWeekday` 走（与 `MonthGridView` 的星期表头同一来源）。
 ///
-/// 不读 `Defaults`、不碰「今天」，因此可以用固定 `Calendar` + 固定月份直接单测
+/// 不读 `Defaults`、不碰「今天」，因此可以用固定 `Calendar` + 固定月份/事件直接单测
 /// （`ModuleKernelTests` 的 `MonthGridLayoutTests`）。
 enum MonthGridLayout {
     static func days(forMonth month: Date, calendar: Calendar = .current) -> [Date] {
@@ -566,15 +566,56 @@ enum MonthGridLayout {
         }
         return days
     }
+
+    /// 给定月份里**有事件的日期**（每个元素都是那天的零点）——`MonthGridView` 日格标记的唯一判据。
+    ///
+    /// 三条口径（都有用例钉住）：
+    /// 1. **传入的 `events` 必须已过滤**：调用方走 `EventListView.filteredEvents(events:hideCompletedReminders:hideAllDayEvents:)`
+    ///    （「已完成提醒 / 被偏好隐藏的全天条目」不进标记），本函数自己**不读 `Defaults`、不碰 `CalendarManager`**
+    ///    ——这样"哪些天有点"与右侧清单同源，不会出现「清单里没有这条、格子上却有点」；
+    /// 2. **覆盖区间按天算**：一条事件覆盖 `[起始日, (结束时刻 − 1s) 所在日]` 里的每一天（跨天事件每天都算）。
+    ///    那个 −1s 是必须的：全天事件在 EventKit 里 `end` 是**次日零点的排他值**（9/29 全天 = 9/29 00:00 → 9/30 00:00），
+    ///    不减就会把次日也标上；定时事件跨零点（9/29 23:00 → 9/30 01:00）两天都覆盖，也是这条规则的自然结果；
+    /// 3. **按月切片**：只返回**当月网格（含跨月补格）里**的日期。补格（相邻月份的日期）照样带标记——与系统
+    ///    日历一致，格子既然画出来了就该显示它有没有事件；网格之外的日期不进集合，跨月事件因此不会把标记
+    ///    画到别的月份的格子上。
+    static func daysWithEvents(
+        inMonth month: Date,
+        events: [EventModel],
+        calendar: Calendar = .current
+    ) -> Set<Date> {
+        guard !events.isEmpty else { return [] }
+
+        let coverage: [(first: Date, last: Date)] = events.map { event in
+            let first = calendar.startOfDay(for: event.start)
+            // 结束时刻不晚于起始时刻（零长 / 数据异常）时退化为「只覆盖起始日」，不产生空区间。
+            let last = calendar.startOfDay(for: event.end.addingTimeInterval(-1))
+            return (first, max(first, last))
+        }
+
+        var daysWithEvents: Set<Date> = []
+        for day in days(forMonth: month, calendar: calendar) {
+            let normalized = calendar.startOfDay(for: day)
+            if coverage.contains(where: { normalized >= $0.first && normalized <= $0.last }) {
+                daysWithEvents.insert(normalized)
+            }
+        }
+        return daysWithEvents
+    }
 }
 
-/// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（今天 / 选中高亮）+ 按选中日居中**。
+/// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（今天 / 选中高亮 / 有事件的小圆点）
+/// + 按选中日居中**。
 ///
 /// 从 `StandaloneCalendarView` 左栏**逐字抽出**（只抽不重写）：独立日历面板与首页的整行日历共用这
 /// 一份实现——月历逻辑只有一处，不再复制第二份（复制必然漂移）。
 ///
 /// 视图只负责「显示哪个月 + 选中哪天」：选中日的写回方（调用方）自己决定要不要拉那一天的日程
 /// （独立面板与首页日历行都走 `CalendarManager.updateCurrentDate`）。
+///
+/// **事件标记的数据源由调用方传入**（`events`，已过滤）：本视图不读 `CalendarManager.shared`，
+/// 因为同一个网格有两个宿主（首页日历行 / 独立面板），谁读全局单例都会让这份实现绑死在宿主的
+/// 数据口径上，也没法用固定事件直接测「标记画在哪几天」。
 struct MonthGridView: View {
     /// 选中日：日格读它做高亮、点日格写它。
     @Binding var selectedDate: Date
@@ -584,6 +625,10 @@ struct MonthGridView: View {
     /// 翻月时是否把选中日一并挪到**新月份首日**：独立面板的既有行为是 `true`；
     /// 首页日历行传 `false`（翻月只改显示月份，选中日不动）。
     var monthNavigationMovesSelection: Bool
+    /// 事件标记的数据源：**已过滤**的条目（口径 = `EventListView.filteredEvents`，由调用方在
+    /// 「既有数据源 → 过滤」之后传进来，如 `HomeCalendarRow.filteredEvents`）。
+    /// 按月切片由本视图自己做（见 `eventDays`），传入的是**全量**已过滤条目、不是某个月的子集。
+    var events: [EventModel]
 
     /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
     @State private var displayedMonth: Date
@@ -593,11 +638,13 @@ struct MonthGridView: View {
     init(
         selectedDate: Binding<Date>,
         scrollTarget: Binding<Date?>,
-        monthNavigationMovesSelection: Bool = false
+        monthNavigationMovesSelection: Bool = false,
+        events: [EventModel]
     ) {
         _selectedDate = selectedDate
         _scrollTarget = scrollTarget
         self.monthNavigationMovesSelection = monthNavigationMovesSelection
+        self.events = events
         // 初值取选中日所在月（而不是 `Date()`）：`onChange` 不会为首帧补发，初值必须自己对齐。
         _displayedMonth = State(initialValue: selectedDate.wrappedValue.startOfMonth)
     }
@@ -618,6 +665,15 @@ struct MonthGridView: View {
 
     private var yearTitle: String {
         displayedMonth.formatted(.dateTime.year())
+    }
+
+    /// 当前显示月份里「有事件」的日期（日格标记的唯一判据）。
+    ///
+    /// 切片放在视图内（而不是调用方）是必需的：**显示月份由本视图自持**，翻月改的是 `displayedMonth`，
+    /// 调用方事先算好一个月的集合翻月后就过期了。所以调用方只传**已过滤的全量条目**，
+    /// 「哪几天有点」由纯函数 `MonthGridLayout.daysWithEvents(inMonth:events:calendar:)` 在这里按月算。
+    private var eventDays: Set<Date> {
+        MonthGridLayout.daysWithEvents(inMonth: displayedMonth, events: events, calendar: calendar)
     }
 
     var body: some View {
@@ -728,6 +784,7 @@ struct MonthGridView: View {
         let isCurrentMonth = calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month)
         let isSelected = calendar.isDate(day, inSameDayAs: selectedDate)
         let isToday = calendar.isDateInToday(day)
+        let hasEvents = eventDays.contains(calendar.startOfDay(for: day))
 
         return Button {
             withAnimation(.smooth(duration: 0.18)) {
@@ -746,9 +803,35 @@ struct MonthGridView: View {
                     .foregroundStyle(dayTextColor(isCurrentMonth: isCurrentMonth, isSelected: isSelected, isToday: isToday))
             }
             .frame(maxWidth: .infinity, minHeight: 30)
+            // 事件标记：右侧小圆点（位置与颜色见 `eventMarker` 的注释）。放在日格**右下角**而不是
+            // 日号正下方，是为了和 28pt 的选中圆永不重叠；`overlay` 不进布局，日格仍恰好 30pt 高
+            // （`HomeCalendarRow` 的行高算式 `36 × 周数 + 78` 依赖这个 30，别改成会撑高的写法）。
+            .overlay(alignment: .bottomTrailing) {
+                if hasEvents {
+                    eventMarker(isCurrentMonth: isCurrentMonth)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// 「有事件」的小圆点：**4pt 实心圆，日格右下角内缩（右 6pt / 下 2pt）**。
+    ///
+    /// 两条都是刻意的选择（候选决策，见批次报告 `final-fix.md`）：
+    /// - **位置取右下角**：日格只有 30pt 高，而选中高亮是**居中**的 28pt 实心圆（纵向占满 1…29pt），
+    ///   日号正下方正是那个圆的底边——把点画在那里会和选中高亮糊成一团。右下角离圆心约 20pt，
+    ///   今天高亮（日号变强调色，无圆圈）与选中高亮因此都能与它共存；它也不改日格高度，不影响
+    ///   整月网格的行距算式。
+    /// - **颜色取面板强调色**（`Color.effectiveAccent`，与今天的日号、选中的圆同一支），跨月补格降到
+    ///   45% 不透明：补格的日号本来就是灰的（`Color(white: 0.35)`），标记跟着一起弱化，免得把视线
+    ///   引到不属于当前显示月份的日子上。
+    private func eventMarker(isCurrentMonth: Bool) -> some View {
+        Circle()
+            .fill(Color.effectiveAccent.opacity(isCurrentMonth ? 1 : 0.45))
+            .frame(width: 4, height: 4)
+            .padding(.trailing, 6)
+            .padding(.bottom, 2)
     }
 
     private func dayTextColor(isCurrentMonth: Bool, isSelected: Bool, isToday: Bool) -> Color {
@@ -832,10 +915,13 @@ struct StandaloneCalendarView: View {
             HStack(alignment: .top, spacing: paneSpacing) {
                 // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
                 // 翻月把选中日一并挪到新月份首日）。
+                // 有事件的日期给日格画小圆点：传**已过滤**的条目（与右栏清单同一份 `filteredEvents`）
+                // ——共用同一个 `MonthGridView` 时，两个宿主的标记口径也必须一致（首页日历行同样传）。
                 MonthGridView(
                     selectedDate: $selectedDate,
                     scrollTarget: $datePickerScrollTarget,
-                    monthNavigationMovesSelection: true
+                    monthNavigationMovesSelection: true,
+                    events: filteredEvents
                 )
                     .frame(width: paneWidth, alignment: .topLeading)
                     .frame(height: paneHeight, alignment: .topLeading)
@@ -1209,7 +1295,8 @@ enum HomeTodayListLayout {
     /// 3. 放不下 / 超上限 → 让出一行额度给 `+N` 提示行，剩余条目计入溢出。
     ///
     /// - Parameters:
-    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView`（收起态首页日历栏）按
+    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView`（**仅供 `#Preview`**，
+    ///     运行期不可达；首页日历见 `HomeCalendarRow`）按
     ///     **面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
     ///     `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
     ///   - itemCount: 今日条目数（全天 + 定时合计，已过 `filteredEvents` 与排序）。
@@ -1247,7 +1334,8 @@ struct EventListView: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     let events: [EventModel]
     let selectedDate: Date
-    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView`（收起态首页日历栏）
+    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView`（**仅供 `#Preview`**，
+    /// 运行期不可达；首页日历见 `HomeCalendarRow`）
     /// 按**面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
     /// `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
     let availableHeight: CGFloat

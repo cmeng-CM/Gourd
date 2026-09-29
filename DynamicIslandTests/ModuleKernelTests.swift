@@ -4408,6 +4408,182 @@ final class MonthGridLayoutTests: XCTestCase {
         XCTAssertEqual(calendar.component(.day, from: days[31]), 30, "下标 31 是当月最后一天（9/30）")
         XCTAssertEqual(calendar.component(.day, from: days[32]), 1, "下标 32 进入 10 月")
     }
+
+    // MARK: - 有事件的日期（日格标记）
+
+    /// 固定 `Calendar` 下的一个条目（`CalendarModel` 用系统色；`type` 决定它是不是提醒）。
+    /// 时刻由调用方用 `gridTime` / `gridDay` 给出，本 helper 不碰「今天」。
+    private func gridEvent(
+        id: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool = false,
+        type: EventType = .event(.accepted)
+    ) -> EventModel {
+        EventModel(
+            id: id,
+            start: start,
+            end: end,
+            title: id,
+            location: nil,
+            notes: nil,
+            url: nil,
+            isAllDay: isAllDay,
+            type: type,
+            calendar: CalendarModel(
+                accountName: "Test",
+                id: "test.calendar",
+                title: "Test",
+                color: .systemBlue,
+                isSubscribed: false,
+                isReminder: type.isReminder
+            ),
+            participants: [],
+            timeZone: TimeZone(secondsFromGMT: 0),
+            hasRecurrenceRules: false,
+            priority: nil,
+            conferenceURL: nil
+        )
+    }
+
+    /// 固定 `Calendar` 下的某个时刻（年 / 月 / 日 / 时 / 分）。
+    private func gridTime(_ calendar: Calendar, year: Int, month: Int, day: Int, hour: Int, minute: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    private func gridDaysWithEvents(_ calendar: Calendar, _ events: [EventModel]) -> Set<Date> {
+        MonthGridLayout.daysWithEvents(
+            inMonth: gridMonth(calendar, year: 2026, month: 9), events: events, calendar: calendar
+        )
+    }
+
+    /// 定时条目只标记它**自己那天**（前后一天都不点），且返回的是那天**零点**（视图就是拿
+    /// `calendar.startOfDay(for: day)` 去 `contains` 的）。
+    func testDaysWithEventsMarksTimedEventDayOnly() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let events = [
+            gridEvent(
+                id: "standup",
+                start: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 9),
+                end: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 10)
+            )
+        ]
+
+        XCTAssertEqual(
+            gridDaysWithEvents(calendar, events), [gridDay(calendar, year: 2026, month: 9, day: 29)],
+            "9/29 09:00–10:00 → 只有 9/29 那格有点，且是那天的零点"
+        )
+    }
+
+    /// 全天条目的 `end` 是 EventKit 的**次日零点排他值**（9/29 全天 = 9/29 00:00 → 9/30 00:00）：
+    /// 只标记 9/29，**不能**把 9/30 也标上（覆盖区间末日按 `end − 1s` 所在日算）。
+    func testAllDayEventExclusiveEndDoesNotMarkNextDay() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let events = [
+            gridEvent(
+                id: "holiday",
+                start: gridDay(calendar, year: 2026, month: 9, day: 29),
+                end: gridDay(calendar, year: 2026, month: 9, day: 30),
+                isAllDay: true
+            )
+        ]
+
+        let days = gridDaysWithEvents(calendar, events)
+        XCTAssertEqual(days, [gridDay(calendar, year: 2026, month: 9, day: 29)], "全天条目的次日零点不是「覆盖」")
+        XCTAssertFalse(days.contains(gridDay(calendar, year: 2026, month: 9, day: 30)), "9/30 不该有点")
+    }
+
+    /// 跨天条目**覆盖到的每一天**都标记：定时跨零点（9/29 23:00 → 9/30 01:00）= 两天；
+    /// 多天全天（9/28 00:00 → 10/1 00:00）= 9/28 / 9/29 / 9/30 三天。
+    func testCrossDayEventMarksEveryCoveredDay() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let overnight = gridEvent(
+            id: "overnight",
+            start: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 23),
+            end: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 1)
+        )
+        XCTAssertEqual(
+            gridDaysWithEvents(calendar, [overnight]),
+            [gridDay(calendar, year: 2026, month: 9, day: 29), gridDay(calendar, year: 2026, month: 9, day: 30)],
+            "跨零点的定时条目两天都算"
+        )
+
+        let multiDay = gridEvent(
+            id: "trip",
+            start: gridDay(calendar, year: 2026, month: 9, day: 28),
+            end: gridDay(calendar, year: 2026, month: 10, day: 1),
+            isAllDay: true
+        )
+        XCTAssertEqual(
+            gridDaysWithEvents(calendar, [multiDay]),
+            [
+                gridDay(calendar, year: 2026, month: 9, day: 28),
+                gridDay(calendar, year: 2026, month: 9, day: 29),
+                gridDay(calendar, year: 2026, month: 9, day: 30)
+            ],
+            "多天全天条目：覆盖到的三天都有点（10/1 是排他端、不算）"
+        )
+    }
+
+    /// **跨月边界**：标记落在**正确的格子**上——9/1 与 9/30（当月首尾）都在网格里；10/1 是这张网格的
+    /// 补格（2026 年 9 月的网格 = 8/30…10/3），补格照样有点；10/15 不在网格里，**不进集合**
+    /// （跨月条目因此不会把标记画到看不见的格子上）。
+    func testMonthBoundaryEventsLandOnTheirOwnCells() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let events = [
+            gridEvent(id: "first", start: gridTime(calendar, year: 2026, month: 9, day: 1, hour: 8),
+                      end: gridTime(calendar, year: 2026, month: 9, day: 1, hour: 9)),
+            gridEvent(id: "last", start: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 8),
+                      end: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 9)),
+            gridEvent(id: "nextMonthPadding", start: gridDay(calendar, year: 2026, month: 10, day: 1),
+                      end: gridDay(calendar, year: 2026, month: 10, day: 2), isAllDay: true),
+            gridEvent(id: "outsideGrid", start: gridTime(calendar, year: 2026, month: 10, day: 15, hour: 8),
+                      end: gridTime(calendar, year: 2026, month: 10, day: 15, hour: 9))
+        ]
+
+        let days = gridDaysWithEvents(calendar, events)
+        XCTAssertTrue(days.contains(gridDay(calendar, year: 2026, month: 9, day: 1)), "9/1（当月首日）有点")
+        XCTAssertTrue(days.contains(gridDay(calendar, year: 2026, month: 9, day: 30)), "9/30（当月末日）有点")
+        XCTAssertTrue(days.contains(gridDay(calendar, year: 2026, month: 10, day: 1)), "10/1 是补格，照样有点")
+        XCTAssertFalse(days.contains(gridDay(calendar, year: 2026, month: 10, day: 15)), "网格外的日期不进集合")
+        XCTAssertEqual(days.count, 3, "四条条目 → 三个有事件的日期（10/15 那条被裁掉）")
+    }
+
+    /// **被过滤掉的条目**不产生标记：先过 `EventListView.filteredEvents`（与两个宿主同一套口径）——
+    /// 已完成提醒（`hideCompletedReminders`）与全天条目（`hideAllDayEvents`）各一例，
+    /// 两种偏好都打开时是**空集**；偏好关掉时两条都在（证明「没标记」是过滤造成的，不是别的原因）。
+    func testFilteredOutEventsProduceNoMarks() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let events = [
+            gridEvent(id: "done-reminder",
+                      start: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 9),
+                      end: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 10),
+                      type: .reminder(completed: true)),
+            gridEvent(id: "all-day", start: gridDay(calendar, year: 2026, month: 9, day: 29),
+                      end: gridDay(calendar, year: 2026, month: 9, day: 30), isAllDay: true)
+        ]
+
+        let hidden = EventListView.filteredEvents(
+            events: events, hideCompletedReminders: true, hideAllDayEvents: true
+        )
+        XCTAssertTrue(hidden.isEmpty, "两条都被偏好隐藏")
+        XCTAssertTrue(gridDaysWithEvents(calendar, hidden).isEmpty, "被过滤掉的条目不产生任何标记")
+
+        let shown = EventListView.filteredEvents(
+            events: events, hideCompletedReminders: false, hideAllDayEvents: false
+        )
+        XCTAssertEqual(shown.count, 2, "偏好关掉时两条都在（过滤才是「没标记」的原因）")
+        XCTAssertEqual(
+            gridDaysWithEvents(calendar, shown), [gridDay(calendar, year: 2026, month: 9, day: 29)],
+            "同一天的两条合并成一个点"
+        )
+    }
+
+    /// 没有条目 → 空集（调用方没有条目时一个点都不该画）。
+    func testNoEventsMeansNoMarks() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        XCTAssertTrue(gridDaysWithEvents(calendar, []).isEmpty, "空输入 → 空集")
+    }
 }
 
 // MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）
