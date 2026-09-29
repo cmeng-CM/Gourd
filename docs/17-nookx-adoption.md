@@ -163,7 +163,7 @@ stateDiagram-v2
 | 任意 | `setEnabled(同现值)` | 不变 | **幂等**：不重复实例化、不重复 `activate` |
 | `activating` | `setEnabled(false)` | `disabled` | 在飞的那次 `activate()` 收尾时**对 `instances` / `states` 一律不写**（只对自己那个悬挂实例 `deactivate()`），因此不会摘掉后来者的实例 |
 
-**并发与幂等**：`setEnabled` 在 `@MainActor` 上，调用之间按提交顺序进入，但方法是 `async`、内含 `await` 挂起点——**挂起期间别的调用可以穿插**，因此"同一模块的并发调用串行执行"是不成立的（本条为 T2 审查实测后的更正）。实现用**全局单调代次**做相等性令牌：只有"代号仍是本 id 当前号"的那一次激活才允许写 `states` / `instances`，从而保证 `.activating` 期间被置关时状态不被错误写回、且后来者的实例不被抹掉。代次**不**保证 `instances` 与 `states` 永远同进同退（那是另一条不变量，本批不作承诺）。
+**并发与幂等**：`setEnabled` 在 `@MainActor` 上，调用之间按提交顺序进入，但方法是 `async`、内含 `await` 挂起点——**挂起期间别的调用可以穿插**，因此"同一模块的并发调用串行执行"是不成立的（本条为 T2 审查实测后的更正）。实现用**全局单调代次**做相等性令牌：只有"代号仍是本 id 当前号"的那一次激活才允许写 `states` / `instances`（**置关侧也必须领一个新号**——否则在飞的那次激活会拿着仍然有效的旧号把 `.active` 写回去，"作废"静默失效），从而保证 `.activating` 期间被置关时状态不被错误写回、且后来者的实例不被抹掉。代次**不**保证 `instances` 与 `states` 永远同进同退（那是另一条不变量，本批不作承诺）。
 
 ### 横切关注点
 
@@ -252,7 +252,7 @@ stateDiagram-v2
 
 | 方案 | 内容 | 不选的理由 |
 |---|---|---|
-| **A（选定）新增 `SettingsTab.modules`** | 卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关 | —（成本：`SettingsView.swift` 里 7 个 `switch` 要各加一行，属机械改动） |
+| **A（选定）新增 `SettingsTab.modules`** | 卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关 | —（成本：`SettingsView.swift` 里 6 处 `switch` 各加一行 + 一个手写数组加一项，属机械改动） |
 | B 把每个模块的开关塞进它"主题对应"的现有 tab（待办→提醒、通知→HUD…） | 复用现有分组 | 用户找不到"我到底有哪些组件"的全局视图，正是 docs/16 §4.2 A1 要解决的"看不见/不知道有什么" |
 | C 复用 `.extensions` tab | 少加一个 tab | 那个 tab 是**第三方扩展**的通道（B 表冻结的线协议身份），把内置组件混进去会让两类生命周期在 UI 上分不开 |
 
@@ -264,7 +264,17 @@ stateDiagram-v2
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）。
+已交付（P2 批次 `p2-home-strip`，2026-09-29；工作流提交 `1e8c8c0c`…`dd93ef64` 加本轮回写提交）。
+
+**代码**：`Host/HomeStripLayoutMath.swift`（新，纯几何：`Item` / `Plan` / `plan(items:available:spacing:)` 三条规则、单一口径 `leftover`）；`Host/HomeStripView.swift`（新：`HomeBlockWidth` / `HomeBlockWidthKey` / `HomeStripLayout`（`spacing = 12`、cache 复用、丢块显式零提案）/ `HomeStripBlock` / `HomeStripView`（内置块 300/420、200/260、140/160；模块块统一 180/240）/ 自建日历块（日期头 + hover 展开 `WheelPicker` 50pt + `EventListView`）/ 模块块降级占位）；`Kernel/ModuleTypes.swift` 加 `Surface.home`；`Kernel/ModuleRegistry.swift` 加 `ModuleHomeEntry` / `homeEntries` / `ModuleRegistry.home` / `setEnabled` / `activateIfNeeded` 抽取 + 全局单调代次；`Kernel/KernelBootstrap.swift` 加 `enablementGate(registry:)`；`models/Constants.swift` 加 `moduleEnableOverrides`；`NotchHomeView.swift` 标准分支换成 strip；`SettingsView.swift` + 新文件 `ModuleSettingsSection.swift`（第 21 个 tab「组件」）；`TodosModule.swift` 声明 `.home` 并实现首页块；`Progress/NotificationsModule` 各补一个穷尽分支。
+
+**测试**：新增 `HomeStripLayoutTests`（16 条）与 `ModuleToggleTests`（14 条，均在 `project.pbxproj` 四处登记），`ModuleKernelTests` 增补首页块与 surfaces 断言；全量 **199 条 0 失败**（终审实跑退出码 0）。跑完 `moduleEnableOverrides` 仍缺键、偏好域 diff 仅 `ClipboardHistory`（应用自管）。
+
+**文档**：`docs/06` §2.2/§6.1/§6.3/§7.1、`docs/09` §5.8（新增「首页 strip」）、`docs/12`（已交付批次记录 + 下一批登记）、`docs/13`（本批口径 + D-30 + 已知限制 31–35）、`docs/14`（todos 行 + 取值口径）、`docs/16` §4.2 状态表。
+
+**与计划的偏离及原因**：① `home` 常量落在 `ModuleRegistry.home` 而不是 `extension ContentRequest`（不把宿主侧常量挂上协议层类型）；② 三个模块的 `switch request.surface` 是穷尽的，加枚举值属编译必需改动（原计划未列，已补进 §接口与数据形状 7 的改动清单）；③ `activateIfNeeded` 不做必要性守卫、跳过规则留在 `bootstrap()`（否则 `setEnabled(true)` 接不了 `.disabled`）；④ **置关侧也领新号**（否则在飞的那次激活会把 `.active` 写回去，"作废"静默失效）；⑤ T4 未改 `Localizable.xcstrings`（块内文案全部复用既有 `module.todos.*`）、未新增 `context.ui.requestRedraw()` 调用（按 `store` 的 `@Published` 重绘，与另两个模块同路）；⑥ T5 顺手补了一条 `settingsSearchIndex`、`isTabVisible` 写显式分支、新 key 用 `settings.modules.*` 前缀（同页其余 tab 以英文原文为 key）；⑦ 首页镜像块是裸 `CameraPreviewView`（旧 `cameraPreview` 的 opacity/blur 包装只服务关闭态动画，留给歌词侧栏路径）。
+
+**遗留**：默认面板宽下首页看不到待办清单（可用 ≥864 / 面板 ≈930pt；新装默认 690pt 时待办块被规则③ 丢弃）；月历 `StandaloneCalendarView` 在展开面板无入口（本次唯一的能力收缩，补齐属 P2a 的 calendar 模块 tab）；`.failed` 的卡片形态未在屏验证（无内置模块会失败），恢复路径只有"重启 + 再打开一次"；两处审查留作后续的残留风险见 §已知限制 19/20；面板宽度连续变化、非刘海外接屏、真实连点竞态未实测（§验证覆盖 已声明不验证）。
 
 ---
 
@@ -276,10 +286,10 @@ stateDiagram-v2
 2. **块的最小宽度是软约定**：声明得过小会让块内容被压到不可读（如日历行的时间列被挤掉）。本批不引入"最小宽度校验"，由块自己负责。
 3. **模块块不参与高度协商**：块拿到的是"整条 strip 的高度"，自己决定内部怎么排。`progress` 那种"剩余量清单"在 850pt 高度下会留白，本批不治。
 4. **minimalistic UI 与歌词侧栏两条路径不接 strip**：这两条路径下首页仍是旧布局（两块 / 播放器 + 侧栏）。因此"首页 = strip"只在标准路径成立。
-5. **接管模块（音乐 / 日历 / 镜子）不随组件开关走**：它们由上游 `Defaults` 键控制，因此设置页「组件」页**不显示**它们——用户会看到"组件页只有 3 张卡，但首页有 5 块"的不一致。接受理由：提前模块化会与上游设置页形成双份真源（14 号文档 T-3）。**缓解**：卡片页顶部有一行说明。
+5. **接管模块（音乐 / 日历 / 镜子）不随组件开关走**：它们由上游 `Defaults` 键控制，因此设置页「组件」页**不显示**它们——用户会看到"组件页只有 3 张卡，但首页最多能出现 4 块（内置 3 + 待办 1）"的不一致。接受理由：提前模块化会与上游设置页形成双份真源（14 号文档 T-3）。**缓解**：卡片页顶部有一行说明。
 6. **`failed` 是终态**：组件启动失败后开关会回弹为关，用户再次打开不会重试（06 §3.3 硬性规则 1）。用户要恢复只能重启应用。
 7. **所有模块首页块共用一份宽度声明**（`180 / 240`）：模块不能自定义自己在首页的宽度。本批不做宽度协商（D-11），模块内容（如歌词、长列表）只能在这个宽度里自适应。
-8. **日历块保留日期选择轮，但月历没有入口**：hover 日期头展开的 `WheelPicker` 日期轮随块保留（D-14，翻日期是改动前就有的能力）；而月历 `StandaloneCalendarView` 在展开面板里**没有入口**——改前它也只在"未开音乐"时作为首页右栏出现，本批之后彻底没有调用点（只剩 `#Preview`）。补齐属 `com.cmeng.gourd.calendar` 模块的 tab 落地（P2a）。**这条是本次唯一的能力收缩**，已在报告里向用户点明。
+8. **日历块保留日期选择轮，但月历没有入口**：hover 日期头展开的 `WheelPicker` 日期轮随块保留（D-14，翻日期是改动前就有的能力）；而月历 `StandaloneCalendarView` 在展开面板里**彻底没有调用点**——改前它也只在"未开音乐"时作为首页右栏出现，本批之后只剩类型定义与注释（全仓 grep 无调用点，也没有 `#Preview` 实例化它）。补齐属 `com.cmeng.gourd.calendar` 模块的 tab 落地（P2a）。**这条是本次唯一的能力收缩**，已在报告里向用户点明。
 9. **本批只有 `todos` 声明 `home`**：`progress` 代码与 manifest 保留但**不声明** `home`（默认关，声明了也没内容）；`notifications` 不做首页块（通知是瞬时事件，不是常驻信息）。
 
 **回写期补充（T1，2026-09-29）**：
@@ -296,10 +306,12 @@ stateDiagram-v2
 
 **回写期补充（T4，2026-09-29）**：
 
-16. **待办块的清单有 220pt 阈值，默认面板宽下只有三环**：面板 770pt 时胶囊内可用宽 ≈**706pt**（770 减 `ContentView` 的水平内边距：`notchHorizontalPadding` 19−5 与 12pt 各一份，再加 `NotchHomeView` 的 8pt×2），代入 `plan`（理想 420/260/240、最小 300/200/180、间距 12）得 ≈**`[301, 200.5, 180.5]`**——三块都压在最小宽度附近；待办块 180.5 < 220 → 只画三环。要让清单出现，面板需约 **930pt**（可用 ≥ 864 时待办块才到 220）。这是宽度预算的必然结果，不是缺陷，但默认配置下"首页看到待办清单"这一条**不成立**。（数字由 T6 审查用布局常量 + 截图像素量测双路核过；早前误记的"可用 754 / 需 1000pt"已更正。）
+16. **待办块的清单有 220pt 阈值，默认面板宽下只有三环**：本机面板 770pt（tab 数 ≥6 时才给到这个宽度）时，胶囊内可用宽**实测 ≈705–706pt**（方法：由展开态截图的三环环心像素反推；**不按内边距常量推导**——那条链的常数分不清 702/706，而 702 会跨过规则② 与规则③ 的分界，704 恰是两规则的分界）。代入 `plan`（理想 420/260/240、最小 300/200/180、间距 12）：705 → `[300.5, 200, 180]`、706 → `[301, 200.5, 180.5]`——两种取值下三块都压在最小宽度附近，待办块 < 220 → 只画三环。要让清单出现，可用宽需 ≥ 864（面板 ≈930pt，按同一实测内边距 ≈65pt 换算）。**另注意新装默认面板是 690pt**（`openNotchWidth` 默认 640 被最小宽度抬到 tab 数对应的值）→ 可用 ≈625 → 规则③ 直接丢掉待办块，首页只有音乐 + 日历两块（`[300, 200]`）。这两条都是宽度预算的必然结果，不是缺陷，但"首页看到待办清单"在默认配置下**不成立**。（数字由 T6 两轮审查与整体终审用布局常量 + 截图像素量测双路核过；早前误记的"可用 754 / 需 1000pt"已更正。）
 17. **首页块的三环一律彩色**（`isSelected: true`），与展开 tab"只有当前类别彩色"不同形——首页块没有"当前类别"这个概念，故有意如此。
 18. **未授权提醒时首页块画三个 0/0 空环**，不做授权引导（`content(for: .home)` 恒返回 `.view`，没有"无内容"分支）。
-19. **`TodoHomeRow` 是 `TodoRow` 的简化副本**（状态圈 10 vs 13pt、`opacity` 0.35/0.8 vs 0.4/0.9、标题 11 vs 12pt）：常量已分叉，展开 tab 改样式时首页块不会跟随。环本身是复用的（同一 `TodoScopeRing`）。
+19. **`HomeStripBlock` 没有 `.clipped()`**：被丢弃的块虽然拿到 `.zero` 提案，但块外框不裁剪，固定尺寸的内容（空态图标 / 降级占位三角）仍可能按固有尺寸溢出到条尾，留下约 40×19pt 残影。**触发前提是"有块被丢弃"**（窄面板 + 镜子开启 / 新装 690pt 面板），当前 770pt 配置不触发。修法是一行 `.clipped()`。
+20. **`deactivateAll()` 的 await 窗口**：该函数在逐个 `deactivate()` 之后才清空代数表，因此在这段 await 里完成的激活仍能匹配自己的号、把实例写回 `instances`/`states`，随后被 `removeAll()` 丢掉——**那个实例不会被 `deactivate()`**。窄窗，且该函数只用于应用退出与测试隔离（进程退出时实例本就消失）。修法是把清代次提到循环之前。
+21. **`TodoHomeRow` 是 `TodoRow` 的简化副本**（状态圈 10 vs 13pt、`opacity` 0.35/0.8 vs 0.4/0.9、标题 11 vs 12pt）：常量已分叉，展开 tab 改样式时首页块不会跟随。环本身是复用的（同一 `TodoScopeRing`）。
 
 **回写期补充**：无（尚未实现）。
 
@@ -315,7 +327,7 @@ stateDiagram-v2
 | 关闭组件后：首页块消失、展开 tab 消失、折叠槽位让位，三者同步 | `homeEntries` / `tabEntries` / `compactEntries` 读同一份 `states` | 单元测试（`setEnabled(false)` 后三个投影同时不含该 id） |
 | 组件启动失败：状态为 `failed`、开关回弹、不崩溃 | `setEnabled` 的失败路径写 `failed` + 设置页读状态回弹 | 单元测试（注入一个 `activate()` 抛错的模块类型） |
 | 重复开 / 关是幂等的：不产生第二次 `activate()` | `states[id]` 前置判定 | 单元测试（计数 `activate` 调用次数） |
-| 既有行为不变：minimalistic UI、歌词侧栏、折叠槽位、拖动调宽、上游 21 个设置 tab | 这些路径的代码不在改动清单内 | 单元测试回归（现有 168 条全绿）+ 目视一次 |
+| 既有行为不变：minimalistic UI、歌词侧栏、折叠槽位、拖动调宽、上游 21 个设置 tab | 这些路径的代码不在改动清单内 | 单元测试回归（提交时 199 条全绿）+ 目视一次 |
 | 不新增权限面与出站请求 | 新增代码只用 `SwiftUI` / `Defaults` / `os` | `grep` 审计新增文件的 import 与 API 调用；核对 [15-platform-dependencies.md](15-platform-dependencies.md) 无新增行 |
 
 **成功度量**（与验收分开）：用户开启 3 个组件后，首页一次展开能看到三类不同信息且无需滚动；用户能从设置页说清"现在有哪些组件、哪些开着"。
@@ -391,7 +403,7 @@ registry.register(builtinModules, enabled: { id in
 ### 4. 持久化
 
 ```swift
-// DynamicIsland/models/Constants.swift（// MARK: - Modules 段）
+// DynamicIsland/models/Constants.swift（// MARK: Module Kernel (P1) 段）
 /// 组件开关的用户显式选择。**缺键 = 用户未表达**（回落到 manifest.defaultEnabled），
 /// 不是 false——升级用户的首次行为必须与升级前一致。
 static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
@@ -434,9 +446,10 @@ public enum HomeStripLayoutMath {
 // DynamicIsland/Host/HomeStripView.swift
 /// 块用它声明宽度约束；不声明则理想宽度由 Layout 测量（sizeThatFits(.unspecified)），
 /// 最小宽度回落到 `ideal × 0.6`。
+/// **两个并列的顶层类型**（`HomeBlockWidth` 不是嵌在 `HomeBlockWidthKey` 里）：
+struct HomeBlockWidth: Equatable { let min: CGFloat; let ideal: CGFloat }
 struct HomeBlockWidthKey: LayoutValueKey {
     static let defaultValue: HomeBlockWidth? = nil
-    struct HomeBlockWidth: Equatable { let min: CGFloat; let ideal: CGFloat }
 }
 ```
 
@@ -483,6 +496,10 @@ struct HomeBlockWidthKey: LayoutValueKey {
 | D-12 | 不新增 capability / TCC 权限 / 出站请求 | agent | 组件开关只写本机偏好；首页块都是进程内视图，与现状同一边界 |
 | D-13 | `failed` 是**不可逃逸**的终态：置关不把它改成 `.disabled`，置开不重试 | agent | 06 §3.3 硬性规则 1 与本文 §已知限制 6（"要恢复只能重启应用"）都承诺不重试；T2 审查实测"置关 → 置开"能给 failed 开出一条隐藏的重试通道，与承诺矛盾。代价：组件启动失败后本次运行内无法恢复，只能重启（这是原本就写下的口径，现在代码也守它） |
 | D-14 | 日历块**保留日期选择轮**（hover 日期头展开，与改动前一致）；月历 `StandaloneCalendarView` 在展开面板无入口，补齐属 `calendar` 模块 tab（P2a） | agent | 不引入用户可见能力倒退：翻日期是改动前就有的能力，strip 重构不该静默拿掉。T3 审查实测：`NotchViews` 里没有 calendar，改前月历也只在"未开音乐"时出现 |
+| D-15 | `home` 请求常量落在 `ModuleRegistry.home`（宿主侧），不挂到协议层的 `ContentRequest` 上 | agent | `ContentRequest` 是模块协议的一部分，宿主常量挂上去会把"谁决定请求形状"搅混；与既有 `compactSlotRequest` 同址 |
+| D-16 | 置关侧也领新代次号；`activateIfNeeded` 不自带必要性守卫（跳过规则留在调用方） | agent | 前者是"在飞激活被作废"机制生效的前提，后者是同时满足"`bootstrap()` 行为逐字不变"与"`setEnabled(true)` 能接 `.disabled`"的唯一落法。代价：方法名前缀 `IfNeeded` 与实现不符，靠注释与调用点守卫维持 |
+| D-17 | 首页镜像块用裸 `CameraPreviewView`；模块首页块不加 `requestRedraw` 调用；组件页新 key 用 `settings.modules.*` 前缀 | agent | 那层 opacity/blur 包装只服务关闭态动画；`store` 的 `@Published` 已驱动重绘（与另两个模块同路）；前缀与本批新增 key 的形态一致 |
+| D-18 | `HomeStripBlock` 的 `.clipped()` 与 `deactivateAll()` 的 await 窗口**本批不修**，记入 §已知限制 19/20 | agent | 前者只在"有块被丢弃"时留下观感级残影（当前配置不触发），后者只影响退出/测试路径；两者都属审查判定的 Minor，改动留到下一次动相关文件的批次，避免在收尾期引入未审改动 |
 
 ---
 
