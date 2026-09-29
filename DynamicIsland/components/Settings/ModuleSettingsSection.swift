@@ -20,6 +20,11 @@
 //  「默认关闭」（`manifest.defaultEnabled == false` 时；`progress` 的形态）。
 //  这两行只加文案，不动图标 / 名称 / 摘要 / 徽标 / 开关。
 //
+//  P1 批次 / T3 增量：卡片下方多一节「首页块顺序」——每个**会出现在首页**的块一行（名称 + 上移 /
+//  下移），写 `Defaults[.homeBlockOrder]`。名单是「内置块（按开关）+ 模块块（按 `homeEntries`）」
+//  合成的一张表，排序算式与首页 strip **逐字同一条**（`HomeBlockOrdering.sorted`）——
+//  这一页显示的顺序就是首页渲染的顺序，不存在第二套口径。
+//
 
 import Defaults
 import SwiftUI
@@ -29,6 +34,15 @@ struct ModuleSettingsSection: View {
     /// **必须自己观察注册表**：`states` 是 `@Published`，卡片的重绘由它驱动。不观察的话
     /// 开关点完不重绘（`SettingsView` 自己并不观察注册表，它只换 detail 视图）。
     @ObservedObject private var registry = ModuleRegistry.shared
+
+    /// 首页块的用户排序覆盖（P1 / T3）。**用 `@Default` 而不是本地 `@State`**：它是
+    /// `DynamicProperty`，写盘即重绘本页（本地状态那一路），首页 strip 读同一个键、同一步重排——
+    /// 「先落盘再刷新」因此是**一次写操作**，不存在两份状态对不上的窗口。
+    @Default(.homeBlockOrder) private var homeBlockOrder
+
+    /// 内置块的**开关级**门控（这一页只看开关，不看运行期条件，理由见 `orderRows`）。
+    @Default(.showStandardMediaControls) private var showStandardMediaControls
+    @Default(.showMirror) private var showMirror
 
     /// 数据源 = 注册表**全量** manifest（含未启用），按 `id` 升序（docs/17 §改动点设计 5）。
     private var manifests: [ModuleManifest] {
@@ -51,8 +65,178 @@ struct ModuleSettingsSection: View {
                     ModuleSettingsCard(registry: registry, manifest: manifest)
                 }
             }
+
+            // 顺序节**放在卡片之后**：上面那行提示说「内置块不出现在这里的卡片里」，顺序节却要列出
+            // 内置块（它们也能排）——放最后 + 脚注说明「开关在各自的设置项里」，两句话才不会互相打架。
+            orderSection
         }
         .navigationTitle(Text(LocalizedStringKey("settings.modules.title")))
+    }
+
+    // MARK: 首页块顺序
+
+    /// 顺序行的一项：内置块或模块块（这一页只关心身份 / 名称 / 图标 / 默认序号）。
+    private struct OrderRow: Identifiable {
+        let id: String
+        let name: String
+        let symbolName: String
+        let defaultOrder: Int
+    }
+
+    /// 顺序行的名单：**只列当前会出现在首页的块**——内置块按开关（`showStandardMediaControls` /
+    /// `showMirror`），模块块按 `homeEntries`（= 已激活且声明 `home` 的模块）。
+    ///
+    /// **判据比首页少一档、是刻意的**：首页还叠加运行期条件（音乐要有会话、镜子要在展开态且摄像头
+    /// 可用、模块块要 `content(for: .home)` 不答 `.none`）。这一页只用**配置级判据**，否则列表会随
+    /// 「有没有在放歌」「面板是不是展开着」抖动，用户刚点的行会跳走。代价：列表里可能出现此刻首页
+    /// 看不到的块（音乐没会话时），反之首页也可能画出这里没列的块（模块答 `.none` 的那个不在此列）。
+    private var orderRows: [OrderRow] {
+        var rows: [OrderRow] = []
+
+        // 内置块的名称沿用它自己的设置项文案（"Music" / "Mirror"）——与用户在设置里认识的词一致，
+        // 不另起一套说法。日历块已移除（首页日历走全宽日历行），这里**不生成**它。
+        if showStandardMediaControls {
+            rows.append(
+                OrderRow(
+                    id: HomeBlockOrdering.BuiltinBlock.music.id,
+                    name: String(localized: "Music"),
+                    symbolName: "music.note",
+                    defaultOrder: HomeBlockOrdering.BuiltinBlock.music.defaultOrder
+                )
+            )
+        }
+
+        if showMirror {
+            rows.append(
+                OrderRow(
+                    id: HomeBlockOrdering.BuiltinBlock.mirror.id,
+                    name: String(localized: "Mirror"),
+                    symbolName: "camera",
+                    defaultOrder: HomeBlockOrdering.BuiltinBlock.mirror.defaultOrder
+                )
+            )
+        }
+
+        for entry in registry.homeEntries {
+            rows.append(
+                OrderRow(
+                    id: entry.id,
+                    name: entry.label,
+                    symbolName: entry.symbolName,
+                    defaultOrder: entry.order
+                )
+            )
+        }
+
+        return HomeBlockOrdering.sorted(
+            rows,
+            defaultOrder: { $0.defaultOrder },
+            id: { $0.id },
+            overrides: homeBlockOrder
+        )
+    }
+
+    private var orderSection: some View {
+        Section {
+            if orderRows.isEmpty {
+                Text(LocalizedStringKey("settings.modules.order.empty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(orderRows.enumerated()), id: \.element.id) { index, row in
+                    HomeBlockOrderRow(
+                        name: row.name,
+                        symbolName: row.symbolName,
+                        isFirst: index == 0,
+                        isLast: index == orderRows.count - 1,
+                        moveUp: { move(row, direction: .up) },
+                        moveDown: { move(row, direction: .down) }
+                    )
+                }
+            }
+        } header: {
+            Text(LocalizedStringKey("settings.modules.order.title"))
+        } footer: {
+            Text(LocalizedStringKey("settings.modules.order.footer"))
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 上移 / 下移一行：**先落盘、再刷新**（docs/18 §处理链路）。
+    ///
+    /// 写的是**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`）；名单在点击这一刻现取
+    /// （而不是捕获渲染时的那一份），因此「点之前名单刚好变了」（模块被开关）也按最新名单算。
+    /// 名单没变（已在顶 / 底，或该行已不在名单里）**不写盘**——用户没表达就不留痕迹。
+    private func move(_ row: OrderRow, direction: HomeBlockOrdering.MoveDirection) {
+        let ids = orderRows.map(\.id)
+        let moved = HomeBlockOrdering.moved(ids, moving: row.id, direction: direction)
+        guard moved != ids else { return }
+        Defaults[.homeBlockOrder] = HomeBlockOrdering.table(for: moved)
+    }
+}
+
+// MARK: - 首页块顺序的一行
+
+/// 顺序行：图标 chip + 名称 + 上移 / 下移（与组件卡同一套排版：图标 chip 在左、动作在右、
+/// 相同的行内边距；按钮文案沿用既有 `Move Up` / `Move Down` 两条 key，不新增说法）。
+private struct HomeBlockOrderRow: View {
+    let name: String
+    let symbolName: String
+    let isFirst: Bool
+    let isLast: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ModuleSymbolChip(symbolName: symbolName)
+
+            Text(name)
+                .fontWeight(.medium)
+
+            Spacer(minLength: 12)
+
+            Button(action: moveUp) {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isFirst)
+            .help(Text(LocalizedStringKey("Move Up")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Up")))
+
+            Button(action: moveDown) {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isLast)
+            .help(Text(LocalizedStringKey("Move Down")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Down")))
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - 图标 chip
+
+/// 组件卡与顺序行共用的图标 chip（24×24、accent 底的圆角方块）。
+///
+/// **取不到图标名就不画**（不画占位方框）——这是 `ModuleSettingsCard` 改动前的口径，抽出来共用，
+/// 视觉一个像素都没动。
+private struct ModuleSymbolChip: View {
+    let symbolName: String
+
+    var body: some View {
+        if !symbolName.isEmpty {
+            Image(systemName: symbolName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.12))
+                )
+        }
     }
 }
 
@@ -68,7 +252,7 @@ private struct ModuleSettingsCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            symbol
+            ModuleSymbolChip(symbolName: manifest.icon.name ?? "")
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -174,21 +358,6 @@ private struct ModuleSettingsCard: View {
     }
 
     // MARK: 呈现
-
-    /// manifest 的图标：取不到就**不画**（不画占位方框）。
-    @ViewBuilder
-    private var symbol: some View {
-        if let name = manifest.icon.name, !name.isEmpty {
-            Image(systemName: name)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.12))
-                )
-        }
-    }
 
     /// surfaces 徽标：命中一个取值就一枚小 chip。
     ///

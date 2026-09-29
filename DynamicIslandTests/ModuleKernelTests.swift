@@ -1926,6 +1926,125 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(todoIDs(summary.today), ["today-last-minute"])
     }
 
+    // MARK: - 待办四视图过滤（P1 / T1，docs/18 §接口与数据形状 3）
+
+    /// 视图枚举的词汇表：`rawValue` 是稳定标识（左导航按声明顺序展示），**只加不改**。
+    func testTodoViewKindVocabulary() throws {
+        XCTAssertEqual(TodoBucketing.TodoViewKind.allCases.map(\.rawValue), ["today", "next7Days", "all", "completed"])
+        XCTAssertEqual(TodoBucketing.TodoViewKind.allCases.map(\.id), TodoBucketing.TodoViewKind.allCases.map(\.rawValue))
+    }
+
+    /// 四个视图各自的取数口径：`today` / `next7Days` 只收**未完成**且到期落在各自的半开区间；
+    /// `all` = 全部未完成（含无到期时间）；`completed` = 全部已完成（不论日期）。
+    ///
+    /// 固定 `now = 2026-09-28 10:00`（周一，Asia/Shanghai）+ 固定日历，结论只依赖 `Calendar` 语义。
+    func testTodoViewKindMembership() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)
+
+        let items = [
+            todo("today-open", due: try instant(2026, 9, 28, 9, calendar: calendar)),
+            todo(
+                "today-done",
+                due: try instant(2026, 9, 28, 8, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 28, 9, 30, calendar: calendar)
+            ),
+            todo("tomorrow-open", due: try instant(2026, 9, 29, 9, calendar: calendar)),
+            todo("day6-open", due: try instant(2026, 10, 4, 9, calendar: calendar)),   // 今天 + 6 天：窗内
+            todo("day7-open", due: try instant(2026, 10, 5, 9, calendar: calendar)),   // 今天 + 7 天：窗外
+            todo("last-minute-open", due: try instant(2026, 9, 28, 23, 59, calendar: calendar)),
+            todo("no-due-open", list: "收集箱"),
+            todo(
+                "overdue-done",
+                due: try instant(2026, 9, 20, 9, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 20, 10, calendar: calendar)
+            ),
+        ]
+
+        // 今天：到期落在 [09-28 00:00, 09-29 00:00) 且未完成
+        XCTAssertEqual(
+            viewed(.today, items, now: now, calendar: calendar),
+            ["today-open", "last-minute-open"],
+            "今天只收今天到期且未完成的（today-done 已完成 → 只在 completed）"
+        )
+        // 最近 7 天：到期落在 [09-28 00:00, 10-05 00:00) 且未完成（含今天，随 `sorted` 按到期升序）
+        XCTAssertEqual(
+            viewed(.next7Days, items, now: now, calendar: calendar),
+            ["today-open", "last-minute-open", "tomorrow-open", "day6-open"],
+            "7 天窗含今天；第 7 天（10-05）在窗外；已完成 / 无到期日的都不进"
+        )
+        // 全部未完成：含无到期时间（排在最后）、含窗外与过期未完成的
+        XCTAssertEqual(
+            viewed(.all, items, now: now, calendar: calendar),
+            ["today-open", "last-minute-open", "tomorrow-open", "day6-open", "day7-open", "no-due-open"],
+            "清单 = 未完成全集：无到期日的算、第 7 天与更远的算"
+        )
+        // 已完成：不论日期（今天完成的排在更早完成的之前）
+        XCTAssertEqual(
+            viewed(.completed, items, now: now, calendar: calendar),
+            ["today-done", "overdue-done"],
+            "已完成档按完成时刻倒序：刚完成的在前"
+        )
+    }
+
+    /// 边界逐条钉死：今天 23:59 算今天（半开区间上界仍是今天）；**恰好第 7 天要排除**；
+    /// 无到期日只进 `all`；已完成 + 已过期只进 `completed`（不进任何时间窗）。
+    func testTodoViewKindBoundaries() throws {
+        let calendar = try fixedGregorian()
+        // now 取当天最后一刻，最大化「同一条目是否算今天」的判定压力
+        let now = try instant(2026, 9, 28, 23, 59, calendar: calendar)
+        let items = [
+            todo("today-last-minute", due: try instant(2026, 9, 28, 23, 59, calendar: calendar)),
+            todo("tomorrow-midnight", due: try instant(2026, 9, 29, calendar: calendar)),
+            todo("day6-midnight", due: try instant(2026, 10, 4, calendar: calendar)),
+            todo("day7-midnight", due: try instant(2026, 10, 5, calendar: calendar)),
+            todo("no-due", list: "收集箱"),
+            todo(
+                "done-overdue",
+                due: try instant(2026, 9, 15, 9, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 16, 9, calendar: calendar)
+            ),
+        ]
+
+        XCTAssertEqual(viewed(.today, items, now: now, calendar: calendar), ["today-last-minute"], "今天 23:59 算今天")
+        XCTAssertEqual(
+            viewed(.next7Days, items, now: now, calendar: calendar),
+            ["today-last-minute", "tomorrow-midnight", "day6-midnight"],
+            "半开区间：明天 00:00 在窗内，第 7 天 00:00 恰好出窗"
+        )
+        XCTAssertEqual(
+            viewed(.all, items, now: now, calendar: calendar),
+            ["today-last-minute", "tomorrow-midnight", "day6-midnight", "day7-midnight", "no-due"],
+            "无到期日的进清单（排最后）；已完成的进不来"
+        )
+        XCTAssertEqual(viewed(.completed, items, now: now, calendar: calendar), ["done-overdue"], "过期但已完成 → 只在已完成档")
+        for view in [TodoBucketing.TodoViewKind.today, .next7Days, .all] {
+            XCTAssertFalse(viewed(view, items, now: now, calendar: calendar).contains("done-overdue"), "\(view) 不出现已完成条目")
+        }
+    }
+
+    /// 空表：四个视图都空（`sorted` / 过滤都不崩）。
+    func testTodoViewKindEmptyInput() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)
+        for view in TodoBucketing.TodoViewKind.allCases {
+            XCTAssertTrue(viewed(view, [], now: now, calendar: calendar).isEmpty, "\(view) 空表为空")
+        }
+    }
+
+    /// 视图过滤的调用壳（把 `TodoBucketing.items(in:from:now:calendar:)` 收敛成 id 列表）。
+    private func viewed(
+        _ view: TodoBucketing.TodoViewKind,
+        _ items: [TodoBucketing.Item],
+        now: Date,
+        calendar: Calendar
+    ) -> [String] {
+        TodoBucketing.items(in: view, from: items, now: now, calendar: calendar).map(\.id)
+    }
+
     /// `TodosModule.manifest` 的契约：id / surfaces / icon / defaultEnabled / placement / 空权限 / 无配置；
     /// 并回走一次 JSON 路径（与宿主读 descriptor 同一条路）。
     func testTodosModuleManifestMatchesContract() throws {
@@ -4807,3 +4926,189 @@ final class HomeCalendarRowLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(six.contentHeight, listHeight, "「5 行 + +N」也必须放进行高里")
     }
 }
+
+// MARK: - 首页块顺序（P1 / T3）
+
+/// `HomeBlockOrdering` 的纯函数口径（docs/18-p1-todos-and-order.md §接口与数据形状 1、§验收标准）：
+/// 覆盖值优先 → 缺键回落默认序号 → 同值按 id 字典序 → **未知 id 不参与排序**；空表不变序。
+/// 另钉住「上移 / 下移」的边界与整表序号的写入口径（`table(for:)`）。
+@MainActor
+final class HomeBlockOrderingTests: XCTestCase {
+
+    /// 排序用例的输入形状：块 = id + 默认序号。
+    private struct Block: Equatable {
+        let id: String
+        let order: Int
+    }
+
+    private func sorted(_ blocks: [Block], _ overrides: [String: Int]) -> [String] {
+        HomeBlockOrdering.sorted(
+            blocks,
+            defaultOrder: { $0.order },
+            id: { $0.id },
+            overrides: overrides
+        ).map(\.id)
+    }
+
+    /// 内置块的 id 与默认序号：`builtin.<rawValue>`、音乐 0 → 日历 1 → 镜子 2（= 改动前写死的顺序）。
+    /// 日历块已从首页移除，但 id 与序号的**既有含义**要留着（老覆盖表里可能有这个键）。
+    func testBuiltinBlockVocabulary() {
+        XCTAssertEqual(
+            HomeBlockOrdering.BuiltinBlock.allCases.map(\.id),
+            ["builtin.music", "builtin.calendar", "builtin.mirror"]
+        )
+        XCTAssertEqual(
+            HomeBlockOrdering.BuiltinBlock.allCases.map(\.defaultOrder),
+            [0, 1, 2]
+        )
+    }
+
+    /// ① 有覆盖：覆盖值优先于默认序号，整表重排（把默认的末位提到首位）。
+    func testOverrideWins() {
+        let blocks = [
+            Block(id: "builtin.music", order: 0),
+            Block(id: "com.cmeng.gourd.todos", order: 20),
+            Block(id: "com.cmeng.gourd.notifications", order: 40),
+        ]
+        let overrides = [
+            "com.cmeng.gourd.notifications": 0,
+            "builtin.music": 1,
+            "com.cmeng.gourd.todos": 2,
+        ]
+
+        XCTAssertEqual(
+            sorted(blocks, overrides),
+            ["com.cmeng.gourd.notifications", "builtin.music", "com.cmeng.gourd.todos"]
+        )
+        // 覆盖只改顺序、不改名单：三条一个不少、也不多
+        XCTAssertEqual(sorted(blocks, overrides).count, blocks.count)
+    }
+
+    /// ② 缺键回落：表里没有的块用默认序号，**与覆盖值混排**时也能算对
+    /// （这是「升级用户 / 没调过顺序的用户行为不变」的判据）。
+    func testMissingKeysFallBackToDefaultOrder() {
+        let blocks = [
+            Block(id: "builtin.music", order: 0),
+            Block(id: "builtin.mirror", order: 2),
+            Block(id: "com.cmeng.gourd.todos", order: 20),
+        ]
+
+        // 空表 = 完全按默认序号（未表达的用户路径）
+        XCTAssertEqual(sorted(blocks, [:]), ["builtin.music", "builtin.mirror", "com.cmeng.gourd.todos"])
+
+        // 只有待办被移动过：它写 0，两个内置块回落到 0 / 2 → 待办与音乐同值 0，按 id 字典序
+        // "builtin.music" < "com.cmeng.gourd.todos"，音乐仍在待办之前
+        XCTAssertEqual(
+            sorted(blocks, ["com.cmeng.gourd.todos": 0]),
+            ["builtin.music", "com.cmeng.gourd.todos", "builtin.mirror"],
+            "同值 0 的两条按 id 字典序：builtin.music 在前"
+        )
+        // 镜子被移动到 -1：单条覆盖即可越到最前，两条内置块仍按 id 字典序（这里只有一个更小）
+        XCTAssertEqual(
+            sorted(blocks, ["builtin.mirror": -1]),
+            ["builtin.mirror", "builtin.music", "com.cmeng.gourd.todos"]
+        )
+    }
+
+    /// ③ 未知 id 忽略：表里出现、名单里没有的键**不占位、不报错、不影响任何块**；
+    /// 名单里的块一个都不消失（失败信号「未知 id 让排序崩或块消失」的反面）。
+    func testUnknownIDsAreIgnored() {
+        let blocks = [
+            Block(id: "builtin.music", order: 0),
+            Block(id: "com.cmeng.gourd.todos", order: 20),
+        ]
+        let overrides = [
+            "builtin.calendar": 0,              // 已移除的日历块：老表里的历史键
+            "com.cmeng.gourd.removed": -100,    // 被移除 / 改名的模块
+            "": 3,                              // 空串 id
+        ]
+
+        XCTAssertEqual(sorted(blocks, overrides), ["builtin.music", "com.cmeng.gourd.todos"], "未知键只被忽略")
+        XCTAssertEqual(sorted(blocks, overrides).count, blocks.count, "块不因未知键而消失")
+
+        // 未知键与已知键混在一起：已知的照样生效
+        var mixed = overrides
+        mixed["com.cmeng.gourd.todos"] = -1
+        XCTAssertEqual(sorted(blocks, mixed), ["com.cmeng.gourd.todos", "builtin.music"])
+    }
+
+    /// ④ 空表：`overrides` 为空 → 默认序号序；`items` 为空 → 空结果（都不崩）。
+    func testEmptyTableAndEmptyItems() {
+        let blocks = [
+            Block(id: "b", order: 1),
+            Block(id: "a", order: 1),
+            Block(id: "c", order: 0),
+        ]
+        XCTAssertEqual(sorted(blocks, [:]), ["c", "a", "b"], "同值 1 的两条按 id 字典序")
+        XCTAssertTrue(sorted([], [:]).isEmpty)
+        XCTAssertTrue(sorted([], ["a": 0]).isEmpty)
+    }
+
+    /// 上移 / 下移的边界：与相邻项互换；**到顶 / 到底 / id 不在名单里 → 原样返回**。
+    func testMoveBoundaries() {
+        let ids = ["a", "b", "c"]
+
+        XCTAssertEqual(HomeBlockOrdering.moved(ids, moving: "b", direction: .up), ["b", "a", "c"])
+        XCTAssertEqual(HomeBlockOrdering.moved(ids, moving: "b", direction: .down), ["a", "c", "b"])
+        XCTAssertEqual(HomeBlockOrdering.moved(ids, moving: "a", direction: .up), ids, "已在顶：不动")
+        XCTAssertEqual(HomeBlockOrdering.moved(ids, moving: "c", direction: .down), ids, "已在底：不动")
+        XCTAssertEqual(HomeBlockOrdering.moved(ids, moving: "missing", direction: .up), ids, "不在名单里：不动")
+        XCTAssertEqual(HomeBlockOrdering.moved(["only"], moving: "only", direction: .up), ["only"])
+        XCTAssertEqual(HomeBlockOrdering.moved([], moving: "a", direction: .up), [])
+    }
+
+    /// 整表序号：名单顺序即 0…n-1；重复 id 取首次出现（不崩）。
+    func testTableRenumbersWholeList() {
+        XCTAssertEqual(HomeBlockOrdering.table(for: ["b", "a", "c"]), ["b": 0, "a": 1, "c": 2])
+        XCTAssertEqual(HomeBlockOrdering.table(for: []), [:])
+        XCTAssertEqual(HomeBlockOrdering.table(for: ["x", "x", "y"]), ["x": 0, "y": 2], "重复键取首次出现，不崩")
+    }
+
+    /// 端到端（纯函数链）：默认名单 → 把末位块上移 → 整表落盘的值能让 `sorted` 复现屏幕上的顺序。
+    func testMoveThenSortRoundTrip() {
+        let blocks = [
+            Block(id: "builtin.music", order: 0),
+            Block(id: "com.cmeng.gourd.todos", order: 20),
+            Block(id: "com.cmeng.gourd.notifications", order: 40),
+        ]
+        let movedIDs = HomeBlockOrdering.moved(blocks.map(\.id), moving: "com.cmeng.gourd.notifications", direction: .up)
+        XCTAssertEqual(movedIDs, ["builtin.music", "com.cmeng.gourd.notifications", "com.cmeng.gourd.todos"])
+
+        let table = HomeBlockOrdering.table(for: movedIDs)
+        XCTAssertEqual(
+            sorted(blocks, table),
+            ["builtin.music", "com.cmeng.gourd.notifications", "com.cmeng.gourd.todos"],
+            "落盘的值读回来排出的顺序 = 移动后屏幕上的顺序"
+        )
+    }
+
+    /// `homeBlockOrder` 键的**声明默认值**（空表 = 用户未表达）+ **序列化往返**（写盘 → 读回）。
+    ///
+    /// 往返走一个**临时 suite**（不碰开发机 `com.cmeng.gourd` 域，同 `notificationHUDBackgroundStyle`
+    /// / `notchPanelBackgroundStyle` 的既有口径）；断言盘上真的出现**字典**而不只是内存值——
+    /// 「顺序落盘、重启保持」靠的就是这一层（同一键被设置页与首页两处读）。
+    func testHomeBlockOrderKeyDefaultsAndRoundTrip() {
+        XCTAssertEqual(Defaults.Keys.homeBlockOrder.name, "homeBlockOrder")
+        XCTAssertEqual(
+            Defaults.Keys.homeBlockOrder.defaultValue,
+            [:],
+            "缺键 = 用户未表达（回落 manifest 的 defaultPlacement.order / 内置块的 0 / 1 / 2）"
+        )
+
+        let suiteName = "com.cmeng.gourd.tests.homeBlockOrder"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("建不出临时 suite（\(suiteName)）")
+        }
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let key = Defaults.Key<[String: Int]>("homeBlockOrder", default: [:], suite: suite)
+
+        XCTAssertEqual(Defaults[key], [:], "没写过时读回空表")
+        let table = ["builtin.music": 1, "com.cmeng.gourd.todos": 0]
+        Defaults[key] = table
+        XCTAssertEqual(Defaults[key], table, "写盘 → 读回同一张表")
+        XCTAssertEqual(suite.dictionary(forKey: key.name) as? [String: Int], table, "盘上存的是字典（不是字符串）")
+        Defaults[key] = [:]
+        XCTAssertEqual(Defaults[key], [:], "清空同样往返（回到「用户未表达」）")
+    }
+}
+

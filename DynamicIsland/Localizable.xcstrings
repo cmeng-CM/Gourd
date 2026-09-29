@@ -68402,6 +68402,54 @@
         }
       }
     },
+    "settings.modules.order.empty" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No blocks will show up on the home screen right now."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前没有会出现在首页的块"
+          }
+        }
+      }
+    },
+    "settings.modules.order.footer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes apply to the home screen immediately and are kept after a restart. The on/off switches for host built-ins live in their own settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顺序改动立即在首页生效，重启后保持；宿主内置块的开关仍在各自的设置项里"
+          }
+        }
+      }
+    },
+    "settings.modules.order.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home block order"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页块顺序"
+          }
+        }
+      }
+    },
     "settings.modules.surface.compact" : {
       "localizations" : {
         "en" : {

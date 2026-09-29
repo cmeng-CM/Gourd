@@ -200,13 +200,19 @@ struct HomeStripBlock<Content: View>: View {
 
 /// 展开面板首页（标准路径）的那一条横向 strip。
 ///
-/// 块顺序固定为「内置块：音乐 → 镜子」+「模块块：`homeEntries` 顺序」；内置块由上游 `Defaults`
-/// 键门控（机制二：本批不把接管模块模块化），模块块由 manifest 的 `surfaces` 含 `home` + 用户开关
-/// 共同决定（名单来自投影，用户没开就不会出现在投影里）。
+/// 块顺序 = **内置块与模块块合成一张名单**，再按 `HomeBlockOrdering` 排序（覆盖值优先 → 缺键回落
+/// 默认序号 → 同值按 id 字典序，P1 / T3）；默认序号下内置块仍是「音乐 → 镜子」在前、模块块按
+/// `homeEntries` 顺序在后——**未调过顺序的用户看到的就是改动前的那条 strip**。
+/// 内置块由上游 `Defaults` 键门控（机制二：本批不把接管模块模块化），模块块由 manifest 的
+/// `surfaces` 含 `home` + 用户开关共同决定（名单来自投影，用户没开就不会出现在投影里）。
+///
+/// **丢块规则不变**（D-03）：宽度不够时仍按**排好序的**尾部丢——顺序改了，丢的对象随之改，
+/// 这是排序生效的正常结果（docs/18 §改动点设计 4 的陷阱栏）。
 ///
 /// **日历不在 strip 里**（2026-09-29 起）：整月网格需要宽度，塞进块里格子只有约 26pt——首页的日历
 /// 改由 strip 下面那条**全宽日历行**（`HomeCalendarRow`）承担。因此本视图不再生成日历块，条里的
-/// 内置块只剩音乐与镜子（哪些块在条里，`showCalendar` 不再参与）。
+/// 内置块只剩音乐与镜子（哪些块在条里，`showCalendar` 不再参与）；`builtin.calendar` 这个 id 只在
+/// `HomeBlockOrdering.BuiltinBlock` 里保留语义，见那里的注释。
 struct HomeStripView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var registry = ModuleRegistry.shared
@@ -215,6 +221,9 @@ struct HomeStripView: View {
     @Default(.showStandardMediaControls) private var showStandardMediaControls
     @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
     @Default(.showMirror) private var showMirror
+    /// 用户排序覆盖（P1 / T3）：`@Default` 是 `DynamicProperty`——设置页写盘后**这里立即重绘**，
+    /// 不需要注册表发通知（顺序与 `moduleEnableOverrides` 的开关路径同形：偏好一个源）。
+    @Default(.homeBlockOrder) private var homeBlockOrder
     let albumArtNamespace: Namespace.ID
 
     /// 内置两块的宽度声明（docs/17 §接口与数据形状 6 的取值，不得另取一套）。
@@ -252,27 +261,26 @@ struct HomeStripView: View {
     }
 
     var body: some View {
-        // 模块块的内容在本轮渲染里**只取一次**：`content(for:request:)` 既决定「有没有块」
-        // （答 `.none` 的不生成块，不留空壳），也决定块里画什么——取值后放在局部常量里，
-        // 不在 `ForEach` 里二次请求（本批裁决 5）。
-        let moduleBlocks = resolvedModuleBlocks()
+        // 名单在本轮渲染里**只取一次**：内置块的开关判据、模块块的 `content(for:request:)`（它同时
+        // 决定「有没有块」——答 `.none` 的不生成块、不留空壳）与排序都在 `resolvedHomeBlocks()`
+        // 里算完；`ForEach` 只按结果摆放，不二次请求（本批裁决 5）。
+        let blocks = resolvedHomeBlocks()
 
         HomeStripLayout {
-            if shouldShowMusicPlayer {
-                HomeStripBlock(width: Self.musicBlockWidth) {
-                    MusicPlayerView(albumArtNamespace: albumArtNamespace)
-                }
-            }
-
-            if mirrorIsVisible {
-                HomeStripBlock(width: Self.mirrorBlockWidth) {
-                    CameraPreviewView(webcamManager: webcamManager)
-                }
-            }
-
-            ForEach(moduleBlocks) { block in
-                HomeStripBlock(width: Self.moduleBlockWidth) {
-                    moduleBlockContent(block.content)
+            ForEach(blocks) { block in
+                switch block.payload {
+                case .music:
+                    HomeStripBlock(width: Self.musicBlockWidth) {
+                        MusicPlayerView(albumArtNamespace: albumArtNamespace)
+                    }
+                case .mirror:
+                    HomeStripBlock(width: Self.mirrorBlockWidth) {
+                        CameraPreviewView(webcamManager: webcamManager)
+                    }
+                case .module(let content):
+                    HomeStripBlock(width: Self.moduleBlockWidth) {
+                        moduleBlockContent(content)
+                    }
                 }
             }
         }
@@ -281,23 +289,65 @@ struct HomeStripView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    // MARK: 模块块
+    // MARK: 块名单
 
-    private struct ResolvedModuleBlock: Identifiable {
-        let entry: ModuleHomeEntry
-        let content: ModuleContent
+    /// 名单里的一项：内置块或模块块，**同构**地放在一张表里（docs/18 §改动点设计 4）。
+    private struct HomeBlock: Identifiable {
+        /// 覆盖表的键：内置块 = `HomeBlockOrdering.BuiltinBlock.id`，模块块 = 模块 id。
+        let id: String
+        /// 缺键时的默认序号（内置块 = `BuiltinBlock.defaultOrder`，模块块 = `entry.order`）。
+        let defaultOrder: Int
+        let payload: Payload
 
-        var id: String { entry.id }
+        enum Payload {
+            case music
+            case mirror
+            case module(ModuleContent)
+        }
     }
 
-    /// 把 `homeEntries` 收成「本轮真的要画的块」：`content(for: .home)` 答 `.none` 的条目被过滤掉
+    /// 把内置块与模块块**合成一张名单**，交给 `HomeBlockOrdering` 排序后返回本轮真的要画的块。
+    ///
+    /// 内置块的生成判据是**开关 + 运行期条件**（音乐要有会话、镜子要在展开态且有摄像头），
+    /// 与改动前逐字同序；模块块仍是「`homeEntries` 里 `content(for: .home)` 不答 `.none`」的那几条
     /// （投影是**声明**、内容是**表态**，两者分开才不会让一次 `.none` 影响后续刷新）。
-    private func resolvedModuleBlocks() -> [ResolvedModuleBlock] {
-        registry.homeEntries.compactMap { entry in
-            let content = registry.content(for: entry.id, request: ModuleRegistry.home)
-            if case .none = content { return nil }
-            return ResolvedModuleBlock(entry: entry, content: content)
+    ///
+    /// 顺序的**唯一权威源**是这一层（覆盖值 + 默认序号），设置页展示用的是同一条算式。
+    private func resolvedHomeBlocks() -> [HomeBlock] {
+        var blocks: [HomeBlock] = []
+
+        if shouldShowMusicPlayer {
+            blocks.append(
+                HomeBlock(
+                    id: HomeBlockOrdering.BuiltinBlock.music.id,
+                    defaultOrder: HomeBlockOrdering.BuiltinBlock.music.defaultOrder,
+                    payload: .music
+                )
+            )
         }
+
+        if mirrorIsVisible {
+            blocks.append(
+                HomeBlock(
+                    id: HomeBlockOrdering.BuiltinBlock.mirror.id,
+                    defaultOrder: HomeBlockOrdering.BuiltinBlock.mirror.defaultOrder,
+                    payload: .mirror
+                )
+            )
+        }
+
+        for entry in registry.homeEntries {
+            let content = registry.content(for: entry.id, request: ModuleRegistry.home)
+            if case .none = content { continue }
+            blocks.append(HomeBlock(id: entry.id, defaultOrder: entry.order, payload: .module(content)))
+        }
+
+        return HomeBlockOrdering.sorted(
+            blocks,
+            defaultOrder: { $0.defaultOrder },
+            id: { $0.id },
+            overrides: homeBlockOrder
+        )
     }
 
     /// 四个分支逐条对应 06 §3.2（与 `ModuleHostView` 同口径）：`.view` 渲染模块给的视图；

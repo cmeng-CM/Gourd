@@ -1525,6 +1525,20 @@ extension Defaults.Keys {
     /// 只改内存状态，持久化属用户偏好那一层（D-05）。
     static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
 
+    /// 首页块的**用户排序覆盖**（P1 / T3，docs/18-p1-todos-and-order.md §接口与数据形状 2）：
+    /// 键 = 块 id（内置块 `builtin.music` / `builtin.calendar` / `builtin.mirror`，模块块 = 模块 id），
+    /// 值 = 序号（升序，越小越靠左）。
+    ///
+    /// **缺键 = 用户未表达**——回落 manifest 的 `defaultPlacement.order`（内置块回落它们写死的
+    /// 0 / 1 / 2），因此升级用户、从未调过顺序的用户的首页块顺序与改动前逐字一致，无需数据迁移。
+    /// 表里出现**未知 id**（模块被移除 / 改名 / 日历块这类不再生成的块）一律忽略：不占位、不报错。
+    ///
+    /// 消费点两处、读的是同一份：`HomeStripView`（渲染顺序）与设置页「组件」的顺序行（展示 + 写入）。
+    /// 写入是**整表覆盖**且只在用户真的点了上移 / 下移时发生——口径与理由见
+    /// `HomeBlockOrdering.table(for:)`；排序比较器（覆盖 → 默认 → id 字典序）见
+    /// `HomeBlockOrdering.sorted(_:defaultOrder:id:overrides:)`。
+    static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
+
     /// 通知浮层是否显示正文（09 §5.5 的配置项 `showBodyInHUD`；键名与设计稿一致）。
     ///
     /// **默认 true（用户 2026-09-28 明确要求默认显示正文）**；设计稿原口径为 false
