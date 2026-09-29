@@ -860,32 +860,11 @@ struct NotchHomeView: View {
             } else if shouldShowSideLyrics {
                 sideLyricsContent
             } else {
-                HStack(alignment: .top, spacing: SideLyricsLayout.hStackSpacing) {
-                    // Normal mode: Show full music player with optional calendar and webcam
-                    if shouldShowMusicPlayer {
-                        MusicPlayerView(albumArtNamespace: albumArtNamespace)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    if showCalendar {
-                        Group {
-                            if shouldShowMusicPlayer {
-                                CalendarView()
-                            } else {
-                                StandaloneCalendarView()
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onHover { isHovering in
-                            vm.isHoveringCalendar = isHovering
-                        }
-                        .environmentObject(vm)
-                    }
-
-                    if mirrorIsVisible {
-                        cameraPreview
-                    }
-                }
+                // 标准路径（2026-09-29 起）：首页是一条横向 strip——块由模块 manifest 的 `home`
+                // 投影与宿主内置块（音乐 / 日历 / 镜子）共同提供，宽度按声明自适应且富余不拉伸。
+                // 块的名单、门控与排版全在 `HomeStripView` 内，本视图不再拼装首页内容
+                // （docs/17-nookx-adoption.md §改动点设计 1）。
+                HomeStripView(albumArtNamespace: albumArtNamespace)
             }
         }
         .transition(.opacity.animation(.smooth.speed(0.9))
