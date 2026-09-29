@@ -58,9 +58,17 @@
 //  - **七张功能卡的键解析**：数据源是生产表本身（`ModuleSettingsSection.featureCards`，为了这条
 //    用例它没写成 `private`）——`id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红；
 //  - **三个接管模块的名称 / 效果行 key 解析**：名称 key 取自真模块的 manifest（与 `label(for:)`
-//    同源）；**效果行三条在用例里是字面量**（映射函数是 `private`），映射侧写错这条不会红——
-//    覆盖缺口如实记在 T6 报告里；
+//    同源）；
 //  - **回弹两档**用三个真模块的真源键再钉一遍（钉的是策略函数，不是视图接线——同见报告）。
+//
+//  P2 接管批次 / T6 **修复**（补齐上一轮两条覆盖缺口的第二条 + 测试本地化形态）：
+//  - **效果行映射有断言了**：映射从 `ModuleSettingsCard` 的私有 switch 提成生产表
+//    `ModuleSettingsSection.effectKeysByModuleID`（internal），`testModuleEffectKeysMatchTableAndCatalog`
+//    迭代它——值写错（含写成另一条已存在的 key）与模块 id 写错都会红。上一轮「把
+//    `settings.modules.effect.music` 改成错字」是全绿的（T6 报告 §3 变异 ②b）；
+//  - **`XCTAssertResolves` 锁定语言**：改查宿主 bundle 的 **zh-Hans** 那一份。七条上游名称 key
+//    没有 `en` 值，原先的 `Bundle.main.localizedString + != key` 跟着机器语言走（英语环境下红）。
+//    Swift 在 Darwin 上没导入带 `localization:` 的四参重载，故用等价的 `.lproj` 子 bundle 形态。
 //
 //  三条刻意写死的口径（改动前先读）：
 //
@@ -878,9 +886,9 @@ final class TakeoverEnablementTests: XCTestCase {
     /// `private`）：表里把 `id` / `effectKey` / `nameKey` 写错、或文案没写进 catalog，这条都会红。
     /// 测试另抄一份键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
     ///
-    /// **语言依赖**：七条名称 key 是上游那几个字面量（en 在 catalog 里以 key 自身为值），
-    /// `!= key` 只在宿主解析出非英语译文时成立（本机是 zh-Hans-CN）——这是「逐字沿用上游字面量」
-    /// 的必然结果，不是本用例的疏漏（见报告 §遗留）。
+    /// **语言无关**（T6 修复）：七条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
+    /// ——`XCTAssertResolves` 因此查的是宿主 bundle 的 **zh-Hans 那一份**，本机语言环境不再参与
+    /// （原先的 `Bundle.main.localizedString(...) != key` 在英语环境下会红）。
     func testFeatureCardKeysResolve() {
         let cards = ModuleSettingsSection.featureCards
 
@@ -910,9 +918,11 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 三个接管模块的卡片文案也能解析：名称 key 取**真模块的 manifest**（卡片上那行名称走
     /// `ModuleRegistry.label(for:)`，读的就是它），效果行是 T6 新增的那三条。
     ///
-    /// 效果行那三条**在用例里是字面量**（映射函数 `ModuleSettingsCard.effectKey(for:)` 是
-    /// `private`，用例拿不到，也没有为它开内部口子）：映射侧把某一条写错时**这条不会红**——
-    /// 覆盖缺口如实记在 T6 报告里（验收靠组件页肉眼一条 + 本节其余断言）。
+    /// 效果行这三条**不再是用例里的字面量**（T6 修复）：它们改由
+    /// `testModuleEffectKeysMatchTableAndCatalog` 从生产映射表里取，映射侧写错会红——
+    /// 原先映射是宿于 `private struct ModuleSettingsCard` 的私有 switch，用例够不到，
+    /// 「把 `settings.modules.effect.music` 改成错字」是全绿的（T6 报告 §3 变异 ②b）。
+    /// 本用例保留「三条 key 在 catalog 里解析得出」这一半，值那一半交给映射表用例。
     func testTakeoverModuleCardKeysResolve() throws {
         for manifest in [TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest] {
             let nameKey = try XCTUnwrap(manifest.name.key, "\(manifest.id) 的名称 key 必须写成 Localizable key")
@@ -927,6 +937,64 @@ final class TakeoverEnablementTests: XCTestCase {
         ] {
             XCTAssertResolves(key)
         }
+    }
+
+    /// 组件卡的「效果 / 出现位置」映射（`ModuleSettingsSection.effectKeysByModuleID`，T6 修复）：
+    /// **表是唯一取值处**，用例直接迭代生产表——
+    ///
+    /// ① 表里每个值都能在宿主 bundle 里解析出 zh-Hans 文案（键写错 / 文案没进 catalog → 红），
+    ///    并钉住 `settings.modules.effect.<模块短名>` 的 key 形态（值被写串成另一条**已存在**的
+    ///    key——比如 todos 指到 progress 那条——解析断言抓不到，这一条抓得到）；
+    /// ② 接管三块的值逐条钉住（`TimerModule.manifest.id` → `settings.modules.effect.timer`，镜子 /
+    ///    音乐同形）——这一条就是上一轮缺的那条断言；
+    /// ③ 表里每个**模块 id** 都是已注册模块的 id（模块改名 / 表里 id 写错 → 红）。
+    ///
+    /// **③ 先 `register` 再取集合**：`setUp` 的 `deactivateAll()` 把 `manifests` 一起清空了
+    /// （注册表因此每次都是空的），不注册就取集合会恒为空表、断言恒红。注册用
+    /// `enabled: { _ in true }` 过门（不读任何偏好键、不落状态），且**不调 `bootstrap()`**：
+    /// 本用例只看 manifest 的 id 集合，不激活、不碰上游键。
+    ///
+    /// **不钉表的条数**：`LauncherModule` 这类没有「效果 / 出现位置」一行的模块**合法地**不在表里
+    /// （未命中 = 整行不显示），拿 `builtinModules.count` 去比会把它变成假红。漏一条模块的效果行
+    /// 由「组件页肉眼一条」兜底，见文件头 T6 段。
+    func testModuleEffectKeysMatchTableAndCatalog() {
+        let table = ModuleSettingsSection.effectKeysByModuleID
+
+        // ③ 表里的模块 id 必须都是已注册模块（注册表是单例，先补注册再取 id 集合）。
+        let registry = ModuleRegistry.shared
+        registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
+        let registeredIDs = Set(registry.manifests.keys)
+        XCTAssertFalse(registeredIDs.isEmpty, "前置：注册后不能还是空表（setUp 刚清过注册表）")
+        for moduleID in table.keys.sorted() {
+            XCTAssertTrue(
+                registeredIDs.contains(moduleID),
+                "\(moduleID) 不是已注册模块的 id（模块改名漏改表 / 表里 id 写错？）"
+            )
+        }
+
+        // ① 每个值都能解析出 zh-Hans 文案（语言锁在 `XCTAssertResolves` 里）。
+        for (moduleID, effectKey) in table.sorted(by: { $0.key < $1.key }) {
+            XCTAssertEqual(
+                effectKey,
+                "settings.modules.effect." + String(moduleID.split(separator: ".").last ?? ""),
+                "\(moduleID) 的效果行 key 形态：`settings.modules.effect.<模块短名>`"
+            )
+            XCTAssertResolves(effectKey)
+        }
+
+        // ② 接管三块逐条钉死（表里把这三条写错、或 key 形态被改，都会红）。
+        XCTAssertEqual(
+            table[TimerModule.manifest.id], "settings.modules.effect.timer",
+            "计时器的效果行 key——上一轮这条在用例里是字面量，映射侧写错抓不到"
+        )
+        XCTAssertEqual(
+            table[MirrorModule.manifest.id], "settings.modules.effect.mirror",
+            "镜子的效果行 key（同形）"
+        )
+        XCTAssertEqual(
+            table[MusicModule.manifest.id], "settings.modules.effect.music",
+            "音乐的效果行 key（同形）"
+        )
     }
 
     /// 回弹两档仍成立（D-13 / docs/20 §做法 机制七），这里用**三个真模块的真源键**再钉一遍：
@@ -1055,15 +1123,33 @@ final class TakeoverEnablementTests: XCTestCase {
         }
     }
 
-    /// 本地化 key 在**宿主 bundle**里解析得出文案（查不到时 `Bundle` 原样返回 key，据此判定；
-    /// 判定口径与 `ModuleKernelTests` 的同类断言逐字相同：`Bundle.main.localizedString` + `!= key`）。
+    /// 本地化 key 在**宿主 bundle 的 zh-Hans 那一份**里解析得出文案（查不到时 `Bundle` 原样返回 key，
+    /// 据此判定）。
+    ///
+    /// **为什么锁定语言**（T6 修复）：catalog 里七条上游名称 key（`Enable Clipboard Manager` 等）
+    /// **没有 `en` 值**（它们在 `en` 下以 key 自身为值），因此 `Bundle.main.localizedString(forKey:value:table:)`
+    /// 的结果**跟着跑测机器的语言走**：本机是 zh-Hans 时返回译文（`!= key`，断言过），英语环境下原样
+    /// 返回 key（断言红）。用例要判的是「文案已进 catalog」，与机器语言无关，所以查**具体的 zh-Hans 一份**。
+    ///
+    /// **形态说明**：Swift 在 Darwin 上只暴露三参的 `localizedString(forKey:value:table:)`
+    /// （ObjC 那条带 `localization:` 的四参方法没有导入：`extra argument 'localization' in call`），
+    /// 因此「指定语言」用等价写法落到 `zh-Hans.lproj` 子 bundle 上——解析结果就是 zh-Hans 那一份译文，
+    /// 本机语言环境不再参与。
+    ///
+    /// 与 `ModuleKernelTests` 的同类断言**不再逐字相同**：那边仍是 `Bundle.main.localizedString` +
+    /// `!= key`（同样的语言依赖），本文件只修自己这一段，不去改别的测试文件。
     private func XCTAssertResolves(
         _ key: String,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
-        XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）", file: file, line: line)
+        guard let localizationPath = Bundle.main.path(forResource: "zh-Hans", ofType: "lproj"),
+              let bundle = Bundle(path: localizationPath) else {
+            XCTFail("宿主 bundle 里找不到 zh-Hans.lproj（拿不到锁语言的解析口径）", file: file, line: line)
+            return
+        }
+        let localized = bundle.localizedString(forKey: key, value: nil, table: nil)
+        XCTAssertNotEqual(localized, key, "\(key) 没解析出 zh-Hans 文案（catalog 未编进宿主 bundle？）", file: file, line: line)
         XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串", file: file, line: line)
     }
 }

@@ -38,6 +38,12 @@
 //  - **顺序节收敛**：接管后首页块只认模块 id，内置块里只剩首页日历行且它**不在 strip 里**
 //    （全宽日历行，不进顺序表），因此不再生成 `builtin.music` / `builtin.mirror` 两行。
 //
+//  P2 接管批次 / T6 **修复**：「效果 / 出现位置」的映射（原先是 `ModuleSettingsCard` 私有的
+//  `effectKey(for:)` switch）提成 `ModuleSettingsSection.effectKeysByModuleID` 这张 **internal
+//  静态表**，`effectKey(for:)` 只做一次查表——理由与 `featureCards` 逐字相同：映射表自己写错一个字
+//  必须能被用例抓到（上一轮「把 `settings.modules.effect.music` 改成错字」是全绿的，
+//  见 T6 报告 §3 变异 ②b）。
+//
 
 import Defaults
 import SwiftUI
@@ -148,6 +154,39 @@ struct ModuleSettingsSection: View {
             key: .enableNotes,
             effectKey: "settings.features.effect.enableNotes"
         ),
+    ]
+
+    // MARK: 模块卡「效果 / 出现位置」一行
+
+    /// 组件卡那行「效果 / 出现位置」的本地化 key：**模块 id → 效果行 key**（唯一的取值处）。
+    ///
+    /// 覆盖**六个**已注册模块——这六行写的是**本项目里这些组件实际的渲染点**（以 manifest 的
+    /// `surfaces` 与实际视图为准），不是从 manifest 推导出来的通用句子：
+    /// - `todos`：`[.expanded, .compact, .home]` → 折叠态中央槽位 + 首页块 + 展开面板待办页；
+    /// - `notifications`：`[.expanded, .compact, .home]` → 折叠态铃铛 + 首页通知块 + 展开面板通知列表
+    ///   （另有 HUD：新通知在刘海上短暂浮现，`presentHUD` 那条链，受浮层总开关控制）；
+    /// - `progress`：`[.compact, .expanded]`（**无 `home`**）→ 折叠态中央槽位 + 展开面板进度页。
+    ///
+    /// 接管三块（P2 / T6）：它们的渲染点由模块拥有，且都带自己的运行期门控，因此这一行要写清
+    /// 「什么时候看得到」：
+    /// - `timer` → 展开面板的计时器 tab（**仅当**「显示方式 = 标签页」，`isTabVisible()` 的口径）；
+    /// - `mirror` / `music` → 首页块（镜子要摄像头可用；音乐要有播放会话，除非关掉了无会话即隐藏）。
+    ///
+    /// **表不是 `private`**（T6 修复）：解析用例直接迭代这张表
+    /// （`TakeoverEnablementTests.testModuleEffectKeysMatchTableAndCatalog`），表侧把任何一个值
+    /// 写成错字才会红——上一轮这段映射是宿于 `private struct ModuleSettingsCard` 的
+    /// `private static func effectKey(for:)` 里的 switch，用例够不到，于是「把
+    /// `settings.modules.effect.music` 改成错字」全绿（T6 报告 §3 变异 ②b），与本文件
+    /// `featureCards` 同一条口径（表侧写错必须能被用例抓到）。
+    ///
+    /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
+    static let effectKeysByModuleID: [String: String] = [
+        "com.cmeng.gourd.todos": "settings.modules.effect.todos",
+        "com.cmeng.gourd.notifications": "settings.modules.effect.notifications",
+        "com.cmeng.gourd.progress": "settings.modules.effect.progress",
+        "com.cmeng.gourd.timer": "settings.modules.effect.timer",
+        "com.cmeng.gourd.mirror": "settings.modules.effect.mirror",
+        "com.cmeng.gourd.music": "settings.modules.effect.music",
     ]
 
     private var featuresSection: some View {
@@ -504,38 +543,13 @@ private struct ModuleSettingsCard: View {
             .background(Capsule().fill(Color.secondary.opacity(0.15)))
     }
 
-    /// 「效果 / 出现位置」一行的本地化 key：**按模块 id 逐块映射**，不是通用模板。
-    ///
-    /// 覆盖**六个**已注册模块——这六行写的是**本项目里这些组件实际的渲染点**（以 manifest 的
-    /// `surfaces` 与实际视图为准），不是从 manifest 推导出来的通用句子：
-    /// - `todos`：`[.expanded, .compact, .home]` → 折叠态中央槽位 + 首页块 + 展开面板待办页；
-    /// - `notifications`：`[.expanded, .compact, .home]` → 折叠态铃铛 + 首页通知块 + 展开面板通知列表
-    ///   （另有 HUD：新通知在刘海上短暂浮现，`presentHUD` 那条链，受浮层总开关控制）；
-    /// - `progress`：`[.compact, .expanded]`（**无 `home`**）→ 折叠态中央槽位 + 展开面板进度页。
-    ///
-    /// 接管三块（P2 / T6）：它们的渲染点由模块拥有，且都带自己的运行期门控，因此这一行要写清
-    /// 「什么时候看得到」：
-    /// - `timer` → 展开面板的计时器 tab（**仅当**「显示方式 = 标签页」，`isTabVisible()` 的口径）；
-    /// - `mirror` / `music` → 首页块（镜子要摄像头可用；音乐要有播放会话，除非关掉了无会话即隐藏）。
+    /// 「效果 / 出现位置」一行的本地化 key：查 `ModuleSettingsSection.effectKeysByModuleID`
+    /// 这张**唯一的表**（键 = 模块 id、值 = 效果行 key；每行写的是什么、为什么按模块逐块映射，
+    /// 都记在表上，本函数只做一次查表）。
     ///
     /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
     private static func effectKey(for manifest: ModuleManifest) -> String? {
-        switch manifest.id {
-        case "com.cmeng.gourd.todos":
-            return "settings.modules.effect.todos"
-        case "com.cmeng.gourd.notifications":
-            return "settings.modules.effect.notifications"
-        case "com.cmeng.gourd.progress":
-            return "settings.modules.effect.progress"
-        case "com.cmeng.gourd.timer":
-            return "settings.modules.effect.timer"
-        case "com.cmeng.gourd.mirror":
-            return "settings.modules.effect.mirror"
-        case "com.cmeng.gourd.music":
-            return "settings.modules.effect.music"
-        default:
-            return nil
-        }
+        ModuleSettingsSection.effectKeysByModuleID[manifest.id]
     }
 
     /// 摘要的解析顺序与 `ModuleRegistry.label(for:)` **逐字同序**：key 形态查 `Bundle.main`

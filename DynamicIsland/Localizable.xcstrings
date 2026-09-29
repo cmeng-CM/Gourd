@@ -68615,13 +68615,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Changes apply to the home screen immediately and are kept after a restart. The on/off switches for host built-ins live in their own settings."
+            "value" : "Changes apply to the home screen immediately and are kept after a restart. This section lists module blocks only (Music and Mirror are component cards); the only host built-in left is the home calendar row, which is not part of the strip and so is not listed here — its switch is in the Features section below."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "顺序改动立即在首页生效，重启后保持；宿主内置块的开关仍在各自的设置项里"
+            "value" : "顺序改动立即在首页生效，重启后保持；这一节只列模块块（音乐 / 镜子已是组件卡）——宿主内置块只剩首页日历行，它不在 strip 上、也就不在这份名单里，开关在下面「功能」段"
           }
         }
       }
