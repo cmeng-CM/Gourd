@@ -200,7 +200,7 @@
 
 **6.1 / 6.2 是审计从 §4.1 挪下来的"其实没做"项**（2026-09-29，见 §4.1 留痕表）：
 
-6.1 **启动台 / 快捷启动（Launcher）**：**规划中（`docs/14` P2b 第 4；模块 id `com.cmeng.gourd.launcher`，config 键 `pinnedApps` / `showRecents` / `iconSize` / `density` 已登记）**，代码零实现（`launcher` / `pinnedApps` / `recentApps` / `launchpad` 全 0 命中）。08 号文档已实测：扫 App 目录 + 使用频次零私有 API。来源：IMG 图 A、S1。
+6.1 **启动台 / 快捷启动（Launcher）**：**已落地（`p2-launcher`，2026-09-30）**——扫三个应用目录一层 + Spotlight 使用数据排序，展开面板一个 tab（搜索 + 应用网格 + 点一下启动并收起 + 右键固定），**只声明 `expanded`、默认关、零权限**；设计见 [19](19-launcher.md)。（原"规划中"状态与 config 键登记见 `docs/14` P2b 第 4），代码零实现（`launcher` / `pinnedApps` / `recentApps` / `launchpad` 全 0 命中）。08 号文档已实测：扫 App 目录 + 使用频次零私有 API。来源：IMG 图 A、S1。
 6.2 **快捷指令上岛（Shortcuts）**：**规划中（`docs/14` P2b 第 3；capability `shortcuts:run` 已登记在 06 §7.1）**，代码零实现（`shortcuts list/run` 在 `*.swift/*.plist/*.sh/*.py` 全 0 命中），且 `docs/15` 的台账自记「尚未落地」。依赖 shelf 的文件输入联动（`--input-path`）。来源：S1。
 
 #### C 组 · 不值得抄（含反面教训）

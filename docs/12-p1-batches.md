@@ -93,6 +93,10 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 **测试**：`DynamicIslandTests` **199 条**（本批新增 `HomeStripLayoutTests` 16 条 + `ModuleToggleTests` 14 条，`ModuleKernelTests` 增补 todos 与首页投影断言）。
 
+### 已交付 · `p2-launcher`（2026-09-30）
+
+启动台/快捷启动：扫三目录一层 + Spotlight 使用数据排序，展开面板 tab（搜索 + 应用网格 + 点一下启动并收起 + 右键固定），只声明 `expanded`、默认关、零权限。设计 [19](19-launcher.md)。执行期发现并修掉一个静默失效缺陷（NSMetadataQuery 依赖主线程 run loop）。**快捷指令（Shortcuts）仍是另一个未落地模块**（P2b 第 3）。
+
 ### 已交付 · P1 第一批 `p2-todos-facelift`（2026-09-29）
 
 待办展开面板四视图左导航 + 右看板 + 行内优先级胶囊（异步写回系统提醒）；首页块顺序可在设置页上移/下移。设计文档 [18](18-p1-todos-and-order.md)。**A2（折叠态左右槽位）未随批落地**：它依赖状态/动作类模块（农历 / 计时器 / 剪贴板 / 启动台，属 P2a），做出来会是空槽位。
