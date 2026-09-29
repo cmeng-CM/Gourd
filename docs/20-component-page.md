@@ -511,9 +511,11 @@ T6 修复 `6e70fc23`（映射表补断言 + 测试锁定语言）。**另有终�
     变异实测：表里值写错 → 3 条红、`showCalendar` 的效果 key 写错 → 2 条红（T6 修复前两处都是全绿）。
 13. **七条功能卡名称在英语宿主下判据退化**：`nameKey` 逐字取上游设置页字面量，而这七个 key 在
     `Localizable.xcstrings` 里只有 `ko` / `nl` / `ru` / `th` / `tr` / `zh-Hans` / `zh-Hant`（**没有 `en`**）。
-    `testFeatureCardKeysResolve` 的判据是 `Bundle.main.localizedString(forKey:value:nil,table:) != key`——
+    `testFeatureCardKeysResolve` 原本用 `Bundle.main.localizedString(forKey:value:nil,table:) != key` 判定——
     英语语言环境下它原样返回 key（= 上游英文原文），断言不成立。这是「逐字沿用上游字面量」的必然结果（D-16），
-    不是实现缺陷；代价是这套用例只在宿主能解析出非英语译文时有效。
+    不是实现缺陷。**2026-09-30 终审修复**：断言改为**显式加载 `zh-Hans` 子 bundle** 取译文，
+    与宿主语言无关（`-testLanguage en` 下实测绿，旧形态 7 条红）；产品侧在英语宿主下显示英文原文，那是正确行为。
+    同样形态的另一处（`ModuleKernelTests` 的同类断言）仍随宿主机语言走，未改。
 14. **`isTimerSurfaceSelected()` 的模块分支在极简 UI 下不可达**：`DynamicIslandViewCoordinator.currentView` 的
     `didSet` 在 `enableMinimalisticUI` 开着时把非 `.home` 的赋值强制打回 `.home`
     （`DynamicIslandViewCoordinator.swift:118-122`），因此该模式下 `currentView == .module` 永远不成立——

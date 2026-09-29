@@ -211,7 +211,9 @@ static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
 id 只剩两类**——接管进来的 `com.cmeng.gourd.music` / `com.cmeng.gourd.mirror`，以及各新增模块的 id
 （`…todos` / `…notifications` 等）。宿主内置块已**不再产生任何键**：音乐 / 镜子用了模块 id，
 `builtin.calendar` 早已不在名单里。旧键因此只以「**读取时映射的输入**」这一身份存在
-（`builtin.music` / `builtin.mirror` 映射一次、`builtin.calendar` 无人接收），盘上不会被清理
+（`builtin.music` / `builtin.mirror` 映射一次、`builtin.calendar` 无人接收）。
+**它们在盘上只活到第一次重排为止**：顺序节的上移/下移是**整表覆盖写**（`HomeBlockOrdering.table(for:)`），
+那次写入只包含当时的模块 id，旧键随之消失；若某模块在那次重排时是关闭的，它的历史名次也会一并丢
 （[20](20-component-page.md) §已知限制 6 / §已知限制 11）。
 
 ### 3. 待办视图与优先级（模块内）
