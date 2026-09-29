@@ -386,7 +386,14 @@ private struct HomeStripCalendarBlock: View {
                     .frame(height: dateExpanded ? Self.dateStripHeight : 0)
                     .opacity(dateExpanded ? 1 : 0)
                     .allowsHitTesting(dateExpanded)
-                    .clipped()
+                    // 这里**不能**加 `.clipped()`（2026-09-29 实测定位，T1 修「hover 展开的日期轮是
+                    // 空条」）：`WheelPicker` 里是 AppKit 背书的 `ScrollView`（`NSScrollView`），而
+                    // `.clipped()` 在容器还是零高时就被求值/缓存成「全裁掉」，容器长到 50pt 之后也
+                    // 不刷新——滚动视图的布局与绘制**都正确**（应用内 `cacheDisplay` 渲染能看到日期），
+                    // 只是永远合成不到屏幕上：空条、只剩两侧渐隐。对照实验（三种容器写法并排，见
+                    // `.workflow/p2-calendar-row/reports/`）：A 现状（带 clipped）= 空条；B 去掉
+                    // clipped = 日期正常；C 展开才挂载、仍带 clipped = 日期正常。
+                    // 收起态的不可见由上面两行保证（0 高 + 透明），不依赖裁剪。
                 }
                 .contentShape(Rectangle())
                 .onHover { inside in

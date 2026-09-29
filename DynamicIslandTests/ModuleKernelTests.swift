@@ -4126,4 +4126,136 @@ final class HomeTodayListLayoutTests: XCTestCase {
         XCTAssertEqual(label(0, 0), "00:00", "零点")
         XCTAssertEqual(label(23, 59), "23:59", "末班时间")
     }
+
+    // MARK: - 首页日历块：日期轮下标算术（2026-09-29 T1）
+
+    /// 日期轮的「选中日 ↔ 项下标」换算（`WheelPickerIndexMath`，纯函数）。
+    ///
+    /// 这一组用例钉的是**定位落点**：`WheelPicker` 的初始定位就是
+    /// `scrollPosition = indexForDate(selectedDate)`（`scrollToToday`），落点算错 = 展开后不在选中日上。
+    /// 注意「hover 展开的日期轮是空条」那条 bug 的**根因不在算术**（实测滚动位置一直是对的，是容器
+    /// 把 AppKit 背书的 `ScrollView` 裁没了），渲染层测不了——由
+    /// `.workflow/p2-calendar-row/reports/` 的对照实验与截图覆盖；这里保证算术不回归。
+    private func wheelCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .gmt
+        return calendar
+    }
+
+    private func wheelDate(_ calendar: Calendar, day: Int, month: Int = 9, hour: Int = 12) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour))!
+    }
+
+    /// 项总数：`ceil((past + future) / steps) + 1`（`steps` 用 `max(_, 1)` 兜底）。
+    func testWheelPickerIndexMathTotalItemsFollowsSteps() {
+        var config = Config()
+        config.past = 7
+        config.future = 14
+        config.steps = 1
+        XCTAssertEqual(WheelPickerIndexMath.totalItems(config: config), 22, "默认窗口 21 天 + 今天 = 22 项")
+
+        config.steps = 3
+        XCTAssertEqual(WheelPickerIndexMath.totalItems(config: config), 8, "每 3 天一跳：ceil(21/3)+1 = 8")
+
+        config.past = 0
+        config.future = 0
+        config.steps = 1
+        XCTAssertEqual(WheelPickerIndexMath.totalItems(config: config), 1, "只有今天 = 1 项")
+
+        config.past = 7
+        config.future = 14
+        config.steps = 0
+        XCTAssertEqual(WheelPickerIndexMath.totalItems(config: config), 22, "step = 0 按 1 兜底（不除以零）")
+    }
+
+    /// 今天落在 `offset + past`；窗口外的日期左闭右夹到两端（不会算出越界下标）。
+    func testWheelPickerIndexMathClampsOutsideWindow() {
+        let calendar = wheelCalendar()
+        let now = wheelDate(calendar, day: 29)
+        let config = Config()   // past 7 / future 14 / steps 1 / offset 2
+
+        XCTAssertEqual(WheelPickerIndexMath.index(for: now, config: config, now: now, calendar: calendar), 9,
+                       "今天是第 9 项（前导 2 个占位格 + past 7 天）")
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 26), config: config, now: now, calendar: calendar),
+            6, "3 天前"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 13, month: 10), config: config, now: now, calendar: calendar),
+            23, "窗口右端（now + 14 天）"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 30, month: 11), config: config, now: now, calendar: calendar),
+            23, "超出右端：夹到最后一格，不越界"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 1), config: config, now: now, calendar: calendar),
+            2, "超出左端：夹到第一格"
+        )
+    }
+
+    /// 选中日在窗口内时，`index(for:)` 与 `date(atItemIndex:)` 互为逆运算（展开时落在选中日上）。
+    func testWheelPickerIndexMathRoundTripsInsideWindow() {
+        let calendar = wheelCalendar()
+        let now = wheelDate(calendar, day: 29)
+        let config = Config()
+
+        for index in config.offset...(config.offset + WheelPickerIndexMath.totalItems(config: config) - 1) {
+            let date = WheelPickerIndexMath.date(atItemIndex: index, spacerNum: config.offset, config: config, now: now, calendar: calendar)
+            XCTAssertEqual(
+                WheelPickerIndexMath.index(for: date, config: config, now: now, calendar: calendar), index,
+                "第 \(index) 项应往返回到同一格"
+            )
+        }
+
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(
+                for: WheelPickerIndexMath.date(atItemIndex: 9, spacerNum: config.offset, config: config, now: now, calendar: calendar),
+                config: config, now: now, calendar: calendar
+            ),
+            9, "今天那一格"
+        )
+    }
+
+    /// `steps > 1`：项与项的日期间隔就是 `steps` 天（拨一格走 3 天）。
+    func testWheelPickerIndexMathStepsSkipDays() {
+        let calendar = wheelCalendar()
+        let now = wheelDate(calendar, day: 29)
+        var config = Config()
+        config.past = 6
+        config.future = 9
+        config.steps = 3
+
+        XCTAssertEqual(WheelPickerIndexMath.totalItems(config: config), 6, "ceil(15/3)+1 = 6 项")
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 29), config: config, now: now, calendar: calendar),
+            4, "offset 2 + 6/3 = 第 4 项（下标 4）"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: wheelDate(calendar, day: 2, month: 10), config: config, now: now, calendar: calendar),
+            5, "3 天后 = 下一格"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.date(atItemIndex: 5, spacerNum: config.offset, config: config, now: now, calendar: calendar),
+            wheelDate(calendar, day: 2, month: 10, hour: 0), "第 5 项 = now + 3 天（按天归一，落在当天 00:00）"        )
+    }
+
+    /// 换算按 `startOfDay` 归一：同一天的不同时刻落在同一格（`now` 的时刻不参与判据）。
+    func testWheelPickerIndexMathNormalizesToStartOfDay() {
+        let calendar = wheelCalendar()
+        let nowLate = wheelDate(calendar, day: 29, hour: 23)
+        let config = Config()
+
+        let early = wheelDate(calendar, day: 26, hour: 0)
+        let late = wheelDate(calendar, day: 26, hour: 23)
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: early, config: config, now: nowLate, calendar: calendar),
+            WheelPickerIndexMath.index(for: late, config: config, now: nowLate, calendar: calendar),
+            "同一天的 00:xx 与 23:xx 是同一格"
+        )
+        XCTAssertEqual(
+            WheelPickerIndexMath.index(for: early, config: config, now: nowLate, calendar: calendar), 6,
+            "3 天前 = 第 6 项（与 `now` 的时刻无关）"
+        )
+    }
 }

@@ -334,35 +334,69 @@ struct WheelPicker: View {
         selectedDate = today
     }
 
+    /// 下面三个换算都转发到 `WheelPickerIndexMath`（纯函数，**没有** SwiftUI 依赖）：
+    /// 「选中日 ↔ 轮上项下标」的算术是本视图唯一能被单测穷举的部分（`ModuleKernelTests`），
+    /// 视图里只留 `Date()` / `Calendar.current` 这两个环境取值。
     private func indexForDate(_ date: Date) -> Int {
-        let spacerNum = config.offset
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let startDate = cal.startOfDay(for: cal.date(byAdding: .day, value: -config.past, to: today) ?? today)
-        let target = cal.startOfDay(for: date)
-        let days = cal.dateComponents([.day], from: startDate, to: target).day ?? 0
-        let stepIndex = max(0, min(days / max(config.steps, 1), totalDateItems() - 1))
-        return spacerNum + stepIndex
+        WheelPickerIndexMath.index(for: date, config: config, now: Date(), calendar: .current)
     }
 
     private func dateForItemIndex(index: Int, spacerNum: Int) -> Date {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let startDate = cal.date(byAdding: .day, value: -config.past, to: today) ?? today
-        let stepIndex = index - spacerNum
-        return cal.date(byAdding: .day, value: stepIndex * max(config.steps, 1), to: startDate) ?? today
+        WheelPickerIndexMath.date(atItemIndex: index, spacerNum: spacerNum, config: config, now: Date(), calendar: .current)
     }
 
     private func totalDateItems() -> Int {
-        let range = config.past + config.future
-        let step = max(config.steps, 1)
-        return Int(ceil(Double(range) / Double(step))) + 1
+        WheelPickerIndexMath.totalItems(config: config)
     }
 
     private func dateToString(for date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "E"
         return formatter.string(from: date)
+    }
+}
+
+/// 日期轮的**下标算术**（纯函数：不引 SwiftUI、不读环境，`now` 与 `calendar` 由调用方给）。
+///
+/// 抽出它的理由（2026-09-29，T1）：轮子的「初始定位」= 「选中日 → 项下标」这一条换算，
+/// 而视图层（`WheelPicker` 的 `onAppear` / `onChange`）本身测不了——把算术抽出来，
+/// 「初始定位落在选中日上」才有可回归的判据（`DynamicIslandTests/ModuleKernelTests.swift`）。
+/// 逐字照搬 `WheelPicker` 原来的三个私有方法，**行为不变**：同一条公式、同一个 `Calendar`
+/// 口径（`startOfDay` 归一后按天差算）、同样的左闭右夹取（`0...totalItems-1`）。
+enum WheelPickerIndexMath {
+    /// 轮上的项总数：`ceil((past + future) / steps) + 1`（照 `WheelPicker.totalDateItems()`；
+    /// `steps` 用 `max(_, 1)` 兜底，`steps = 3` 时按 3 天一跳计）。
+    static func totalItems(config: Config) -> Int {
+        let range = config.past + config.future
+        let step = max(config.steps, 1)
+        return Int(ceil(Double(range) / Double(step))) + 1
+    }
+
+    /// `date` 落在轮上的项下标：`offset + clamp(天数差 / steps, 0, totalItems - 1)`。
+    ///
+    /// `now` 决定「今天」——它同时是窗口的起点（`now - past` 天）与天数差的参照；传固定日期
+    /// 就能得到确定的判据（本机今天不算输入）。
+    static func index(for date: Date, config: Config, now: Date, calendar: Calendar) -> Int {
+        let spacerNum = config.offset
+        let today = calendar.startOfDay(for: now)
+        let startDate = calendar.startOfDay(
+            for: calendar.date(byAdding: .day, value: -config.past, to: today) ?? today
+        )
+        let target = calendar.startOfDay(for: date)
+        let days = calendar.dateComponents([.day], from: startDate, to: target).day ?? 0
+        let stepIndex = max(0, min(days / max(config.steps, 1), totalItems(config: config) - 1))
+        return spacerNum + stepIndex
+    }
+
+    /// 项下标对应的日期（`WheelPicker.dateForItemIndex` 原式）：`startDate + (index - 起点偏移) × steps`。
+    ///
+    /// 下标落在前导 `offset` 个「占位格」上时返回 `now - past` 天那天（原式不区分占位格与日期格，
+    /// 前导格在视图里是 `Spacer`，不会被当作日期显示）。
+    static func date(atItemIndex index: Int, spacerNum: Int, config: Config, now: Date, calendar: Calendar) -> Date {
+        let today = calendar.startOfDay(for: now)
+        let startDate = calendar.date(byAdding: .day, value: -config.past, to: today) ?? today
+        let stepIndex = index - spacerNum
+        return calendar.date(byAdding: .day, value: stepIndex * max(config.steps, 1), to: startDate) ?? today
     }
 }
 
@@ -438,7 +472,13 @@ struct CalendarView: View {
                 .frame(height: dateExpanded ? 50 : 0)
                 .opacity(dateExpanded ? 1 : 0)
                 .allowsHitTesting(dateExpanded)
-                .clipped()
+                // 这里**不能**加 `.clipped()`（2026-09-29 实测定位，T1 修复）：`WheelPicker`
+                // 内部是 AppKit 背书的 `ScrollView`（`NSScrollView`），而外层 `.clipped()` 在容器
+                // 还是零高时就被求值/缓存成「全裁掉」，之后容器长到 50pt 也不会刷新——日期轮于是
+                // 永远不可见（只剩两侧渐隐；同容器里的 SwiftUI 自绘内容照常显示）。对照实验：
+                // 同一容器写法下 A（带 clipped）= 空条、B（去掉 clipped）= 日期正常、C（展开才挂载
+                // 但带 clipped）= 日期正常，见 `.workflow/p2-calendar-row/reports/`。
+                // 收起态的不可见由上面两行保证（0 高 + 透明），不需要裁剪。
             }
             .padding(.horizontal, 4)
             .padding(.top, 2)
