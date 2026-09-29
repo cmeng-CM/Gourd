@@ -10,7 +10,7 @@
 
 ## 一句话现状
 
-**应用工程已进仓库：Atoll 基线 `v2.3.3-beta.3`（`c7305ec`）的历史已接入 `main`，改名与基座落地（P0）已完成**——`xcodebuild build` 产出 `Gourd.app`（`PRODUCT_NAME=Gourd`、Bundle ID `com.cmeng.gourd`，Debug 为 `com.cmeng.gourd.dev`）、合规与 CI 配置就位、上游功能零删减。本机构建命令见 [docs/10](docs/10-p0-execution.md)；尚未做的是 P1 起的模块化与业务实现（`docs/02-roadmap.md`）。仓库**无远端、CI 从未实跑**（见 docs/10「已知限制」）。
+**应用工程已进仓库：Atoll 基线 `v2.3.3-beta.3`（`c7305ec`）的历史已接入 `main`，改名与基座落地（P0）已完成**——构建产物仍是 `Gourd.app`（`PRODUCT_NAME=Gourd`、Bundle ID `com.cmeng.gourd`，Debug 为 `com.cmeng.gourd.dev`），`tools/build.sh --install` / `--dmg` 落地时命名为 `壶中天.app`（DMG 为 `dist/壶中天-<ver>.dmg`）；合规与 CI 配置就位、上游功能零删减。本机构建命令见 [docs/10](docs/10-p0-execution.md)；尚未做的是 P1 起的模块化与业务实现（`docs/02-roadmap.md`）。仓库**无远端、CI 从未实跑**（见 docs/10「已知限制」）。
 
 ## 关键决策（详见 [docs/00-decisions.md](docs/00-decisions.md)）
 
