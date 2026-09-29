@@ -31,7 +31,27 @@ class CalendarManager: ObservableObject {
     static let shared = CalendarManager()
 
     @Published var currentWeekStartDate: Date
+    /// **按日**窗口（`[选中日, +1 天)`）的条目：今日清单（`HomeCalendarRow` 右栏 /
+    /// `EventListView`）与独立日历面板右栏（`StandaloneEventCardList`）的数据源。
+    /// `updateEvents` 是它唯一的赋值点。**月历标记不用它**（见 `monthEvents`）。
     @Published var events: [EventModel] = []
+    /// **按月**窗口的条目快照（与 `events` 完全独立的一条数据路径，2026-09-29 补）。
+    ///
+    /// 为什么必须单开一条：`events` 的窗口只有一天（选中日），拿它算「月历上哪些天有事件」等于
+    /// **除选中日外整月的格子永远不会有标记**——这正是上一版标记「基本无用」的原因。
+    ///
+    /// 窗口 = 显示月份**首日所在周的起点 → 末日所在周的终点**（`MonthGridLayout.monthWindow`，
+    /// 与月历网格 `days(forMonth:)` 逐日同源、含跨月补格），查询与权限**沿用**既有
+    /// `CalendarService.events(from:to:calendars:)`（不新增权限、不新增查询口径）。
+    ///
+    /// 触发点（不轮询）：① `MonthGridView` 在**显示月份变化**时通知宿主调一次
+    /// `updateMonthEvents(for:)`（含首次出现）；② 既有 `EKEventStoreChanged` 监听里、且**只在
+    /// 已经有人要过按月数据时**重抓一次（`refreshRequestedMonthEvents()`）——不打开日历行的用户
+    /// 不为这条数据付任何查询代价。
+    ///
+    /// 条目**未过滤**：已完成提醒 / 全天条目的隐藏偏好由显示侧（宿主）走
+    /// `EventListView.filteredEvents` 施加，与右侧今日清单同一条链路。
+    @Published private(set) var monthEvents: MonthEventSnapshot = .empty
     @Published var allCalendars: [CalendarModel] = []
     @Published var eventCalendars: [CalendarModel] = []
     @Published var reminderLists: [CalendarModel] = []
@@ -41,6 +61,9 @@ class CalendarManager: ObservableObject {
     @Published var lockScreenEvents: [EventModel] = []
 
     private var lockScreenPreviewEvents: [EventModel]?
+    /// 最近一次发出按月请求的月份：`monthEvents` 的**最后一次请求为准**判据（快速连翻月份时
+    /// 丢弃迟到的旧响应，见 `updateMonthEvents(for:force:)`）。
+    private var requestedMonth: Date?
 
     private var selectedCalendars: [CalendarModel] = []
     private let calendarService = CalendarService()
@@ -120,6 +143,8 @@ class CalendarManager: ObservableObject {
         await reloadCalendarAndReminderLists()
         await maybeRefreshEventsAfterReload()
         await updateLockScreenEvents(force: true)
+        // 复用同一个既有监听刷新按月数据（只在已经有人要过按月数据时；节流与抑制口径同上）。
+        await refreshRequestedMonthEvents()
         nextAllowedEventStoreRefresh = Date().addingTimeInterval(eventStoreChangeThrottle)
         ignoreEventStoreChangesUntil = Date().addingTimeInterval(selfInducedChangeSuppression)
     }
@@ -242,6 +267,9 @@ class CalendarManager: ObservableObject {
         updateSelectedCalendars()
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
+        // 月历标记走的是按 `selectedCalendars` 抓的**另一份**数据：换日历勾选后它也必须跟着换，
+        // 否则取消勾选的日历的事件会继续在月历上留点。
+        await refreshRequestedMonthEvents()
     }
 
     static func startOfDay(_ date: Date) -> Date {
@@ -382,6 +410,50 @@ class CalendarManager: ObservableObject {
         lastEventsFetchDate = Date()
     }
 
+    /// 抓取（或复用）**某个显示月份**的按月数据，写进 `monthEvents`（窗口与理由见该属性的注释）。
+    ///
+    /// 三条口径：
+    /// 1. **按月去重**：已经有了同一个月的快照就不再查（`force` 可越过）。翻月才查一次，
+    ///    同一月份内点日期 / 重开面板都不产生新查询；
+    /// 2. **最后一次请求为准**：连翻两个月份会有两个请求在飞，晚到的旧响应被丢弃
+    ///    （否则「翻到 10 月又马上翻回 9 月」会把 10 月的条目画在 9 月的网格上）；
+    /// 3. 没有日历权限时不动 `monthEvents`（键保持 `nil`，下次请求会重试）。
+    ///
+    /// - Parameter month: 显示月份里的任意日期（内部归一化到该月 1 日零点）。
+    func updateMonthEvents(for month: Date, force: Bool = false) async {
+        let normalizedMonth = MonthGridLayout.firstDay(ofMonth: month)
+        if !force, monthEvents.month == normalizedMonth { return }
+        // 权限读数**直取 EventKit**，而不是用 `hasCalendarAccess`（它读的 @Published
+        // `calendarAuthorizationStatus` 只在 `checkCalendarAuthorization()` 被调过之后才有真值，
+        // 而那条链路只挂在设置页与锁屏天气小部件上、不在应用启动链上）——按它守门的话，没打开过
+        // 设置页的机器上按月数据**一次都抓不到**，月历会一个点都没有。这里只读不写：授权状态本身
+        // 仍由既有链路维护。（`CalendarService.events` 内部也各自按 EventKit 状态决定查哪一类。）
+        guard isAuthorized(EKEventStore.authorizationStatus(for: .event)),
+              let window = MonthGridLayout.monthWindow(forMonth: normalizedMonth)
+        else { return }
+
+        Logger.log("CalendarManager: Updating month events (force: \(force))", category: .lifecycle)
+
+        requestedMonth = normalizedMonth
+
+        let calendarIDs = selectedCalendars.map { $0.id }
+        let service = calendarService
+
+        let fetched = await eventFetchLimiter.run {
+            await service.events(from: window.start, to: window.end, calendars: calendarIDs)
+        }
+
+        guard requestedMonth == normalizedMonth else { return }
+        monthEvents = MonthEventSnapshot(month: normalizedMonth, events: fetched)
+    }
+
+    /// 把**已经要过**的那个月重抓一次（选择日历 / 事件库发生变化后调用，让月历标记跟着变）。
+    /// 没人要过按月数据（`monthEvents.month == nil`）时什么也不做——不给不打开日历行的用户白查。
+    private func refreshRequestedMonthEvents() async {
+        guard let month = monthEvents.month else { return }
+        await updateMonthEvents(for: month, force: true)
+    }
+
     func setCalendarsSelected(_ calendars: [CalendarModel], isSelected: Bool) async {
         var selectionState = Defaults[.calendarSelectionState]
         let ids = Set(calendars.map { $0.id })
@@ -410,11 +482,14 @@ class CalendarManager: ObservableObject {
         updateSelectedCalendars()
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
+        await refreshRequestedMonthEvents()
     }
 
     func setReminderCompleted(reminderID: String, completed: Bool) async {
         await calendarService.setReminderCompleted(reminderID: reminderID, completed: completed)
         await updateEvents(force: true)
+        // 勾选/取消勾选会改变它是否被 `hideCompletedReminders` 过滤掉 → 月历上的点也要跟着变。
+        await refreshRequestedMonthEvents()
     }
 }
 

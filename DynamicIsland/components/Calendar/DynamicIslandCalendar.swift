@@ -540,6 +540,22 @@ struct CalendarView: View {
 
 // MARK: - 整月网格（抽取复用：独立面板左栏 + 首页日历行左栏）
 
+/// 一份**按月**的事件快照：`month` = 这份数据覆盖的显示月份（该月 1 日零点），`events` = 该月
+/// 网格覆盖区间（`MonthGridLayout.monthWindow`）内的**已过滤**条目（口径 = `EventListView.filteredEvents`）。
+///
+/// 由 `CalendarManager.monthEvents`（按月的唯一抓取路径）产出、经宿主过滤后交给 `MonthGridView`。
+///
+/// **为什么把「月份」和「条目」绑成一份传**：网格的显示月份由 `MonthGridView` 自持，而按月数据是
+/// 异步到的——只传条目数组的话，翻月那一瞬间会拿**上个月**的条目去算新月份的标记（错点落在新网格上）；
+/// 绑上月份后 `MonthGridLayout.eventDays` 只在「快照月份 == 显示月份」时出点，数据在路上时宁可空着。
+struct MonthEventSnapshot {
+    /// 快照覆盖的月份（该月 1 日零点）；`nil` = 还没有任何按月数据。
+    var month: Date?
+    var events: [EventModel]
+
+    static let empty = MonthEventSnapshot(month: nil, events: [])
+}
+
 /// 整月网格的**纯几何 + 纯标记**：`MonthGridView` 日格与事件标记的唯一来源，由 `StandaloneCalendarView`
 /// 的 `monthDays` 逐字抽出（口径不变）——
 ///
@@ -565,6 +581,31 @@ enum MonthGridLayout {
             current = next
         }
         return days
+    }
+
+    /// 某个日期所在月份的**首日零点**——按月数据的键（`MonthEventSnapshot.month` 与
+    /// `MonthGridView.displayedMonth` 用它比较，`CalendarManager.updateMonthEvents` 用它去重）。
+    static func firstDay(ofMonth month: Date, calendar: Calendar = .current) -> Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: month))
+            ?? calendar.startOfDay(for: month)
+    }
+
+    /// 某个显示月份要**抓取的事件区间**：网格首格零点 → 末格次日零点（末尾排他，正好是 EventKit
+    /// 谓词的 `end` 口径）。
+    ///
+    /// 与 `days(forMonth:)` **同源**（就是它的首末格）：网格画得出的每一格都在这个区间内，
+    /// 因此「哪些天有点」不会因为抓取窗口比网格小而缺格——这是按月数据路径的窗口判据
+    /// （用例 `testMonthWindowCoversEveryMonthGridOfAYear` 钉住）。
+    ///
+    /// 注意末端的**半开**口径：`end` 那一瞬间（末格的次日零点）不属于窗口。`DateInterval.contains`
+    /// 是**闭**区间（末点也算在内），判边界时别拿它当判据（测试里显式按半开比较）。
+    static func monthWindow(forMonth month: Date, calendar: Calendar = .current) -> DateInterval? {
+        let gridDays = days(forMonth: month, calendar: calendar)
+        guard let first = gridDays.first,
+              let last = gridDays.last,
+              let end = calendar.date(byAdding: .day, value: 1, to: last)
+        else { return nil }
+        return DateInterval(start: first, end: end)
     }
 
     /// 给定月份里**有事件的日期**（每个元素都是那天的零点）——`MonthGridView` 日格标记的唯一判据。
@@ -602,6 +643,25 @@ enum MonthGridLayout {
         }
         return daysWithEvents
     }
+
+    /// 显示月份对应的「有事件日期」集合 = **按月快照的切片**，`MonthGridView` 日格标记的唯一入口。
+    ///
+    /// 比 `daysWithEvents(inMonth:events:calendar:)` 多一层**月份对齐**判据：快照的 `month`
+    /// 必须与显示月份同月，否则返回空集。数据是按月异步抓的（`CalendarManager.updateMonthEvents`），
+    /// 翻月后新数据到达之前手上还是上个月的条目——不对齐就会把上个月的点画到新网格上
+    /// （批次的失败信号之一）；对齐判据下这段时间是「没有点」，不会出错点。
+    ///
+    /// 快照的条目仍然**必须已过滤**（口径同 `daysWithEvents`，由宿主走 `EventListView.filteredEvents`）。
+    static func eventDays(
+        forDisplayedMonth displayedMonth: Date,
+        snapshot: MonthEventSnapshot,
+        calendar: Calendar = .current
+    ) -> Set<Date> {
+        guard let month = snapshot.month,
+              calendar.isDate(month, equalTo: displayedMonth, toGranularity: .month)
+        else { return [] }
+        return daysWithEvents(inMonth: displayedMonth, events: snapshot.events, calendar: calendar)
+    }
 }
 
 /// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（今天 / 选中高亮 / 有事件的小圆点）
@@ -613,9 +673,13 @@ enum MonthGridLayout {
 /// 视图只负责「显示哪个月 + 选中哪天」：选中日的写回方（调用方）自己决定要不要拉那一天的日程
 /// （独立面板与首页日历行都走 `CalendarManager.updateCurrentDate`）。
 ///
-/// **事件标记的数据源由调用方传入**（`events`，已过滤）：本视图不读 `CalendarManager.shared`，
-/// 因为同一个网格有两个宿主（首页日历行 / 独立面板），谁读全局单例都会让这份实现绑死在宿主的
-/// 数据口径上，也没法用固定事件直接测「标记画在哪几天」。
+/// **事件标记的数据源由调用方传入**（`monthEvents`，一份**按月**的快照、条目已过滤）：本视图不读
+/// `CalendarManager.shared`，因为同一个网格有两个宿主（首页日历行 / 独立面板），谁读全局单例都会让
+/// 这份实现绑死在宿主的数据口径上，也没法用固定事件直接测「标记画在哪几天」。
+///
+/// 数据是**按月**抓的（窗口 = 本视图显示月份的整张网格，见 `MonthGridLayout.monthWindow`），
+/// 因此本视图多了一个出口 `onDisplayedMonthChange`：显示月份一变就通知宿主去抓那个月
+/// ——月历标记不能靠宿主自己的选中日窗口（那是**一天**，除选中日外整月都不会有点）。
 struct MonthGridView: View {
     /// 选中日：日格读它做高亮、点日格写它。
     @Binding var selectedDate: Date
@@ -625,10 +689,14 @@ struct MonthGridView: View {
     /// 翻月时是否把选中日一并挪到**新月份首日**：独立面板的既有行为是 `true`；
     /// 首页日历行传 `false`（翻月只改显示月份，选中日不动）。
     var monthNavigationMovesSelection: Bool
-    /// 事件标记的数据源：**已过滤**的条目（口径 = `EventListView.filteredEvents`，由调用方在
-    /// 「既有数据源 → 过滤」之后传进来，如 `HomeCalendarRow.filteredEvents`）。
-    /// 按月切片由本视图自己做（见 `eventDays`），传入的是**全量**已过滤条目、不是某个月的子集。
-    var events: [EventModel]
+    /// 事件标记的数据源：**按月**快照，`events` 必须**已过滤**（口径 = `EventListView.filteredEvents`，
+    /// 由调用方在「`CalendarManager.monthEvents` → 过滤」之后传进来）。
+    /// 切片到「显示月份的那张网格（含跨月补格）」由 `MonthGridLayout.eventDays` 在这里做；
+    /// 快照月份与显示月份不同月时不出点（数据在路上时的口径）。
+    var monthEvents: MonthEventSnapshot
+    /// 显示月份变化通知（含首次出现）：宿主据此抓该月数据（`CalendarManager.updateMonthEvents(for:)`）。
+    /// 只在这一件事上回调，不做高频轮询。
+    var onDisplayedMonthChange: ((Date) -> Void)?
 
     /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
     @State private var displayedMonth: Date
@@ -639,12 +707,14 @@ struct MonthGridView: View {
         selectedDate: Binding<Date>,
         scrollTarget: Binding<Date?>,
         monthNavigationMovesSelection: Bool = false,
-        events: [EventModel]
+        monthEvents: MonthEventSnapshot,
+        onDisplayedMonthChange: ((Date) -> Void)? = nil
     ) {
         _selectedDate = selectedDate
         _scrollTarget = scrollTarget
         self.monthNavigationMovesSelection = monthNavigationMovesSelection
-        self.events = events
+        self.monthEvents = monthEvents
+        self.onDisplayedMonthChange = onDisplayedMonthChange
         // 初值取选中日所在月（而不是 `Date()`）：`onChange` 不会为首帧补发，初值必须自己对齐。
         _displayedMonth = State(initialValue: selectedDate.wrappedValue.startOfMonth)
     }
@@ -670,10 +740,11 @@ struct MonthGridView: View {
     /// 当前显示月份里「有事件」的日期（日格标记的唯一判据）。
     ///
     /// 切片放在视图内（而不是调用方）是必需的：**显示月份由本视图自持**，翻月改的是 `displayedMonth`，
-    /// 调用方事先算好一个月的集合翻月后就过期了。所以调用方只传**已过滤的全量条目**，
-    /// 「哪几天有点」由纯函数 `MonthGridLayout.daysWithEvents(inMonth:events:calendar:)` 在这里按月算。
+    /// 调用方事先算好一个月的集合翻月后就过期了。所以调用方传的是**按月快照**（月份 + 已过滤条目），
+    /// 「哪几天有点」由纯函数 `MonthGridLayout.eventDays(forDisplayedMonth:snapshot:calendar:)` 在这里算
+    /// ——快照月份与本视图显示月份不同月的这段时间（翻月后新数据还在路上）**不出点**，不会出错点。
     private var eventDays: Set<Date> {
-        MonthGridLayout.daysWithEvents(inMonth: displayedMonth, events: events, calendar: calendar)
+        MonthGridLayout.eventDays(forDisplayedMonth: displayedMonth, snapshot: monthEvents, calendar: calendar)
     }
 
     var body: some View {
@@ -691,6 +762,14 @@ struct MonthGridView: View {
         .padding(.horizontal, 6)
         .padding(.top, 4)
         .clipped()
+        // 显示月份一变（翻月 / 选中日换到别的月）就通知宿主去抓那个月的标记数据。
+        // `.onChange` 不为首帧补发，所以出现时另发一次（首月同样要抓）。
+        .onAppear {
+            onDisplayedMonthChange?(displayedMonth)
+        }
+        .onChange(of: displayedMonth) { _, newMonth in
+            onDisplayedMonthChange?(newMonth)
+        }
         // 选中日一变（点日格 / 调用方换选中日）→ 显示月份跟到那一天所在月。
         .onChange(of: selectedDate) { _, newDate in
             withAnimation(.smooth(duration: 0.22)) {
@@ -892,6 +971,19 @@ struct StandaloneCalendarView: View {
         )
     }
 
+    /// 月历网格的**按月**数据源：`calendarManager.monthEvents`（该显示月份整张网格的窗口）经同一套
+    /// 偏好过滤——与右栏清单的**按日** `filteredEvents` 是两条不同窗口的数据，别混用。
+    private var monthEventSnapshot: MonthEventSnapshot {
+        MonthEventSnapshot(
+            month: calendarManager.monthEvents.month,
+            events: EventListView.filteredEvents(
+                events: calendarManager.monthEvents.events,
+                hideCompletedReminders: hideCompletedReminders,
+                hideAllDayEvents: hideAllDayEvents
+            )
+        )
+    }
+
     private var resolvedNotchHeight: CGFloat {
         let height = vm.notchSize.height
         return height > 0 ? height : openNotchSize.height
@@ -915,13 +1007,17 @@ struct StandaloneCalendarView: View {
             HStack(alignment: .top, spacing: paneSpacing) {
                 // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
                 // 翻月把选中日一并挪到新月份首日）。
-                // 有事件的日期给日格画小圆点：传**已过滤**的条目（与右栏清单同一份 `filteredEvents`）
-                // ——共用同一个 `MonthGridView` 时，两个宿主的标记口径也必须一致（首页日历行同样传）。
+                // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后的
+                // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
+                // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
                 MonthGridView(
                     selectedDate: $selectedDate,
                     scrollTarget: $datePickerScrollTarget,
                     monthNavigationMovesSelection: true,
-                    events: filteredEvents
+                    monthEvents: monthEventSnapshot,
+                    onDisplayedMonthChange: { month in
+                        Task { await calendarManager.updateMonthEvents(for: month) }
+                    }
                 )
                     .frame(width: paneWidth, alignment: .topLeading)
                     .frame(height: paneHeight, alignment: .topLeading)

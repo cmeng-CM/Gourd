@@ -4584,6 +4584,200 @@ final class MonthGridLayoutTests: XCTestCase {
         let calendar = gridCalendar(firstWeekday: 1)
         XCTAssertTrue(gridDaysWithEvents(calendar, []).isEmpty, "空输入 → 空集")
     }
+
+    // MARK: - 按月数据的抓取窗口（`CalendarManager.monthEvents` 的窗口判据）
+
+    /// EventKit 谓词的窗口是**半开区间** `[start, end)`。`DateInterval.contains` 是**闭**区间
+    /// （末点也算在内，实测 `contains(10/4) == true`），拿它判边界会让「窗口少抓一天」的用例假绿，
+    /// 所以这里显式按半开写。
+    private func gridWindowContains(_ window: DateInterval, _ day: Date) -> Bool {
+        day >= window.start && day < window.end
+    }
+
+    /// **窗口必须覆盖网格能画出的每一格**：逐月走完 2026 年，每个月都验「网格的每一个日格都落在
+    /// `monthWindow` 内」，且窗口两端就是网格的首格、末格的次日零点。
+    ///
+    /// 这是「月历上只有选中日有点」那个缺陷的回归钉：按月数据的抓取窗口只要比网格小一格，
+    /// 那一格的事件就抓不到、永远没有标记（上一版的窗口是**一天**，所以整月只剩选中日有点）。
+    func testMonthWindowCoversEveryMonthGridOfAYear() throws {
+        let calendar = gridCalendar(firstWeekday: 1)
+
+        for month in 1...12 {
+            let monthDate = gridMonth(calendar, year: 2026, month: month)
+            let gridDays = MonthGridLayout.days(forMonth: monthDate, calendar: calendar)
+            let window = try XCTUnwrap(
+                MonthGridLayout.monthWindow(forMonth: monthDate, calendar: calendar),
+                "\(month) 月应能算出窗口"
+            )
+
+            XCTAssertTrue(
+                gridDays.allSatisfy { gridWindowContains(window, $0) },
+                "\(month) 月：每一个日格都在抓取窗口内"
+            )
+            XCTAssertEqual(window.start, gridDays.first, "\(month) 月：窗口起点 = 网格首格（当周起点）")
+            XCTAssertEqual(
+                window.end,
+                try XCTUnwrap(gridDays.last).addingTimeInterval(24 * 3600),
+                "\(month) 月：窗口终点 = 网格末格的次日零点（末尾排他）"
+            )
+        }
+    }
+
+    /// 2026 年 9 月（周日起点）的窗口 = **8/30 00:00 → 10/4 00:00**：起点是当月首日所在周的起点
+    /// （8/30 周日）、终点是网格末格（10/3）的**次日零点**——末尾排他，正好是 EventKit 谓词的
+    /// `end` 口径，因此 10/3 在窗口内、10/4 不在。
+    func testMonthWindowMatchesGridBoundsForSeptember() throws {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let window = try XCTUnwrap(
+            MonthGridLayout.monthWindow(forMonth: gridMonth(calendar, year: 2026, month: 9), calendar: calendar)
+        )
+
+        XCTAssertEqual(window.start, gridDay(calendar, year: 2026, month: 8, day: 30), "起点 = 网格首格（8/30 周日）")
+        XCTAssertEqual(window.end, gridDay(calendar, year: 2026, month: 10, day: 4), "终点 = 末格次日零点")
+        XCTAssertTrue(gridWindowContains(window, gridDay(calendar, year: 2026, month: 8, day: 30)), "首格（补格）在窗口内")
+        XCTAssertTrue(gridWindowContains(window, gridDay(calendar, year: 2026, month: 10, day: 3)), "末格（补格）在窗口内")
+        XCTAssertFalse(gridWindowContains(window, gridDay(calendar, year: 2026, month: 10, day: 4)), "末尾排他：10/4 不在窗口内")
+    }
+
+    /// 窗口跟着 `firstWeekday` 走（与 `days(forMonth:)` 同源）：同一月份换周一起点后窗口两端各挪一天。
+    func testMonthWindowFollowsFirstWeekday() throws {
+        let sundayStart = gridCalendar(firstWeekday: 1)
+        let mondayStart = gridCalendar(firstWeekday: 2)
+
+        let sundayWindow = try XCTUnwrap(
+            MonthGridLayout.monthWindow(forMonth: gridMonth(sundayStart, year: 2026, month: 9), calendar: sundayStart)
+        )
+        let mondayWindow = try XCTUnwrap(
+            MonthGridLayout.monthWindow(forMonth: gridMonth(mondayStart, year: 2026, month: 9), calendar: mondayStart)
+        )
+
+        XCTAssertEqual(sundayWindow.start, gridDay(sundayStart, year: 2026, month: 8, day: 30), "周日起点：8/30")
+        XCTAssertEqual(mondayWindow.start, gridDay(mondayStart, year: 2026, month: 8, day: 31), "周一起点：8/31")
+        XCTAssertEqual(sundayWindow.end, gridDay(sundayStart, year: 2026, month: 10, day: 4), "周日起点：10/4")
+        XCTAssertEqual(mondayWindow.end, gridDay(mondayStart, year: 2026, month: 10, day: 5), "周一起点：10/5")
+    }
+
+    /// **恰好四周**的月份没有补格：2026 年 2 月（2/1 周日 → 2/28 周六）的窗口 = 2/1 00:00 → 3/1 00:00，
+    /// 一个月一天都不多抓。
+    func testMonthWindowForExactFourWeekMonth() throws {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let window = try XCTUnwrap(
+            MonthGridLayout.monthWindow(forMonth: gridMonth(calendar, year: 2026, month: 2), calendar: calendar)
+        )
+
+        XCTAssertEqual(window.start, gridDay(calendar, year: 2026, month: 2, day: 1), "起点 = 2/1（周日）")
+        XCTAssertEqual(window.end, gridDay(calendar, year: 2026, month: 3, day: 1), "终点 = 2/28 的次日零点")
+    }
+
+    /// `firstDay(ofMonth:)` 把月内任意一天归一化到**该月 1 日零点**——按月数据的键
+    /// （`MonthEventSnapshot.month` 与 `MonthGridView.displayedMonth` 都用它比较、管理器用它去重）。
+    func testFirstDayOfMonthNormalizesAnyDayInThatMonth() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let septemberFirst = gridDay(calendar, year: 2026, month: 9, day: 1)
+
+        for day in [1, 15, 30] {
+            XCTAssertEqual(
+                MonthGridLayout.firstDay(ofMonth: gridTime(calendar, year: 2026, month: 9, day: day, hour: 13), calendar: calendar),
+                septemberFirst,
+                "9/\(day)（含带时刻的）都归一化到 9/1 零点"
+            )
+        }
+        XCTAssertEqual(
+            MonthGridLayout.firstDay(ofMonth: gridDay(calendar, year: 2026, month: 10, day: 1), calendar: calendar),
+            gridDay(calendar, year: 2026, month: 10, day: 1),
+            "月首日本身不动"
+        )
+    }
+
+    // MARK: - 按月快照 → 日格标记（含「翻月期间不出错点」的判据）
+
+    private func gridSnapshot(_ calendar: Calendar, year: Int, month: Int, events: [EventModel]) -> MonthEventSnapshot {
+        MonthEventSnapshot(month: gridMonth(calendar, year: year, month: month), events: events)
+    }
+
+    private func gridEventDays(_ calendar: Calendar, displayedMonth: Int, snapshot: MonthEventSnapshot) -> Set<Date> {
+        MonthGridLayout.eventDays(
+            forDisplayedMonth: gridMonth(calendar, year: 2026, month: displayedMonth),
+            snapshot: snapshot,
+            calendar: calendar
+        )
+    }
+
+    /// **一个月里多个日期都有点**：按月窗口内的条目（8/31、9/1、9/30、10/2）在 9 月网格上各得一点
+    /// ——上一版用「选中日那一天的条目」只可能有一个点，这条用例是那件事的正向对照。
+    func testEventDaysMarksEveryDayWithEventsInTheMonthWindow() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let events = [
+            gridEvent(id: "august-padding",
+                      start: gridTime(calendar, year: 2026, month: 8, day: 31, hour: 9),
+                      end: gridTime(calendar, year: 2026, month: 8, day: 31, hour: 10)),
+            gridEvent(id: "first-of-month",
+                      start: gridTime(calendar, year: 2026, month: 9, day: 1, hour: 9),
+                      end: gridTime(calendar, year: 2026, month: 9, day: 1, hour: 10)),
+            gridEvent(id: "last-of-month",
+                      start: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 9),
+                      end: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 10)),
+            gridEvent(id: "october-padding",
+                      start: gridTime(calendar, year: 2026, month: 10, day: 2, hour: 9),
+                      end: gridTime(calendar, year: 2026, month: 10, day: 2, hour: 10))
+        ]
+
+        XCTAssertEqual(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: gridSnapshot(calendar, year: 2026, month: 9, events: events)),
+            [
+                gridDay(calendar, year: 2026, month: 8, day: 31),
+                gridDay(calendar, year: 2026, month: 9, day: 1),
+                gridDay(calendar, year: 2026, month: 9, day: 30),
+                gridDay(calendar, year: 2026, month: 10, day: 2)
+            ],
+            "9 月网格里 4 个不同的日期都有点（含两个跨月补格）"
+        )
+    }
+
+    /// **快照月份与显示月份不同月 → 一个点都不出**：翻月后新数据还在路上时，手上还是上个月的条目，
+    /// 拿它算新月份就会把点画到错的格子上——此刻宁可空着。同一份条目在对齐月份里才出点。
+    func testEventDaysIgnoresSnapshotFromAnotherMonth() {
+        let calendar = gridCalendar(firstWeekday: 1)
+        let septemberEvent = gridEvent(
+            id: "standup",
+            start: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 9),
+            end: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 10)
+        )
+
+        // 10 月的窗口（9/27…10/31）本来就含 9/29，所以「10 月快照里有 9/29 的条目」是真实形态。
+        let octoberSnapshot = gridSnapshot(calendar, year: 2026, month: 10, events: [septemberEvent])
+        XCTAssertTrue(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: octoberSnapshot).isEmpty,
+            "显示 9 月、快照是 10 月 → 不出点（哪怕条目本身落在 9/29）"
+        )
+
+        let augustSnapshot = gridSnapshot(calendar, year: 2026, month: 8, events: [septemberEvent])
+        XCTAssertTrue(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: augustSnapshot).isEmpty,
+            "显示 9 月、快照是 8 月 → 不出点"
+        )
+
+        let septemberSnapshot = gridSnapshot(calendar, year: 2026, month: 9, events: [septemberEvent])
+        XCTAssertEqual(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: septemberSnapshot),
+            [gridDay(calendar, year: 2026, month: 9, day: 29)],
+            "月份对齐时同一个条目才出点（证明上面的空集是月份不齐造成的）"
+        )
+    }
+
+    /// 还没有按月数据（`.empty`）/ 该月没有条目 → 一个点都不画。
+    func testEventDaysWithEmptySnapshotHasNoMarks() {
+        let calendar = gridCalendar(firstWeekday: 1)
+
+        XCTAssertTrue(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: .empty).isEmpty,
+            "还没有按月数据 → 空集"
+        )
+        XCTAssertTrue(
+            gridEventDays(calendar, displayedMonth: 9, snapshot: gridSnapshot(calendar, year: 2026, month: 9, events: [])).isEmpty,
+            "该月没有条目 → 空集"
+        )
+    }
 }
 
 // MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）

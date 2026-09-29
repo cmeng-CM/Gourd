@@ -43,6 +43,21 @@ struct HomeCalendarRow: View {
     /// 本行与上排 strip 之间的间距（接缝里的 `VStack(spacing:)` 取同一个值，两处只有一个数）。
     static let rowSpacing: CGFloat = 8
 
+    /// 右栏今日清单的**右侧内边距**：留给展开面板右下角的拖动把手（D-29），约 36pt（2026-09-29 补）。
+    ///
+    /// 为什么要留：把手命中框 `panelResizeHandleHitSize`（32pt）距面板右下角各
+    /// `panelResizeHandleEdgeInset`（14pt）→ 它从面板右边往内占到 **46pt**、从下边往内也占到 46pt。
+    /// 而本行内容离面板右边缘只有 12（展开态面板自身内边距）+ 14（`notchHorizontalPadding` 开态
+    /// = 19 − 5）+ 8（`NotchHomeView` 的内边距）= **34pt**，今日清单**最后一行**的行尾（提醒勾选圈
+    /// 与行尾那一段可点区）因此正落在把手的命中框里：点上去是被把手吃掉（拖动面板）而不是打开日程，
+    /// 提醒勾选圈更是直接点不到。
+    ///
+    /// 取值：46 − 34 = 12 是「刚好不重叠」的下限；取 36（≈ 下限 + 24）是留出余量——把手的有效区
+    /// 还受面板裁剪形状（`NotchShape` 右下角是二次曲线）影响，而 36 让行的右端停在距边 70pt 处，
+    /// 与把手之间留 24pt 空白，勾选圈（14pt）也整颗在安全区内。代价是标题列窄 36pt（尾部截断更早、
+    /// 勾选圈更靠内），这是「行尾可点」换来的，按判决**不缩小把手**。
+    static let todayListTrailingInset: CGFloat = 36
+
     /// 左栏（整月网格）占行宽的比例。
     private static let monthGridWidthRatio: CGFloat = 0.55
     /// 左栏最小宽度：7 列日格低于这个宽度就挤到不可读。
@@ -61,11 +76,26 @@ struct HomeCalendarRow: View {
     @Default(.hideAllDayEvents) private var hideAllDayEvents
 
     /// 与独立面板同一套过滤（已完成提醒 / 全天条目按偏好隐藏），空态判据因此也一致。
+    /// **数据源是 `calendarManager.events`（选中日那一天）**——右栏今日清单的口径。
     private var filteredEvents: [EventModel] {
         EventListView.filteredEvents(
             events: calendarManager.events,
             hideCompletedReminders: hideCompletedReminders,
             hideAllDayEvents: hideAllDayEvents
+        )
+    }
+
+    /// 月历网格的**按月**数据源：`calendarManager.monthEvents`（显示月份整张网格的窗口，含跨月补格）
+    /// 经同一套偏好过滤。与上面 `filteredEvents`（按**日**、只覆盖选中日）是两条不同窗口的数据，
+    /// **别把这一份传给右栏清单**（那会让今日清单列出整月条目）。
+    private var monthEventSnapshot: MonthEventSnapshot {
+        MonthEventSnapshot(
+            month: calendarManager.monthEvents.month,
+            events: EventListView.filteredEvents(
+                events: calendarManager.monthEvents.events,
+                hideCompletedReminders: hideCompletedReminders,
+                hideAllDayEvents: hideAllDayEvents
+            )
         )
     }
 
@@ -91,10 +121,15 @@ struct HomeCalendarRow: View {
                     // 翻月只改显示月份、不动选中日（首页这一排的月历是「浏览」用的；
                     // 选中日只由点某一天改，右侧清单与高亮因此只在点日期时变）。
                     monthNavigationMovesSelection: false,
-                    // 有事件的日期给日格画小圆点：传**已过滤**的条目（与右侧清单同一份
-                    // `filteredEvents`，同一套偏好口径）——已完成提醒 / 被隐藏的全天条目不会有点。
-                    // 按月切片由 `MonthGridView` 自己按它持有的 `displayedMonth` 做（翻月后标记要跟着变）。
-                    events: filteredEvents
+                    // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后
+                    // 的那一份，与右侧清单同一套偏好口径）——已完成提醒 / 被隐藏的全天条目不会有点。
+                    // 传入的是整张网格窗口的条目，切片到「显示月份的那张网格」由 `MonthGridView` 自己
+                    // 按它持有的 `displayedMonth` 做（翻月后标记要跟着变）。
+                    monthEvents: monthEventSnapshot,
+                    // 显示月份一变（翻月 / 选中日换月）就抓那个月的数据。
+                    onDisplayedMonthChange: { month in
+                        Task { await calendarManager.updateMonthEvents(for: month) }
+                    }
                 )
                 .frame(width: monthGridWidth(in: max(0, geometry.size.width)), alignment: .topLeading)
 
@@ -106,6 +141,10 @@ struct HomeCalendarRow: View {
 
                 todayListColumn
                     .frame(maxWidth: .infinity, alignment: .topLeading)
+                    // 右侧内边距：把今日清单（含表头）的可点区右端从面板右下角的拖动把手命中框里
+                    // 让出来（取值与理由见 `todayListTrailingInset`）。放在列的 `frame` 之后，
+                    // 因此列的外框宽度不变、只有内容区窄了 36pt。
+                    .padding(.trailing, Self.todayListTrailingInset)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
