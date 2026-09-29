@@ -127,7 +127,11 @@ public final class ModuleRegistry: ObservableObject {
     ///
     /// 单个模块抛错只把自己置 `.failed(reason:)` 并继续下一个（06 §3.3 硬性规则 1）。
     /// 迭代顺序按 id 升序（稳定，便于复现「失败模块之后的兄弟模块仍被激活」）。
-    public func bootstrap() async {
+    ///
+    /// `collapse` 是应用侧注入的「收起刘海」闭包（`UIHandle.requestCollapse()` 的唯一出口），
+    /// 注册表只把它转交给每个模块的 context——**透传、不改写、不做裁决**（docs/13 D-28）。
+    /// 默认 `{}` 让既有调用点（单测、未接线的启动路径）保持原语义：请求了也什么都不发生。
+    public func bootstrap(collapse: @escaping () -> Void = {}) async {
         for manifest in manifests.values.sorted(by: { $0.id < $1.id }) {
             guard states[manifest.id] == nil, let type = moduleTypes[manifest.id] else { continue }
 
@@ -139,7 +143,9 @@ public final class ModuleRegistry: ObservableObject {
                 redraw: { [weak self] in
                     guard let self else { return }
                     self.objectWillChange.send()
-                }
+                },
+                // requestCollapse 的路由：注册表没有窗口能力，也不该有——原样交给应用侧。
+                collapse: collapse
             ))
 
             do {

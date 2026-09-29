@@ -15,16 +15,24 @@ import os
 ///
 /// `redraw` 由宿主注入：注册表（T2）把 `requestRedraw` 接到自己的 `objectWillChange` 上，
 /// T3 的 `ModuleHostView` 观察注册表即可重绘；单测注入计数器即可断言转发。
+///
+/// `collapse` 也由宿主注入（**应用侧**）：`UIHandle.requestCollapse()` 只是转给它，
+/// 内核这一层不认识窗口、也不认识「哪块屏」（见 docs/13 D-28）。默认 `{}` 让既有调用点
+/// （单测、未接线时的注册表）一字不改：没有注入时收起请求就是空操作。
 @MainActor
 public enum ModuleContextFactory {
-    public static func make(manifest: ModuleManifest, redraw: @escaping () -> Void) -> ModuleContext {
+    public static func make(
+        manifest: ModuleManifest,
+        redraw: @escaping () -> Void,
+        collapse: @escaping () -> Void = {}
+    ) -> ModuleContext {
         let logger = ModuleLogger(moduleID: manifest.id, shortID: manifest.shortID)
         return ModuleContext(
             moduleID: manifest.id,
             host: hostInfo(),
             config: ManifestConfigHandle(manifest: manifest, logger: logger),
             logger: logger,
-            ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw)
+            ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw, collapse: collapse)
         )
     }
 
@@ -106,10 +114,12 @@ private final class ManifestConfigHandle: ConfigHandle {
 private final class RedrawUIHandle: UIHandle {
     private let moduleID: String
     private let redraw: () -> Void
+    private let collapse: () -> Void
 
-    init(moduleID: String, redraw: @escaping () -> Void) {
+    init(moduleID: String, redraw: @escaping () -> Void, collapse: @escaping () -> Void) {
         self.moduleID = moduleID
         self.redraw = redraw
+        self.collapse = collapse
     }
 
     /// 转发宿主注入的重绘闭包（注册表 → `objectWillChange`）。
@@ -133,5 +143,11 @@ private final class RedrawUIHandle: UIHandle {
         let registry = ModuleRegistry.shared
         guard let hud = registry.activeHUD, hud.moduleID == moduleID else { return }
         registry.dismissHUD(id: hud.id)
+    }
+
+    /// 收起刘海：**只转发宿主注入的闭包**（唯一实现落点在应用侧——哪块屏、当前是否展开、
+    /// 收起动画都由它定）。内核这一层不碰窗口（06 §3.3 R1），也不做裁决。
+    func requestCollapse() {
+        collapse()
     }
 }

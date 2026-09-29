@@ -81,6 +81,17 @@ public protocol UIHandle: AnyObject {
     /// 台前已被后来者替换时它是**空操作**——撤掉别人的浮层不是本模块该有的能力，
     /// 也不需要模块自己记住浮层 id（`presentTransient` 不返回 id，模块本来也拿不到）。
     func dismissTransient()
+    /// **请求收起刘海**（`docs/06` §3.4 的 `NotchHandle.requestExpand/Collapse` 的过渡实现，
+    /// 见 docs/13 D-28）。
+    ///
+    /// 内核只把这条请求转给**应用侧注入的闭包**（`KernelBootstrap.bootstrap(collapse:)` →
+    /// `ModuleContextFactory.make(manifest:redraw:collapse:)`）——模块**仍不得自己碰窗口**
+    /// （06 §3.3 R1），也不做「能不能收」的裁决：那块屏的展开态由应用侧解析
+    /// （`showOnAllDisplays` 下是鼠标所在屏），已收起 / 没窗口时是空操作。
+    ///
+    /// 语义与 06 §3.4 的 `requestCollapse(reason:)` 差一个 `reason` 参数：本批还没有
+    /// 「事件账本 / 诊断面板」消费它（P1-2 的 `NotchStateMachine` 一起补）。
+    func requestCollapse()
 }
 
 /// 自动带 `moduleID` 与 subsystem 前缀 `com.cmeng.gourd.module.<shortID>` 的日志器。

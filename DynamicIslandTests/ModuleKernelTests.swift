@@ -28,6 +28,8 @@
 //  到期**只清自己那一条**（被后来者替换后旧任务让路）与无人接替时自动清除、
 //  `UIHandle.presentTransient` 转发到注册表（唯一实现落点）、
 //  **主动撤浮层**（`dismissHUD(id:)` 的 id 判据与 `UIHandle.dismissTransient()` 的归属判定）、
+//  **收起刘海请求**（D-28：`UIHandle.requestCollapse()` 由工厂原样转发到应用侧注入的闭包、
+//  未接线时是空操作、组合根 → 注册表 → 工厂 → 句柄的透传链）、
 //  **浮层窗口宿主的放置几何与尺寸消毒**（D-23：刘海 / 菜单栏内边、居中贴顶、0×0 与非有限值兜底）、
 //  **可见性状态机的幂等性**（2026-09-28：首次上台 / 淡出中被接手 / 淡出结束无接手 / 同尺寸重弹 /
 //  有接手时不 orderOut——「内置屏偶发只显示第一条」的根因判据）。
@@ -1373,6 +1375,47 @@ final class ModuleKernelTests: XCTestCase {
             "别的模块的浮层不在本模块的处置范围内"
         )
         registry.clearHUD()
+    }
+
+    // MARK: - 收起刘海请求（docs/13 D-28）
+
+    /// `UIHandle.requestCollapse()` 的实现落点 = **应用侧注入的闭包**：工厂原样转发，模块一调就算数。
+    /// 内核这一层不认识窗口、也不做裁决（「哪块屏、能不能收」由应用侧定），因此这里只钉转发本身。
+    func testRequestCollapseForwardsInjectedClosure() throws {
+        let manifest = RegistryFixture.manifest(shortID: "collapse-probe")
+        let probe = RedrawProbe()
+        let context = ModuleContextFactory.make(manifest: manifest, redraw: {}, collapse: { probe.count += 1 })
+
+        XCTAssertEqual(probe.count, 0, "前置：没请求就不该有转发")
+        context.ui.requestCollapse()
+        XCTAssertEqual(probe.count, 1, "requestCollapse 必须转发到注入的闭包")
+        context.ui.requestCollapse()
+        XCTAssertEqual(probe.count, 2, "逐次转发、不做去重（合并与裁决都在应用侧）")
+    }
+
+    /// 未接线时（`make` 的 `collapse` 默认 `{}`）**不崩、也不静默改变语义**：收起请求是空操作。
+    /// 这条是「单测与注释掉一行的启动路径都不必传闭包」的判据。
+    func testRequestCollapseWithoutInjectedClosureIsNoOp() throws {
+        let context = ModuleContextFactory.make(
+            manifest: RegistryFixture.manifest(shortID: "collapse-probe"),
+            redraw: {}
+        )
+        XCTAssertNoThrow(context.ui.requestCollapse())
+    }
+
+    /// **透传链**（组合根 → 注册表 → 工厂 → 句柄）：`bootstrap(collapse:)` 注入的闭包必须真的落进
+    /// `activate()` 之后那个模块的 `context.ui`——注册表只是转发者，中间任何一环改写闭包都会断链。
+    func testBootstrapPassesCollapseClosureIntoModuleContext() async throws {
+        let registry = ModuleRegistry.shared
+        let probe = RedrawProbe()
+        registry.register([StubModule.self], enabled: { _ in true })
+
+        await registry.bootstrap(collapse: { probe.count += 1 })
+        let instance = try XCTUnwrap(registry.instance(for: "com.cmeng.gourd.stub") as? StubModule)
+        XCTAssertEqual(registry.states["com.cmeng.gourd.stub"], .active, "前置：模块应已激活")
+
+        instance.context.ui.requestCollapse()
+        XCTAssertEqual(probe.count, 1, "bootstrap 注入的闭包应直达模块的 UIHandle")
     }
 
     // MARK: - 浮层期间的悬浮展开抑制
@@ -3405,10 +3448,13 @@ private final class StubUIHandle: UIHandle {
     var presentedTTLs: [TimeInterval] = []
     /// 收到的主动撤浮层请求次数（只记次数：假体不持有注册表，转发语义由别处钉）。
     var dismissCount = 0
+    /// 收到的收起刘海请求次数（D-28）：假体没有窗口，只记「模块调过来了」。
+    var collapseCount = 0
     func requestRedraw() { redrawCount += 1 }
     var isLowPower: Bool { false }
     func presentTransient(view: AnyView, ttl: TimeInterval) { presentedTTLs.append(ttl) }
     func dismissTransient() { dismissCount += 1 }
+    func requestCollapse() { collapseCount += 1 }
 }
 
 @MainActor

@@ -681,7 +681,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup 模块内核（P1 接缝 S6）：落首启默认值 + 注册内置模块 + 逐个 activate。
         // 与上面一族 `Manager...shared.setup/configure(coordinator:)` 同构；
         // 用 Task 是因为 bootstrap 是 async，且不阻塞启动流程（注册表空时是一次空跑）。
-        Task { await KernelBootstrap.bootstrap() }
+        //
+        // `collapse` 是模块侧 `UIHandle.requestCollapse()` 的唯一实现落点（docs/13 D-28）：
+        // 「哪块屏」只能由应用侧裁定，故按既有的 `activeVM` 口径解析——`showOnAllDisplays`
+        // 下取鼠标所在屏的 VM（与 toggleNotchOpen / clipboard 快捷键逐字同一套写法），
+        // 否则取主 VM。闭包在**调用时**才解析，启动阶段窗口还没建好也无妨；已收起时是空操作。
+        Task { await KernelBootstrap.bootstrap(collapse: { [weak self] in
+            guard let self else { return }
+            var activeVM = self.vm
+            if Defaults[.showOnAllDisplays] {
+                let mouseLocation = NSEvent.mouseLocation
+                for screen in NSScreen.screens where screen.frame.contains(mouseLocation) {
+                    if let screenViewModel = self.viewModels[screen] {
+                        activeVM = screenViewModel
+                        break
+                    }
+                }
+            }
+            guard activeVM.notchState == .open else { return }
+            activeVM.close()
+        }) }
 
         // Setup 模块浮层窗口宿主（D-23）：瞬时浮层不再渲染在关闭态链里，改由内核的独立窗口
         // 承载（按内容自适应 + 跟随鼠标屏 + 不被刘海裁剪，见 `Kernel/ModuleHUDWindow.swift`）。

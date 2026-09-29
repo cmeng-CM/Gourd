@@ -27,14 +27,18 @@ public enum KernelBootstrap {
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
 
     /// 注册内置模块 + 落首启默认值 + 激活。幂等，可在启动流程里安全重复调用。
-    public static func bootstrap() async {
+    ///
+    /// `collapse` 由**应用侧**在此注入（`UIHandle.requestCollapse()` 的唯一实现落点）：
+    /// 组合根本身不认识窗口，只把闭包透传给注册表（docs/13 D-28）。
+    /// 默认 `{}` = 没有接线时收起请求是空操作（单测与「注释掉一行」的启动路径都不必改）。
+    public static func bootstrap(collapse: @escaping () -> Void = {}) async {
         // 首启默认值先落：模块 `activate()` 里读宿主设置时看到的已是最终值。
         applyFirstLaunchDefaults()
 
         let registry = ModuleRegistry.shared
         // 启用门逐字取 `defaultEnabled`（缺省 false，06 §2.2）。下一行的数组就是「新增模块 = 加一行」。
         registry.register(builtinModules, enabled: { registry.manifests[$0]?.defaultEnabled ?? false })
-        await registry.bootstrap()
+        await registry.bootstrap(collapse: collapse)
     }
 
     /// 首启默认值：把不需要的上游功能用**默认值**表达，不改上游源码（09 §8.1 / D-08）。
