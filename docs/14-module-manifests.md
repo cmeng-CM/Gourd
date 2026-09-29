@@ -27,16 +27,16 @@
 
 | id | surfaces | slot | permissions | config 关键项 | 优先级/依赖 |
 |---|---|---|---|---|---|
-| `com.cmeng.gourd.nowplaying` | `compact`、`expanded` | `center` / order 10 | `media:read`、`media:control`、`network:itunes.apple.com` | `playerColorTinting`、`useMusicVisualizer`、`visualizerBarCount`、`enableWaveformScrubber`（接管映射，见 T-3） | P2a 首批；依赖 15 号文档 §1 的 `MediaRemote.framework` / `MediaRemoteAdapter.framework` |
+| `com.cmeng.gourd.nowplaying` | `compact`、`expanded` | `center` / order 10 | `media:read`、`media:control`、`network:itunes.apple.com` | `playerColorTinting`、`useMusicVisualizer`、`visualizerBarCount`、`enableWaveformScrubber`（接管映射，见 T-3） | P2a 首批；依赖 15 号文档 §1 的 `MediaRemote.framework` / `MediaRemoteAdapter.framework`。**本批（`p2-takeover`，2026-09-30）先落它的 `home` 形态 = 首页音乐块**：`surfaces` 收敛为 **`[.home]`**、`defaultPlacement: Placement(slot: nil, order: 0)`、`defaultEnabled: true`（= `showStandardMediaControls` 上游默认）、`permissions: []`、`config` 只登记 `playerColorTinting` / `useMusicVisualizer`（读写仍走上游键）；启用真源 = `showStandardMediaControls`，块宽继承 300 / 420——**`compact` / `expanded` 与 `media:read` / `media:control` / `network:itunes.apple.com`、`visualizerBarCount` / `enableWaveformScrubber` 两键均待后续批次** |
 | `com.cmeng.gourd.lyrics` | `compact`、`expanded` | `center` / order 20 | `media:read`、`events:subscribe:media.playbackChanged`、`network:lrclib.net` | `enableLyrics`、`lyricsPanelWidth`、`lyricsPanelOffset` + 歌词磁盘缓存开关（09 §2 A 的 🔧 缺陷修复） | P2a；曲目变化经 EventBus 订阅，不做模块间直接引用（06 §3.3 R4） |
 | `com.cmeng.gourd.stats` | `compact`、`expanded` | `left` / order 10 | `system:metrics` | `statsUpdateInterval`、`statsStopWhenNotchCloses`、`enableStatsFeature`（接管映射） | P2a；依赖 15 号文档 §1 的 AppleSMC（温度）/ `IOReport.framework`（频率） |
 | `com.cmeng.gourd.calendar` | `expanded` | — | `[]`（事件标题/地点的细粒度读取另需 `calendar:read-titles`，**待落 06 号文档 §7.1**，见 T-8 / §3） | `showCalendar`、`hideCompletedReminders`、`hideAllDayEvents`（接管映射） | P2a；事件与提醒读取走 EventKit，依赖日历 / 提醒 TCC 授权 |
 | `com.cmeng.gourd.shelf` | `expanded` | — | `files:picker`、`files:shelf`、`network:local`（**待落 06 号文档 §7.1**） | `dynamicShelf`（接管映射）+ LocalSend 传输开关（09 §2 D） | P2a；依赖本地网络 TCC（`NSLocalNetworkUsageDescription`，09 §7 必办项） |
-| `com.cmeng.gourd.timer` | `compact`、`expanded` | `right` / order 10 | `timers`、`notifications` | `enableTimerFeature`、`timerDisplayMode`、`timerPresets` + 计时器持久化与到点通知（09 §2 C 的 🔧 缺陷修复） | P2a；到点通知依赖 `notifications` capability |
+| `com.cmeng.gourd.timer` | `compact`、`expanded` | `right` / order 10 | `timers`、`notifications` | `enableTimerFeature`、`timerDisplayMode`、`timerPresets` + 计时器持久化与到点通知（09 §2 C 的 🔧 缺陷修复） | **已落地（2026-09-30，批次 `p2-takeover`）**：`surfaces` 收敛为**只 `expanded`**（展开面板的计时器 tab，渲染点 = 上游 `NotchTimerView`）、`defaultPlacement: nil`（tab 落模块 tab 段）、`defaultEnabled: true`（= `enableTimerFeature` 上游默认）、`permissions: []`；启用真源 = `enableTimerFeature`，`isTabVisible()` = `timerDisplayMode == .tab`；**`compact` / `slot: right` 待折叠态左右槽位落地后再声明**（T-4 的分配口径不变）。P2a；到点通知依赖 `notifications` capability |
 | `com.cmeng.gourd.clipboard` | `compact`、`expanded` | `right` / order 20 | `clipboard:read`、`clipboard:write` | `enableClipboardManager`、`clipboardDisplayMode` + 电池上降频（09 §2 D 的 🔧 缺陷修复） | P2a；`clipboard:read` 只给元数据（06 §7 硬性规则 2） |
 | `com.cmeng.gourd.controls` | `expanded` | — | `power:control` | `enableSystemHUD`、`enableVolumeHUD`、`enableBrightnessHUD`、`enableKeyboardBacklightHUD`、`enableCustomOSD`（接管映射；surfaces 口径见 T-2） | P2a；依赖辅助功能 TCC（媒体键 / 亮度键拦截） |
 | `com.cmeng.gourd.weather` | `compact`、`expanded` | `left` / order 20 | `network:api.open-meteo.com`、`network:air-quality-api.open-meteo.com`、`network:wttr.in` | `lockScreenWeatherProviderSource`、`lockScreenWeatherTemperatureUnit`、`lockScreenWeatherRefreshInterval`（接管映射） | P2a；依赖位置 TCC |
-| `com.cmeng.gourd.mirror` | `expanded` | — | `[]` | `showMirror`、`mirrorShape`、`selectedCameraID`（接管映射） | P2a；依赖相机 TCC |
+| `com.cmeng.gourd.mirror` | `expanded` | — | `[]` | `showMirror`、`mirrorShape`、`selectedCameraID`（接管映射） | **已落地（2026-09-30，批次 `p2-takeover`）**：`surfaces` 收敛为 **`[.home]`**（首页 strip 的镜子块，渲染点 = `CameraPreviewView(webcamManager:)`，判据 = `showMirror && cameraAvailable`）、`defaultPlacement: Placement(slot: nil, order: 2)`（= 被接管的内置镜子块原本的默认序号）、`defaultEnabled: false`（= `showMirror` 上游默认）、`permissions: []`、块宽继承 140 / 160；启用真源 = `showMirror`。P2a；依赖相机 TCC（上游 `WebcamManager` 本来就有的那条，本模块不新增） |
 | `com.cmeng.gourd.launcher` | `compact`、`expanded` | `right` / order 30 | `[]` | `showRecents`、`iconSize`、`density`（`pinnedApps` **不是** manifest config：它是 `Defaults` 键，见 [09](09-features-and-mechanisms.md) §5.1）（09 §5.1） | P2b 第 4；全局热键用上游 `KeyboardShortcuts`（**2026-09-30 已落地**：`surfaces` 收敛为**只 `expanded`**——`compact`/`slot: right` 待折叠态左右槽位落地后再声明；`defaultEnabled: false`） |
 | `com.cmeng.gourd.lunar` | `compact` | `left` / order 30 | `[]` | `displayFormat`、`showFestivals`（09 §5.2） | P2b 第 1；展开区归属见 T-6 |
 | `com.cmeng.gourd.progress` | `compact`、`expanded`（折叠态形态 = **中央槽位常驻百分比**；展开态 = **剩余量清单**——一行一个尺度：图标 + 标签 + 细进度条 + 剩余量 + 百分比，行悬停显示起止时刻） | `center` / order 30（2026-09-27 落地：`slot` 记 `center`，`order` 同时是 expanded tab 与 compact 槽位候选的排序键，双语义已按 [13](13-runtime-kernel.md) 已知限制 25 的「明确写下」分支处理，见 D-19；与 T-1 早期给折叠态预留的 `left` / order 40 不同——本版**只做中央槽位**，左/右槽位仍推 P2） | `[]` | `visibleScopes`（默认 `day` + `year`）、`style`、`baseCalendar`（09 §5.3；已落地三键） | **默认关（`defaultEnabled = false`，2026-09-28 用户判定「时间进度」无行动价值，见 [13](13-runtime-kernel.md) D-20）**；代码与 manifest 全部保留、可手动开回。落地：P1-4 提前消化 P2b 第 2；折叠态中央槽位 2026-09-27 落地 |
@@ -45,7 +45,21 @@
 | `com.cmeng.gourd.notifications` | `expanded`、`compact`、`home`（2026-09-29 起声明首页块；浮层用 `presentation: hud`，见 T-7） | — | `notifications:read`（**待落 06 号文档 §7.1**） | `showBodyInHUD`、`appsFilter`、`maxItems`、`pollIntervalSeconds`（09 §5.5） | P2c（先做可行性探针）；依赖完全磁盘访问 TCC |
 | `com.cmeng.gourd.terminal`（终端，独立条目） | `expanded` | — | `[]` | `mode`、`externalApp`、`openMode`、`workingDirectory`、`extraArguments`（09 §5.6） | P2b 最后；依赖 Ghostty 启动参数验证（09 §5.6 的实测项） |
 
-**2026-09-29 的 `home` 取值（P2 批次 `p2-home-strip`，后由 `p2-p0-visible` 增补）**：`home` 目前出现在 **todos 与 notifications 两行**——`todos` 是首批（三环横排 + 今日清单前 N 条），`notifications` 在 2026-09-29 的 `p2-p0-visible` 批次补上（「通知 · 最近 N 条」+ 最近 3 条，点条目开 App 并收起）。**`progress` 保留代码与 manifest 但不声明 `home`**（它默认关、声明了也没内容，组件卡已标注"暂不出现在首页"）。原说明（17-nookx-adoption.md](17-nookx-adoption.md) 已知限制 9）。**本批没有新增模块**，模块数与 manifest 份数**不变**（仍是 16 个模块 / 17 份 manifest，含终端独立条目）——变的是 todos 与 notifications 各多了一个 `home` 取值。
+**2026-09-30 的三行落地（批次 `p2-takeover`）**：`timer` / `mirror` / `nowplaying` 三行都标了「已落地」，
+但**落地的粒度不同**，别读成「这三个模块做完了」：
+
+- **音乐 = `nowplaying` 行的 `home` 形态**（首页音乐块）——本行其余 surface（`compact` / `expanded`）与
+  `media:read` / `media:control` / `network:itunes.apple.com` 三个 capability、`visualizerBarCount` /
+  `enableWaveformScrubber` 两个 config 键**都待后续批次**；后台的播放会话仍由上游 `MusicManager` 承担
+  （本批只搬渲染归属与开关真源）。
+- **`timer` 只落了 `expanded`**（展开 tab）：`compact` / `slot: right` 与 `timers` / `notifications`
+  两个 capability 待折叠态左右槽位落地时再声明；到点提醒仍是上游 `TimerManager` 的行为。
+- **`mirror` 落的是 `home`**（首页块）：它本来就只有这一处渲染点，故这一行最接近「做完」；
+  但摄像头采集会话仍由上游 `WebcamManager` 持有。
+
+三行的 `config` 都**只登记键名与上游默认值**（读侧仍读上游键，见 T-3 的 2026-09-30 落地行）。
+
+**2026-09-29 的 `home` 取值（P2 批次 `p2-home-strip`，后由 `p2-p0-visible` 增补）**：`home` 目前出现在 **todos 与 notifications 两行**——`todos` 是首批（三环横排 + 今日清单前 N 条），`notifications` 在 2026-09-29 的 `p2-p0-visible` 批次补上（「通知 · 最近 N 条」+ 最近 3 条，点条目开 App 并收起）。**`progress` 保留代码与 manifest 但不声明 `home`**（它默认关、声明了也没内容，组件卡已标注"暂不出现在首页"）。原说明（17-nookx-adoption.md](17-nookx-adoption.md) 已知限制 9）。**本批没有新增模块**，模块数与 manifest 份数**不变**（仍是 16 个模块 / 17 份 manifest，含终端独立条目）——变的是 todos 与 notifications 各多了一个 `home` 取值。**2026-09-30 补充**：本批之后 `home` 还出现在 `mirror` 与 `nowplaying`（音乐块）两行，同样是「**没有新增模块**」（仍是 16 个模块 / 17 份 manifest）——接管只是把已实现的三处渲染点搬进模块。
 
 **两处「不是模块」的说明**（避免清单被读成"全部功能都模块化"）：
 
@@ -72,6 +86,7 @@
 
 - **结论**：接管 10 个模块的 config **不新发明键**，一律映射上游既有 `Defaults` 键（如 `enableLyrics`、`dynamicShelf`、`enableClipboardManager`、`statsUpdateInterval`、`showCalendar`、`timerPresets`、`showMirror`、`enableSystemHUD`、`lockScreenWeatherProviderSource`、`playerColorTinting`）；缺口（`type` / `default` / 取值范围）在各自 P2a 落地时按 06 §5.2/§5.3 的词汇表补齐，读侧口径照 06 §5.4（`config.json` 只存用户显式设过的值）。
 - **理由**：上游这些键已有默认值与含义，用 06 §5 重新发明一遍会立刻产生"上游设置页改了、模块配置没跟"的双份真源（09 §0 原则 P1 要求上游功能维持现状）。
+- **2026-09-30 落地（批次 `p2-takeover`，`timer` / `mirror` / `music` 三个接管模块）**：本批落地为**只登记键名与上游默认值**——`ConfigSchema` 的 `type` / `default`（`mirrorShape` 另有 `values`）按 06 §5.2/§5.3 写全，**读写仍走上游键**：`ConfigHandle`（写 `com.cmeng.gourd.module.<shortID>`）对它们不生效，`config.json` 里不落这三个模块的值。默认值一律从 `Defaults.Keys.<键>.defaultValue` 取，不另抄字面量（`music.useMusicVisualizer` 的上游真值是 `true`，`DynamicIsland/models/Constants.swift:989`）。登记的价值是**声明与审计一致性**（变更前先看这里能不能对上真源）；写路径接管属配置层（P1-3 的 ConfigStore），见 [20](20-component-page.md) §已知限制 1 与 §决策摘要 D-03 / D-15。
 
 ### T-4 timer 折叠态位置
 
@@ -118,6 +133,7 @@
 - **结论**：16 份 manifest 统一取 `manifestVersion` 1、`version` `"1.0.0"`、`apiVersion` = `HostInfo.currentAPIVersion`（当前 `1.0`）、`kind` `builtin`、`entry` 缺省、`icon.type` 取 `symbol`、`name`/`summary` 用 `LocalizedText` 的 `key` 形态（`module.<shortID>.name` / `module.<shortID>.summary`）；`defaultEnabled` 接管模块映射上游开关默认值，新增模块除 progress 外取 `false`。
 - **理由**：前六项是 06 §2.2/§2.3/§2.4/§2.5 对内置的强制约束（`kind == builtin`、`entry` 出现即 `E_UNEXPECTED_FIELD`、内置 `icon` 必须 `symbol`），progress 已按此落地（D-11）；`defaultEnabled` 取保守值，与 06 §2.2「装了自动上屏不可接受」的取向一致。
 - **2026-09-28 修订**：`progress` 由 `true` 改 `false`（用户判定「时间进度」无行动价值，[13](13-runtime-kernel.md) D-20）；新增的 `todos` 取 `true`——它是折叠态中央槽位的默认内容，上屏是它的存在理由（同为 D-20）。因此本批 `defaultEnabled` 的实际判据收敛成一条：**占中央槽位者取 `true`（现为 `todos`），其余一律 `false`（含被替换下来的 `progress`）**。
+- **2026-09-30 补充（批次 `p2-takeover`）**：**接管模块**的 `defaultEnabled` 映射为**各自上游键的默认值**——`timer` = `enableTimerFeature` 默认 `true`、`mirror` = `showMirror` 默认 `false`、`music` = `showStandardMediaControls` 默认 `true`。它只在「接管键读不到」时才被见到（启用门直接读上游键，见 [20](20-component-page.md) §接口与数据形状 2），填它的唯一作用是把「默认开启 / 关闭」如实写在 manifest 与卡片上。**上一段那条判据（占中央槽位者 `true`、其余 `false`）只适用于新增模块**，不覆盖接管模块。
 
 ### T-13 只有字段名没有类型/默认值的项
 

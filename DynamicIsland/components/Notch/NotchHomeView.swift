@@ -860,8 +860,8 @@ struct NotchHomeView: View {
             } else if shouldShowSideLyrics {
                 sideLyricsContent
             } else {
-                // 标准路径（2026-09-29 起）：首页是**两排**——上排一条横向 strip（块由模块 manifest 的
-                // `home` 投影与宿主内置块（音乐 / 镜子）共同提供，宽度按声明自适应且富余不拉伸），
+                // 标准路径（2026-09-29 起）：首页是**两排**——上排一条横向 strip（块全部由模块 manifest 的
+                // `home` 投影提供——音乐 / 镜子自 P2 接管批次起也是模块块，宽度按声明自适应且富余不拉伸），
                 // 下排一条全宽日历行（左整月网格 / 右今日清单，由 `showCalendar` 门控）。
                 // 块与行的名单、门控与排版都在各自视图内，本视图只做两排的接缝与高度分配
                 // （docs/17-nookx-adoption.md §改动点设计 1）。

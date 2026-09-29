@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 草稿（实现完成后回写） |
+| 状态 | 已实现（2026-09-30） |
 | 最后更新 | 2026-09-30 |
 | 关联来源 | [12-p1-batches.md](12-p1-batches.md) §已交付 · `p2-p0-visible` 的下一批；[14-module-manifests.md](14-module-manifests.md) §1 与 T-3/T-12；[16-nookx-reference.md](16-nookx-reference.md) §4.4 里「组件页列不全」那条尾账 |
 
@@ -98,8 +98,9 @@ D-11 的口径因此收窄为「**新增**模块不参与宽度决策；接管�
 
 启用真源是上游键以后，**上游设置页也是这个开关的一个入口**。键被改动时注册表的 `states` 必须跟上，
 否则会出现「计时器已经关了、tab 还在」。组合根因此在 `bootstrap()` 里为每个接管模块订阅它那一个键
-（`Defaults.publisher(key, options: [.new])`），变化时调 `ModuleRegistry.setEnabled(_:for:)`——
-用的就是设置页那条同一条路径（`setEnabled` 本身**不写偏好**，所以不会自激）。
+（`Defaults.publisher(key, options: [])`——本项目 Defaults 包只有 `.initial` / `.prior` 两个选项，
+`.initial` 会在订阅瞬间改变激活次序，故禁用；取值写 `change.newValue`），变化时调
+`ModuleRegistry.setEnabled(_:for:)`——用的就是设置页那条同一条路径（`setEnabled` 本身**不写偏好**，所以不会自激）。
 
 订阅只处理「已激活 ↔ 已关闭」这一维；`failed` 仍是终态（[17](17-nookx-adoption.md) D-13 不变：
 重同步不会把一个失败模块救活，也不会把它降级）。
@@ -176,7 +177,14 @@ D-11 的口径因此收窄为「**新增**模块不参与宽度决策；接管�
 
 ## 接口与数据形状
 
-### 1. 模块侧的两个钩子（`DynamicIsland/Kernel/GourdModule.swift`）
+### 1. 模块侧的三条钩子（`DynamicIsland/Kernel/GourdModule.swift`）
+
+**落地形态 = 协议要求 + 扩展缺省**（实现期实测，D-14）：三条钩子在 `GourdModule` **协议体内**声明为
+要求，同时在文件末尾的 `public extension GourdModule` 里给缺省实现（即下面这个代码块）。
+只写扩展不行——注册表一律经 `any GourdModule.Type`（`moduleTypes` 的取值形态）取用元类型成员，
+而协议扩展的静态成员走**静态派发**：只写在扩展里时，`(any GourdModule.Type).homeBlockWidth` 拿到的是
+缺省值（`nil`），模块自己的声明被**静默忽略**（无编译错误、无警告，只有行为不对）。
+协议体里的三条要求与扩展里的三条缺省**逐字同形**，既有四个内置模块因此一行未改。
 
 ```swift
 public extension GourdModule {
@@ -207,23 +215,33 @@ public struct ModuleHomeBlockWidth: Sendable, Equatable {
 }
 ```
 
+**没有显式 `public init`**（照上面代码块逐字落地）：`public struct` 的 memberwise init 是 internal，
+所以它只能在 app target 内构造（三个接管模块与 `HomeStripView` 的映射都在这个 target 里）。
+将来若要让模块声明出到独立 target/SDK，需要补一个 `public init`。
+
 ### 2. 注册表与组合根（`ModuleRegistry.swift` / `KernelBootstrap.swift`）
 
 ```swift
-// ModuleRegistry
+// ModuleRegistry（public）
 public func takeoverEnableKey(for id: String) -> Defaults.Key<Bool>?   // moduleTypes[id]?.takeoverEnableKey
 public func homeBlockWidth(for id: String) -> ModuleHomeBlockWidth?    // moduleTypes[id]?.homeBlockWidth
-// tabEntries 的过滤条件追加 `&& (moduleTypes[id]?.isTabVisible() ?? true)`
+// tabEntries 的过滤条件追加 `&& (moduleTypes[id]?.isTabVisible() ?? true)`（比较器与排序不动）
 
-// KernelBootstrap.enablementGate(_:) 的判定顺序
-//   1. registry.takeoverEnableKey(for: id) 非 nil → Defaults[key]
+// KernelBootstrap（internal：单测直接验三档回落，不必跑整个 bootstrap()）
+// enablementGate(_:) 的判定顺序（三段）
+//   1. registry.takeoverEnableKey(for: id) 非 nil → Defaults[key]（overrides 与 defaultEnabled 都不再看）
 //   2. 否则 Defaults[.moduleEnableOverrides][id] ?? registry.manifests[id]?.defaultEnabled ?? false
 static func enablementGate(registry: ModuleRegistry) -> (String) -> Bool
-// 新增：为每个接管模块订阅它那一个键，变化 → await registry.setEnabled(change.newValue, for: id)
-static func startTakeoverBridge(registry: ModuleRegistry)
-// 新增（只为可测性）：当前订阅条数，用例据它断言幂等
+// 为每个接管模块订阅它那一个键，变化 → await registry.setEnabled(change.newValue, for: id)
+static func startTakeoverBridge(registry: ModuleRegistry)   // 幂等：进入先 removeAll()
+// 只为可测性：当前订阅条数，用例据它断言幂等
 static var takeoverSubscriptionCount: Int { get }
 ```
+
+**调用次序**（`bootstrap()` 内）：落首启默认值 → `register(builtinModules, enabled: enablementGate(...))`
+→ `startTakeoverBridge(registry:)` → `await registry.bootstrap(collapse:)`。桥必须在 `register` **之后**
+起（它按 `registry.manifests.keys` 找接管模块），在激活 **之前** 起（激活那一刻的 `states` 由门判定，
+桥只负责之后的「别处改键」）。
 
 **订阅的既有形态**（本项目 Defaults 包只提供 `.initial` / `.prior` 两个 `ObservationOption`，
 `options: []` 是仓库里唯一的既有写法，见 `DynamicIslandApp.swift` 的同款订阅）：
@@ -265,6 +283,11 @@ enum ModuleEnablementRollback {
 static func migratingLegacyIDs(_ overrides: [String: Int]) -> [String: Int]
 ```
 
+**「加一条」不是「换一条」**：返回的表里**旧键仍然在**（别名语义，见 §已知限制 11），
+`sorted` 只查名单里出现过的 id，故留下的旧键无害。模块 id 在映射表里是字面量
+（`legacyIDToModuleID`——本文件是纯逻辑、不认模块类型），两处一致由用例拿 `MirrorModule.moduleID` /
+`MusicModule.moduleID` 查表钉住。
+
 ### 5. 三个接管模块的 manifest（逐字取值）
 
 | 模块 id | `surfaces` | `defaultPlacement` | `icon.name` | `defaultEnabled` | `takeoverEnableKey` | `homeBlockWidth` | `isTabVisible()` | 渲染点 |
@@ -275,11 +298,18 @@ static func migratingLegacyIDs(_ overrides: [String: Int]) -> [String: Int]
 
 三个模块一律：`manifestVersion 1`、`version "1.0.0"`、`apiVersion = HostInfo.currentAPIVersion`、`kind "builtin"`、
 `icon.type "symbol"`、`permissions []`、`name`/`summary` 用 `module.<shortID>.name` / `.summary`；
+每个模块还有一个 `static let moduleID`（模块 id 的**唯一字面量**，供 `selectModule(...)` 等调用点用）；
 `defaultEnabled` **填上游键的默认值**（[14](14-module-manifests.md) T-12 对接管模块的口径——它只在
 「接管键读不到」时不生效，填它是为了让卡片上那行「默认关闭」只在镜子卡出现）；
 `config` 只登记上游键名与上游默认值（`timer`：`enableTimerFeature` / `timerDisplayMode` / `timerPresets`；
 `mirror`：`showMirror` / `mirrorShape` / `selectedCameraID`；`music`：`playerColorTinting` / `useMusicVisualizer`），
-**读写仍走上游键**（§已知限制 1）。
+**读写仍走上游键**（§已知限制 1）。**默认值一律从 `Defaults.Keys.<键>.defaultValue` 取**（不抄字面量，
+D-15）；`timerPresets` 因类型是 `[TimerPreset]` 而只登记 `type: list` / `itemType: string`、不给 `default`。
+
+**勘误（`music.config` 的一项）**：本批计划里把 `useMusicVisualizer` 写成了 `(boolean, false)`，
+**以上游真源为准 = `true`**（`DynamicIsland/models/Constants.swift:989` 是
+`Key<Bool>("useMusicVisualizer", default: true)`；同段的 `playerColorTinting` 也是 `true`）。
+登记值必须等于真源值，否则这份登记的审计价值当场失效（D-15）。
 
 ### 6. 音乐块的命名空间注入（`DynamicIsland/Host/HomeStripView.swift` + 模块）
 
@@ -296,24 +326,63 @@ extension EnvironmentValues {
 
 模块侧读不到时用一个自己的 `@Namespace` 兜底（配对失效，但不会崩、不会空白）。
 
-### 7. 功能卡段的数据形状（`ModuleSettingsSection.swift`）
+### 7. 功能卡段的数据形状（`DynamicIsland/components/Settings/ModuleSettingsSection.swift`）
 
 ```swift
 /// 一段上游功能的登记行：开关就是那个 `Defaults` 键，没有模块、没有内核状态。
-private struct FeatureCard {
+struct FeatureCard: Identifiable {          // internal（不是 private：见下）
     let id: String            // 上游键名，同时是效果文案 key 的后缀
     let nameKey: String       // 上游设置页里的同一个名称（`String(localized:)` 同源）
     let symbolName: String
     let key: Defaults.Key<Bool>
     let effectKey: String     // `settings.features.effect.<id>`
 }
+// 表本身挂在视图类型上：static let featureCards: [FeatureCard]（七行，逐字见下）
 ```
 
-本批七行（键 → 效果），`nameKey` **逐字沿用上游设置页里那一项的名称字面量**（同一个 key，不另起说法；
-执行时到 `SettingsView.swift` 里该键附近取证）：`enableClipboardManager` → `"Clipboard"`、
-`showCalendar` → `"Calendar"`、`enableLockScreenWeatherWidget` → 锁屏页里那一项的名称（执行时取证）、
-`enableStatsFeature` → `"Stats"`、`dynamicShelf` → `"Shelf"`、`enableTerminalFeature` → `"Terminal"`、
-`enableNotes` → `"Notes"`。
+**`FeatureCard` 与 `featureCards` 是 internal、不是 `private`**（D-16）：解析用例
+（`TakeoverEnablementTests.testFeatureCardKeysResolve`）直接读**生产表本身**——表侧把 `id` / `effectKey` /
+`nameKey` 的任一个写错才会红（变异实测会红）；测试另抄一份键表则查不出「表写错、文案对」。
+这是本批唯一为可测性放宽的可见性，不新增公开 API、不改行为。
+
+本批七行（`effectKey` → `nameKey`），`nameKey` **逐字沿用上游设置页里那一项的名称字面量**（同一个 key，
+不另起说法；执行时在 `SettingsView.swift` 里那一项旁边取证）：
+`settings.features.effect.enableClipboardManager` → `"Enable Clipboard Manager"`、
+`settings.features.effect.showCalendar` → `"Show calendar"`、
+`settings.features.effect.enableLockScreenWeatherWidget` → `"Show lock screen weather"`、
+`settings.features.effect.enableStatsFeature` → `"Enable system stats monitoring"`、
+`settings.features.effect.dynamicShelf` → `"Enable shelf"`、
+`settings.features.effect.enableTerminalFeature` → `"Enable terminal"`、
+`settings.features.effect.enableNotes` → `"Enable Notes"`。
+`symbolName` 取各功能自己那套图标（`clipboard` / `calendar` / `cloud.sun.fill` / `chart.xyaxis.line` /
+`tray.and.arrow.down` / `apple.terminal` / `note.text`）。
+
+> **与本文档早先一版正文的差异**：原文的表格示例给的是短名（`"Clipboard"` / `"Calendar"` / …），
+> 与同段「逐字沿用上游字面量」的指令互相矛盾；实现按指令取**上游字面量**（见 §决策摘要 D-16 与
+> §已知限制 13——这条取舍的代价是七个名称 key 在 catalog 里没有 `en` 值）。
+
+**接管模块的效果行**在同一张卡片上用另一个映射（`ModuleSettingsCard.effectKey(for:)`）：
+`com.cmeng.gourd.timer` → `settings.modules.effect.timer`（展开面板的计时器标签页——只在
+「计时器控制显示为 = 标签页」时出现）、`…mirror` → `settings.modules.effect.mirror`（首页块——摄像头可用时出现）、
+`…music` → `settings.modules.effect.music`（首页块——有播放会话时出现；关掉「无会话自动隐藏」则常驻）；
+非接管模块仍走既有 `settings.modules.effect.<shortID>`（待办 / 通知 / 进度那三条）。
+
+### 8. 计时器第二入口的判据（`DynamicIslandViewCoordinator.swift`）
+
+```swift
+/// 「计时器这个页面此刻是不是被选中」——三条赋值点与两处高度档共用这一条判据。
+func isTimerSurfaceSelected() -> Bool {
+    currentView == .timer || (currentView == .module && selectedModuleID == TimerModule.moduleID)
+}
+```
+
+**赋值点实为三处**（实现期 grep 实测，本文档机制六一节只写了悬浮聚焦一处）：
+`ContentView` 的悬浮聚焦（`shouldFocusTimerTab` → `selectModule(TimerModule.moduleID)`）、
+`NotchTimerView` 的点预设、以及同文件的 `startCustomTimer`——后两处都改走
+`DynamicIslandViewCoordinator.selectModule(_:)`（它同时置 `selectedModuleID` 与 `currentView = .module`）。
+高度档仍是两处（`ContentView` / `DynamicIslandApp` 各一），两处都改问 `isTimerSurfaceSelected()`。
+`.timer` 这一档是**旧路径**，三条生产路径改走模块后已无生产调用者——保留它是为了不动 `NotchViews`
+的哈希与 `tabOrder` 的方向语义（§已知限制 10）。
 
 ## 明确不做
 
@@ -330,7 +399,49 @@ private struct FeatureCard {
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）
+**已交付**（工作流 `p2-takeover`，2026-09-30；提交 `1de20d4d`…`423e0918`，`1de20d4d` 是设计文档先行的
+方案门提交，其后 7 个提交是本批的实现与回写）。
+
+| 类 | 落点 | 交付物 |
+|---|---|---|
+| 三个接管模块 | `Modules/Takeover/TimerModule.swift` / `MirrorModule.swift` / `MusicModule.swift`（均新） | manifest（§接口与数据形状 5 逐字）、三条钩子、`content(for:)`、`static let moduleID`；文件内私有的块视图（`MirrorHomeBlockView` / `MusicHomeBlockView`）与判据纯函数（`MirrorModule.isVisible(showMirror:cameraAvailable:)`、`MusicModule.isVisible(showStandardMediaControls:autoHideInactive:hasActiveSession:)`） |
+| 内核三件套 | `Kernel/GourdModule.swift`、`Kernel/ModuleTypes.swift`、`Kernel/ModuleRegistry.swift` | 三条钩子（协议要求 + 扩展缺省）、`ModuleHomeBlockWidth`、`takeoverEnableKey(for:)` / `homeBlockWidth(for:)`、`tabEntries` 追加 `isTabVisible()` 过滤 |
+| 组合根 | `Kernel/KernelBootstrap.swift` | 三段启用门 `enablementGate`、重同步桥 `startTakeoverBridge` + `takeoverSubscriptionCount`；`builtinModules` 七行（progress / todos / notifications / launcher / **timer / mirror / music**） |
+| 开关写路径 | `Kernel/ModuleEnablementWrite.swift`（新） | `ModuleEnablementWrite.write(_:for:takeoverKey:)` + `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)`（D-13） |
+| 命名空间注入 | `Host/HomeAlbumArtNamespace.swift`（新） | `EnvironmentKey` + `EnvironmentValues.homeAlbumArtNamespace`（本仓第一处 `EnvironmentKey`）；`HomeStripView` 注入、`MusicHomeBlockView` 消费并按 `?? 自带 @Namespace` 兜底 |
+| 顺序表迁移 | `Host/HomeBlockOrdering.swift` | `migratingLegacyIDs(_:)` + `legacyIDToModuleID`；`sorted(...)` 第一步先过它 |
+| 上游分支删除 | `components/Tabs/TabSelectionView.swift`、`sizing/matters.swift`、`Host/HomeStripView.swift` | Timer tab 的 `if` 与两个 `@Default`、`enabledStandardTabCount()` 的 `+1`；镜子块与音乐块各四件（判据 / 分支 / 块宽常量 / `@Default`）。`HomeStripView` 因此**再无宿主内置块**：`HomeBlock` 的 `Payload` 枚举随最后一块删除，收成 `(id, defaultOrder, content)` |
+| 计时器第二入口 | `DynamicIslandViewCoordinator.swift`、`ContentView.swift`、`DynamicIslandApp.swift`、`components/Notch/NotchTimerView.swift` | 新增 `isTimerSurfaceSelected()`；三处赋值点改走 `selectModule(TimerModule.moduleID)`；两处 250pt 高度档改判据 |
+| 组件页两段 | `components/Settings/ModuleSettingsSection.swift` | 第一段**七张卡**（四张既有 + 计时器 / 镜子 / 音乐，各多一行 `settings.modules.effect.*`）；第二段「功能」**七张卡**（段头 `settings.features.title` + 脚注 `.footer` + 七条 `effectKey`）；写路径改调 `ModuleEnablementWrite`、回弹改问 `ModuleEnablementRollback`；顺序节删掉 `builtin.music` / `builtin.mirror` 两行与两个 `@Default`，只剩模块块 |
+| 文案 | `DynamicIsland/Localizable.xcstrings` | 新增 **18 条**（`module.{timer,mirror,music}.{name,summary}` 六条 + `settings.features.title` / `.footer` / 七条 `effect` + 三条 `settings.modules.effect.*`），中英双语 `state = translated`；键数 **1520 → 1538**。另改写 `settings.modules.builtinHint` 中英两值 |
+| 测试 | `DynamicIslandTests/TakeoverEnablementTests.swift`（T1 新建）、`DynamicIslandTests/ModuleKernelTests.swift` | 新文件 9 → **26** 条用例（启用真源 read-through、桥的幂等与 `failed` 终态、`isTabVisible`、三模块 manifest 契约、判据纯函数、迁移与排序、计数 1·0·0、`homeBlockWidth` 与回落、环境键缺省、文案可解析）；`ModuleKernelTests` 内置清单四行 → 七行并补三模块的 `states` / 投影期望；`project.pbxproj` 四处登记新测试文件。**全量 293 → 310 条，0 失败** |
+
+**与计划的偏离及原因**：
+
+1. **三条钩子同时声明为协议要求**（计划只给扩展缺省）——只写扩展会被静态派发静默忽略（D-14）。
+2. **`music.config.useMusicVisualizer` 取上游真值 `true`**（计划写的 `false` 是勘误，D-15）。
+3. **计时器的第二入口实为三处赋值点**（计划与机制六只写了「悬浮聚焦」一处；另两处是 `NotchTimerView`
+   的点预设与 `startCustomTimer`）。判据函数 `isTimerSurfaceSelected()` 是 T3 产出的接口（§接口与数据形状 8）。
+4. **`HomeStripView.HomeBlock.Payload` 收成 `content`**：最后一个内置块删除后单 case 枚举 + 重复的 id 是死结构；
+   `sorted` 的用法逐字不变（D-10 的取宽度那半改走 payload 里的模块 id）。
+5. **`MirrorModule.config.mirrorShape.values` 按枚举声明顺序**登记为 `["Rectangular", "Circular"]`
+   （与上游设置页 Picker 的展示顺序相反；config 不参与渲染）。
+6. **`FeatureCard` 与 `featureCards` 放宽为 internal + `nameKey` 取上游字面量**（D-16；文档 §7 原有表格
+   与同段指令互相矛盾，实现按指令执行）。
+7. **`.timer` 枚举成员只补注释、不动结构**（D-11 的保留口径；纯注释，随本批回写落地）。
+
+**遗留项**（本批明确未做，逐条有出处）：
+
+1. **日历行 / 锁屏天气 / 剪贴板 / 统计 / 文件架 / 终端 / 便签七项的渲染接管**——本批只给功能卡（§明确不做）。
+2. **tab 排序机制 / tab 拖动**——接管后计时器 tab 落模块段（§已知限制 2；要做精确定位得先有排序机制）。
+3. **`config` 写路径接管**——登记与真源仍是「只登记、读写走上游键」（§已知限制 1，属 P1-3 的 ConfigStore）。
+4. **四处接线 / 赋值点没有自动化断言**（变异实测「改坏不红」）：卡片回弹接线、`settings.modules.effect.*`
+   三条映射、`homeAlbumArtNamespace` 的环境注入、三条赋值点与两处高度档（§已知限制 12）。
+5. **三处保留 / 过时项，本批刻意不动**：`.timer` 枚举与 `case .timer` 分支（§已知限制 10）；
+   `HomeStripView` 的 `@EnvironmentObject var vm`（已无读点，改动前既有）；`HomeBlockOrdering.migratingLegacyIDs`
+   注释里「设置页顺序节仍有 `builtin.*` 行」的理由（顺序节已收敛，该理由已过时，行为不受影响）。
+6. **UI 层未目视**：组件页三段顺序、功能卡拨动方向、接管卡落点不写 `moduleEnableOverrides`、顺序节内容、
+   悬浮聚焦的 tab 高亮与 250pt 档——人工验收清单见本批各任务报告。
 
 ## 已知限制
 
@@ -357,6 +468,38 @@ private struct FeatureCard {
 10. **`.timer` 枚举成员与 `case .timer` 分支成了无生产路径的保留代码**：为了不动 `NotchViews` 的哈希语义与
     `tabOrder` 的动画方向，它们保留在原地（代码注释写明「新路径经模块 tab」）。删它们的收益只有清洁度，
     代价是一次跨枚举语义的改动。
+
+**回写期补充（2026-09-30，实现期真正踩到的边界）**：
+
+11. **旧顺序键保留在映射结果里（别名语义）**：`migratingLegacyIDs` 是「加一条」不是「换一条」——
+    返回的表里 `builtin.music` / `builtin.mirror` 仍在（盘上也从不写回）。今天唯一的消费者 `HomeStripView`
+    按名单里的 id 查表、未知 id 不参与排序，故无害；代价是表里长期多两条对已改名块无效的键
+    （`HomeBlockOrdering.swift:111-117`，查表在 `:83-87`）。**同一函数注释里「设置页顺序节仍有 `builtin.*` 行」
+    这条理由已过时**（T6 顺序节收敛成只剩模块块行），行为不受影响——下次动该文件时顺手删那半句。
+12. **四处接线 / 赋值点没有自动化断言**（各由变异实测证实「改坏仍全绿」，不是推测）：
+    ① **卡片回弹的接线**——策略函数 `ModuleEnablementRollback.preferenceToWrite` 有用例，但视图里那句
+    「回弹时去问策略、而不是无条件写 `false`」（`ModuleSettingsSection.swift:482-485`）跑在 `Binding` 闭包
+    的 `Task` 里、且需要一次 `activate()` 失败才触发，测试进程里没有可驱动路径；
+    ② **`settings.modules.effect.*` 三条映射**（`ModuleSettingsSection.swift:522` 的 `effectKey(for:)`）——
+    `ModuleSettingsCard` 是 `private struct`，用例够不到，映射里打错字只能靠组件页肉眼；
+    ③ **宿主的环境注入**——`HomeStripView` 上那条 `.environment(\.homeAlbumArtNamespace, …)` 被注释掉
+    仍是全绿（测试进程里没有宿主视图树，任何「读回刚写的环境值」的断言都只是把修饰符抄进用例）；
+    ④ **计时器的三条赋值点与两处 250pt 高度档**——它们位于 SwiftUI 闭包与 `NSSize` 计算里，单测驱动不到，
+    现有护栏是 `grep -rn "currentView = .timer" DynamicIsland/` 无命中 + 人工验收。
+13. **七条功能卡名称在英语宿主下判据退化**：`nameKey` 逐字取上游设置页字面量，而这七个 key 在
+    `Localizable.xcstrings` 里只有 `ko` / `nl` / `ru` / `th` / `tr` / `zh-Hans` / `zh-Hant`（**没有 `en`**）。
+    `testFeatureCardKeysResolve` 的判据是 `Bundle.main.localizedString(forKey:value:nil,table:) != key`——
+    英语语言环境下它原样返回 key（= 上游英文原文），断言不成立。这是「逐字沿用上游字面量」的必然结果（D-16），
+    不是实现缺陷；代价是这套用例只在宿主能解析出非英语译文时有效。
+14. **`isTimerSurfaceSelected()` 的模块分支在极简 UI 下不可达**：`DynamicIslandViewCoordinator.currentView` 的
+    `didSet` 在 `enableMinimalisticUI` 开着时把非 `.home` 的赋值强制打回 `.home`
+    （`DynamicIslandViewCoordinator.swift:118-122`），因此该模式下 `currentView == .module` 永远不成立——
+    判据只剩 `.timer` 那一档（它同样无生产路径）。正常模式下两档都有效；记下来是因为「一条判据的两档在某个
+    配置下都到不了」读判据本身看不出来，只有读 `didSet` 才知道。
+15. **登记与真源的两处小落差（都是刻意）**：① `MirrorModule.config.mirrorShape.values` 按枚举声明顺序登记
+    `["Rectangular", "Circular"]`，与上游设置页 Picker 的展示顺序相反（config 不参与渲染，见 §接口与数据形状 5）；
+    ② `ModuleHomeBlockWidth` 没有显式 `public init`，memberwise init 是 internal——只能在 app target 内构造
+    （当前三个接管模块与 `HomeStripView` 的映射都满足），将来要出到独立 target 就得补一个 `public init`。
 
 ## 验收标准
 
@@ -388,3 +531,6 @@ private struct FeatureCard {
 | D-11 | 计时器的**悬浮聚焦入口与 250pt 高度档改走模块 tab**（`selectModule`），`.timer` 枚举与 `case .timer` 分支保留但无生产路径 | agent | 计划评审实测：只删 tab 会让「计时器在跑 + 悬浮展开」落到「内容在、无 tab 高亮」且高度回落到默认档 |
 | D-12 | `.home` surface **蕴含展开态**：镜子块判据 = `showMirror && cameraAvailable`，不重复 `vm.notchState == .open` | agent | `.home` 的定义就是「展开面板首页的一条 strip 块」；[17](17-nookx-adoption.md) 已知限制 7 的第二句在本批同批回写 |
 | D-13 | 接管模块的开关**回弹是空操作**（不得因 `activate()` 失败把上游总开关写 `false`） | agent | 计划评审实测：照搬非接管模块的回弹会把用户的计时器 / 音乐功能关掉，`showStandardMediaControls` 还会连带关掉 Home tab 判据 |
+| D-14 | `GourdModule` 的三条钩子**必须同时声明为协议要求**（扩展只提供缺省实现），不能只写在扩展里 | agent | 实现期最小复现（`swiftc -swift-version 5`）：只写扩展时经 `any GourdModule.Type` 取用一律走静态派发拿到缺省值（`nil` / `true`），接管模块声明的接管键 / 可见性 / 块宽被**静默忽略**——无编译错误、无警告，只有行为不对 |
+| D-15 | 接管模块 `config` 的默认值一律取**上游真源**的 `Defaults.Keys.<键>.defaultValue`，不抄计划里的字面量（`useMusicVisualizer` = `true`，计划写的 `false` 作废） | agent | 登记的价值是「声明 = 真源」（§备选与取舍 ④）；两处各写一个字面量就会漂（`Constants.swift:988-989` 是 `true` / `true`） |
+| D-16 | 功能卡 `nameKey` 取**上游设置页字面量**（不是本文档 §7 早先表格里的短名），`FeatureCard` / `featureCards` 因此放宽为 internal 供用例直读生产表 | agent | §7 同段指令（「逐字沿用上游那一项的名称字面量」）与表格示例的短名互相矛盾，取指令；解析用例读**生产表本身**才能钉住「表写错、文案对」这类故障（变异实测：表侧改一个字符即红）；代价是七条名称在英语宿主下判据退化（§已知限制 13） |

@@ -1103,12 +1103,12 @@ final class ModuleKernelTests: XCTestCase {
             Defaults.Keys.showStandardMediaControls.name,
         ]
         let domain = Bundle.main.bundleIdentifier
-        let originalTimerValues = takeoverKeyNames.reduce(into: [String: Any]()) { table, key in
+        let originalTakeoverValues = takeoverKeyNames.reduce(into: [String: Any]()) { table, key in
             table[key] = domain.flatMap { defaults.persistentDomain(forName: $0)?[key] }
         }
         defer {
             for key in takeoverKeyNames {
-                if let value = originalTimerValues[key] {
+                if let value = originalTakeoverValues[key] {
                     defaults.set(value, forKey: key)
                 } else {
                     defaults.removeObject(forKey: key)

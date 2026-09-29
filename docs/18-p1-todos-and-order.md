@@ -46,7 +46,7 @@
 
 **机制二 · 优先级是 EventKit 的既有字段**。`EKReminder.priority`（0 = 无、1–4 = 高、5 = 中、6–9 = 低）；读出来映射成三档胶囊显示，点胶囊按 无 → 低 → 中 → 高 → 无 循环并写回。**写回失败不静默**：保留旧值并把失败记进模块日志。
 
-**机制三 · 首页顺序 = manifest 默认值 + 用户覆盖**。新增一个持久化键 `homeBlockOrder: [String: Int]`（键 = 块 id：内置块用 `builtin.music` / `builtin.calendar` 之类的固定 id，模块块用模块 id），排序时先取覆盖值、没有则回落 manifest 的 `order`；设置页只提供"上移 / 下移"两个按钮（不引入拖拽，见备选）。
+**机制三 · 首页顺序 = manifest 默认值 + 用户覆盖**。新增一个持久化键 `homeBlockOrder: [String: Int]`（键 = 块 id：内置块用 `builtin.music` / `builtin.calendar` 之类的固定 id，模块块用模块 id），排序时先取覆盖值、没有则回落 manifest 的 `order`；设置页只提供"上移 / 下移"两个按钮（不引入拖拽，见备选）。**2026-09-30 改判（批次 `p2-takeover`）**：音乐 / 镜子搬成模块块之后，**strip 里的块只剩模块块**（`builtin.music` / `builtin.mirror` 降级为"读取时映射一次"的历史键，`builtin.calendar` 早在日历行改造后就没有接收者）；排序算法与写入口径一字未改，见 §接口与数据形状 1/2。
 
 ---
 
@@ -68,7 +68,7 @@ sequenceDiagram
     H->>H: 按 (覆盖值 ?? manifest.order, id) 重排并重绘
 ```
 
-> 从这张图该读出什么：**顺序的唯一权威源是"覆盖值 + manifest 默认值"这一层**，设置页与首页读同一份；内置块（音乐/日历/镜子）也要能被排序，因此覆盖表的键包含内置块 id。
+> 从这张图该读出什么：**顺序的唯一权威源是"覆盖值 + manifest 默认值"这一层**，设置页与首页读同一份；**任何会出现在首页 strip 里的块都要能被排序**，因此覆盖表的键必须覆盖当时的全部块 id。**2026-09-30 改判（批次 `p2-takeover`）**：接管后 strip 里**没有宿主内置块了**（音乐 / 镜子搬成模块块 `com.cmeng.gourd.music` / `com.cmeng.gourd.mirror`，日历移到下排的独立一行、本就不参与 strip 排序），所以覆盖表今天的键**只剩模块 id**；老用户表里的 `builtin.music` / `builtin.mirror` 由读取时的 `migratingLegacyIDs` 映射到模块 id（只读不写），`builtin.calendar` 没有接收者（它已不在任何名单里）。
 
 链路的落点：设置页按钮（§改动点设计 3）、`homeBlockOrder`（§接口与数据形状 2）、首页排序（§接口与数据形状 1）。
 
@@ -182,6 +182,13 @@ enum HomeBlockOrdering {
                           defaultOrder: (T) -> Int,
                           id: (T) -> String,
                           overrides: [String: Int]) -> [T]
+
+    /// 历史键 → 模块 id 的读取时映射（P2 接管批次 / T4 加，见 [20](20-component-page.md) §做法 机制四）：
+    /// `builtin.music` → `com.cmeng.gourd.music`、`builtin.mirror` → `com.cmeng.gourd.mirror`。
+    /// **仅当新 id 在表里没有自己的值**时才搬（用户在新版里重排过就压过历史值）；
+    /// **只读不写**（盘上旧键一个字节不动）、**旧键保留在返回值里**（是"加一条"不是"换一条"）；
+    /// `sorted(...)` 内部第一步先过它。
+    static func migratingLegacyIDs(_ overrides: [String: Int]) -> [String: Int]
 }
 ```
 
@@ -189,8 +196,9 @@ enum HomeBlockOrdering {
 
 ```swift
 // DynamicIsland/models/Constants.swift（// MARK: Module Kernel (P1) 段）
-/// 首页块的用户排序覆盖：键 = 块 id（内置块 `builtin.music` / `builtin.calendar` / `builtin.mirror`，
-/// 模块块 = 模块 id）。**缺键 = 用户未表达**，回落 manifest 的 `defaultPlacement.order`。
+/// 首页块的用户排序覆盖：键 = 块 id（**本批之后只剩模块 id**；历史键 `builtin.music` /
+/// `builtin.mirror` / `builtin.calendar` 可以被读到，但只有前两个有接收者——见 §接口与数据形状 1 的
+/// `migratingLegacyIDs`）。**缺键 = 用户未表达**，回落 manifest 的 `defaultPlacement.order`。
 static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
 
 // 写入口径（回写校正）：一次移动写的是**整表**——`HomeBlockOrdering.table(for:)` 把
@@ -198,6 +206,13 @@ static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
 // manifest 默认值（模块 order 是 20/30/40 这类大间隔）混在一起，"屏幕上的顺序"与
 // "落盘的值"就对不上了。代价见 §已知限制 8。
 ```
+
+**2026-09-30 覆盖表的键词汇表（批次 `p2-takeover` 之后）**：写入口径没变（整表覆盖），但**表里出现的
+id 只剩两类**——接管进来的 `com.cmeng.gourd.music` / `com.cmeng.gourd.mirror`，以及各新增模块的 id
+（`…todos` / `…notifications` 等）。宿主内置块已**不再产生任何键**：音乐 / 镜子用了模块 id，
+`builtin.calendar` 早已不在名单里。旧键因此只以「**读取时映射的输入**」这一身份存在
+（`builtin.music` / `builtin.mirror` 映射一次、`builtin.calendar` 无人接收），盘上不会被清理
+（[20](20-component-page.md) §已知限制 6 / §已知限制 11）。
 
 ### 3. 待办视图与优先级（模块内）
 
@@ -229,8 +244,8 @@ func setReminderPriority(_ reminderID: String, priority: Int) async -> Bool
 |---|---|---|---|---|---|
 | 1 | 待办展开面板 | 左导航（四视图，竖排，带计数徽标）+ 右看板（分组标题 + 行） | `TodosModule.swift` 的 `TodosModuleView` 一带 | **三环不删**（首页块仍用 `TodoScopeRing`）；展开面板的视图切换用新的四视图枚举，不要复用 `TodoBucketing.Scope` 的语义 | 既有 `TodoRingPicker` 若被移除，首页块会一起没了——首页块是独立视图，但要确认引用关系 |
 | 2 | 看板行 | 行 = 完成圈 + 标题 + 优先级胶囊 + 日期 | `TodoRow`（既有） | 胶囊用 `highPriorityGesture`，别与**完成圈按钮**和面板的既有手势抢；写回是异步的，UI 先乐观更新、失败回滚 | 回写校正：`TodoRow` 并没有"打开提醒"手势（原文写错），真正要防的是完成圈与面板手势 |
-| 3 | 设置页「组件」排序 | 每个块一行：名称 + 上移/下移 | `ModuleSettingsSection.swift` | 按钮只在有多于 1 个块时出现；顺序落盘后要触发首页重绘（注册表重绘或本地状态） | 内置块也要能排——覆盖表的键必须包含内置块 id（见 §接口与数据形状 2） |
-| 4 | 首页排序接入 | `HomeStripView` 的块名单按新排序 | `HomeStripView.swift` | 内置块与模块块**合成一张名单**再排序（现在内置块是写死的三块、模块块单独投影） | 丢块规则按排好序后的尾部丢（既有行为），顺序改了丢块对象也随之变——这是正确的，但要在报告里说清 |
+| 3 | 设置页「组件」排序 | 每个块一行：名称 + 上移/下移 | `ModuleSettingsSection.swift` | 按钮只在有多于 1 个块时出现；顺序落盘后要触发首页重绘（注册表重绘或本地状态） | **2026-09-30 改判**：~~内置块也要能排——覆盖表的键必须包含内置块 id~~——顺序节已收敛为**只剩模块块**（`registry.homeEntries`，T6 删掉了 `builtin.music` / `builtin.mirror` 两行与两个 `@Default`），所以这一节的"块"就是模块块；**历史键仍然要能用**：`builtin.music` / `builtin.mirror` 由 `sorted` 内部的 `migratingLegacyIDs` 映射到模块 id（见 §接口与数据形状 1），否则老用户排过的顺序会看起来"回到默认" |
+| 4 | 首页排序接入 | `HomeStripView` 的块名单按新排序 | `HomeStripView.swift` | ~~内置块与模块块**合成一张名单**再排序（现在内置块是写死的三块、模块块单独投影）~~ **2026-09-30 改判**：名单**只有模块块**（`registry.homeEntries` 一处权威源——音乐 / 镜子也搬成了模块块），"合成一张名单"这半条随内置块一起消失；`sorted` 的调用形态与比较器一字未改 | 丢块规则按排好序后的尾部丢（既有行为），顺序改了丢块对象也随之变——这是正确的，但要在报告里说清 |
 
 ---
 
@@ -256,7 +271,7 @@ func setReminderPriority(_ reminderID: String, priority: Int) async -> Bool
 | 模块 | `DynamicIsland/Modules/TodosModule.swift` | 展开面板重构 + 看板行 + 优先级胶囊与写回 |
 | 管理器 | `DynamicIsland/managers/CalendarManager.swift` | 加 `setReminderPriority(_:priority:)` |
 | 宿主 | `DynamicIsland/Host/HomeBlockOrdering.swift`（新） | 排序纯函数 |
-| 宿主 | `DynamicIsland/Host/HomeStripView.swift` | 内置块与模块块合成一张名单后按新顺序排 |
+| 宿主 | `DynamicIsland/Host/HomeStripView.swift` | 块的名单按新顺序排（**2026-09-30 起名单只有模块块**——音乐 / 镜子也搬成了模块块，见 §接口与数据形状 1/2 的改判行） |
 | 设置 | `DynamicIsland/components/Settings/ModuleSettingsSection.swift` | 每块一行 + 上移/下移 |
 | 配置 | `DynamicIsland/models/Constants.swift` | 加 `homeBlockOrder` |
 | 测试 | `DynamicIslandTests/ModuleKernelTests.swift` | 视图过滤 / 优先级映射 / 排序 三组用例 |

@@ -97,6 +97,28 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 启动台/快捷启动：扫三目录一层 + Spotlight 使用数据排序，展开面板 tab（搜索 + 应用网格 + 点一下启动并收起 + 右键固定），只声明 `expanded`、默认关、零权限。设计 [19](19-launcher.md)。执行期发现并修掉一个静默失效缺陷（NSMetadataQuery 依赖主线程 run loop）。**快捷指令（Shortcuts）仍是另一个未落地模块**（P2b 第 3）。
 
+### 已交付 · `p2-takeover`（2026-09-30）
+
+组件页看得见、管得着：**计时器 / 镜子 / 音乐三个已实现功能真接管为模块**（模块拥有渲染点、**启用真源就是上游那个开关键本身**，上游三处写死的分支删除、不并存），**剪贴板 / 日历 / 锁屏天气 / 统计 / 文件架 / 终端 / 便签七个做成上游开关卡**（纯登记，不改渲染归属）。设计 [20](20-component-page.md)（D-01…D-16）。它同时把 [16](16-nookx-reference.md) §4.4 P1 第 6 项「组件化继续」往前推了一格：这一次补的不是"看得见"，而是"组件页管着的是不是真的那件事"。
+
+提交范围 `1de20d4d..423e0918`（`1de20d4d` 是设计文档先行的方案门提交，其后 7 个提交：内核三件套 / 计时器模块 / 计时器第二入口 / 镜子模块 / 音乐模块 / 组件页两段 / 文档回写）。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1 | 内核：接管三件套 + 门 + 重同步桥 + 开关写路径 | 三条钩子（`takeoverEnableKey` / `isTabVisible()` / `homeBlockWidth`，**协议要求 + 扩展缺省**）、`ModuleHomeBlockWidth`；启用门改**三段判定**（接管键 → `moduleEnableOverrides` → `manifest.defaultEnabled`）；`startTakeoverBridge` 订阅每个接管模块那一个上游键（`options: []` + `change.newValue`）把注册表状态拉回来；`ModuleEnablementWrite` / `ModuleEnablementRollback`（回弹对接管模块是空操作） |
+| T2 | 计时器接管模块 + tab 表移除 + 计数回归 | `TimerModule`（只声明 `expanded`，渲染点 = 上游 `NotchTimerView`，`isTabVisible()` = `timerDisplayMode == .tab`）；`TabSelectionView` 的 timer 分支与 `enabledStandardTabCount()` 的 `+1` 同批删除，对计数的贡献 1 / 0 / 0 由用例钉住 |
+| T3 | 计时器的第二入口与高度 | 新增 `DynamicIslandViewCoordinator.isTimerSurfaceSelected()`；**三处赋值点**（悬浮聚焦 / 点预设 / `startCustomTimer`）改走 `selectModule(TimerModule.moduleID)`；两处 250pt 高度档改判据（否则「计时器在跑 + 悬浮展开」会落到"内容在、无 tab 高亮 + 默认高度"） |
+| T4 | 镜子接管模块 + 顺序表历史键映射 | `MirrorModule`（只声明 `home`，判据 `showMirror && cameraAvailable`，块宽 140/160）；`HomeBlockOrdering.migratingLegacyIDs`（`builtin.music` / `builtin.mirror` → 模块 id，仅当新键缺席、只读不写） |
+| T5 | 音乐接管模块 + 命名空间环境注入 | `MusicModule`（只声明 `home`，判据沿用旧内置块表达式但**不含展开态**，块宽 300/420）；`EnvironmentValues.homeAlbumArtNamespace`（本仓第一处 `EnvironmentKey`：宿主注入、模块自带 `@Namespace` 兜底） |
+| T6 | 组件页功能卡段 + 接管卡写路径与文案 | 第一段七张卡（四张既有 + 三个接管，各多一行 `settings.modules.effect.*`）；第二段「功能」七张卡（`settings.features.*`）；写路径收在 `ModuleEnablementWrite`、回弹问 `ModuleEnablementRollback`；顺序节只剩模块块；xcstrings +18 条 |
+| T7 | 文档回写 | 本文 + [09](09-features-and-mechanisms.md) §5.8/§8.1 + [14](14-module-manifests.md) §1/T-3/T-12 + [16](16-nookx-reference.md) §4.4 + [17](17-nookx-adoption.md) 已知限制 5/7 与块宽取值 + [18](18-p1-todos-and-order.md) 接口节 + [20](20-component-page.md) 终稿 |
+
+**本批边界（零新增权限、零新出站）**：没有新 capability、没有新 TCC 授权、没有新出站请求、没有新子进程——只搬渲染归属与开关真源（与 `p2-home-strip` 同一条边界）。
+
+**本批没做**：日历行 / 锁屏天气 / 剪贴板 / 统计 / 文件架 / 终端 / 便签的**渲染接管**（只给功能卡）、tab 排序机制、`config` 写路径接管（仍只登记键名，读写走上游键）。逐条见 [20](20-component-page.md) §明确不做 / §实际交付 · 遗留项。
+
+**测试**：`DynamicIslandTests` 293 → **310 条 0 失败**（`TakeoverEnablementTests` 9 → 26 条）。
+
 ### 已交付 · P1 第一批 `p2-todos-facelift`（2026-09-29）
 
 待办展开面板四视图左导航 + 右看板 + 行内优先级胶囊（异步写回系统提醒）；首页块顺序可在设置页上移/下移。设计文档 [18](18-p1-todos-and-order.md)。**A2（折叠态左右槽位）未随批落地**：它依赖状态/动作类模块（农历 / 计时器 / 剪贴板 / 启动台，属 P2a），做出来会是空槽位。

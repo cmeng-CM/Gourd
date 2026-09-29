@@ -73,6 +73,9 @@ public enum NotchState {
 public enum NotchViews {
     case home
     case shelf
+    /// 计时器页。**已无生产路径**（P2 接管批次起计时器页经模块 tab 渲染——`TimerModule`，
+    /// 三条入口都走 `selectModule(TimerModule.moduleID)`）；保留是为了不动 `NotchViews`
+    /// 的哈希与 `tabOrder` 语义（docs/20-component-page.md 已知限制 10）。
     case timer
     case stats
     case llmUsage
