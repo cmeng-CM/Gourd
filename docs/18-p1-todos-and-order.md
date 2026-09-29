@@ -62,8 +62,8 @@ sequenceDiagram
     participant R as ModuleRegistry / 内置块表
     participant H as HomeStripView
     U->>S: 点「上移」
-    S->>D: 写 homeBlockOrder[blockID] = 新的序号
-    S->>R: 通知重排（注册表 objectWillChange 或本地状态）
+    S->>D: 写整表 homeBlockOrder = HomeBlockOrdering.table(for: 移动后的名单)
+    S->>R: 写 @Default（Default 包装器自带代通知，首页/设置页各自观察）
     R-->>H: 块名单顺序变化
     H->>H: 按 (覆盖值 ?? manifest.order, id) 重排并重绘
 ```
@@ -117,13 +117,13 @@ sequenceDiagram
 
 **代码**：`Modules/TodoBucketing.swift` 加 `TodoViewKind` 与 `items(in:from:now:calendar:)`（既有三环零改动）；`Modules/TodosModule.swift` 展开面板改四视图左导航 + 右看板、新增 `TodoPriority` / `TodoPriorityOverlay` / `TodoViewSource` / `TodoDueLabel`；`managers/CalendarManager.swift` + `Providers/CalendarServiceProviding.swift` 加 `setReminderPriority`（`nonisolated async`，`save` 进 `Task.detached`）；`Host/HomeBlockOrdering.swift`（新，排序纯函数）；`Host/HomeStripView.swift` 合成名单后排序；`components/Settings/ModuleSettingsSection.swift` 加上移/下移；`models/Constants.swift` 加 `homeBlockOrder`。
 
-**测试**：新增 24 条，全量 **253 条 0 失败**。
+**测试**：新增 22 条（T1 13 / T2 7 / T2 修复 2），全量 **253 条 0 失败**。
 
 **文档**：本文 + `docs/09` §5.8、`docs/14` todos 行、`docs/16` §4.4、`docs/12`。
 
 **与计划的偏离及原因**：① 优先级写回落在 `CalendarService`（不新开第二条写回链）；② 排序按钮恒显示 / 单块置灰；③ 枚举嵌在 `TodoBucketing` 内、形参用既有 `Item`（计划里的 `TodoItem` 是笔误）；④ 目视只做了"进程内渲染生产视图"的替代证据（本机长时间锁屏）。
 
-**遗留**：屏上点击（切视图 / 点胶囊循环并重启保持 / 调顺序）待用户确认；`TodoRingPicker` 现无生产调用者（保留）；跨零点瞬间徽标与行数可能差 1。
+**遗留**：屏上点击（切视图 / 点胶囊循环并重启保持 / 调顺序）待用户确认；`TodoRingPicker` 现无生产调用者（保留）；跨零点瞬间徽标与行数可能差 1；**`@Default` 驱动首页/设置页重排这一机制既无单测也无渲染证据**（执行期点名的风险）；**设置页列块的判据比首页少运行期一档**（首页还会按丢块规则隐藏尾部块，设置页只按配置级判断）。
 
 ## 已知限制
 
@@ -137,6 +137,7 @@ sequenceDiagram
 5. **设置页的排序按钮恒显示**（单块时置灰），与设计期写的"多于 1 个块才出现"不同——裁定接受（置灰比隐藏更好发现）。
 6. **「已完成」只覆盖近 7 天**（`completedWindowDays = 7`）：文案已改为「已完成（近 7 天）」与实现一致；更早完成的历史条目当前不可见。
 7. **顺序改变会连带改变"谁被丢"**：被规则③ 丢弃的是排好序之后的尾部（算法一行未改）。
+8. **排序一旦动过，写的是整表**：未动过的块会脱离 manifest 的默认序号（自动排到整数表之后），此后新增/重开的块也落在整数表尾部——用户看不出问题，但"默认顺序"不再回退（`HomeBlockOrdering.swift` 的注释里有同样说明）。
 
 ## 验收标准
 
@@ -191,6 +192,11 @@ enum HomeBlockOrdering {
 /// 首页块的用户排序覆盖：键 = 块 id（内置块 `builtin.music` / `builtin.calendar` / `builtin.mirror`，
 /// 模块块 = 模块 id）。**缺键 = 用户未表达**，回落 manifest 的 `defaultPlacement.order`。
 static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
+
+// 写入口径（回写校正）：一次移动写的是**整表**——`HomeBlockOrdering.table(for:)` 把
+// 「移动后的完整名单」按 0,1,2… 编号后整体写入。理由：只写被移动那一键的话，它会与
+// manifest 默认值（模块 order 是 20/30/40 这类大间隔）混在一起，"屏幕上的顺序"与
+// "落盘的值"就对不上了。代价见 §已知限制 8。
 ```
 
 ### 3. 待办视图与优先级（模块内）
@@ -211,9 +217,10 @@ static func eventKitValue(of: TodoPriority) -> Int
 ### 4. 提醒写回（CalendarManager 侧，新增入口）
 
 ```swift
-/// 设置提醒优先级；成功返回 true。失败不抛错（记日志）——调用方据此决定是否回滚 UI。
+/// 设置提醒优先级；成功返回 true。真正实现是 `nonisolated async`（`save` 进 `Task.detached`），
+/// 失败不抛错——调用方据此**回滚 UI** 并记模块日志（回写校正：原写"只记日志"已作废）。
 @discardableResult
-func setReminderPriority(_ reminderID: String, priority: Int) -> Bool
+func setReminderPriority(_ reminderID: String, priority: Int) async -> Bool
 ```
 
 ### 改动点设计
@@ -221,7 +228,7 @@ func setReminderPriority(_ reminderID: String, priority: Int) -> Bool
 | # | 改动点 | 终态 | 落点 | 关键实现约束 | 陷阱 |
 |---|---|---|---|---|---|
 | 1 | 待办展开面板 | 左导航（四视图，竖排，带计数徽标）+ 右看板（分组标题 + 行） | `TodosModule.swift` 的 `TodosModuleView` 一带 | **三环不删**（首页块仍用 `TodoScopeRing`）；展开面板的视图切换用新的四视图枚举，不要复用 `TodoBucketing.Scope` 的语义 | 既有 `TodoRingPicker` 若被移除，首页块会一起没了——首页块是独立视图，但要确认引用关系 |
-| 2 | 看板行 | 行 = 完成圈 + 标题 + 优先级胶囊 + 日期 | `TodoRow`（既有） | 胶囊点击 `stopPropagation`，不要触发行的"打开提醒"手势；写回是异步的，UI 先乐观更新、失败回滚 | `TodoRow` 的既有手势（打开提醒）与新胶囊手势的优先级 |
+| 2 | 看板行 | 行 = 完成圈 + 标题 + 优先级胶囊 + 日期 | `TodoRow`（既有） | 胶囊用 `highPriorityGesture`，别与**完成圈按钮**和面板的既有手势抢；写回是异步的，UI 先乐观更新、失败回滚 | 回写校正：`TodoRow` 并没有"打开提醒"手势（原文写错），真正要防的是完成圈与面板手势 |
 | 3 | 设置页「组件」排序 | 每个块一行：名称 + 上移/下移 | `ModuleSettingsSection.swift` | 按钮只在有多于 1 个块时出现；顺序落盘后要触发首页重绘（注册表重绘或本地状态） | 内置块也要能排——覆盖表的键必须包含内置块 id（见 §接口与数据形状 2） |
 | 4 | 首页排序接入 | `HomeStripView` 的块名单按新排序 | `HomeStripView.swift` | 内置块与模块块**合成一张名单**再排序（现在内置块是写死的三块、模块块单独投影） | 丢块规则按排好序后的尾部丢（既有行为），顺序改了丢块对象也随之变——这是正确的，但要在报告里说清 |
 
