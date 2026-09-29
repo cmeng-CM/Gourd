@@ -30,6 +30,13 @@
 //  块的**存在性**用「是/否」而不是透明度：条件不满足的块根本不生成——否则它仍占宽度、
 //  仍参与布局（本批裁决 1）。块的**名单**只有一个权威源：`homeEntries` 投影（机制二）。
 //
+//  P2 丢块提示批次 / T1 增量：**丢块不再无声**。`plan(…:tailReserve:)` 在纯函数里决定「这次会不会
+//  丢块、丢了几块」（`droppedCount` / `tailReserveUsed`）；本视图多两件事——把每块的宽度**解析成
+//  非可选值**（`blockWidths(for:)`，同一个数组既喂块壳也喂 Layout，D-03 同源），以及在条尾画一枚
+//  `＋N` 小胶囊（悬停列被丢掉的块名）。提示用的宽度是**额外预留**的 `droppedHintWidth`（34pt）：
+//  只有基线本来就会丢块时才预留，边界处可能因此多丢一块（docs/21 §已知限制 6，D-01 / D-02）。
+//  丢块规则本身一字未动（仍从尾部丢、不滚动、不压扁，D-03）。
+//
 
 import Defaults
 import SwiftUI
@@ -51,7 +58,11 @@ struct HomeBlockWidth: Equatable {
 /// 块把自己的宽度约束递给 `HomeStripLayout` 的通道。
 ///
 /// **含 `GeometryReader` 的视图在 `.unspecified` 测量下只报约 10pt**，靠测量会算出约 6pt 的块
-/// （docs/17「机制三」）——所以本批**所有**块都显式声明本键，测量只作取不到声明时的回退。
+/// （docs/17「机制三」）——所以块都显式声明本键，测量只作取不到声明时的回退。
+///
+/// **P2 丢块提示批次 / T1 起这条通道降为退路**：生产路径的宽度由**视图**解析成非可选值后
+/// 经 `HomeStripLayout(items:)` 直接传入（D-03 同源），Layout 只在 `items` 为空时才回过头来
+/// 读本键 / 测量（今天没有这样的调用点）。声明这一侧因此逐字不变，测量仍不当主力。
 struct HomeBlockWidthKey: LayoutValueKey {
     static let defaultValue: HomeBlockWidth? = nil
 }
@@ -69,7 +80,17 @@ struct HomeBlockWidthKey: LayoutValueKey {
 /// 规则 ② 不幂等（实测 available 684 → 上报 `[414.5, 257.0]`；用 683.5 重算得 `[414.0, 257.0]`），
 /// 于是「摆放用的宽度」与「上报的宽度」不是同一组数。所以这里用 `Layout` 的 cache 传递结果，
 /// 而不是靠「同一算式重算一遍」这种假设。
+///
+/// **P2 丢块提示批次 / T1 增量**：块宽不再由本布局从 subviews 取声明（生产路径改由视图传入
+/// `items`，D-03 同源：同一个非可选数组既喂 `plan` 也喂块壳）；`tailHintWidth` 与 `items` 一起
+/// 进 cache 的复用判据，plan 用的是与视图**同值**的尾部预留位（`tailReserve`）。
 struct HomeStripLayout: Layout {
+    /// 本次要摆的块宽（**由视图传入**：视图已经把每块的宽度解析成确定值，Layout 不再从 subviews
+    /// 取声明、也不测量）。空数组 = 走「声明优先、测量回退」的旧路径（退路，今天无生产调用）。
+    var items: [HomeStripLayoutMath.Item] = []
+    /// 尾部预留位宽度（与 `plan(…:tailReserve:)` 同值；唯一取值在 `HomeStripView.droppedHintWidth`）
+    var tailHintWidth: CGFloat = 0
+
     /// 块间距：单一常量（docs/17「做法」机制三）。T1 的用例与算式也共用这个数。
     ///
     /// **2026-09-29 由 12 改为 8**（T2+T3 修复轮）：770pt 面板的可用宽 **≈702**——这个数是
@@ -90,23 +111,29 @@ struct HomeStripLayout: Layout {
 
     /// 一次布局的输入形状与算出的结果。
     struct Cache {
-        /// 各块的宽度约束（声明优先、测量回退）。子视图变化时由 `updateCache` 重新取一次。
+        /// 本轮的宽度约束：`items` 非空时就是视图传进来的那一份（D-03 同源）；
+        /// 视图没传（空数组）时才是「声明优先、测量回退」的旧结果。子视图变化时由 `updateCache` 重新取一次。
         var items: [HomeStripLayoutMath.Item] = []
         /// 下面这份 `plan` 是拿哪个可用宽度算出来的（`plan == nil` 时无意义）。
         var available: CGFloat = .nan
+        /// 上面那份 `plan` 是拿哪个尾部预留位宽度算出来的——**复用判据的一部分**：
+        /// 只看 `available` 会在预留位变化时复用旧 plan（两份 plan 的 `visibleCount` /
+        /// `tailReserveUsed` 可能不同）。`plan == nil` 时无意义。
+        var tailHintWidth: CGFloat = .nan
         /// nil = 还没有任何人为当前的输入算过。
         var plan: HomeStripLayoutMath.Plan?
     }
 
     func makeCache(subviews: Subviews) -> Cache {
-        Cache(items: Self.items(of: subviews))
+        Cache(items: resolvedItems(subviews: subviews))
     }
 
-    /// 子视图变了（块被加上 / 去掉、宽度声明变了）→ 重新取声明，并把宽度分配结果作废，
+    /// 子视图变了（块被加上 / 去掉、宽度声明变了）→ 重新取一次宽度约束，并把宽度分配结果作废，
     /// 由下一次 `sizeThatFits` 按新的输入重算。测量只在这里（和 `makeCache`）发生。
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
-        cache.items = Self.items(of: subviews)
+        cache.items = resolvedItems(subviews: subviews)
         cache.available = .nan
+        cache.tailHintWidth = .nan
         cache.plan = nil
     }
 
@@ -151,21 +178,32 @@ struct HomeStripLayout: Layout {
         }
     }
 
-    /// 取本次布局的 `plan`：输入形状（`available`）与 cache 里记的一致就直接复用，
-    /// 否则按 cache 里的声明算一次并写回。`items` 的失效由 `updateCache` 负责。
+    /// 取本次布局的 `plan`：输入形状（**`available` 与 `tailHintWidth` 两个**）与 cache 里记的
+    /// 一致就直接复用，否则按 cache 里的宽度约束算一次并写回。`items` 的失效由 `updateCache` 负责。
     private func resolvedPlan(available: CGFloat, cache: inout Cache) -> HomeStripLayoutMath.Plan {
-        if let plan = cache.plan, cache.available == available {
+        if let plan = cache.plan, cache.available == available, cache.tailHintWidth == tailHintWidth {
             return plan
         }
-        let plan = HomeStripLayoutMath.plan(items: cache.items, available: available, spacing: Self.spacing)
+        let plan = HomeStripLayoutMath.plan(
+            items: cache.items,
+            available: available,
+            spacing: Self.spacing,
+            tailReserve: tailHintWidth
+        )
         cache.available = available
+        cache.tailHintWidth = tailHintWidth
         cache.plan = plan
         return plan
     }
 
-    /// 每个 subview 的宽度约束：声明优先，取不到才回退到测量（`ideal` = 测得的宽度，
-    /// `min = ideal × 0.6`——设计文档给未声明块的回退口径）。
-    private static func items(of subviews: Subviews) -> [HomeStripLayoutMath.Item] {
+    /// 本轮实际要摆的块宽：**视图传了就用视图的**（D-03 同源，生产路径）；只有 `items` 为空时
+    /// 才回退到旧路径——每个 subview 的声明优先、取不到声明才测量（`ideal` = 测得的宽度、
+    /// `min = ideal × 0.6`，设计文档给未声明块的回退口径）。
+    private func resolvedItems(subviews: Subviews) -> [HomeStripLayoutMath.Item] {
+        items.isEmpty ? Self.measuredItems(of: subviews) : items
+    }
+
+    private static func measuredItems(of subviews: Subviews) -> [HomeStripLayoutMath.Item] {
         subviews.map { subview in
             if let declared = subview[HomeBlockWidthKey.self] {
                 return HomeStripLayoutMath.Item(min: declared.min, ideal: declared.ideal)
@@ -265,7 +303,7 @@ struct HomeStripView: View {
 
     /// 模块块的**缺省**宽度由宿主统一声明（模块不参与「我在首页占多宽」的决策，D-11）：
     /// 声明值必须存在——模块块内容多为 `GeometryReader`，测量回退会把它们算成约 6pt。
-    /// **接管模块例外**：它接住的是被接管块原本的宽度（D-10），走 `blockWidth(for:)` 取模块的声明。
+    /// **接管模块例外**：它接住的是被接管块原本的宽度（D-10），走 `blockWidths(for:)` 取模块的声明。
     private static let moduleBlockWidth = HomeBlockWidth(min: 180, ideal: 240)
 
     /// strip 的**最小可用高度**：低于它就不生成这条 strip（判据在接缝
@@ -284,12 +322,25 @@ struct HomeStripView: View {
     /// 少画一条，不画残片。
     static let minimumUsableHeight: CGFloat = 152
 
+    /// 条尾 `＋N` 提示的**预留位宽度**（docs/21 §备选与取舍 ②：固定，不按块数伸缩）。
+    ///
+    /// **唯一取值在这里**：视图拿它喂 `plan(…:tailReserve:)`、也拿它喂 `HomeStripLayout(tailHintWidth:)`
+    /// ——两处必须同值，否则「预留出来的位置」与「画提示的位置」会不是同一个 34pt。
+    /// 取值依据：`＋N` 的 N 是一位到两位数（32~36pt 足够放下，docs/21 §已知限制 1）。
+    static let droppedHintWidth: CGFloat = 34
+
     /// 模块块的宽度：**接管模块继承被接管块的宽度**（D-10 / docs/20 §做法 机制一「块宽继承」），
     /// 非接管模块用宿主统一值——内核的 `ModuleHomeBlockWidth` 与渲染层的 `HomeBlockWidth`
     /// **同形不同名**，映射就在这一处（内核不认识渲染层类型）。
-    private func blockWidth(for id: String) -> HomeBlockWidth {
-        guard let declared = registry.homeBlockWidth(for: id) else { return Self.moduleBlockWidth }
-        return HomeBlockWidth(min: declared.min, ideal: declared.ideal)
+    ///
+    /// **非可选**（P2 丢块提示批次 / T1，D-03）：每块在这一步就拿到确定宽度（不再有「谁去测量」这条
+    /// 分叉），同一个数组既喂 `HomeStripBlock(width:)` 也转成 `[HomeStripLayoutMath.Item]` 交给
+    /// `HomeStripLayout`——视图与 Layout 于是拿到**同一组**宽度声明（提示的 N 因此与真实丢块数同源）。
+    private func blockWidths(for blocks: [HomeBlock]) -> [HomeBlockWidth] {
+        blocks.map { block in
+            guard let declared = registry.homeBlockWidth(for: block.id) else { return Self.moduleBlockWidth }
+            return HomeBlockWidth(min: declared.min, ideal: declared.ideal)
+        }
     }
 
     var body: some View {
@@ -297,17 +348,49 @@ struct HomeStripView: View {
         // 答 `.none` 的不生成块、不留空壳）与排序都在 `resolvedHomeBlocks()` 里算完；
         // `ForEach` 只按结果摆放，不二次请求（本批裁决 5）。
         let blocks = resolvedHomeBlocks()
+        // 宽度声明也**只解析一次**（D-03 同源）：下面这条 zip 的两半是同一个来源。
+        let widths = blockWidths(for: blocks)
+        let items = widths.map { HomeStripLayoutMath.Item(min: $0.min, ideal: $0.ideal) }
 
-        HomeStripLayout {
-            ForEach(blocks) { block in
-                HomeStripBlock(width: blockWidth(for: block.id)) {
-                    moduleBlockContent(block.content)
+        // 可用宽度从 `GeometryReader` 取：它与 `HomeStripLayout` 拿到的 `proposal.width` 是**同一条
+        // strip 宽度**（ZStack 把自身尺寸原样提案给子视图），所以视图这份 plan 与 Layout 那份 plan
+        // 的输入完全相同——两边各自算一次同一道题，不需要把结果从视图传进 Layout。
+        GeometryReader { proxy in
+            let available = proxy.size.width
+            let plan = HomeStripLayoutMath.plan(
+                items: items,
+                available: available,
+                spacing: HomeStripLayout.spacing,
+                tailReserve: Self.droppedHintWidth
+            )
+
+            ZStack(alignment: .topLeading) {
+                HomeStripLayout(items: items, tailHintWidth: Self.droppedHintWidth) {
+                    ForEach(Array(zip(blocks, widths)), id: \.0.id) { block, width in
+                        HomeStripBlock(width: width) {
+                            moduleBlockContent(block.content)
+                        }
+                        // 音乐块要的那条 matchedGeometry 命名空间在这里注入（D-08 / docs/20 §接口与数据形状 6）：
+                        // 宿主（本文件）持有折叠态播放器共享的那一条，模块拿不到它；读不到时模块用自带
+                        // `@Namespace` 兜底（配对静默失效，不崩不空白）。注入**只加在模块块上**——块壳与它
+                        // 所在的环境由宿主给，块里画什么由模块说。
+                        .environment(\.homeAlbumArtNamespace, albumArtNamespace)
+                    }
                 }
-                // 音乐块要的那条 matchedGeometry 命名空间在这里注入（D-08 / docs/20 §接口与数据形状 6）：
-                // 宿主（本文件）持有折叠态播放器共享的那一条，模块拿不到它；读不到时模块用自带
-                // `@Namespace` 兜底（配对静默失效，不崩不空白）。注入**只加在模块块上**——块壳与它
-                // 所在的环境由宿主给，块里画什么由模块说。
-                .environment(\.homeAlbumArtNamespace, albumArtNamespace)
+
+                if plan.tailReserveUsed {
+                    // 提示位**锚在尾部边缘**（`x = available − droppedHintWidth`，D-01）：**不要用
+                    // `plan.leftover` 反推**——它的口径是「未被使用的尾部空间总量」，丢块路径下按缩减后
+                    // 的宽度算，拿它算坐标既可能越界也不是对齐依据（docs/17 已知限制 11）。
+                    // `tailReserveUsed` 为真 ⟹ 这份 plan 是按 `available − 34` 分配的 ⟹ 它的总宽
+                    // 不超过 `available − 34`，所以这个 x 恒非负、且提示不与任何可见块重叠。
+                    droppedHint(
+                        count: plan.droppedCount,
+                        names: droppedNames(blocks, visibleCount: plan.visibleCount)
+                    )
+                    .frame(width: Self.droppedHintWidth, alignment: .trailing)
+                    .offset(x: available - Self.droppedHintWidth)
+                }
             }
         }
         // 条本身**不铺满**：`HomeStripLayout` 报出的宽度就是「各块分配宽度 + 间隙」，
@@ -329,6 +412,10 @@ struct HomeStripView: View {
     private struct HomeBlock: Identifiable {
         /// 覆盖表的键与摆放时的宽度查询键：模块 id。
         let id: String
+        /// 条尾 `＋N` 的悬停文案里列的块名（**已本地化**：`ModuleHomeEntry.label` 与 tab 条目同一份）。
+        /// 内置块已全部搬走，所以今天只有这一个来源（docs/21 §做法 机制三 给内置块留的那一档
+        /// `String(localized:)` 没有落点）。
+        let name: String
         /// 缺键时的默认序号（= `entry.order`，`manifest.defaultPlacement.order`）。
         let defaultOrder: Int
         /// 该模块这一刻答的首页内容（`.view` / `.descriptor` / `.unavailable`；`.none` 已被过滤掉，
@@ -353,7 +440,7 @@ struct HomeStripView: View {
             let content = registry.content(for: entry.id, request: ModuleRegistry.home)
             if case .none = content { continue }
             blocks.append(
-                HomeBlock(id: entry.id, defaultOrder: entry.order, content: content)
+                HomeBlock(id: entry.id, name: entry.label, defaultOrder: entry.order, content: content)
             )
         }
 
@@ -380,6 +467,36 @@ struct HomeStripView: View {
         case .none:
             EmptyView()
         }
+    }
+
+    // MARK: 条尾的丢块提示
+
+    /// 被丢掉的块名（`.help()` 的文案来源）：名单是**排好序的**那份，`visibleCount` 之后的就是
+    /// 被规则 ③ 丢掉的那些——名单与 plan 都来自上面这一份输入，所以提示列的块与真正没显示的块
+    /// 必然是同一批（D-03「名单同源」）。
+    private func droppedNames(_ blocks: [HomeBlock], visibleCount: Int) -> [String] {
+        blocks.dropFirst(max(0, visibleCount)).map(\.name)
+    }
+
+    /// 条尾的 `＋N` 小胶囊：告诉用户「这里还有 N 块没显示」（把面板拉宽就能看见）。
+    ///
+    /// **刻意低调**（`white.opacity` 的边与字）：它是「这里还有东西」的线索，不是主内容，
+    /// 也不可点击（docs/21 §明确不做：做入口要先定「点了去哪」）。
+    ///
+    /// 文字用 `Text(verbatim:)`：`＋N` 是符号 + 数字、语言无关，走本地化 key 会让 string catalog
+    /// 凭空多出一条待翻译条目（与 `DynamicIslandCalendar.overflowRow` 的 `+N` 同一口径）。
+    /// 悬停文案只列**已被注册表本地化**的块名（`HomeBlock.name`），本身不含待翻译句子。
+    private func droppedHint(count: Int, names: [String]) -> some View {
+        Text(verbatim: "＋\(count)")
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .monospacedDigit()
+            .foregroundColor(.white.opacity(0.55))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(.white.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            .help(Text(verbatim: names.joined(separator: "、")))
     }
 }
 

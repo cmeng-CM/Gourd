@@ -11,6 +11,11 @@
 //  决策：D-02（富余不拉伸：块保持理想宽度、余量留尾部）、D-03（不足不滚动不分页：
 //  按最小宽度收敛，仍不足则按 `order` 从尾部丢块）。
 //
+//  P2 丢块提示批次 / T1 增量：`plan` 多一个入参 `tailReserve`（缺省 0 = 改动前的行为）与两个出参
+//  `droppedCount` / `tailReserveUsed`——「这次会不会丢块、丢了几块」由**纯函数**回答，视图只负责画
+//  那个 `＋N`（`HomeStripView.droppedHintWidth` 是预留位宽度的唯一取值）。三条规则本体一行未动，
+//  搬进私有 `distribute`（基线与预留版共用）；判定三步见 `plan` 的文档（docs/21 §做法 机制一、D-02）。
+//
 
 import CoreGraphics
 
@@ -46,10 +51,65 @@ public enum HomeStripLayoutMath {
         ///（≤ 0.5 × 块数）、规则 ③ 是丢块空出来的空间（可达数百 pt；恰好用满时为 0）。
         /// **它不等于 0 不代表块被铺满**——丢块路径下宽度取的是各自 `min`，
         /// 与可用宽度无关，T3 若拿它做尾部对齐/铺满判据必须先看 `visibleCount`。
+        ///
+        /// **预留版的 `leftover` 不把预留位加回来**：它按缩减后的宽度算
+        /// （`max(0, available − tailReserve − used)`），口径与基线是同一个式子——
+        /// 「这一份 plan 的未使用尾部空间」。**渲染侧不得拿它反推提示位坐标**
+        ///（[docs/17](../../docs/17-nookx-adoption.md) 已知限制 11：它不是对齐依据）。
         public let leftover: CGFloat
+        /// **被整块丢掉的块数**：`items.count - visibleCount`（空数组为 0）。
+        /// 与 `tailReserve` 无关——预留版这个数可能比基线更大（边界处多丢一块，docs/21 §已知限制 6），
+        /// 条尾的 `＋N` 显示的就是它。
+        public let droppedCount: Int
+        /// 本次是否**真的占了**尾部预留位：真 = 下面这份宽度是按 `available − tailReserve` 分配出来的；
+        /// 假 = 预留位不存在（那份宽度一个字节都没用上，`widths` 来自完整可用宽度的基线）。
+        /// 判定见 `plan(items:available:spacing:tailReserve:)` 的三步。
+        public let tailReserveUsed: Bool
     }
 
-    /// 分配规则（三条，**按序判定**，命中即返回）：
+    /// 分配入口：**尾部预留位在纯函数里定，不在视图里拍脑袋**（docs/21 §做法 机制一）。
+    ///
+    /// `tailReserve == 0`（缺省）时**逐字等于改动前的行为**（就是 `distribute` 的返回值）——
+    /// 既有用例与生产布局的宽度分配都不变（D-02）。
+    ///
+    /// **三步判定**（顺序固定，①②③）：
+    /// 1. 按**完整** `available` 算一次（**基线**）。基线没丢块 → 原样返回、`tailReserveUsed = false`：
+    ///    不丢块的时候预留位不存在（`tailReserve` 传了也不生效——它是为「有块被丢」准备的）。
+    /// 2. 基线丢了块、且 `tailReserve > 0` → 按 `max(0, available - tailReserve)` 再算一次（**预留版**）。
+    ///    预留版还能显示 ≥ 1 块 → 返回预留版、`tailReserveUsed = true`（`visibleCount` 已扣掉预留位）。
+    ///    **预留不会让块变窄**：规则 ③ 下每块取各自的 `min`（与可用宽度无关），因此只可能改变丢块数。
+    /// 3. 预留版一块都放不下（宽度太小）→ 退回基线、`tailReserveUsed = false`：连块都没有的时候，
+    ///    一个孤零零的 `＋N` 没有意义。
+    ///    **今天这条分支不可达**：规则 ③ 对非空 `items` 至少保住第一块（`keep` 停在 1），
+    ///    因此预留版的 `visibleCount >= 1` 恒成立；留着它是契约的一部分，也给规则将来的变化一条确定行为。
+    ///
+    /// - Parameter tailReserve: 尾部预留位宽度（`<= 0` 视为不预留）。
+    public static func plan(
+        items: [Item],
+        available: CGFloat,
+        spacing: CGFloat,
+        tailReserve: CGFloat = 0
+    ) -> Plan {
+        // ① 基线：完整可用宽度
+        let baseline = distribute(items: items, available: available, spacing: spacing)
+        guard baseline.droppedCount > 0, tailReserve > 0 else { return baseline }
+
+        // ② 预留版：把尾位从可用宽度里扣掉再算一次
+        let reserved = distribute(items: items, available: max(0, available - tailReserve), spacing: spacing)
+        // ③ 预留版一块都放不下 → 提示不显示（退回基线）
+        guard reserved.visibleCount >= 1 else { return baseline }
+
+        return Plan(
+            widths: reserved.widths,
+            visibleCount: reserved.visibleCount,
+            leftover: reserved.leftover,
+            droppedCount: reserved.droppedCount,
+            tailReserveUsed: true
+        )
+    }
+
+    /// 分配规则本体（三条，**按序判定**，命中即返回）——`plan` 的基线与预留版都走这一份：
+    /// 差别只在传进来的 `available`（`tailReserveUsed` 恒为 `false`，预留判定在外层）。
     ///
     /// 1. **富余**（`available >= sum(ideal) + spacing × (n-1)`）：`widths == ideal`——
     ///    块保持理想宽度、**不拉伸**（D-02），余量留在尾部。
@@ -72,9 +132,9 @@ public enum HomeStripLayoutMath {
     ///
     /// **不变量**（三条）：`widths.count == visibleCount`；`widths.allSatisfy { $0 >= 0 }`；
     /// `sum(widths) + spacing × max(0, count-1) <= available`。
-    public static func plan(items: [Item], available: CGFloat, spacing: CGFloat) -> Plan {
+    private static func distribute(items: [Item], available: CGFloat, spacing: CGFloat) -> Plan {
         guard !items.isEmpty else {
-            return Plan(widths: [], visibleCount: 0, leftover: available)
+            return Plan(widths: [], visibleCount: 0, leftover: available, droppedCount: 0, tailReserveUsed: false)
         }
 
         let count = items.count
@@ -126,6 +186,12 @@ public enum HomeStripLayoutMath {
 
         // `leftover` 只有一个口径：**未被使用的尾部空间总量**（三条规则共用这个式子）
         let used = widths.reduce(CGFloat.zero) { $0 + $1 } + spacing * CGFloat(max(0, visibleCount - 1))
-        return Plan(widths: widths, visibleCount: visibleCount, leftover: max(0, available - used))
+        return Plan(
+            widths: widths,
+            visibleCount: visibleCount,
+            leftover: max(0, available - used),
+            droppedCount: count - visibleCount,
+            tailReserveUsed: false
+        )
     }
 }

@@ -16,6 +16,12 @@
 //  - `leftover` 一律是**未被使用的尾部空间总量**（规则 ② 的取整零头、规则 ③ 丢块空出来的
 //    空间都计入），`> 0` 不等于「没铺满」，所以断言一律走公式而不是 `== 0`。
 //
+//  **尾部预留位**（`plan(…:tailReserve:)`，docs/21-strip-honesty.md §做法 机制一 / §接口与数据形状 1）
+//  - 不丢块 → 预留位不生效：宽度分配、`leftover` 与不传预留位时逐字相同，`tailReserveUsed == false`；
+//  - 生产档（可用宽 702、四个块）：基线 3 块、预留 34pt 后**仍 3 块**、`droppedCount == 1`；
+//  - 边界档（可用宽 660）：预留把尾部再挤掉一块（3 → 2，docs/21 §已知限制 6）；
+//  - `tailReserve` 缺省 0 / 显式 0 / 负值等价（既有用例的默认行为因此逐字不变）。
+//
 //  **协议与投影**
 //  - `Surface.home`：词汇表取值与保序解码（四个取值，既有三个不变）；
 //  - `ModuleRegistry.homeEntries`：只收 `active` 且声明 `.home` 的模块（failed / disabled /
@@ -282,6 +288,172 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(zero.widths, [0], "可用宽度为 0 时给 0（不得为负）")
         XCTAssertEqual(zero.visibleCount, 1)
         assertInvariants(zero, available: 0, spacing: Self.spacing)
+    }
+
+    // MARK: - 尾部预留位（`＋N` 丢块提示，docs/21 §做法 机制一）
+
+    /// ① **不丢块 → 预留位不存在**：基线没丢块时 `tailReserve` 传了也不生效
+    ///（`tailReserveUsed == false`、`droppedCount == 0`），宽度分配与不传时**逐字相同**。
+    /// 这一条挡的是「不丢块也预留」——那会白占尾部 34pt、把压缩档的宽度分配整个改掉。
+    func testTailReserveDoesNothingWhenBaselineKeepsEveryBlock() {
+        // 富余档（规则 ①）：宽度就是各自的 ideal、余量留尾部
+        let surplusItems = [Self.music, Self.calendar, Self.mirror, Self.moduleBlock]
+        let surplusAvailable: CGFloat = 1200
+        let surplus = HomeStripLayoutMath.plan(
+            items: surplusItems,
+            available: surplusAvailable,
+            spacing: Self.spacing,
+            tailReserve: 34
+        )
+        XCTAssertEqual(surplus.widths, [420, 260, 160, 240], "不丢块时宽度分配不得因预留位改变")
+        XCTAssertEqual(surplus.visibleCount, 4)
+        XCTAssertEqual(surplus.droppedCount, 0, "一块都没丢")
+        XCTAssertFalse(surplus.tailReserveUsed, "不丢块时预留位不生效")
+        // 1200 − 1080 − 36 = 84：未生效的预留位不得从尾部余量里扣走任何东西
+        XCTAssertEqual(surplus.leftover, 84, accuracy: 1e-9, "未生效的预留位不得改变 leftover 口径")
+        assertInvariants(surplus, available: surplusAvailable, spacing: Self.spacing)
+        XCTAssertEqual(
+            surplus,
+            HomeStripLayoutMath.plan(items: surplusItems, available: surplusAvailable, spacing: Self.spacing),
+            "传 / 不传预留位在「不丢块」档必须得到同一份 plan"
+        )
+
+        // 压缩档（规则 ②，同样一块都不丢）：预留位不得生效——误扣掉它会让宽度从「等比压缩」
+        // 掉到「每块取 min」甚至丢块（fail signal：不丢块时提示把块挤掉）
+        let hostSpacing = HomeStripLayout.spacing
+        let compressedItems = [Self.music, Self.calendar, Self.moduleBlock]
+        let compressedAvailable: CGFloat = 702
+        let compressed = HomeStripLayoutMath.plan(
+            items: compressedItems,
+            available: compressedAvailable,
+            spacing: hostSpacing,
+            tailReserve: 34
+        )
+        XCTAssertEqual(compressed.widths, [303, 201.5, 181.5], "压缩档的分配不得因预留位变化")
+        XCTAssertEqual(compressed.visibleCount, 3, "压缩档一块都不丢")
+        XCTAssertEqual(compressed.droppedCount, 0)
+        XCTAssertFalse(compressed.tailReserveUsed)
+        assertInvariants(compressed, available: compressedAvailable, spacing: hostSpacing)
+    }
+
+    /// ② **生产档（770pt 面板，可用宽 ≈702）**：四个块时基线就丢第 4 块（D-03），
+    /// 预留 34pt 后**可见块数不变**（提示只占本来空着的位置）、`tailReserveUsed == true`、
+    /// `droppedCount == 1`（条尾显示 `＋1`）。
+    ///
+    /// 数字与 docs/21 §验收标准 2 逐字对应：`300 + 140 + 180 + 2×8 = 636 ≤ 702`、预留后 `636 ≤ 668`。
+    func testTailReserveKeepsVisibleCountAtDefaultPanelBudget() {
+        let hostSpacing = HomeStripLayout.spacing
+        XCTAssertEqual(hostSpacing, 8, "本用例的数字按宿主块间距 8 算（改它会同时改这些数字）")
+        XCTAssertEqual(HomeStripView.droppedHintWidth, 34, "预留位宽度的唯一取值（docs/21 §备选与取舍 ②）")
+        XCTAssertEqual(hostSpacing * 2 + 300 + 140 + 180, 636, "三块最小宽度和 + 两个间隙（docs/21 §验收标准 2）")
+
+        // 生产四块：音乐 300/420、镜子 140/160、待办与通知各 180/240（宿主统一宽度）
+        let items = [Self.music, Self.mirror, Self.moduleBlock, Self.moduleBlock]
+        let available: CGFloat = 702
+
+        // 基线（缺省 = 改动前的行为）：第 4 块被规则 ③ 从尾部丢掉
+        let baseline = HomeStripLayoutMath.plan(items: items, available: available, spacing: hostSpacing)
+        XCTAssertEqual(baseline.visibleCount, 3, "702 下基线只放得下三块（第 4 块从尾部丢）")
+        XCTAssertEqual(baseline.widths, [300, 140, 180], "丢块路径下留下的取各自 min")
+        XCTAssertEqual(baseline.droppedCount, 1)
+        XCTAssertFalse(baseline.tailReserveUsed)
+
+        // 预留版：可见块数与基线**相同**（提示不得把本可显示的块挤掉）
+        let reserved = HomeStripLayoutMath.plan(
+            items: items,
+            available: available,
+            spacing: hostSpacing,
+            tailReserve: HomeStripView.droppedHintWidth
+        )
+        XCTAssertEqual(reserved.visibleCount, 3, "预留位不得把可见块从 3 挤到 2（fail signal）")
+        XCTAssertEqual(reserved.widths, baseline.widths, "可见块的宽度逐字不变（同一个 636 预算）")
+        XCTAssertEqual(reserved.droppedCount, 1, "条尾显示 ＋1：提示数字 = 真的少显示的块数")
+        XCTAssertTrue(reserved.tailReserveUsed, "702 下预留位真的用上了")
+        // leftover 按**缩减后**的宽度算：668 − 636 = 32（预留的 34pt 不属于任何块）
+        XCTAssertEqual(reserved.leftover, 32, accuracy: 1e-9, "预留版的 leftover 与基线同一个口径")
+        assertInvariants(reserved, available: available - HomeStripView.droppedHintWidth, spacing: hostSpacing)
+        // 不越界：可见块 + 间隙 + 预留位 ≤ 可用宽度 → 提示位不会压到最后一块上
+        XCTAssertLessThanOrEqual(
+            reserved.widths.reduce(CGFloat.zero, +) + gaps(3, spacing: hostSpacing) + HomeStripView.droppedHintWidth,
+            available,
+            "提示位必须落在本来空着的位置里"
+        )
+    }
+
+    /// ③ **边界档（可用宽 660）**：基线三块，预留 34pt 后**掉到两块**——D-02 的确定行为：
+    /// 宁可少显示一块，也要把「还有 N 块」说出来（docs/21 §已知限制 6，不是故障）。
+    func testTailReserveMayDropOneMoreBlockAtBoundaryWidth() {
+        let hostSpacing = HomeStripLayout.spacing
+        let items = [Self.music, Self.mirror, Self.moduleBlock, Self.moduleBlock]
+        let available: CGFloat = 660
+
+        let baseline = HomeStripLayoutMath.plan(items: items, available: available, spacing: hostSpacing)
+        XCTAssertEqual(baseline.visibleCount, 3, "660 下基线放得下三块（636 ≤ 660）")
+        XCTAssertEqual(baseline.widths, [300, 140, 180])
+        XCTAssertEqual(baseline.droppedCount, 1)
+        XCTAssertFalse(baseline.tailReserveUsed)
+        XCTAssertEqual(baseline.leftover, 24, accuracy: 1e-9)  // 660 − 636
+
+        let reserved = HomeStripLayoutMath.plan(
+            items: items,
+            available: available,
+            spacing: hostSpacing,
+            tailReserve: HomeStripView.droppedHintWidth
+        )
+        XCTAssertEqual(reserved.visibleCount, 2, "预留 34pt 后尾部再让出一块（docs/21 §已知限制 6）")
+        XCTAssertEqual(reserved.widths, [300, 140], "少显示的那一块从尾部掉（留下的仍取各自 min）")
+        XCTAssertEqual(reserved.droppedCount, 2, "被丢块数与提示数字同一个来源")
+        XCTAssertTrue(reserved.tailReserveUsed)
+        // 626 − 448 = 178
+        XCTAssertEqual(reserved.leftover, 178, accuracy: 1e-9)
+        assertInvariants(reserved, available: available - HomeStripView.droppedHintWidth, spacing: hostSpacing)
+        XCTAssertLessThan(
+            reserved.visibleCount,
+            baseline.visibleCount,
+            "这一档就是「预留位可能多丢一块」的现场（已知限制 6，提示优先于多显示一块）"
+        )
+    }
+
+    /// ④ **`tailReserve` 缺省 0 = 改动前的行为**：缺省、显式 `0`、负值三条路径得到**同一份 plan**
+    ///（`tailReserveUsed == false`；`droppedCount` 就是真实的丢块数）。
+    func testTailReserveDefaultsToNoReserve() {
+        let cases: [(items: [HomeStripLayoutMath.Item], available: CGFloat, spacing: CGFloat)] = [
+            ([Self.music, Self.calendar, Self.mirror, Self.moduleBlock], 1200, Self.spacing),  // 规则 ①
+            ([Self.music, Self.calendar, Self.mirror, Self.moduleBlock], 1010, Self.spacing),  // 规则 ②
+            ([Self.music, Self.calendar, Self.mirror], 520, Self.spacing),                     // 规则 ③（丢块）
+            ([Self.music, Self.mirror, Self.moduleBlock, Self.moduleBlock], 702, HomeStripLayout.spacing),
+            ([], 1010, Self.spacing),                                                          // 空数组
+        ]
+
+        for itemCase in cases {
+            let defaulted = HomeStripLayoutMath.plan(
+                items: itemCase.items,
+                available: itemCase.available,
+                spacing: itemCase.spacing
+            )
+            let explicitZero = HomeStripLayoutMath.plan(
+                items: itemCase.items,
+                available: itemCase.available,
+                spacing: itemCase.spacing,
+                tailReserve: 0
+            )
+            let negative = HomeStripLayoutMath.plan(
+                items: itemCase.items,
+                available: itemCase.available,
+                spacing: itemCase.spacing,
+                tailReserve: -HomeStripView.droppedHintWidth
+            )
+
+            XCTAssertEqual(defaulted, explicitZero, "缺省 0 与显式 0 必须是同一份 plan")
+            XCTAssertEqual(negative, defaulted, "`<= 0` 视为不预留（负值不得开启预留位）")
+            XCTAssertFalse(defaulted.tailReserveUsed, "不预留时永不占用尾位")
+            XCTAssertEqual(
+                defaulted.droppedCount,
+                itemCase.items.count - defaulted.visibleCount,
+                "droppedCount 的口径恒为 items.count − visibleCount"
+            )
+            assertInvariants(defaulted, available: itemCase.available, spacing: itemCase.spacing)
+        }
     }
 
     // MARK: - 空数组与 spacing 口径
