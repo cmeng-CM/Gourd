@@ -143,21 +143,31 @@ class CalendarService: CalendarServiceProviding {
     /// 设置提醒的优先级（`EKReminder.priority`，0…9）。**返回成功与否**——
     /// 找不到提醒（已在「提醒」App 里被删）或 `save` 抛错都返回 false，调用方据此回滚 UI 上的乐观值。
     ///
+    /// **不在主线程上做磁盘 I/O**（P1 / T2 复审修）：取值与 `commit: true` 的 `save` 放进
+    /// `Task.detached(priority: .userInitiated)`，结果 hop 回调用方——因此这个方法是
+    /// `nonisolated async`：主 actor 在 `await` 期间是空的，UI 可以先画乐观值，点胶囊不会卡在落盘上。
+    /// `EKEventStore` 的存取从后台线程调用是既有的常见做法（本文件既有的 `fetchReminders(matching:)`
+    /// 也是「EventKit 回调 + 延续式包一层」的形态，那个回调本来就不在主线程）。
+    ///
     /// 与 `setReminderCompleted` **同一条写回链**：同一个 `EKEventStore`、`commit: true`，
     /// 不新开 store、不新增权限（[docs/18](../../docs/18-p1-todos-and-order.md) §接口与数据形状 4）。
     /// 不写进 `CalendarServiceProviding` 协议：本批**不改对外契约**（设计分级），
     /// 调用方 `CalendarManager` 持有的是具体类型 `CalendarService`。
-    @MainActor
-    func setReminderPriority(reminderID: String, priority: Int) -> Bool {
-        guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else { return false }
-        reminder.priority = priority
-        do {
-            try store.save(reminder, commit: true)
-            return true
-        } catch {
-            print("Failed to update reminder priority: \(error)")
-            return false
-        }
+    nonisolated func setReminderPriority(reminderID: String, priority: Int) async -> Bool {
+        let store = self.store
+        return await Task.detached(priority: .userInitiated) {
+            guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else {
+                return false
+            }
+            reminder.priority = priority
+            do {
+                try store.save(reminder, commit: true)
+                return true
+            } catch {
+                print("Failed to update reminder priority: \(error)")
+                return false
+            }
+        }.value
     }
 }
 

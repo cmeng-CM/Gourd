@@ -495,17 +495,22 @@ class CalendarManager: ObservableObject {
     /// 设置提醒的优先级（`EKReminder.priority`，0…9）——待办面板的行内优先级胶囊走这个入口
     /// （[docs/18](../../docs/18-p1-todos-and-order.md) §接口与数据形状 4）。
     ///
-    /// **返回成功与否**（找不到提醒 / `save` 失败 → false）：调用方（`TodoStore.cyclePriority`）
-    /// 据此决定是否回滚 UI 上的乐观值。这里**不抛错、不打日志**——失败细节由调用方落模块日志
-    /// （`module.todos`），与「谁发起、谁记账」的分工一致。
+    /// **async 的理由（P1 / T2 复审修）**：`CalendarService.setReminderPriority` 内部把 **`save` 的
+    /// 磁盘 I/O 放到后台执行器**上跑，这里 `await` 等它回来。于是调用方（`TodoStore.cyclePriority`）
+    /// 在「乐观更新」与「写回完成」之间有一次**真正的挂起点**：主 actor 在这段区间是空的，
+    /// SwiftUI 因此有机会先把新档位画出来（`docs/18` §并发与幂等「写回在后台任务里做」），
+    /// 也不会因为 `commit: true` 的落盘把主线程顶住。
+    ///
+    /// **返回成功与否**（找不到提醒 / `save` 失败 → false）：调用方据此决定是否回滚 UI 上的乐观值。
+    /// 这里**不抛错、不打日志**——失败细节由调用方落模块日志（`module.todos`），与「谁发起、谁记账」的分工一致。
     ///
     /// 写回沿用本文件既有的提醒写回口径：与 `setReminderCompleted` **同一条链**
     /// （`calendarService` 的同一个 `EKEventStore` + `commit: true`），不新开 store、不新增权限。
     /// 写完**不在这里刷日历数据**：优先级不参与日历行 / 月历标记的取数（`EventModel.priority`
     /// 只作为事件属性透传），库变更由既有的 `EKEventStoreChanged` 监听统一收口。
     @discardableResult
-    func setReminderPriority(_ reminderID: String, priority: Int) -> Bool {
-        calendarService.setReminderPriority(reminderID: reminderID, priority: priority)
+    func setReminderPriority(_ reminderID: String, priority: Int) async -> Bool {
+        await calendarService.setReminderPriority(reminderID: reminderID, priority: priority)
     }
 }
 

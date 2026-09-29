@@ -251,13 +251,16 @@ struct TodoPriorityOverlay: Equatable {
         )
     }
 
-    /// 点一下胶囊：按 无 → 低 → 中 → 高 → 无 取下一档并**先乐观更新** UI。
-    mutating func beginCycle(for id: String) -> TodoPriorityStep? {
-        beginWrite(id, to: TodoPriority.cycled(from: value(for: id)))
-    }
+    /// 写回**失败**：撤销乐观值——显示值立刻退回 `baseline` 里的真值（不停在错误值）。
+    mutating func rollback(_ id: String) { pending[id] = nil }
 
-    /// 清掉乐观值（写回成功与失败都走这里，语义差别见类型注释）。
-    mutating func clear(_ id: String) { pending[id] = nil }
+    /// 写回**成功**：把乐观值**转正**成基线——此后即使一次重读还没拿到新值
+    /// （写回走的是另一个 `EKEventStore` 实例、通知尚未处理时的既有现象），
+    /// 显示值也停在用户点出的档位，不会闪回旧值；真正的库变更由 `EKEventStoreChanged` 收口。
+    mutating func confirm(_ id: String) {
+        if let value = pending[id] { baseline[id] = value }
+        pending[id] = nil
+    }
 
     /// 重取后重建基线（**保留 `pending`**：写回还在飞时不能被一次重取抹掉乐观值）。
     mutating func rebuild(from values: [String: TodoPriority]) { baseline = values }
@@ -267,11 +270,15 @@ struct TodoPriorityOverlay: Equatable {
 
 /// 优先级写回的执行体：`reminderID` + 目标 EventKit 值 → 成功与否。
 ///
-/// 默认实现是**管理器侧的入口** `CalendarManager.setReminderPriority(_:priority:)`
-/// （docs/18 §接口与数据形状 4：写回由 `CalendarManager` 提供，模块只做映射与乐观 UI）。
-/// 抽成可注入的接缝是为了让单测用**计数型假体**覆盖「同名同档不重复写回」与「失败回滚」，
-/// 而不必往用户真实的提醒库里写数据。
-typealias TodoPriorityWriter = @MainActor (_ reminderID: String, _ eventKitPriority: Int) -> Bool
+/// **异步**（P1 / T2 复审修）：默认实现 `CalendarManager.setReminderPriority` 内部把
+/// `EKEventStore.save(commit: true)` 放到**后台执行器**上跑，调用方 `await` 它。
+/// 对 `TodoStore` 来说关键是「乐观更新」与「写回完成」之间因此有**一次真正的挂起点**：
+/// 主 actor 在这段区间是空的、落盘 I/O 也不在主线程上，所以 UI 先画新档位、不等 EventKit
+/// （`docs/18` §状态机与流程「并发与幂等」：写回在后台任务里做）。
+///
+/// 抽成可注入的接缝是为了让单测用**计数型假体**覆盖「同级不重复写回」与「失败回滚」，
+/// 而不必往用户真实的提醒库里写数据（见 `ModuleKernelTests` 的两条 store 级用例）。
+typealias TodoPriorityWriter = @MainActor (_ reminderID: String, _ eventKitPriority: Int) async -> Bool
 
 /// 待办的取数 / 写回 / 变更订阅。**模块自己持有** `EKEventStore`（理由见文件头）。
 ///
@@ -302,21 +309,35 @@ final class TodoStore: ObservableObject {
     private let store = EKEventStore()
     private let log: ModuleLogger
     private let writePriority: TodoPriorityWriter
+    /// 授权读数接缝（**不引入协议**）：默认读 EventKit 的实时状态；单测注入固定值，
+    /// 让写回链的用例不依赖本机 TCC（也不会因为机器上没授权就整条用例空转）。
+    private let authorizationStatus: () -> EKAuthorizationStatus
     private var changedObserver: NSObjectProtocol?
 
     /// - Parameters:
     ///   - logger: 模块日志器（写回失败必须留下痕迹，不静默）。
     ///   - writePriority: 优先级写回的执行体；**nil = 走管理器侧入口**
     ///     （`CalendarManager.setReminderPriority`）。单测注入计数型假体。
-    init(logger: ModuleLogger, writePriority: TodoPriorityWriter? = nil) {
+    ///   - authorizationStatus: 授权读数；**nil = 读 EventKit 实时状态**。单测注入 `.fullAccess`。
+    init(
+        logger: ModuleLogger,
+        writePriority: TodoPriorityWriter? = nil,
+        authorizationStatus: (() -> EKAuthorizationStatus)? = nil
+    ) {
         self.log = logger
         self.writePriority = writePriority ?? { reminderID, eventKitPriority in
-            CalendarManager.shared.setReminderPriority(reminderID, priority: eventKitPriority)
+            await CalendarManager.shared.setReminderPriority(reminderID, priority: eventKitPriority)
         }
+        self.authorizationStatus = authorizationStatus ?? { Self.currentAuthorization() }
     }
 
-    /// 是否已拿到提醒的完整访问权限（= 可以取数）。
-    var hasFullAccess: Bool { authorization == .fullAccess }
+    /// 是否已拿到提醒的完整访问权限（= 可以取数 / 可以写回）。
+    ///
+    /// 判定走 `authorizationStatus` 接缝（**实时读**，不缓存）：生产里接缝就是
+    /// `EKEventStore.authorizationStatus(for: .reminder)`，与 `authorization` 同源
+    /// （后者是最近一次读数，供 UI 展示）；单测注入固定值后，这条 gate 也照样生效——
+    /// 否则用例会在「未授权」上静默空转（P1 / T2 复审修 2 的 store 级用例就靠它）。
+    var hasFullAccess: Bool { authorizationStatus() == .fullAccess }
 
     /// 某条待办的优先级显示值（乐观值优先，其次读回的真值，都没有 = 无）。
     func priority(for itemID: String) -> TodoPriority { priorityOverlay.value(for: itemID) }
@@ -325,7 +346,7 @@ final class TodoStore: ObservableObject {
 
     /// 订阅 `EKEventStoreChanged` 并做一次首取。**幂等**；**不请求权限**（未授权时只记状态、不取数）。
     func start() {
-        authorization = Self.currentAuthorization()
+        authorization = authorizationStatus()
         guard changedObserver == nil else { return }
 
         // `object: nil`：提醒库的变更对**所有** `EKEventStore` 实例广播，我们不分辨是谁改的
@@ -359,7 +380,7 @@ final class TodoStore: ObservableObject {
     /// 顺带把**优先级的真值**重建进 `priorityOverlay.baseline`（乐观值 `pending` 原样保留，
     /// 写回还在飞时不会被一次重取抹掉——见 `TodoPriorityOverlay`）。
     func refresh() async {
-        authorization = Self.currentAuthorization()
+        authorization = authorizationStatus()
         guard hasFullAccess else {
             if !items.isEmpty { items = [] }
             priorityOverlay = TodoPriorityOverlay()
@@ -431,17 +452,32 @@ final class TodoStore: ObservableObject {
 
     // MARK: 优先级写回（P1 / T2）
 
-    /// 点一下优先级胶囊：**先乐观更新 UI，再异步写回**；失败 → 回滚 + 记模块日志，不静默。
-    ///
-    /// 三条口径（docs/18 §接口与数据形状 4 与 §状态机与流程的「并发与幂等」）：
-    /// 1. **幂等**：与当前档位同级时不写、也不动 UI（`TodoPriorityOverlay.beginCycle` 返回 nil）；
-    /// 2. **乐观**：`pending` 先写进 `priorityOverlay`，视图下一帧就是新档位，不等 EventKit 往返；
-    /// 3. **失败回滚**：写回返回 false（提醒不在库里 / save 失败）→ `clear` 撤掉乐观值（显示值退回真值）
-    ///    + `writeFailure` 一行提示 + `log.error`（含提醒 id 与目标值），然后重取一次让面板与库一致。
-    ///
-    /// 写回的执行体是注入的 `writePriority`（默认 `CalendarManager.setReminderPriority`，见该 typealias）。
+    /// 点一下优先级胶囊：按 无 → 低 → 中 → 高 → 无 取下一档，交给 `setPriority(_:to:)` 写回。
     @discardableResult
     func cyclePriority(_ item: TodoBucketing.Item) async -> Bool {
+        await setPriority(item, to: TodoPriority.cycled(from: priority(for: item.id)))
+    }
+
+    /// 把某条待办写到指定档位：**先乐观更新 UI，再异步写回**；失败 → 回滚 + 记模块日志，不静默。
+    ///
+    /// 三条口径（docs/18 §接口与数据形状 4 与 §状态机与流程的「并发与幂等」）：
+    ///
+    /// 1. **幂等**：与当前档位同级 → `beginWrite` 返回 nil，**不写、也不动 UI**（先比对当前值）；
+    /// 2. **乐观且先渲染**：`beginWrite` **同步**把新档位写进 `@Published priorityOverlay`
+    ///    （`objectWillChange` 当场发出，SwiftUI 立刻把这次视图标脏），紧接着 `await Task.yield()`
+    ///    **把主 actor 让出一轮**，让排队等主 actor 的工作（含这次 UI 更新）先跑。于是
+    ///    **乐观值一定先于写回结果上屏**：写回这一侧是 async 的、且内部把 `save` 放到后台执行器
+    ///    （见该 typealias），主线程在它整个执行期间都是空的——既不会被落盘 I/O 顶住，
+    ///    也不会出现"等 EventKit 回来才变色"（"视图下一帧就是新档位"的准确含义）；
+    /// 3. **失败回滚 / 成功转正**：写回返回 false → `rollback` 撤掉乐观值（显示值退回读回的真值）+
+    ///    `writeFailure` 一行提示 + `log.error`（含提醒 id 与目标值），随后重取一次（提醒可能已被删，
+    ///    让那一行自然消失）；成功 → `confirm` 把乐观值转正成基线，**不再立刻重取**：优先级不改变
+    ///    条目归属与顺序，而写回走的是另一个 `EKEventStore` 实例，紧跟着重读可能拿到尚未失效的旧值、
+    ///    把 UI 拉回旧档位——库变更由既有的 `EKEventStoreChanged` 监听收口。
+    ///
+    /// 「同级不产生第二次写回」这条口径由本方法第 1 条保证（用例经 `writePriority` 接缝直接驱动它）。
+    @discardableResult
+    func setPriority(_ item: TodoBucketing.Item, to target: TodoPriority) async -> Bool {
         guard hasFullAccess else {
             writeFailure = .storage("提醒未授权")
             log.warn("优先级写回跳过：提醒未授权")
@@ -449,13 +485,17 @@ final class TodoStore: ObservableObject {
         }
 
         // 同级 → nil：不写回、不动 UI（先比对当前值，见 TodoPriority.shouldWrite）。
-        guard let step = priorityOverlay.beginCycle(for: item.id) else {
-            log.info("优先级写回跳过：\(item.id) 已是 \(priorityOverlay.value(for: item.id).rawValue)")
+        guard let step = priorityOverlay.beginWrite(item.id, to: target) else {
+            log.info("优先级写回跳过：\(item.title)（\(item.id)）已是 \(target.rawValue)")
             return false
         }
 
-        guard writePriority(item.id, step.eventKitValue) else {
-            priorityOverlay.clear(item.id)   // 回滚：显示值退回读回的旧值
+        // 口径 2：乐观值先渲染——`beginWrite` 已同步发出 objectWillChange，这里让主 actor 一轮，
+        // 让这次 UI 更新先跑；写回随后开始，且它的落盘在后台执行器上（不占主线程）。
+        await Task.yield()
+
+        guard await writePriority(item.id, step.eventKitValue) else {
+            priorityOverlay.rollback(item.id)   // 回滚：显示值退回读回的真值
             let detail = "setReminderPriority 返回 false（提醒 id \(item.id)，目标 EventKit \(step.eventKitValue)）"
             lastErrorDescription = detail
             writeFailure = .storage(detail)
@@ -464,10 +504,9 @@ final class TodoStore: ObservableObject {
             return false
         }
 
+        priorityOverlay.confirm(item.id)   // 乐观值转正（口径 3：不立刻重取，避免读到未失效的旧值）
         writeFailure = nil
         log.info("优先级写回：\(item.title) → \(step.priority.rawValue)（EventKit \(step.eventKitValue)）")
-        priorityOverlay.clear(item.id)       // 随后的 refresh 会把真值写进 baseline
-        await refresh()
         return true
     }
 
@@ -569,7 +608,7 @@ final class TodoStore: ObservableObject {
             lastErrorDescription = String(describing: error)
             log.error("提醒授权请求抛错：\(String(describing: error))")
         }
-        authorization = Self.currentAuthorization()
+        authorization = authorizationStatus()
         await refresh()
     }
 
@@ -792,8 +831,12 @@ enum TodoViewChrome {
 /// 左列定宽的理由与旧的三环左列相同：右侧看板的可用宽度要随面板变宽而变宽。
 /// 4 项 × 26 + 3 × 4 = 116pt：默认面板高度（约 180pt 可用）放得下，不需要像三环那样按高度收缩。
 enum TodoViewNavLayout {
-    /// 左列固定宽度：图标（14）+ 「最近 7 天」（最长的标签）+ 计数徽标（20）放得下。
-    static let columnWidth: CGFloat = 118
+    /// 左列固定宽度：图标（14）+ **最长的标签** + 计数徽标（20）放得下。
+    ///
+    /// 最长的标签是「已完成（近 7 天）」（P1 / T2 复审修 3：把 `completedWindowDays = 7`
+    /// 这个可见窗口写进文案，标签因此从 3 个字变长约一倍）——列宽从 118 提到 150 容纳它，
+    /// 标签另有 `minimumScaleFactor(0.8)` 兜底（再窄也只是缩一点，不会截成「已完成（近 …」）。
+    static let columnWidth: CGFloat = 150
     /// 项与项的垂直间距。
     static let itemSpacing: CGFloat = 4
     /// 每项的高度（即点击区高度）。
@@ -841,6 +884,7 @@ private struct TodoViewNavItem: View {
             Text(LocalizedStringKey(TodoViewChrome.labelKey(for: view)))
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)   // 「已完成（近 7 天）」放不进 150pt 时缩字，不截断
                 .truncationMode(.tail)
 
             Spacer(minLength: 4)

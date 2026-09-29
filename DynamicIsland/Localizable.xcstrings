@@ -81490,13 +81490,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Completed"
+            "value" : "Completed (7 days)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已完成"
+            "value" : "已完成（近 7 天）"
           }
         }
       }

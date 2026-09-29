@@ -2417,10 +2417,13 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertFalse(TodoPriority.shouldWrite(current: .high, target: .high), "重复点击同一档：不写")
     }
 
-    /// 点胶囊的完整链路（用**计数型假写回器**驱动生产代码 `TodoPriorityOverlay`）：
+    /// 乐观层的完整口径（用**计数型假写回器**驱动生产代码 `TodoPriorityOverlay`）：
     /// ① 一次点击 = 一次乐观更新 + 一次写回（值取区间端点）；
     /// ② **同级重复请求不产生第二次写回**（`beginWrite` 返回 nil，写回计数不变）；
-    /// ③ **写回失败 → 回滚**到读回的真值（不停在错误值）。
+    /// ③ **写回失败 → `rollback`** 到读回的真值、写回成功 → **`confirm` 转正**（不停在错误值）；
+    /// ④ 重取（`rebuild`）不抹掉在飞的乐观值。
+    ///
+    /// 这一条只钉**乐观层**；整条写回链（`TodoStore` + 注入的假写回器）另见下面两条 store 级用例。
     func testTodoPriorityOverlayCycleWriteBackAndRollback() {
         var overlay = TodoPriorityOverlay()
         overlay.rebuild(from: ["a": .none])
@@ -2429,8 +2432,13 @@ final class ModuleKernelTests: XCTestCase {
         var writes: [Int] = []
         func fakeWrite(_ step: TodoPriorityStep) { writes.append(step.eventKitValue) }
 
+        /// 与 `TodoStore.cyclePriority` 同形：取循环的下一档做为目标（生产的取档就在这里）。
+        func cycle() -> TodoPriorityStep? {
+            overlay.beginWrite("a", to: TodoPriority.cycled(from: overlay.value(for: "a")))
+        }
+
         // ① 点一下：无 → 低，UI 先变（乐观），写回值 9
-        guard let first = overlay.beginCycle(for: "a") else {
+        guard let first = cycle() else {
             return XCTFail("无 → 低应给出写回计划")
         }
         fakeWrite(first)
@@ -2445,35 +2453,132 @@ final class ModuleKernelTests: XCTestCase {
         // 主链路继续：低 → 中 → 高 → 无，每步各写一次（5 / 1 / 0）
         var visited: [TodoPriority] = []
         for _ in 0..<3 {
-            guard let step = overlay.beginCycle(for: "a") else {
+            guard let step = cycle() else {
                 return XCTFail("循环途中不应出现同级请求")
             }
             visited.append(step.priority)
             fakeWrite(step)
-            // 写回成功后的口径与 `TodoStore.cyclePriority` 同序：清乐观值 + 重取把真值写进 baseline
-            overlay.clear("a")
+            // 写回成功后的口径与 `TodoStore.setPriority` 同序：乐观值转正 + 重取把真值写进 baseline
+            overlay.confirm("a")
             overlay.rebuild(from: ["a": step.priority])
         }
         XCTAssertEqual(visited, [.medium, .high, .none], "低 → 中 → 高 → 无")
         XCTAssertEqual(writes, [9, 5, 1, 0], "四步循环各写一次，值取每档区间的端点")
 
-        // ③ 写回失败：先乐观（UI 已经变了），`clear` 后回到真值
-        guard let failing = overlay.beginCycle(for: "a") else {
+        // ③ 写回失败：先乐观（UI 已经变了），`rollback` 后回到真值
+        guard let failing = cycle() else {
             return XCTFail("无 → 低应给出写回计划")
         }
         XCTAssertEqual(failing.eventKitValue, 9)
         XCTAssertEqual(overlay.value(for: "a"), .low, "乐观更新已经生效（此刻 UI 是低）")
-        overlay.clear("a")   // 写回返回 false → TodoStore 走这一句（不回挂任何乐观值）
+        overlay.rollback("a")   // 写回返回 false → TodoStore 走这一句
         XCTAssertEqual(overlay.value(for: "a"), .none, "回滚到 baseline（读回的真值），不停在错误值")
         XCTAssertEqual(writes.count, 4, "失败的写回没记账（这一轮根本没调假写回器）")
 
         // 重取不冲掉"写回在飞"的乐观值：rebuild 只重建 baseline
-        guard let inFlight = overlay.beginCycle(for: "a") else {
+        guard let inFlight = cycle() else {
             return XCTFail("无 → 低应给出写回计划")
         }
         overlay.rebuild(from: ["a": .none, "b": .high])
         XCTAssertEqual(overlay.value(for: "a"), inFlight.priority, "写回在飞时，一次重取不得抹掉乐观值")
         XCTAssertEqual(overlay.value(for: "b"), .high, "没点过的条目按读回的真值")
+    }
+
+    // MARK: - 待办优先级的**整条写回链**（P1 / T2 复审修 2：经 `TodoStore(writePriority:)` 接缝）
+
+    /// 用例共用的假写回器：按 id 记账（EventKit 值），结果由参数决定。
+    ///
+    /// **不碰提醒库**：这组用例只经接缝驱动 `TodoStore` 的生产写回逻辑，
+    /// 唯一会读到系统提醒的地方是失败路径末尾的那次只读 `refresh()`（不写任何数据）。
+    @MainActor
+    private final class FakePriorityWriter {
+        private(set) var writes: [(id: String, eventKitValue: Int)] = []
+        /// 返回给 `cyclePriority` / `setPriority` 的结果。
+        var succeeds = true
+
+        func write(reminderID: String, eventKitValue: Int) -> Bool {
+            writes.append((reminderID, eventKitValue))
+            return succeeds
+        }
+
+        var values: [Int] { writes.map(\.eventKitValue) }
+    }
+
+    /// 构造一个**不依赖本机 TCC** 的 store：授权读数注入 `.fullAccess`，写回走注入的假体。
+    @MainActor
+    private func todoStore(writer: FakePriorityWriter) -> TodoStore {
+        TodoStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"),
+            writePriority: { reminderID, eventKitValue in
+                writer.write(reminderID: reminderID, eventKitValue: eventKitValue)
+            },
+            authorizationStatus: { .fullAccess }
+        )
+    }
+
+    /// **写回失败 → 回滚**（复审修 2）：注入「总是失败」的写回，经**生产的** `cyclePriority` 驱动——
+    /// 乐观值先挂上（写回时看得见）、失败后被撤掉（显示值退回真值），并且失败**不静默**。
+    ///
+    /// 断言里带「写回被调用时的显示值」，正是为了钉住"乐观更新先于写回"这条口径：
+    /// 写回执行时 `priority(for:)` 已经是新档位，而不是等 EventKit 往返之后才变。
+    func testTodoStorePriorityRollsBackWhenWriteBackFails() async {
+        let writer = FakePriorityWriter()
+        writer.succeeds = false
+        let item = TodoBucketing.Item(id: "t2-rollback", title: "回滚用例")
+        /// 写回**开始那一刻**的显示值——"乐观更新先于写回"的直接证据。
+        var displayedWhenWriteStarts: TodoPriority?
+        var store: TodoStore?
+
+        let created = TodoStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"),
+            writePriority: { reminderID, eventKitValue in
+                displayedWhenWriteStarts = store?.priority(for: reminderID)
+                return writer.write(reminderID: reminderID, eventKitValue: eventKitValue)
+            },
+            authorizationStatus: { .fullAccess }
+        )
+        store = created
+
+        let ok = await created.cyclePriority(item)
+
+        XCTAssertEqual(
+            displayedWhenWriteStarts,
+            .low,
+            "写回开始那一刻显示值已经是新档位：乐观更新在写回之前就提交了"
+        )
+        XCTAssertFalse(ok, "写回失败 → cyclePriority 返回 false")
+        XCTAssertEqual(writer.values, [9], "确实调了一次写回（无 → 低 = EventKit 9）")
+        XCTAssertEqual(writer.writes.first?.id, item.id, "写的是这条待办")
+        XCTAssertEqual(created.priority(for: item.id), .none, "回滚：乐观值被撤掉，显示值退回真值（无）")
+        XCTAssertNotNil(created.writeFailure, "失败不静默：面板那一行「写入系统提醒失败」有值")
+    }
+
+    /// **同级不重复写回**（复审修 2）：同一个档位连要两次，只有第一次落到写回；
+    /// 第二次直接 false、UI 不动（幂等）。换一档是真写回（对照：闸门没把一切都挡住）。
+    func testTodoStorePriorityWritesOncePerTier() async {
+        let writer = FakePriorityWriter()
+        let store = todoStore(writer: writer)
+        let item = TodoBucketing.Item(id: "t2-idempotent", title: "同级用例")
+
+        // `XCTAssert*` 的表达式参数是 autoclosure（不支持 async）——先 await 到局部量再断言
+        let firstWrite = await store.setPriority(item, to: .low)
+        XCTAssertTrue(firstWrite, "第一次：写到低")
+        XCTAssertEqual(writer.values, [9], "写回一次（低 = EventKit 9）")
+        XCTAssertEqual(store.priority(for: item.id), .low, "成功 → 乐观值转正，显示值停在低")
+
+        let sameTierAgain = await store.setPriority(item, to: .low)
+        XCTAssertFalse(sameTierAgain, "同级再要一次：不写回")
+        XCTAssertEqual(writer.values, [9], "写回次数没有增加（同级不产生第二次写回）")
+        XCTAssertEqual(store.priority(for: item.id), .low, "同级请求也不动 UI")
+
+        let changedTier = await store.setPriority(item, to: .high)
+        XCTAssertTrue(changedTier, "换一档：真写回")
+        XCTAssertEqual(writer.values, [9, 1], "高 = EventKit 1")
+        XCTAssertEqual(store.priority(for: item.id), .high, "显示值跟进新高档")
+
+        let sameHighAgain = await store.setPriority(item, to: .high)
+        XCTAssertFalse(sameHighAgain, "再做一次同级请求（高档）：同样不写")
+        XCTAssertEqual(writer.values, [9, 1], "仍然是两次写回")
     }
 
     /// 看板与徽标**同源**（控制器裁决 4：视图里不另写过滤）：左导航四个徽标数 =
@@ -2551,7 +2656,11 @@ final class ModuleKernelTests: XCTestCase {
 
         let navHeight = TodoViewNavLayout.itemHeight * 4 + TodoViewNavLayout.itemSpacing * 3
         XCTAssertLessThanOrEqual(navHeight, 180, "默认面板可用高度（约 180pt）要放得下四项导航")
-        XCTAssertGreaterThan(TodoViewNavLayout.columnWidth, 0)
+        XCTAssertGreaterThanOrEqual(
+            TodoViewNavLayout.columnWidth,
+            150,
+            "列宽要容纳最长的标签「已完成（近 7 天）」（复审修 3 把 7 天窗口写进文案后变长）"
+        )
     }
 
     /// 行内日期的显示口径（控制器裁决 2）：到期在**今天** → `.today`（走本地化文案）；
