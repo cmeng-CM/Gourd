@@ -1887,6 +1887,99 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
+    // MARK: - 待办的新增 / 删除（2026-09-28 用户反馈「待办里面要可以增删待办内容」）
+
+    /// 新增的校验与构造是纯函数：**标题去首尾空白**后写库，日期三选一给「当天 00:00 的年月日」。
+    ///
+    /// 「今天」给的是**年月日组件、不带时分**——与系统「提醒」App 的全天条目同形，读回时
+    /// `TodoText.dueText` 按「到期 == 当天起点」判为全天、只显示日期（口径闭环）。
+    func testTodoComposerTrimsTitleAndBuildsTodayDue() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 14, 30, calendar: calendar)
+
+        let draft = TodoComposer.draft(title: "  买牛奶\n ", due: .today, now: now, calendar: calendar)
+        guard case let .create(title, components) = draft else {
+            return XCTFail("非空标题必须能建：\(draft)")
+        }
+        XCTAssertEqual(title, "买牛奶", "首尾空白与换行都去掉，内部文字不动")
+        XCTAssertEqual(components?.year, 2026)
+        XCTAssertEqual(components?.month, 9)
+        XCTAssertEqual(components?.day, 28)
+        XCTAssertNil(components?.hour, "只给年月日：不带时分才是全天口径（14:30 的现在也不写 14:30）")
+        XCTAssertNil(components?.minute)
+        XCTAssertNil(components?.second)
+        XCTAssertEqual(
+            calendar.date(from: try XCTUnwrap(components)),
+            calendar.startOfDay(for: now),
+            "今天 = 今天 00:00"
+        )
+    }
+
+    /// 标题去空白后为空：**拒绝**（不建提醒）——空标题在「提醒」App 里是一行看不见的条目。
+    func testTodoComposerRejectsBlankTitle() {
+        for blank in ["", "   ", "\n\t ", " \n \t\n"] {
+            XCTAssertEqual(
+                TodoComposer.draft(title: blank, due: .today),
+                .rejectEmptyTitle,
+                "\(blank.debugDescription) 是空标题"
+            )
+        }
+    }
+
+    /// 「明天」= `now + 1 天`的当天起点：跨月（9/30 → 10/1）与跨年（12/31 → 次年 1/1）都按自然日推进，
+    /// 且**先加一天再取起点**（夏令时切换日「今天起点 + 1 天」与「现在 + 1 天」不是同一天）。
+    func testTodoComposerTomorrowUsesNextDayStart() throws {
+        let calendar = try fixedGregorian()
+        func tomorrow(_ now: Date) -> DateComponents? {
+            guard case let .create(_, components) = TodoComposer.draft(
+                title: "x", due: .tomorrow, now: now, calendar: calendar
+            ) else { return nil }
+            return components
+        }
+
+        let acrossMonth = try XCTUnwrap(tomorrow(try instant(2026, 9, 30, 23, 50, calendar: calendar)))
+        XCTAssertEqual([acrossMonth.year, acrossMonth.month, acrossMonth.day], [2026, 10, 1], "月末跨月")
+
+        let acrossYear = try XCTUnwrap(tomorrow(try instant(2026, 12, 31, 0, 5, calendar: calendar)))
+        XCTAssertEqual([acrossYear.year, acrossYear.month, acrossYear.day], [2027, 1, 1], "跨年")
+    }
+
+    /// 「无日期」给 nil：条目**没有** `dueDateComponents`——按 `TodoBucketing` 的硬规则它只出现在
+    /// 「所有」里，这是刻意的（不是漏填）。
+    func testTodoComposerNoDateYieldsNilDueComponents() {
+        XCTAssertEqual(
+            TodoComposer.draft(title: "收集", due: .none),
+            .create(title: "收集", dueDateComponents: nil)
+        )
+    }
+
+    /// 目标列表的兜底：默认列表（`defaultCalendarForNewReminders()` 可为 nil）优先，
+    /// 取不到时退到第一个可用列表；两者都没有 → nil（调用方据此显示一行失败提示，而不是猜一个列表）。
+    func testTodoComposerTargetListFallsBackToFirstAvailable() {
+        XCTAssertEqual(
+            TodoComposer.targetList(defaultList: "默认", availableLists: ["A", "B"]),
+            "默认",
+            "有默认列表就用默认列表（不碰第一个可用列表）"
+        )
+        XCTAssertEqual(
+            TodoComposer.targetList(defaultList: String?.none, availableLists: ["A", "B"]),
+            "A",
+            "默认列表为 nil 时兜到第一个可用列表"
+        )
+        XCTAssertNil(
+            TodoComposer.targetList(defaultList: String?.none, availableLists: []),
+            "一个列表都没有 → nil（失败并回显提示，不静默）"
+        )
+    }
+
+    /// `TODO` 日期选项的文案 key 与 `DueOption` 同源（加选项必须同时给 key，否则面板上出现裸 key）。
+    func testTodoComposerDueOptionLabelKeys() {
+        XCTAssertEqual(
+            TodoComposer.DueOption.allCases.map(\.labelKey),
+            ["module.todos.dueToday", "module.todos.dueTomorrow", "module.todos.dueNone"]
+        )
+    }
+
     /// `module.todos.*` 的 key 必须能从宿主 bundle 解析出文案（06 §3.3 R5 的 key 形态）：
     /// 解析不到时 `Bundle` 原样返回 key，断言因此能抓住漏编译 / 拼错的 key。
     func testTodosLocalizationKeysResolve() {
@@ -1901,6 +1994,16 @@ final class ModuleKernelTests: XCTestCase {
             "module.todos.permission",
             "module.todos.requestAccess",
             "module.todos.openSettings",
+            // 增删（2026-09-28）：新增输入行、日期三选一、删除确认、写回失败的一行提示
+            "module.todos.add",
+            "module.todos.addPlaceholder",
+            "module.todos.dueToday",
+            "module.todos.dueTomorrow",
+            "module.todos.dueNone",
+            "module.todos.delete",
+            "module.todos.deleteConfirm",
+            "module.todos.cancel",
+            "module.todos.writeFailed",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
