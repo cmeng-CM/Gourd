@@ -89,7 +89,11 @@
 //    只有 App 名），按名反查（`bundleIdentifier(forAppName:in:runningApps:)`）后走同一条打开路径；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
-//    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
+//    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）；
+//  - **首页块**（T1，`surfaces` 的第三个取值）：标题行「通知 · 未读 N」+ 最近 3 条
+//    （每行「App 名 · 标题」，单行尾部截断），**只读**——点一行 = 打开对应 App + 收起刘海，
+//    不做关闭 / 清除 / 回复；未读与清单与展开 tab **同源**（`store.items`），
+//    行数上限固定 3、不按块宽分档（见 `NotificationsHomeBlockView`）。
 //
 //  ## 颜色（本项目已踩过两次的坑）
 //  面板是黑底、系统外观可为浅色——本模块所有文字与图标**一律显式浅色**
@@ -103,7 +107,9 @@
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
 //  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss` /
 //  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）/
-//  `.moreCount`（一次多条新通知时浮层第二行末尾的计数后缀，`and %d more` / `等 %d 条`）。
+//  `.moreCount`（一次多条新通知时浮层第二行末尾的计数后缀，`and %d more` / `等 %d 条`）/
+//  `.homeUnread`（首页块标题行的未读口径，`Notifications · %d unread` / `通知 · 未读 %d`；
+//  未读为 0 时不带这个后缀，标题行只剩 `.name`）。
 //
 
 import AppKit
@@ -708,9 +714,11 @@ struct NotificationHUDPresentation: Equatable {
 final class NotificationsModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
-    /// - `surfaces`：`expanded`（通知列表）+ `compact`（bell + 未读数）；
+    /// - `surfaces`：`expanded`（通知列表）+ `compact`（bell + 未读数）+ `home`（首页块：
+    ///   「通知 · 未读 N」+ 最近 3 条，见 `NotificationsHomeBlockView`）；
     /// - `defaultPlacement`：`slot: .center` / `order: 40`——排在 todos（20）与 progress（30）之后，
     ///   因此**默认配置下拿不到中央槽位**（`compactSlotContent()` 只转发第一个候选）；
+    ///   首页 strip 里模块块按同一个 `order` 排（todos 块在前、通知块在后）；
     /// - `defaultEnabled: true`；
     /// - `permissions: []`：本批不改 06 §7.1 的白名单，而 docs/14 给本模块标注的
     ///   `notifications:read` **尚未落进白名单**（06 §7.1 只有无参数的 `notifications`）。
@@ -727,7 +735,7 @@ final class NotificationsModule: GourdModule {
         version: "1.0.0",
         apiVersion: HostInfo.currentAPIVersion,
         kind: "builtin",
-        surfaces: [.expanded, .compact],
+        surfaces: [.expanded, .compact, .home],
         defaultPlacement: Placement(slot: .center, order: 40),
         defaultEnabled: true,
         permissions: [],
@@ -936,11 +944,12 @@ final class NotificationsModule: GourdModule {
         return fallback.isEmpty ? item.displayName : fallback
     }
 
-    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 与 `home` 返回 `.none`（不占位、不算失败）。
+    /// 三个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、也不算失败）。
     ///
     /// 展开面板多交一条 `onCollapse`：列表行点击的「收起刘海」出口——模块**只调注入的
     /// `UIHandle`**（`requestCollapse()` → 应用侧注入的闭包），自己不碰窗口（06 §3.3 R1）。
     /// 每次取内容时新建闭包：`content(for:)` 由 `ModuleHostView` 在 body 里调用，闭包不会跨渲染留存。
+    /// 首页块同理，多交一条 `onOpen`（点击一行 = 打开对应 App + 收起刘海）。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .compact:
@@ -955,9 +964,34 @@ final class NotificationsModule: GourdModule {
                     self.context.ui.requestCollapse()
                 }
             )))
-        case .lockscreen, .home:
+        case .home:
+            return .view(AnyView(NotificationsHomeBlockView(
+                store: store,
+                onOpen: { [weak self] item in self?.openHomeBlockItem(item) }
+            )))
+        case .lockscreen:
             return .none
         }
+    }
+
+    /// 首页块的一行被点开：**打开对应 App → 收起刘海**（`NotificationClickPolicy.row`——与展开面板的
+    /// 列表行**同一条动作序列**，只有那两个动作、只有那个顺序：先开应用再收面板，
+    /// 反了会让前台切换被收起动画拖后）。
+    ///
+    /// 与浮层卡片（`.hudCard` = 开应用 → 撤浮层）的差别只在第二个动作：首页块是**面板里**的块，
+    /// 收的是面板；浮层是独立窗口，撤的是浮层本身。**不做**关闭 / 清除 / 回复（控制器裁决：
+    /// 首页块只读，那些动作留在展开 tab）。
+    private func openHomeBlockItem(_ item: NotificationItem) {
+        let ui = context.ui
+        let log = context.logger
+        NotificationClickPolicy.run(
+            NotificationClickPolicy.row,
+            openApp: { store.openApp(for: item) },
+            collapseNotch: {
+                log.info("首页块点击：已打开 App，请求收起刘海（requestCollapse）")
+                ui.requestCollapse()
+            }
+        )
     }
 }
 
@@ -1193,6 +1227,102 @@ private struct NotificationRow: View {
         .buttonStyle(.plain)
         .onHover { isDismissHovered = $0 }
         .help(NotificationText.localized("module.notifications.dismiss"))
+    }
+}
+
+// MARK: - 首页块（通知 · 未读 N + 最近 3 条）
+
+/// 首页块的**取舍与文案**（纯函数，无 SwiftUI 依赖，单测直接钉）。
+///
+/// 规格（T1）：标题行「通知 · 未读 N」（N == 0 只显示「通知」）+ **最近 3 条**清单，
+/// 每行「App 名 · 标题」。**行数上限固定 3、不按块宽分档**（按宽度分档是本批之后的事）。
+/// 块宽由宿主 `HomeStripView` 统一声明（模块块 180 / 240），本模块**不声明、不读宽度**。
+enum NotificationsHomeBlockLayout {
+    /// 首页块最多画几条（规格：最近 3 条；超出的不显示——完整列表在展开 tab）。
+    static let maxListRows = 3
+
+    /// 清单要画的条目：**列表顺序的前 3 条**。
+    ///
+    /// 不在这里排序：`store.items` 本身就是「新的在前」（`NotificationCenterReader.fetchRecent`
+    /// 走 `ORDER BY rec_id DESC`），再排一遍只会让首页块与展开 tab 的顺序出现两套口径。
+    static func listedItems(_ items: [NotificationItem]) -> [NotificationItem] {
+        Array(items.prefix(maxListRows))
+    }
+
+    /// 一行的文案：「App 名 · 标题」。
+    ///
+    /// - 标题先去空白并**压成单行**（复用 `NotificationText.singleLine`：通知标题里的换行会
+    ///   白白吃掉 `lineLimit(1)` 的预算，截断位置也不可控）；
+    /// - 任一边为空时**不留悬空的分隔符**（plist 缺 `titl` 时只有 App 名，反之亦然）；
+    /// - 两边都空时给空串（`Text("")` 不画内容；这种条目在 DB 通道实际上不存在——
+    ///   `displayName` 有 bundle id 兜底）。
+    static func rowLabel(appName: String, title: String) -> String {
+        let name = NotificationText.singleLine(appName)
+        let subject = NotificationText.singleLine(title)
+        guard !subject.isEmpty else { return name }
+        guard !name.isEmpty else { return subject }
+        return name + " · " + subject
+    }
+}
+
+/// 首页块：**标题行「通知 · 未读 N」+ 最近 3 条**（每行「App 名 · 标题」）。
+///
+/// 与展开 tab **同源**（控制器裁决 1）：未读数与清单都取自模块既有的 `NotificationStore`——
+/// 未读数就是展开 tab 状态行用的同一个 `store.items.count`（**不在这里另算一遍**），
+/// 清单是它的前 3 条。`store.items` 已由 reader 按 `dismissedNotificationIDs` 过滤
+/// （`fetchRecent(limit:dismissing:)`），所以「关掉的条目」不会在首页块里复活。
+///
+/// **只读**（控制器裁决 2/3）：不做关闭 / 清除 / 回复，也不为「未读为 0」画空态插图——
+/// 没有内容时只有标题行一根。**不做新通知高亮 / 闪烁**：瞬时提示是浮层（HUD）的职责，
+/// 块只做常驻展示。**不引入定时器**：重绘靠 `store` 的 `@Published`。
+///
+/// 交互只有一处：整行点击 = 打开对应 App **并收起刘海**（动作与顺序收在模块的
+/// `openHomeBlockItem`，走 `NotificationClickPolicy.row`）。
+///
+/// 颜色：面板是黑底、系统外观可能浅色——本模块所有文字**一律显式白色系**
+/// （`Color.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`（见文件头「颜色」）。
+///
+/// 宽度：**不声明、不读**（`HomeStripBlock` 由宿主统一声明模块块 180 / 240，模块不参与
+/// 「我在首页占多宽」的决策）。填充方式沿用待办块：占满分配到的框、内容左上对齐。
+private struct NotificationsHomeBlockView: View {
+    @ObservedObject var store: NotificationStore
+    /// 行点击出口（模块注入：打开对应 App + 收起刘海）。
+    let onOpen: (NotificationItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            header
+
+            ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
+                row(item)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // 与展开 tab 同口径：每次出现取一次数（首页块只在展开面板里存在，面板一开就是它出现的时刻）。
+        // 不新建定时器：增量仍由模块的 AX 通道 / 文件事件 / 60s 兜底轮询推进。
+        .task { await store.refreshAll() }
+    }
+
+    /// 标题行：未读 > 0 时「通知 · 未读 N」，为 0 时只留模块名（**不画空态文案**）。
+    private var header: some View {
+        Text(NotificationText.homeHeader(unreadCount: store.items.count))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.95))
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    /// 一行 = 「App 名 · 标题」，单行尾部截断；整行是「打开 App + 收起刘海」的点击区。
+    private func row(_ item: NotificationItem) -> some View {
+        Text(NotificationsHomeBlockLayout.rowLabel(appName: item.displayName, title: item.title))
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.8))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // `.contentShape` 让整行（含文字右侧的空白）都能点到，而不是只有字形落在的地方
+            .contentShape(Rectangle())
+            .onTapGesture { onOpen(item) }
     }
 }
 
@@ -1596,6 +1726,18 @@ private struct NotificationsCompactView: View {
 /// 状态行的三段文案与相对时间都**先拼成 String 再给 `Text`**（走 `Text(_: String)` 的 verbatim
 /// 重载，不会把这些形态当成本地化 key 去查表），与 `ProgressText` / `TodoText` 同口径。
 enum NotificationText {
+    /// **纯函数**：首页块标题行的文案（T1）。
+    ///
+    /// - 未读 > 0 → `module.notifications.homeUnread`（「通知 · 未读 N」/「Notifications · N unread」）；
+    /// - 未读 == 0 → 只剩模块名（复用既有 `module.notifications.name`），**不画空态文案**。
+    ///
+    /// 未读数由调用方给（生产路径是 `store.items.count`——与展开 tab 的状态行**同一个来源**，
+    /// 且已滤 `dismissedNotificationIDs`）；函数本身不碰 store，边界因此由单测直接钉。
+    static func homeHeader(unreadCount: Int) -> String {
+        guard unreadCount > 0 else { return localized("module.notifications.name") }
+        return String(format: localized("module.notifications.homeUnread"), unreadCount)
+    }
+
     /// 状态行：`最近 N 条` / `需要完全磁盘访问` / 错误原因（截断到 60 字）。
     static func status(_ state: NotificationReadState, count: Int) -> String {
         switch state {

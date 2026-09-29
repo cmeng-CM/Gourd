@@ -81516,6 +81516,22 @@
           }
         }
       }
+    },
+    "module.notifications.homeUnread" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications · %d unread"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知 · 未读 %d"
+          }
+        }
+      }
     }
   },
   "version" : "1.2"

@@ -1110,10 +1110,14 @@ final class ModuleKernelTests: XCTestCase {
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID])
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
-        // 首页块投影（P2 / T4）：只有声明 `.home` 的 todos 进块名单——notifications 不声明，
-        // 因此首页上是「内置块 + 待办块」；todos 的首页请求拿到 `.view`（不是 `.none`：那意味着首页没有块）
-        XCTAssertEqual(registry.homeEntries.map(\.id), [todosID], "首页块名单 = 声明 .home 的已激活模块")
-        XCTAssertFalse(registry.homeEntries.contains { $0.id == notificationsID }, "notifications 不声明 home")
+        // 首页块投影（P2 / T4 起，T1 加通知块）：声明 `.home` 的已激活模块都进块名单——
+        // todos（order 20）在前、notifications（order 40）在后；两者的首页请求都拿到 `.view`
+        // （不是 `.none`：那意味着首页没有块）。T1 之前 notifications 不声明 home，这条随之加宽。
+        XCTAssertEqual(registry.homeEntries.map(\.id), [todosID, notificationsID], "首页块名单 = 声明 .home 的已激活模块")
+        XCTAssertEqual(registry.homeEntries.map(\.order), [20, 40], "块顺序与 tab / 槽位同一比较器")
+        guard case .view = registry.content(for: notificationsID, request: ModuleRegistry.home) else {
+            return XCTFail("notifications 声明了 home，首页块内容应是 .view")
+        }
         guard case .view = registry.content(for: todosID, request: ModuleRegistry.home) else {
             return XCTFail("todos 声明了 home，首页块内容应是 .view")
         }
@@ -2279,7 +2283,9 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.summary?.key, "module.notifications.summary")
         XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "bell.badge"))
         XCTAssertEqual(manifest.kind, "builtin")
-        XCTAssertEqual(manifest.surfaces, [.expanded, .compact], "展开面板通知列表 + 折叠态未读数")
+        // 顺序 + 内容都钉住：T1 起多一个 `.home`（首页 strip 的通知块），值的顺序即声明顺序
+        XCTAssertEqual(manifest.surfaces, [.expanded, .compact, .home], "展开面板通知列表 + 折叠态未读数 + 首页块")
+        XCTAssertTrue(manifest.surfaces.contains(.home), "首页块是 manifest 驱动的：通知组件必须声明 .home")
         XCTAssertEqual(manifest.defaultEnabled, true)
         XCTAssertEqual(manifest.defaultPlacement, Placement(slot: .center, order: 40))
         XCTAssertTrue(
@@ -2317,6 +2323,78 @@ final class ModuleKernelTests: XCTestCase {
             XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
             XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
         }
+    }
+
+    // MARK: - 通知首页块（T1：组件开关的可见效果）
+
+    /// 通知组件声明 `.home`、激活后进首页块名单、`.home` 请求拿到 `.view`。
+    ///
+    /// 三条一起钉住「组件页里打开通知 → 首页真的多一块」这条链路的三段：
+    /// manifest（声明）→ 注册表投影（名单）→ 内容转发（这块里画什么）。
+    /// 与 todos 的同类用例同形（`Surfaces.contains(.home)` + `homeEntries` + `content(for:)`）。
+    func testNotificationsModuleServesHomeBlock() async {
+        // ① 声明：首页块名单的唯一来源是 manifest 的 surfaces
+        XCTAssertTrue(
+            NotificationsModule.manifest.surfaces.contains(.home),
+            "通知组件必须声明 .home，否则首页块不会出现（T1 的验收前提）"
+        )
+
+        // ② 投影：激活后进块名单（按 order 升序：todos 20 → notifications 40）
+        let registry = ModuleRegistry.shared
+        let notificationsID = "com.cmeng.gourd.notifications"
+        registerProbes([NotificationsModule.self])
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.homeEntries.map(\.id), [notificationsID], "声明 .home 的已激活模块应进块名单")
+        XCTAssertEqual(registry.homeEntries.map(\.order), [40], "块顺序沿用 defaultPlacement.order")
+
+        // ③ 内容：`.home` 请求答 `.view`（`.none` 意味着首页没有块——T1 的失败信号之一）
+        if case .view = registry.content(for: notificationsID, request: ModuleRegistry.home) {
+            // 预期分支
+        } else {
+            XCTFail("notifications 声明了 home，首页块内容应是 .view")
+        }
+    }
+
+    /// 首页块的取舍与文案（纯函数）：**最近 3 条**（新的在前，不在这里重排）、
+    /// 行文案「App 名 · 标题」（标题为空不留悬空分隔符、换行压成空格）、
+    /// 标题行「通知 · 未读 N」（N == 0 只留模块名，不画空态文案）。
+    func testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader() {
+        XCTAssertEqual(NotificationsHomeBlockLayout.maxListRows, 3, "最近 3 条是规格值（行数上限固定，不按块宽分档）")
+
+        // 清单：按列表顺序取前 3（`store.items` 已是新的在前），第 4 条起不画
+        let items = (1...5).map { notificationItem(Int64($0), title: "标题\($0)") }
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.listedItems(items).map(\.id),
+            [1, 2, 3],
+            "首页块只画最近 3 条，顺序与 store.items 一致（不在这里重排）"
+        )
+        XCTAssertTrue(NotificationsHomeBlockLayout.listedItems([]).isEmpty, "空列表给空（不画空态文案）")
+        XCTAssertEqual(NotificationsHomeBlockLayout.listedItems(Array(items.prefix(2))).map(\.id), [1, 2], "不足 3 条时原样")
+
+        // 行文案：App 名 · 标题
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "构建完成"),
+            "邮件 · 构建完成"
+        )
+        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "  "), "邮件", "标题为空不留悬空分隔符")
+        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "", title: "只有标题"), "只有标题")
+        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "", title: ""), "", "两边都空给空串（不画分隔符）")
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "第一行\n第二行"),
+            "邮件 · 第一行 第二行",
+            "标题里的换行压成空格（行只有一行的预算）"
+        )
+
+        // 标题行：未读 > 0 → 带未读数的文案；未读 == 0 → 只剩模块名
+        let zero = NotificationText.homeHeader(unreadCount: 0)
+        XCTAssertEqual(zero, NotificationText.localized("module.notifications.name"), "未读为 0 时只显示「通知」")
+        XCTAssertFalse(zero.contains("0"), "0 不显示成「未读 0」：\(zero)")
+        let three = NotificationText.homeHeader(unreadCount: 3)
+        let format = NotificationText.localized("module.notifications.homeUnread")
+        XCTAssertNotEqual(format, "module.notifications.homeUnread", "首页块未读文案没解析出来（catalog 未编进宿主 bundle？）")
+        XCTAssertEqual(three, String(format: format, 3), "未读数走本地化格式串")
+        XCTAssertTrue(three.contains("3"), "未读数要出现在标题行：\(three)")
     }
 
     // MARK: - 通知浮层（P2d：基线 + 正文口径）
