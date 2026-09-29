@@ -139,6 +139,26 @@ class CalendarService: CalendarServiceProviding {
             print("Failed to update reminder completion: \(error)")
         }
     }
+
+    /// 设置提醒的优先级（`EKReminder.priority`，0…9）。**返回成功与否**——
+    /// 找不到提醒（已在「提醒」App 里被删）或 `save` 抛错都返回 false，调用方据此回滚 UI 上的乐观值。
+    ///
+    /// 与 `setReminderCompleted` **同一条写回链**：同一个 `EKEventStore`、`commit: true`，
+    /// 不新开 store、不新增权限（[docs/18](../../docs/18-p1-todos-and-order.md) §接口与数据形状 4）。
+    /// 不写进 `CalendarServiceProviding` 协议：本批**不改对外契约**（设计分级），
+    /// 调用方 `CalendarManager` 持有的是具体类型 `CalendarService`。
+    @MainActor
+    func setReminderPriority(reminderID: String, priority: Int) -> Bool {
+        guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else { return false }
+        reminder.priority = priority
+        do {
+            try store.save(reminder, commit: true)
+            return true
+        } catch {
+            print("Failed to update reminder priority: \(error)")
+            return false
+        }
+    }
 }
 
 // MARK: - Model Extensions

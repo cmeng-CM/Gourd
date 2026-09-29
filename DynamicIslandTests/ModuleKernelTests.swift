@@ -2073,7 +2073,7 @@ final class ModuleKernelTests: XCTestCase {
     /// 新增的校验与构造是纯函数：**标题去首尾空白**后写库，日期三选一给「当天 00:00 的年月日」。
     ///
     /// 「今天」给的是**年月日组件、不带时分**——与系统「提醒」App 的全天条目同形，读回时
-    /// `TodoText.dueText` 按「到期 == 当天起点」判为全天、只显示日期（口径闭环）。
+    /// `TodoDueLabel` 按自然日判定（到期落在今天 → 「今天」，其余 `M/D`，见 P1 / T2 的用例）。
     func testTodoComposerTrimsTitleAndBuildsTodayDue() throws {
         let calendar = try fixedGregorian()
         let now = try instant(2026, 9, 28, 14, 30, calendar: calendar)
@@ -2316,6 +2316,17 @@ final class ModuleKernelTests: XCTestCase {
             "module.todos.deleteConfirm",
             "module.todos.cancel",
             "module.todos.writeFailed",
+            // 四视图左导航 + 优先级胶囊（P1 / T2）：四个视图名、四档优先级、胶囊提示、已完成档的空态
+            "module.todos.view.today",
+            "module.todos.view.next7Days",
+            "module.todos.view.all",
+            "module.todos.view.completed",
+            "module.todos.priority.none",
+            "module.todos.priority.low",
+            "module.todos.priority.medium",
+            "module.todos.priority.high",
+            "module.todos.priorityHint",
+            "module.todos.completedEmpty",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
@@ -2326,6 +2337,266 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(TodoBucketing.Bucket.allCases.map(\.labelKey), [
             "module.todos.scope.today", "module.todos.scope.week", "module.todos.scope.all",
         ])
+    }
+
+    // MARK: - 待办的优先级胶囊与看板口径（P1 / T2，docs/18 §接口与数据形状 3/4）
+
+    /// 优先级四档的词汇表与 EventKit 双向映射：0 → 无、1…4 → 高、5 → 中、6…9 → 低；
+    /// 反向 无 → 0、高 → 1、中 → 5、低 → 9，且**双向可逆**（写回的值读回来仍是同一档）。
+    /// 表外的值（负值 / 10，EventKit 不会给）按「无」处理——不崩、不猜档位。
+    func testTodoPriorityMappingAndVocabulary() {
+        XCTAssertEqual(
+            TodoPriority.allCases.map(\.rawValue),
+            ["none", "high", "medium", "low"],
+            "词汇表与 docs/18 §接口与数据形状 3 一致，只加不改"
+        )
+
+        let forward: [(Int, TodoPriority)] = [
+            (0, .none), (1, .high), (2, .high), (3, .high), (4, .high),
+            (5, .medium), (6, .low), (7, .low), (8, .low), (9, .low),
+        ]
+        for (eventKit, expected) in forward {
+            XCTAssertEqual(
+                TodoPriority.priority(fromEventKit: eventKit),
+                expected,
+                "EventKit \(eventKit) 应映射到 \(expected.rawValue)"
+            )
+        }
+        XCTAssertEqual(TodoPriority.priority(fromEventKit: -1), .none, "表外的负值按「无」")
+        XCTAssertEqual(TodoPriority.priority(fromEventKit: 10), .none, "表外的 > 9 按「无」")
+
+        XCTAssertEqual(TodoPriority.eventKitValue(of: .none), 0)
+        XCTAssertEqual(TodoPriority.eventKitValue(of: .high), 1)
+        XCTAssertEqual(TodoPriority.eventKitValue(of: .medium), 5)
+        XCTAssertEqual(TodoPriority.eventKitValue(of: .low), 9)
+
+        // 双向可逆：每一档写回的值读回来仍是同一档（写回不会把档位写跑偏）
+        for priority in TodoPriority.allCases {
+            XCTAssertEqual(
+                TodoPriority.priority(fromEventKit: TodoPriority.eventKitValue(of: priority)),
+                priority
+            )
+        }
+
+        // 文案 key 由 rawValue 派生（面板上不会出现裸 key）
+        XCTAssertEqual(TodoPriority.allCases.map(\.labelKey), [
+            "module.todos.priority.none", "module.todos.priority.high",
+            "module.todos.priority.medium", "module.todos.priority.low",
+        ])
+    }
+
+    /// 点胶囊的循环顺序：无 → 低 → 中 → 高 → 无（四步回到起点）；
+    /// 循环表必须覆盖四档且不重复（日后加档却忘了进循环表 → 这里红）。
+    func testTodoPriorityCycleOrder() {
+        XCTAssertEqual(TodoPriority.cycle, [.none, .low, .medium, .high], "循环顺序是交互口径，单列成表")
+        XCTAssertEqual(Set(TodoPriority.cycle), Set(TodoPriority.allCases), "循环表覆盖全部四档")
+        XCTAssertEqual(TodoPriority.cycle.count, TodoPriority.allCases.count, "循环表不重复档位")
+
+        XCTAssertEqual(TodoPriority.cycled(from: .none), .low)
+        XCTAssertEqual(TodoPriority.cycled(from: .low), .medium)
+        XCTAssertEqual(TodoPriority.cycled(from: .medium), .high)
+        XCTAssertEqual(TodoPriority.cycled(from: .high), .none, "高之后回到无")
+
+        var priority = TodoPriority.none
+        for _ in 0..<4 { priority = TodoPriority.cycled(from: priority) }
+        XCTAssertEqual(priority, .none, "四步一循环，回到起点")
+    }
+
+    /// 写回闸门（幂等）：**同级不写**、跨级一律写——「先比对当前值」的判据。
+    func testTodoPriorityWriteGateIsIdempotent() {
+        for priority in TodoPriority.allCases {
+            XCTAssertFalse(
+                TodoPriority.shouldWrite(current: priority, target: priority),
+                "同级（\(priority.rawValue)）不产生写回"
+            )
+            XCTAssertTrue(
+                TodoPriority.shouldWrite(current: priority, target: TodoPriority.cycled(from: priority)),
+                "循环的下一档必须写回"
+            )
+        }
+        XCTAssertFalse(TodoPriority.shouldWrite(current: .high, target: .high), "重复点击同一档：不写")
+    }
+
+    /// 点胶囊的完整链路（用**计数型假写回器**驱动生产代码 `TodoPriorityOverlay`）：
+    /// ① 一次点击 = 一次乐观更新 + 一次写回（值取区间端点）；
+    /// ② **同级重复请求不产生第二次写回**（`beginWrite` 返回 nil，写回计数不变）；
+    /// ③ **写回失败 → 回滚**到读回的真值（不停在错误值）。
+    func testTodoPriorityOverlayCycleWriteBackAndRollback() {
+        var overlay = TodoPriorityOverlay()
+        overlay.rebuild(from: ["a": .none])
+
+        /// 计数型假写回器：只记账（不碰 EventKit）。
+        var writes: [Int] = []
+        func fakeWrite(_ step: TodoPriorityStep) { writes.append(step.eventKitValue) }
+
+        // ① 点一下：无 → 低，UI 先变（乐观），写回值 9
+        guard let first = overlay.beginCycle(for: "a") else {
+            return XCTFail("无 → 低应给出写回计划")
+        }
+        fakeWrite(first)
+        XCTAssertEqual(first.priority, .low)
+        XCTAssertEqual(writes, [9])
+        XCTAssertEqual(overlay.value(for: "a"), .low, "乐观更新：不等 EventKit 往返，显示值立刻是新档位")
+
+        // ② 同一个目标再要一次（同级）→ nil：不写、也不动 UI
+        XCTAssertNil(overlay.beginWrite("a", to: .low), "同级重复请求不产生第二次写回")
+        XCTAssertEqual(writes.count, 1, "写回次数没有增加")
+
+        // 主链路继续：低 → 中 → 高 → 无，每步各写一次（5 / 1 / 0）
+        var visited: [TodoPriority] = []
+        for _ in 0..<3 {
+            guard let step = overlay.beginCycle(for: "a") else {
+                return XCTFail("循环途中不应出现同级请求")
+            }
+            visited.append(step.priority)
+            fakeWrite(step)
+            // 写回成功后的口径与 `TodoStore.cyclePriority` 同序：清乐观值 + 重取把真值写进 baseline
+            overlay.clear("a")
+            overlay.rebuild(from: ["a": step.priority])
+        }
+        XCTAssertEqual(visited, [.medium, .high, .none], "低 → 中 → 高 → 无")
+        XCTAssertEqual(writes, [9, 5, 1, 0], "四步循环各写一次，值取每档区间的端点")
+
+        // ③ 写回失败：先乐观（UI 已经变了），`clear` 后回到真值
+        guard let failing = overlay.beginCycle(for: "a") else {
+            return XCTFail("无 → 低应给出写回计划")
+        }
+        XCTAssertEqual(failing.eventKitValue, 9)
+        XCTAssertEqual(overlay.value(for: "a"), .low, "乐观更新已经生效（此刻 UI 是低）")
+        overlay.clear("a")   // 写回返回 false → TodoStore 走这一句（不回挂任何乐观值）
+        XCTAssertEqual(overlay.value(for: "a"), .none, "回滚到 baseline（读回的真值），不停在错误值")
+        XCTAssertEqual(writes.count, 4, "失败的写回没记账（这一轮根本没调假写回器）")
+
+        // 重取不冲掉"写回在飞"的乐观值：rebuild 只重建 baseline
+        guard let inFlight = overlay.beginCycle(for: "a") else {
+            return XCTFail("无 → 低应给出写回计划")
+        }
+        overlay.rebuild(from: ["a": .none, "b": .high])
+        XCTAssertEqual(overlay.value(for: "a"), inFlight.priority, "写回在飞时，一次重取不得抹掉乐观值")
+        XCTAssertEqual(overlay.value(for: "b"), .high, "没点过的条目按读回的真值")
+    }
+
+    /// 看板与徽标**同源**（控制器裁决 4：视图里不另写过滤）：左导航四个徽标数 =
+    /// `TodoBucketing.items(in:...)` 的条数；固定数据 + 固定「今天」钉住四个数。
+    func testTodoViewCountsMatchListedItems() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)
+        let items = [
+            todo("today-open", due: try instant(2026, 9, 28, 9, calendar: calendar)),
+            todo(
+                "today-done",
+                due: try instant(2026, 9, 28, 8, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 28, 9, calendar: calendar)
+            ),
+            todo("tomorrow-open", due: try instant(2026, 9, 29, 9, calendar: calendar)),
+            todo("day6-open", due: try instant(2026, 10, 4, 9, calendar: calendar)),
+            todo("day7-open", due: try instant(2026, 10, 5, 9, calendar: calendar)),
+            todo("no-due-open", list: "收集箱"),
+            todo(
+                "overdue-done",
+                due: try instant(2026, 9, 20, 9, calendar: calendar),
+                completed: true,
+                completedAt: try instant(2026, 9, 20, 10, calendar: calendar)
+            ),
+        ]
+
+        let counts = TodoViewSource.counts(from: items, now: now, calendar: calendar)
+        XCTAssertEqual(counts[.today], 1, "今天 = 今天到期且未完成")
+        XCTAssertEqual(counts[.next7Days], 3, "最近 7 天 = [今天, 今天+7 天) 内未完成（含今天）")
+        XCTAssertEqual(counts[.all], 5, "清单 = 全部未完成（含无到期日的）")
+        XCTAssertEqual(counts[.completed], 2, "已完成 = 全部已完成（不论日期）")
+
+        for view in TodoBucketing.TodoViewKind.allCases {
+            let listed = TodoViewSource.items(in: view, from: items, now: now, calendar: calendar)
+            XCTAssertEqual(counts[view], listed.count, "\(view) 的徽标数必须等于看板条数")
+        }
+        XCTAssertEqual(
+            (counts[.all] ?? 0) + (counts[.completed] ?? 0),
+            items.count,
+            "「清单（未完成）」与「已完成」互补且覆盖全集"
+        )
+
+        // 空表：四个徽标都是 0、四个视图都空（不崩）
+        let emptyCounts = TodoViewSource.counts(from: [], now: now, calendar: calendar)
+        XCTAssertEqual(emptyCounts.count, TodoBucketing.TodoViewKind.allCases.count)
+        for view in TodoBucketing.TodoViewKind.allCases {
+            XCTAssertEqual(emptyCounts[view], 0)
+            XCTAssertTrue(TodoViewSource.items(in: view, from: [], now: now, calendar: calendar).isEmpty)
+        }
+    }
+
+    /// 四视图的**外壳词汇表**（左导航的文案 key / 图标、看板的空态 key）与左导航的高度预算：
+    /// key 由 `rawValue` 派生；四项图标互不相同；4 项（26pt + 4pt 间距）放进默认面板可用高度。
+    func testTodoViewChromeVocabularyAndNavBudget() {
+        let views = TodoBucketing.TodoViewKind.allCases
+        XCTAssertEqual(views.map { TodoViewChrome.labelKey(for: $0) }, [
+            "module.todos.view.today", "module.todos.view.next7Days",
+            "module.todos.view.all", "module.todos.view.completed",
+        ])
+        XCTAssertEqual(
+            views.map { TodoViewChrome.symbolName(for: $0) },
+            ["sun.max", "calendar", "tray.full", "checkmark.circle"]
+        )
+        XCTAssertEqual(
+            Set(views.map { TodoViewChrome.symbolName(for: $0) }).count,
+            views.count,
+            "左导航四项的图标必须互不相同"
+        )
+
+        XCTAssertEqual(TodoViewChrome.emptyKey(for: .completed), "module.todos.completedEmpty")
+        for view in [TodoBucketing.TodoViewKind.today, .next7Days, .all] {
+            XCTAssertEqual(TodoViewChrome.emptyKey(for: view), "module.todos.empty", "非「已完成」档沿用既有空态文案")
+        }
+
+        let navHeight = TodoViewNavLayout.itemHeight * 4 + TodoViewNavLayout.itemSpacing * 3
+        XCTAssertLessThanOrEqual(navHeight, 180, "默认面板可用高度（约 180pt）要放得下四项导航")
+        XCTAssertGreaterThan(TodoViewNavLayout.columnWidth, 0)
+    }
+
+    /// 行内日期的显示口径（控制器裁决 2）：到期在**今天** → `.today`（走本地化文案）；
+    /// 其余有到期日 → `M/D`（不补前导零、不带时刻）；**无到期日 → nil**（该行不显示日期）。
+    func testTodoDueLabelFormat() throws {
+        let calendar = try fixedGregorian()
+        let now = try instant(2026, 9, 28, 10, calendar: calendar)
+
+        XCTAssertNil(TodoDueLabel.label(for: todo("no-due"), now: now, calendar: calendar), "无到期日不显示日期")
+        XCTAssertEqual(
+            TodoDueLabel.label(
+                for: todo("today", due: try instant(2026, 9, 28, 0, calendar: calendar)),
+                now: now,
+                calendar: calendar
+            ),
+            .today,
+            "今天 00:00 到期 → 「今天」"
+        )
+        XCTAssertEqual(
+            TodoDueLabel.label(
+                for: todo("today-late", due: try instant(2026, 9, 28, 23, 59, calendar: calendar)),
+                now: now,
+                calendar: calendar
+            ),
+            .today,
+            "今天 23:59 到期同样是「今天」（按自然日判，不按时刻）"
+        )
+        XCTAssertEqual(
+            TodoDueLabel.label(
+                for: todo("next-month", due: try instant(2026, 10, 5, 9, calendar: calendar)),
+                now: now,
+                calendar: calendar
+            ),
+            .day("10/5"),
+            "M/D，不补前导零、不带时刻"
+        )
+        XCTAssertEqual(
+            TodoDueLabel.label(
+                for: todo("overdue", due: try instant(2026, 9, 7, 9, calendar: calendar)),
+                now: now,
+                calendar: calendar
+            ),
+            .day("9/7"),
+            "已过期条目照样是 M/D（过期红字是另一段，不混进日期文本）"
+        )
     }
 
     // MARK: - 通知上岛 notifications（P2c：探针 + 表）

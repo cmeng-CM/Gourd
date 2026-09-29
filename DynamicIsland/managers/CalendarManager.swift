@@ -491,6 +491,22 @@ class CalendarManager: ObservableObject {
         // 勾选/取消勾选会改变它是否被 `hideCompletedReminders` 过滤掉 → 月历上的点也要跟着变。
         await refreshRequestedMonthEvents()
     }
+
+    /// 设置提醒的优先级（`EKReminder.priority`，0…9）——待办面板的行内优先级胶囊走这个入口
+    /// （[docs/18](../../docs/18-p1-todos-and-order.md) §接口与数据形状 4）。
+    ///
+    /// **返回成功与否**（找不到提醒 / `save` 失败 → false）：调用方（`TodoStore.cyclePriority`）
+    /// 据此决定是否回滚 UI 上的乐观值。这里**不抛错、不打日志**——失败细节由调用方落模块日志
+    /// （`module.todos`），与「谁发起、谁记账」的分工一致。
+    ///
+    /// 写回沿用本文件既有的提醒写回口径：与 `setReminderCompleted` **同一条链**
+    /// （`calendarService` 的同一个 `EKEventStore` + `commit: true`），不新开 store、不新增权限。
+    /// 写完**不在这里刷日历数据**：优先级不参与日历行 / 月历标记的取数（`EventModel.priority`
+    /// 只作为事件属性透传），库变更由既有的 `EKEventStoreChanged` 监听统一收口。
+    @discardableResult
+    func setReminderPriority(_ reminderID: String, priority: Int) -> Bool {
+        calendarService.setReminderPriority(reminderID: reminderID, priority: priority)
+    }
 }
 
 // MARK: - Event Fetch Limiter
