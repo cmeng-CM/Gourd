@@ -279,13 +279,20 @@ stateDiagram-v2
 5. **接管模块（音乐 / 日历 / 镜子）不随组件开关走**：它们由上游 `Defaults` 键控制，因此设置页「组件」页**不显示**它们——用户会看到"组件页只有 3 张卡，但首页有 5 块"的不一致。接受理由：提前模块化会与上游设置页形成双份真源（14 号文档 T-3）。**缓解**：卡片页顶部有一行说明。
 6. **`failed` 是终态**：组件启动失败后开关会回弹为关，用户再次打开不会重试（06 §3.3 硬性规则 1）。用户要恢复只能重启应用。
 7. **所有模块首页块共用一份宽度声明**（`180 / 240`）：模块不能自定义自己在首页的宽度。本批不做宽度协商（D-11），模块内容（如歌词、长列表）只能在这个宽度里自适应。
-8. **日历块没有日期选择轮**：`CalendarView` 的 `WheelPicker` 日期条是横向滚动控件，与"无横向滚动"的取向冲突，因此首页块只显示今天；切日期与月历在独立日历 tab。
+8. **日历块保留日期选择轮，但月历没有入口**：hover 日期头展开的 `WheelPicker` 日期轮随块保留（D-14，翻日期是改动前就有的能力）；而月历 `StandaloneCalendarView` 在展开面板里**没有入口**——改前它也只在"未开音乐"时作为首页右栏出现，本批之后彻底没有调用点（只剩 `#Preview`）。补齐属 `com.cmeng.gourd.calendar` 模块的 tab 落地（P2a）。**这条是本次唯一的能力收缩**，已在报告里向用户点明。
 9. **本批只有 `todos` 声明 `home`**：`progress` 代码与 manifest 保留但**不声明** `home`（默认关，声明了也没内容）；`notifications` 不做首页块（通知是瞬时事件，不是常驻信息）。
 
 **回写期补充（T1，2026-09-29）**：
 
 10. **`HomeStripLayoutMath.plan` 的浮点边界**（独立审查实测，本批四条声明全为整数故均不可达）：① `min` / `ideal` 落在非 0.5 网格时，规则② 的比例可能因浮点误差略超 1，向下取整后可产出 **-0.5pt** 的宽度（需同时 `min == 0`）；② 规则③ 的逐块递减会因残差**多丢一块**（前两块的最小宽度和恰好等于可用宽度时）；③ 前置条件里的"有限数"只覆盖 `min` / `ideal`——`available` 传 `NaN` 会得到 `widths == [0]`、传 `±∞` 不会被拦。三条都属调用方违约或非整数声明才会出现，本批不修，改为把契约写死（见 §接口与数据形状 5 的前置条件）。
 11. **`leftover` 在规则③ 下可能很大**（丢块空出的空间，可达数百 pt）：它只表示"未被使用的尾部空间"，**不是"还有多少块能塞进去"**，宿主不得据此做居中或对齐。
+
+**回写期补充（T3，2026-09-29）**：
+
+12. **丢块必须靠"显式零提案"，不能靠"不调用 place"**：`Layout` 里没被摆放的子视图，SwiftUI 会按 Apple 文档「以容器中心 + 容器尺寸提案」自动摆放——即"少调用 `place`"会把被丢掉的块变成**叠画在已摆放块之上**。这是 strip 机制的一条硬约束，实现已在被丢弃的子视图上显式 `.zero` 提案。
+13. **`sizeThatFits` 与 `placeSubviews` 必须复用同一份 plan**：前者的输入是 `proposal.width`、后者的 `bounds.width` 是上一份 plan 的已压缩输出，而规则② 不幂等——两处各算一次会得到相差 ≤0.5pt/块的两组宽度。实现用 `Layout` 的 cache 存一份 plan 供两处共用。
+14. **高度不协商的后果**：strip 的高度直接取 `proposal.height`；提案高为 `nil` 时整条报 0 高，日历块只剩日期头 + 一行 `+N`（不崩，但要知道这个形态存在）。
+15. **日历列表的高度口径变了**：从"按 `vm.notchSize` 的**面板高度换算**"变为"**块自身实测高度**"（`GeometryReader`）。`HomeTodayListLayout.capacity` 与 `EventListView.availableHeight` 的文档串已在 T3 修复轮同步改成"两个调用方各自换算"（`CalendarView` 按面板高度 / `HomeStripCalendarBlock` 按块实测高度）。
 
 **回写期补充**：无（尚未实现）。
 
@@ -443,7 +450,7 @@ struct HomeBlockWidthKey: LayoutValueKey {
 |---|---|---|---|---|---|
 | 1 | `NotchHomeView` 标准路径 | 走 strip；minimalistic / 歌词侧栏两条路径**逐字保留** | `NotchHomeView.swift:840-896` 的 `mainContent` | strip 只在 `!enableMinimalisticUI && !shouldShowSideLyrics` 分支出现 | 别动 `padding(8)` 与既有 `.transition`——面板展开动画依赖它；改错会让展开时内容跳一下 |
 | 2 | `HomeStripView` | `Layout` 实现 + 块封装（内置块与模块块同构） | 新文件 | `sizeThatFits` 只对**未声明宽度**的块调测量作回退；对子视图一律按分配宽度给提案；块间距单一常量 `12` | 含 `GeometryReader` 的视图测不出宽度（`.unspecified` 下约 10pt）——所有块**必须**声明 `HomeBlockWidthKey`，模块块由宿主统一声明 |
-| 3 | 内置块（音乐 / 日历 / 镜子） | 三块封装成各自声明宽度的块视图，门控仍读上游键 | 同 2 的文件内 | 音乐 `300 / 420`、日历 `200 / 260`、镜子 `140 / 160`（取值依据：1051pt 面板宽下三块 + 待办块（180/240）合计理想 1080 > 可用 ≈1010，走比例压缩后仍都在最小宽度之上）。**日历块要自建**：`StandaloneCalendarView` 是"双栏月历 + 滚动事件面板"（顶层 `GeometryReader` 宽度对半、高度取 `vm.notchSize`、右栏是滚动 `List`），塞进 200–260pt 的块里既横滚又撑高；块内改用 `EventListView`（今日竖向紧凑多行，`DynamicIslandCalendar.swift` 内 internal 声明）+ 一行日期头，无条目时用 `EmptyEventsView`，**不带 `WheelPicker` 日期轮**（横向滚动） | 镜子块的可见性判据是 `showMirror && webcamManager.cameraAvailable && vm.notchState == .open`（原逻辑），别把它写成只看 `showMirror` |
+| 3 | 内置块（音乐 / 日历 / 镜子） | 三块封装成各自声明宽度的块视图，门控仍读上游键 | 同 2 的文件内 | 音乐 `300 / 420`、日历 `200 / 260`、镜子 `140 / 160`（取值依据：1051pt 面板宽下三块 + 待办块（180/240）合计理想 1080 > 可用 ≈1010，走比例压缩后仍都在最小宽度之上）。**日历块要自建**：`StandaloneCalendarView` 是"双栏月历 + 滚动事件面板"（顶层 `GeometryReader` 宽度对半、高度取 `vm.notchSize`、右栏是滚动 `List`），塞进 200–260pt 的块里既横滚又撑高；块内改用 `EventListView`（今日竖向紧凑多行，`DynamicIslandCalendar.swift` 内 internal 声明）+ 一行日期头 + **hover 展开的 `WheelPicker` 日期轮**（D-14），无条目时用 `EmptyEventsView` | 镜子块的可见性判据是 `showMirror && webcamManager.cameraAvailable && vm.notchState == .open`（原逻辑），别把它写成只看 `showMirror` |
 | 4 | `todos` 模块 | manifest `surfaces` 加 `home`；`content(for: .home)` 返回首页块 | `Modules/TodosModule.swift` | 块内容 = 三环横排（今日 / 本周 / 所有）+ 今日清单前 N 条；宽度 < 220 时只画三环 | 复用既有 `TodoBucketing`，不要为首页块另算一套聚合 |
 | 5 | 设置页「组件」 | 新 tab，卡片列表 | `SettingsView.swift`（**六处 `switch` + 一个手写数组**：`group` / `title` / `systemImage` / `tint` / `detailView`（无 `default:`，漏改即编译错）/ `isTabVisible`（有 `default: return true`，漏改不报错）/ `availableTabs`（手写数组，漏改则 tab 静默不出现））+ 新视图文件 | 卡片读 `ModuleRegistry.shared.manifests`（全量，含未启用）而不是 `tabEntries`（只有已激活）；开关读 `states`，`nil`（已注册未判定）按关处理 | `SettingsView` 是 `@ObservedObject` 还是 `@StateObject` 决定重绘——卡片视图须自己 `@ObservedObject private var registry = ModuleRegistry.shared`；搜索索引是 `settingsSearchIndex`（`searchSuggestions` 只是过滤器，别改它） |
 | 6 | `setEnabled` | 见 §接口与数据形状 3 | `ModuleRegistry.swift` | 复用 `bootstrap()` 里的实例化 + context 构造（**抽出私有方法**，两条路径共用）；`collapse` 闭包由 `bootstrap(collapse:)` 存进实例字段（初值 `{}`），`setEnabled` 不再需要该形参 | `activating` 期间被置关时，`activate()` 的收尾不得把 `states[id]` 写回 `active`——用代数（generation）比对 |
@@ -468,6 +475,7 @@ struct HomeBlockWidthKey: LayoutValueKey {
 | D-11 | 模块块只走 `ModuleContent.view`，不做高度协商、不新增 descriptor | agent | 沿用 docs/13 的既有裁定（descriptor 属 P4、自报高度属 P2 余项）；本批的 `sizeHint` 不参与块宽决策 |
 | D-12 | 不新增 capability / TCC 权限 / 出站请求 | agent | 组件开关只写本机偏好；首页块都是进程内视图，与现状同一边界 |
 | D-13 | `failed` 是**不可逃逸**的终态：置关不把它改成 `.disabled`，置开不重试 | agent | 06 §3.3 硬性规则 1 与本文 §已知限制 6（"要恢复只能重启应用"）都承诺不重试；T2 审查实测"置关 → 置开"能给 failed 开出一条隐藏的重试通道，与承诺矛盾。代价：组件启动失败后本次运行内无法恢复，只能重启（这是原本就写下的口径，现在代码也守它） |
+| D-14 | 日历块**保留日期选择轮**（hover 日期头展开，与改动前一致）；月历 `StandaloneCalendarView` 在展开面板无入口，补齐属 `calendar` 模块 tab（P2a） | agent | 不引入用户可见能力倒退：翻日期是改动前就有的能力，strip 重构不该静默拿掉。T3 审查实测：`NotchViews` 里没有 calendar，改前月历也只在"未开音乐"时出现 |
 
 ---
 
