@@ -226,14 +226,20 @@ struct HomeStripView: View {
     private static let moduleBlockWidth = HomeBlockWidth(min: 180, ideal: 240)
 
     /// strip 的**最小可用高度**：低于它就不生成这条 strip（判据在接缝
-    /// `NotchHomeView.standardHomeContent`，2026-09-29 复审补充——原实现只在「恰好 0」时拦住）。
+    /// `NotchHomeView.standardHomeContent`）——**判据是「画不满就不画」**（2026-09-29 复审裁决）：
+    /// 高度不足以**完整渲染**条内的块时，整条不画，而不是画一条被切一半的封面。
     ///
-    /// **来源**：一个块至少要容得下它的最小固定件——模块块降级占位 `HomeStripModulePlaceholder`
-    /// 是 14pt 图标 + 4pt 间距 + 一行 `caption`（约 13pt）≈ 31pt，再加 13pt 顶部余量 = **44pt**；
-    /// 低于此，块里那点内容也只能画成被切一半的残片。既有状态是「strip 高度 0 时 `.clipped()` 在
-    /// 退化尺寸下不生效、块内容溢出画到 strip 之外」（见 `.workflow/p2-calendar-row/reports/T2.md`
-    /// §3.2 的实测与截图），所以「没有可用高度」与「只剩细条」两种情形都不该画。
-    static let minimumUsableHeight: CGFloat = 44
+    /// **数值来源（同一批实测截图，见 `.workflow/p2-calendar-row/reports/` 的 §6.5）**：音乐块（当前
+    /// 唯一的内置块）从上到下需要 `18`（块内顶部偏移，封面起点）+ `133`（封面边长，受块宽 420 下的
+    /// 宽度份额约束）≈ **151.5pt**，留半 pt 取整 = **152**：
+    /// - 面板 544 → strip 174：封面下沿 + 角标 + 控制三键全在，完整 ✓（留 ~22pt 余量）；
+    /// - 面板 522 → strip 152：按此阈值刚好画满；
+    /// - 面板 504 → strip 134：封面下沿被切、角标只剩半个（`strip-hidden-panel460.png` 之前的
+    ///   `strip-clipped-panel460.png` 是同一现象的更矮一档）→ 因此 134 **不够**，阈值取 152。
+    ///
+    /// 低于阈值即整条不画（面板只剩日历行、干净）；模块块比音乐块矮，本阈值对它们偏保守——宁可
+    /// 少画一条，不画残片。
+    static let minimumUsableHeight: CGFloat = 152
 
     /// 音乐块门控：逐字沿用 `NotchHomeView` 的旧判据（开启 + 非「无会话即隐藏」）。
     private var shouldShowMusicPlayer: Bool {
