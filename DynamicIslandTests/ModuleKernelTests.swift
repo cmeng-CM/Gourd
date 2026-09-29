@@ -2358,7 +2358,8 @@ final class ModuleKernelTests: XCTestCase {
 
     /// 首页块的取舍与文案（纯函数）：**最近 3 条**（新的在前，不在这里重排）、
     /// 行文案「App 名 · 标题」（标题为空不留悬空分隔符、换行压成空格）、
-    /// 标题行「通知 · 未读 N」（N == 0 只留模块名，不画空态文案）。
+    /// 标题行「通知 · 最近 N 条」（N == 0 只留模块名，不画空态文案）、
+    /// 不可读 / 无权限时的那一行提示（可读给 nil——两种情形必须能区分开）。
     func testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader() {
         XCTAssertEqual(NotificationsHomeBlockLayout.maxListRows, 3, "最近 3 条是规格值（行数上限固定，不按块宽分档）")
 
@@ -2386,15 +2387,35 @@ final class ModuleKernelTests: XCTestCase {
             "标题里的换行压成空格（行只有一行的预算）"
         )
 
-        // 标题行：未读 > 0 → 带未读数的文案；未读 == 0 → 只剩模块名
-        let zero = NotificationText.homeHeader(unreadCount: 0)
-        XCTAssertEqual(zero, NotificationText.localized("module.notifications.name"), "未读为 0 时只显示「通知」")
-        XCTAssertFalse(zero.contains("0"), "0 不显示成「未读 0」：\(zero)")
-        let three = NotificationText.homeHeader(unreadCount: 3)
-        let format = NotificationText.localized("module.notifications.homeUnread")
-        XCTAssertNotEqual(format, "module.notifications.homeUnread", "首页块未读文案没解析出来（catalog 未编进宿主 bundle？）")
-        XCTAssertEqual(three, String(format: format, 3), "未读数走本地化格式串")
-        XCTAssertTrue(three.contains("3"), "未读数要出现在标题行：\(three)")
+        // 标题行：条数 > 0 → 「通知 · 最近 N 条」；== 0 → 只剩模块名（不画空态文案）
+        let zero = NotificationText.homeHeader(count: 0)
+        XCTAssertEqual(zero, NotificationText.localized("module.notifications.name"), "0 条时只显示「通知」")
+        XCTAssertFalse(zero.contains("0"), "0 不显示成「最近 0 条」：\(zero)")
+        let three = NotificationText.homeHeader(count: 3)
+        let format = NotificationText.localized("module.notifications.homeRecent")
+        XCTAssertNotEqual(format, "module.notifications.homeRecent", "首页块条数文案没解析出来（catalog 未编进宿主 bundle？）")
+        XCTAssertEqual(
+            three,
+            NotificationText.localized("module.notifications.name") + " · " + String(format: format, 3),
+            "条数走本地化格式串，拼在模块名之后（与展开 tab 的「最近 N 条」同一口径）"
+        )
+        XCTAssertTrue(three.contains("3"), "条数要出现在标题行：\(three)")
+
+        // 不可读 / 无权限的一行提示：可读给 nil（= 不画那一行），两个非 ok 分支各给一句本地化文案
+        // ——这条钉住「取不到数据」与「可读但 0 条」在块上能区分开（审查发现 2）。
+        XCTAssertNil(NotificationText.homeHint(.ok), "可读时不画提示行（0 条只留标题行）")
+        let needsPermission = NotificationText.homeHint(.needsFullDiskAccess)
+        XCTAssertEqual(needsPermission, NotificationText.localized("module.notifications.homeNeedsPermission"))
+        XCTAssertNotEqual(needsPermission, "module.notifications.homeNeedsPermission", "无权限提示没解析出文案")
+        let unreadable = NotificationText.homeHint(.failure("库文件不可访问"))
+        XCTAssertEqual(unreadable, NotificationText.localized("module.notifications.homeUnreadable"))
+        XCTAssertNotEqual(unreadable, "module.notifications.homeUnreadable", "不可读提示没解析出文案")
+        XCTAssertNotEqual(needsPermission, unreadable, "无权限与取数失败是两件事，提示不能是同一句")
+        XCTAssertNotEqual(
+            unreadable,
+            NotificationText.localized("module.notifications.name"),
+            "不可读时不能退化成只显示模块名（那就与「0 条」同形了）"
+        )
     }
 
     // MARK: - 通知浮层（P2d：基线 + 正文口径）

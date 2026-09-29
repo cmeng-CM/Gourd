@@ -90,9 +90,10 @@
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）；
-//  - **首页块**（T1，`surfaces` 的第三个取值）：标题行「通知 · 未读 N」+ 最近 3 条
-//    （每行「App 名 · 标题」，单行尾部截断），**只读**——点一行 = 打开对应 App + 收起刘海，
-//    不做关闭 / 清除 / 回复；未读与清单与展开 tab **同源**（`store.items`），
+//  - **首页块**（T1，`surfaces` 的第三个取值）：标题行「通知 · 最近 N 条」+ 最近 3 条
+//    （每行「App 名 · 标题」，单行尾部截断；**N = 列表里的条数**，与展开 tab 同源，
+//    **不是**折叠态铃铛那个「自上次打开面板以来的新增数」）+ 不可读 / 无权限时的一行提示，
+//    **只读**——点一行 = 打开对应 App + 收起刘海，不做关闭 / 清除 / 回复；
 //    行数上限固定 3、不按块宽分档（见 `NotificationsHomeBlockView`）。
 //
 //  ## 颜色（本项目已踩过两次的坑）
@@ -108,8 +109,9 @@
 //  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss` /
 //  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）/
 //  `.moreCount`（一次多条新通知时浮层第二行末尾的计数后缀，`and %d more` / `等 %d 条`）/
-//  `.homeUnread`（首页块标题行的未读口径，`Notifications · %d unread` / `通知 · 未读 %d`；
-//  未读为 0 时不带这个后缀，标题行只剩 `.name`）。
+//  `.homeRecent`（首页块标题行的条数口径，`Notifications · %d recent` / `通知 · 最近 %d 条`；
+//  0 条时不带这个后缀，标题行只剩 `.name`）/
+//  `.homeNeedsPermission` / `.homeUnreadable`（首页块在无权限 / 不可读时标题行下的那一行提示）。
 //
 
 import AppKit
@@ -715,7 +717,7 @@ final class NotificationsModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
     /// - `surfaces`：`expanded`（通知列表）+ `compact`（bell + 未读数）+ `home`（首页块：
-    ///   「通知 · 未读 N」+ 最近 3 条，见 `NotificationsHomeBlockView`）；
+    ///   「通知 · 最近 N 条」+ 最近 3 条 + 不可读时一行提示，见 `NotificationsHomeBlockView`）；
     /// - `defaultPlacement`：`slot: .center` / `order: 40`——排在 todos（20）与 progress（30）之后，
     ///   因此**默认配置下拿不到中央槽位**（`compactSlotContent()` 只转发第一个候选）；
     ///   首页 strip 里模块块按同一个 `order` 排（todos 块在前、通知块在后）；
@@ -1230,11 +1232,11 @@ private struct NotificationRow: View {
     }
 }
 
-// MARK: - 首页块（通知 · 未读 N + 最近 3 条）
+// MARK: - 首页块（通知 · 最近 N 条 + 最近 3 条）
 
 /// 首页块的**取舍与文案**（纯函数，无 SwiftUI 依赖，单测直接钉）。
 ///
-/// 规格（T1）：标题行「通知 · 未读 N」（N == 0 只显示「通知」）+ **最近 3 条**清单，
+/// 规格（T1）：标题行「通知 · 最近 N 条」（N == 0 只显示「通知」）+ **最近 3 条**清单，
 /// 每行「App 名 · 标题」。**行数上限固定 3、不按块宽分档**（按宽度分档是本批之后的事）。
 /// 块宽由宿主 `HomeStripView` 统一声明（模块块 180 / 240），本模块**不声明、不读宽度**。
 enum NotificationsHomeBlockLayout {
@@ -1265,16 +1267,28 @@ enum NotificationsHomeBlockLayout {
     }
 }
 
-/// 首页块：**标题行「通知 · 未读 N」+ 最近 3 条**（每行「App 名 · 标题」）。
+/// 首页块：**标题行「通知 · 最近 N 条」+ 最近 3 条**（每行「App 名 · 标题」）。
 ///
-/// 与展开 tab **同源**（控制器裁决 1）：未读数与清单都取自模块既有的 `NotificationStore`——
-/// 未读数就是展开 tab 状态行用的同一个 `store.items.count`（**不在这里另算一遍**），
-/// 清单是它的前 3 条。`store.items` 已由 reader 按 `dismissedNotificationIDs` 过滤
-/// （`fetchRecent(limit:dismissing:)`），所以「关掉的条目」不会在首页块里复活。
+/// ## N 是什么（**口径说明，别读成「未读」**）
+/// N = `store.items.count` = **列表里的条数**（reader 按 `rec_id DESC` 取回的最近 ≤ 40 条，
+/// 已滤 `dismissedNotificationIDs`，见 `fetchRecent(limit:dismissing:)`），与展开 tab 状态行
+/// 的「最近 N 条」是**同一个数、同一个来源**（控制器裁决 1：不在这里另算一遍）。
 ///
-/// **只读**（控制器裁决 2/3）：不做关闭 / 清除 / 回复，也不为「未读为 0」画空态插图——
-/// 没有内容时只有标题行一根。**不做新通知高亮 / 闪烁**：瞬时提示是浮层（HUD）的职责，
-/// 块只做常驻展示。**不引入定时器**：重绘靠 `store` 的 `@Published`。
+/// 它**不是**「自上次打开面板以来的新增数」——那是折叠态铃铛用的 `store.unseenCount`
+/// （`refreshIncremental` 累加、只有展开 tab 的 `markPanelOpened()` 清零，从首页打开面板
+/// 不清零）。两者口径不同是**有意的**：铃铛交代「刚来了几条」，本块交代「列表里现在有几条」，
+/// 因此文案也刻意不同（「最近 N 条」而不是「未读 N」），不会让用户以为二者应当一致。
+/// 本块的标题行**不读 `unseenCount`**。
+///
+/// ## 不可读 / 无权限
+/// `store.state != .ok` 时在标题行下加**一行**浅色提示（`NotificationText.homeHint`：
+/// 无权限 / 不可读两种），与「可读但 0 条」区分开——后者只留标题行一根（控制器裁决 3：
+/// 不做空态插图）。提示只是一行字，详细的权限引导与失败原因仍在展开 tab
+/// （`NotificationPermissionPrompt` / 失败原因截断显示）。
+///
+/// **只读**（控制器裁决 2/3）：不做关闭 / 清除 / 回复。
+/// **不做新通知高亮 / 闪烁**：瞬时提示是浮层（HUD）的职责，块只做常驻展示。
+/// **不引入定时器**：重绘靠 `store` 的 `@Published`。
 ///
 /// 交互只有一处：整行点击 = 打开对应 App **并收起刘海**（动作与顺序收在模块的
 /// `openHomeBlockItem`，走 `NotificationClickPolicy.row`）。
@@ -1293,6 +1307,16 @@ private struct NotificationsHomeBlockView: View {
         VStack(alignment: .leading, spacing: 4) {
             header
 
+            // 不可读 / 无权限时加一行浅色提示（取数失败与「真的 0 条」必须能区分开）；
+            // 可读但 0 条时这里什么都不画（控制器裁决 3：不做空态）。
+            if let hint = NotificationText.homeHint(store.state) {
+                Text(hint)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
             ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
                 row(item)
             }
@@ -1303,9 +1327,9 @@ private struct NotificationsHomeBlockView: View {
         .task { await store.refreshAll() }
     }
 
-    /// 标题行：未读 > 0 时「通知 · 未读 N」，为 0 时只留模块名（**不画空态文案**）。
+    /// 标题行：有内容时「通知 · 最近 N 条」，0 条时只留模块名（**不画空态文案**）。
     private var header: some View {
-        Text(NotificationText.homeHeader(unreadCount: store.items.count))
+        Text(NotificationText.homeHeader(count: store.items.count))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.white.opacity(0.95))
             .lineLimit(1)
@@ -1726,16 +1750,41 @@ private struct NotificationsCompactView: View {
 /// 状态行的三段文案与相对时间都**先拼成 String 再给 `Text`**（走 `Text(_: String)` 的 verbatim
 /// 重载，不会把这些形态当成本地化 key 去查表），与 `ProgressText` / `TodoText` 同口径。
 enum NotificationText {
-    /// **纯函数**：首页块标题行的文案（T1）。
+    /// **纯函数**：首页块标题行的文案（T1，审查后改口径）。
     ///
-    /// - 未读 > 0 → `module.notifications.homeUnread`（「通知 · 未读 N」/「Notifications · N unread」）；
-    /// - 未读 == 0 → 只剩模块名（复用既有 `module.notifications.name`），**不画空态文案**。
+    /// - `count > 0` → `通知 · 最近 N 条`（`module.notifications.name` + `module.notifications.homeRecent`）；
+    /// - `count == 0` → 只剩模块名（复用既有 `module.notifications.name`），**不画空态文案**。
     ///
-    /// 未读数由调用方给（生产路径是 `store.items.count`——与展开 tab 的状态行**同一个来源**，
-    /// 且已滤 `dismissedNotificationIDs`）；函数本身不碰 store，边界因此由单测直接钉。
-    static func homeHeader(unreadCount: Int) -> String {
-        guard unreadCount > 0 else { return localized("module.notifications.name") }
-        return String(format: localized("module.notifications.homeUnread"), unreadCount)
+    /// **刻意不叫「未读」**：`count` 是「列表里的条数」（生产路径 = `store.items.count`，
+    /// 与展开 tab 状态行的「最近 N 条」同一个来源、同一个数），与折叠态铃铛的
+    /// `store.unseenCount`（自上次打开面板以来的新增数）**不是一回事**——
+    /// 用「未读」会让人以为二者应当一致，而它们本来就不该一致（见块视图的「N 是什么」）。
+    /// 函数本身不碰 store，边界因此由单测直接钉。
+    static func homeHeader(count: Int) -> String {
+        guard count > 0 else { return localized("module.notifications.name") }
+        let recent = String(format: localized("module.notifications.homeRecent"), count)
+        return localized("module.notifications.name") + " · " + recent
+    }
+
+    /// **纯函数**：首页块在**不可读 / 无权限**时标题行下的那一行提示；可读（`.ok`）给 `nil`
+    /// （= 不画那一行）。
+    ///
+    /// 判据直接用既有状态枚举的两个非 `ok` 分支，不另造条件：
+    /// - `.needsFullDiskAccess`（`open(2)` 被 TCC 拒绝）→ 「需完全磁盘访问」；
+    /// - `.failure`（库不存在 / schema 变了 / SQLite 打不开）→ 「通知不可读」。
+    ///
+    /// 为什么要这一行：没有它时「取不到数据」与「可读但 0 条」在块上长得一样（都只剩标题行），
+    /// 而这两件事对用户的意义完全不同（前者要去授权 / 去查探针报告，后者只是没有新通知）。
+    /// 详细的权限引导与失败原因仍在展开 tab（块里只有一行字的预算）。
+    static func homeHint(_ state: NotificationReadState) -> String? {
+        switch state {
+        case .ok:
+            return nil
+        case .needsFullDiskAccess:
+            return localized("module.notifications.homeNeedsPermission")
+        case .failure:
+            return localized("module.notifications.homeUnreadable")
+        }
     }
 
     /// 状态行：`最近 N 条` / `需要完全磁盘访问` / 错误原因（截断到 60 字）。

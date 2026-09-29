@@ -81517,18 +81517,50 @@
         }
       }
     },
-    "module.notifications.homeUnread" : {
+    "module.notifications.homeNeedsPermission" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Notifications · %d unread"
+            "value" : "Needs Full Disk Access"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通知 · 未读 %d"
+            "value" : "需完全磁盘访问"
+          }
+        }
+      }
+    },
+    "module.notifications.homeRecent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d recent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近 %d 条"
+          }
+        }
+      }
+    },
+    "module.notifications.homeUnreadable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications unreadable"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知不可读"
           }
         }
       }
