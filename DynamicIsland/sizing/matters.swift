@@ -66,13 +66,50 @@ func sideLyricsRequiredNotchWidth() -> CGFloat {
         + SideLyricsLayout.combinedInset
 }
 
+/// 展开态高度的**可配范围**（用户可拖的区间，也是夹取的下界 + 绝对上界）。
+///
+/// 2026-09-28 用户反馈「这个高度最高就 400 吗，现在高度不够，这个要可以调」：上限从 400 提到 **1000**。
+let openNotchHeightRange: ClosedRange<CGFloat> = 120...1000
+
+/// 展开态高度相对**当前屏** `visibleFrame.height` 的占比上限：屏幕矮（外接小屏 / 缩放分辨率）时，
+/// 1000pt 的面板会超出可用高度，因此再按屏高收敛一道。
+let openNotchHeightScreenRatio: CGFloat = 0.9
+
+/// 展开态高度的**有效上界** = `min(1000, 屏 visibleFrame.height * 0.9)`；取不到屏（nil / 非正值）时
+/// 回落 `openNotchHeightRange.upperBound`（1000）。
+///
+/// **设置页滑块的上界就是它**（同一口径）：滑块能拖到 800 而 `openNotchSize` 把它夹成 810 以下的
+/// 某一个值，用户会看到「拖了没用」；两边同源才不会出现这种自相矛盾。
+func effectiveOpenNotchHeightUpperBound(screenVisibleHeight: CGFloat?) -> CGFloat {
+    guard let screenVisibleHeight, screenVisibleHeight > 0, screenVisibleHeight.isFinite else {
+        return openNotchHeightRange.upperBound
+    }
+    // 极矮的屏（visibleFrame 小到 90% 低于可配下界）时至少保留下界，否则区间会反向。
+    let screenLimit = max(openNotchHeightRange.lowerBound, screenVisibleHeight * openNotchHeightScreenRatio)
+    return min(openNotchHeightRange.upperBound, screenLimit)
+}
+
+/// 展开态高度的夹取（纯函数）：下界 120 恒定；上界是「可配上限 1000」与「屏高 90%」里更小的那个。
+///
+/// 改造前这里是写死的 `min(max(值, 120), 400)`——400 是「高度不可调」时代的遗留上界，
+/// 用户反馈「高度不够」后改为按屏收敛（2026-09-28）。
+func clampedOpenNotchHeight(_ stored: CGFloat, screenVisibleHeight: CGFloat?) -> CGFloat {
+    let upper = effectiveOpenNotchHeightUpperBound(screenVisibleHeight: screenVisibleHeight)
+    guard stored.isFinite else { return openNotchHeightRange.lowerBound }
+    return min(max(stored, openNotchHeightRange.lowerBound), upper)
+}
+
 @MainActor
 var openNotchSize: CGSize {
     let storedWidth = Defaults[.openNotchWidth]
     let minWidth = currentRecommendedMinimumNotchWidth()
     let maxWidth = maxAllowedNotchWidth()
     let width = min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)
-    let height = min(max(Defaults[.openNotchHeight], 120), 400)
+    // 高度按「当前屏可见高度的 90%」收敛（取不到屏时回落 1000，同 `clampedOpenNotchHeight`）。
+    let height = clampedOpenNotchHeight(
+        Defaults[.openNotchHeight],
+        screenVisibleHeight: NSScreen.main?.visibleFrame.height
+    )
     return .init(width: width, height: height)
 }
 

@@ -2577,6 +2577,92 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    // MARK: - 展开态高度（120…1000，按屏高 90% 收敛；2026-09-28 用户要求「高度可以调」）
+
+    /// 下界恒定 120：低于它的值一律抬到 120（面板再矮就装不下 tab 栏与内容）。
+    /// 上界与屏无关的两个极端（不管传多大的屏）也一并钉住。
+    func testClampedOpenNotchHeightKeepsLowerBound() {
+        XCTAssertEqual(
+            clampedOpenNotchHeight(0, screenVisibleHeight: 1000),
+            openNotchHeightRange.lowerBound,
+            "0（用户直接改 UserDefaults）抬到 120"
+        )
+        XCTAssertEqual(
+            clampedOpenNotchHeight(60, screenVisibleHeight: nil),
+            openNotchHeightRange.lowerBound,
+            "取不到屏时同样有下界"
+        )
+        XCTAssertEqual(
+            clampedOpenNotchHeight(120, screenVisibleHeight: 1000),
+            120,
+            "正好是下界：原样保留"
+        )
+        XCTAssertEqual(
+            clampedOpenNotchHeight(.nan, screenVisibleHeight: 1000),
+            120,
+            "非有限值不参与比较，退回下界（不崩、不产生 NaN 尺寸）"
+        )
+    }
+
+    /// 区间内的值**原样通过**（用户拖到 900 时不能再被悄悄改掉）：这里用「可见高度 1200 → 上界 1080」
+    /// 的屏幕，900 落在区间内。改造前 400 的上限会把它夹成 400 —— 那正是用户反馈的问题。
+    func testClampedOpenNotchHeightPassesValuesInsideRange() {
+        let visible: CGFloat = 1200
+        XCTAssertEqual(
+            effectiveOpenNotchHeightUpperBound(screenVisibleHeight: visible),
+            1000,
+            "1200 的 90% = 1080 > 1000，因此上界还是可配上限 1000"
+        )
+        for value: CGFloat in [400, 401, 800, 900, 1000] {
+            XCTAssertEqual(
+                clampedOpenNotchHeight(value, screenVisibleHeight: visible),
+                value,
+                "\(value) 在 120…1000 内且低于屏高 90%，必须原样生效"
+            )
+        }
+    }
+
+    /// 超过上界被**夹到屏高 90%**（真值 1000 也不越过屏幕）：900 可见高度的屏上，1500 与 1000 都落在
+    /// 810；取不到屏时才回落到可配上限 1000。
+    func testClampedOpenNotchHeightClampsToScreenLimit() {
+        let visible: CGFloat = 900
+        XCTAssertEqual(
+            effectiveOpenNotchHeightUpperBound(screenVisibleHeight: visible),
+            810,
+            "900 * 0.9 = 810"
+        )
+        XCTAssertEqual(clampedOpenNotchHeight(1500, screenVisibleHeight: visible), 810, "离谱值夹到屏高 90%")
+        XCTAssertEqual(clampedOpenNotchHeight(1000, screenVisibleHeight: visible), 810, "可配上限也要按屏收敛")
+        XCTAssertEqual(clampedOpenNotchHeight(810, screenVisibleHeight: visible), 810, "正好在上界：原样保留")
+        XCTAssertEqual(clampedOpenNotchHeight(1500, screenVisibleHeight: nil), 1000, "取不到屏 → 回落 1000")
+
+        // 极矮的屏：90% 低于可配下界时区间会反向，必须保底到 120（而不是给一个 < 120 的上界）
+        XCTAssertEqual(
+            effectiveOpenNotchHeightUpperBound(screenVisibleHeight: 100),
+            120,
+            "100 * 0.9 = 90 < 120 → 上界保底 120"
+        )
+        XCTAssertEqual(clampedOpenNotchHeight(1000, screenVisibleHeight: 100), 120)
+    }
+
+    /// **滑块与夹取同源**：设置页滑块的上界就是 `effectiveOpenNotchHeightUpperBound`，
+    /// 因此「滑块能拖到的每个值」都不会再被 `clampedOpenNotchHeight` 改掉——否则用户看到的是
+    /// 「拖了没用」（本次改造要修的正是这种自相矛盾）。
+    func testOpenNotchHeightSliderUpperBoundMatchesClamp() {
+        for visible: CGFloat in [600, 900, 1112, 1200, 2400] {
+            let upper = effectiveOpenNotchHeightUpperBound(screenVisibleHeight: visible)
+            XCTAssertGreaterThanOrEqual(upper, openNotchHeightRange.lowerBound)
+            XCTAssertLessThanOrEqual(upper, openNotchHeightRange.upperBound)
+            for value in stride(from: openNotchHeightRange.lowerBound, through: upper, by: 10) {
+                XCTAssertEqual(
+                    clampedOpenNotchHeight(value, screenVisibleHeight: visible),
+                    value,
+                    "滑块能拖到的 \(value)（屏可见高度 \(visible)）必须原样生效"
+                )
+            }
+        }
+    }
+
     /// 判据与**档位数量**同源：给 `NotchPanelBackgroundStyle` 加第四档时，这条会失败并提醒
     /// 「新档要不要显示遮罩」必须显式表态（而不是默默沿用某个默认）。
     func testScrollFadeMaskDecisionCoversEveryPanelBackgroundStyle() {

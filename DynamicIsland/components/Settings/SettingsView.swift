@@ -5192,7 +5192,15 @@ struct Appearance: View {
 
             Divider().padding(.vertical, 4)
 
-            let expandedHeightRange = Double(120)...400
+            // 2026-09-28 用户反馈「这个高度最高就 400 吗，现在高度不够，这个要可以调」：
+            // 上限 400 → 1000，且**滑块上界与 `clampedOpenNotchHeight` 同源**
+            // （`effectiveOpenNotchHeightUpperBound`：可配上限 1000 与「当前屏 visibleFrame * 0.9」取小），
+            // 否则滑块能拖到一个会被尺寸钳制悄悄改掉的值，用户看到的是「拖了没用」。
+            let expandedHeightLower: CGFloat = openNotchHeightRange.lowerBound
+            let expandedHeightUpper = effectiveOpenNotchHeightUpperBound(
+                screenVisibleHeight: NSScreen.main?.visibleFrame.height
+            )
+            let expandedHeightRange = Double(expandedHeightLower)...Double(expandedHeightUpper)
             let expandedHeightBinding = Binding<Double>(
                 get: { Double(openNotchHeight) },
                 set: { newValue in
@@ -5207,7 +5215,7 @@ struct Appearance: View {
             Slider(
                 value: expandedHeightBinding,
                 in: expandedHeightRange,
-                step: 5
+                step: 10
             ) {
                 HStack {
                     Text("Expanded notch height")
