@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 状态 | **已实现**（2026-09-30；实机观感与「点下去之后真关闭的返回」两条现场证据未取得，见 §实际交付 遗留项） |
-| 最后更新 | 2026-09-30（回写；实现提交 T1 `8eafb8be` / T2 `d23ede48`） |
+| 最后更新 | 2026-09-30（回写；实现提交 T1 `8eafb8be` / T2 `d23ede48`，末笔 T2 修复 `c6799692`；范围见 §实际交付） |
 | 关联来源 | [17-nookx-adoption.md](17-nookx-adoption.md) §已知限制 22（丢块没有 `+N` 提示，**本批已落地**，该条已就地改判）/ §做法 机制三；[16-nookx-reference.md](16-nookx-reference.md) §4.2 的 A3 行；[12-p1-batches.md](12-p1-batches.md) §已交付 · `p2-honesty` |
 
 > **怎么读**：§背景与目标 / §明确不做 / §备选与取舍 是判断依据；
@@ -112,8 +112,9 @@ Layout 因此不再从 subviews 取声明，也不再测量（测量回退只在
 **① 丢块提示：尾部 `＋N` / 覆盖在最后一块上的角标 / 不提示只改设置页文案？**
 选 **尾部 `＋N` + 预留位**。角标会压住最后一块的内容（首页块都是"读一眼"的信息，压住就是损失）；
 只改文案解决不了"此刻有东西没显示"这个当下问题。预留位的代价是**多一次纯函数计算 + 边界处可能多丢一块**
-（规则 ③ 在丢失路径下把每块宽度取各自的 `min`、与可用宽度无关，所以预留**不会**让块变窄，
-只可能改变丢块数）——换来的是"提示永远不与块重叠"。
+（**首块放得下时**——即可用宽 ≥ 首块最小宽——规则 ③ 在丢失路径下把每块宽度取各自的 `min`、与可用宽度无关，
+所以预留**不会**让块变窄，只可能改变丢块数；可用宽 < 首块最小宽时规则 ③ 的「单块取 `max(0, available)`」
+兜底会让预留版更窄，属调用方违约、生产不可达）——换来的是"提示永远不与块重叠"。
 
 **② 预留位的宽度取值：固定 34pt / 按块数伸缩？** 选**固定**。提示只需要放下 `＋N`（N 是一位数到两位数，
 32~36pt 足够）；按块数伸缩会让"预留多少"变成一个猜谜游戏，而且丢得越多提示越大、越挤——与目的相反。
@@ -185,7 +186,9 @@ private struct HomeBlock: Identifiable {
 
 **同源的另一半**：`items` 与 `HomeStripBlock(width:)` 用的是同一个 `[HomeBlockWidth]`（`body` 里解析一次），
 Layout 只在 `items` 为空时才回头读 `HomeBlockWidthKey` / 测量——今天没有这样的生产调用点（退路保留）。
-视图那一份 plan 取 `GeometryReader` 的宽、Layout 那份取 `proposal.width`，两者是同一条 strip 宽度。
+视图那一份 plan 取 `GeometryReader` 的宽、Layout 那份取 `proposal.width`，两者是同一条**确定性提案**的宽度。
+Layout 在提案宽度为 `nil` 时走 `naturalWidth(of: cache.items)` 兜底（按各块理想宽度之和当可用宽度），
+兜底那一份可能与视图这份 plan 不一致——生产提案恒为确定值，这条兜底只在非生产调用下可能命中。
 
 ### 3. 通知文案（`DynamicIsland/Localizable.xcstrings`）
 
@@ -225,7 +228,8 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
 
 ## 实际交付
 
-**提交**：T1 `682b4bd8..8eafb8be`、T2 `8eafb8be..d23ede48`（本批未 push；文档回写为 T3，另计）。
+**提交**：本批范围 `682b4bd8..c6799692`（**4 个提交**：T1 `8eafb8be` → T2 `d23ede48` → T3 文档回写 `14261efe` →
+**T2 修复** `c6799692`（新 key 进解析名单），范围因此非连续——修复那一笔夹在 T3 之后；本批未 push）。
 
 **交付物**：
 
@@ -258,9 +262,8 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
 
 - **实机 `＋1` 观测**：770pt 面板 + 四块 → 条尾 `＋1`、可见块数仍 3（需要「音乐有会话 + 摄像头可用 + 两个模块块都有内容 + 展开面板」这一组合）。
 - **真机点击通知的现场证据**（`performAndVerify` 的返回）：本批无（偏离 4）。
-- **两处无自动化断言**：`HomeStripLayout` 的 Cache 复用判据、通知侧谓词与新 key（§已知限制 9/10）。
+- **两处无自动化断言**：`HomeStripLayout` 的 Cache 复用判据、通知侧**谓词**（新 key 的那一半已由 `c6799692` 补进解析名单，见 §已知限制 9/10）。
 - **浮层 × 的无障碍标签缺口**（与谓词同源，一行改动即可补）。
-- **`module.notifications.removeFromList` 没进既有 key 名单用例**（`ModuleKernelTests` 那份名单止于 `module.notifications.moreCount`）——补一行即可让「key 未编进 bundle」这类回归有断言。
 - **提示位宽度若动态化**（按 `droppedCount` 变宽）必须同时补 Cache 判据的端到端验证（§已知限制 9）。
 
 ## 已知限制
@@ -278,7 +281,8 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
    出现较慢（秒级）——文案本身仍可通过无障碍标签读到（列表行 × 的无障碍标签已随本批补上；**浮层 × 仍只有悬停
    文案**，见 §实际交付 遗留项）。
 6. **预留位在边界处可能多丢一块**：基线已经丢块、且可用宽刚好够基线那几块时，预留 34pt 会把尾部再挤掉一块
-   （例：可用宽 660、四块的最小宽度和 636 → 基线 3 块，预留后 626 → 2 块）。这是 D-02 的确定行为：
+   （例：可用宽 660、**三块**的最小宽 300 + 140 + 180 = 620 加两个间距 2×8 = **636** → 基线 3 块，
+   预留后 626 → 2 块）。这是 D-02 的确定行为：
    **宁可少显示一块，也要把"还有 N 块"说出来**。770pt 面板（≈702）下不发生。
 7. **提示只回答"有几块没显示"，不回答"怎么让它们显示"**：拉宽面板是唯一的办法，提示里没有入口（§明确不做）。
 
@@ -293,9 +297,12 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
    今天 `tailHintWidth` 是常量（恒 34），生产路径上没有「同 available、不同 tailHintWidth」的输入，因此那行判据
    目前是防御性的；**将来把提示位宽度变成动态值时，必须补端到端验证**。另：机制三那句「内置块取
    `String(localized:)`」随宿主内置块归零而过时，实际只有 `entry.label` 一个来源（§接口与数据形状 2）。
-10. **通知侧的新谓词与新 key 同样没有自动化断言**：变异验证实测（T2 报告 §4）——谓词恒 false、以及从
-    `Localizable.xcstrings` 删掉 `module.notifications.removeFromList`，全量用例都零红（既有解析用例的 key 名单
-    止于 `module.notifications.moreCount`，没有 include 新 key）。文案分档与 key 可用性本批只经人工核对
+10. **通知侧的新谓词仍没有自动化断言，新 key 已有**：变异验证实测（T2 报告 §4）——谓词恒 false 时全量用例
+    **无一条变红**（本批没有任何用例断言这个谓词，也没断言列表行文案分档）；**新 key 那一半已由 `c6799692` 处置**——
+    `module.notifications.removeFromList` 已加进 `DynamicIslandTests/ModuleKernelTests.swift:3062` 的解析名单，
+    同一变异（从 `Localizable.xcstrings` 删掉该 key）现在让 315 条里**恰 1 条变红**
+    （`testNotificationsLocalizationKeysResolve`，实到值即原始 key——正是"漏编 catalog 时 `.help()` /
+    `.accessibilityLabel` 把原始 key 直接显示给用户"这种静默降级形态）。文案分档本批只经人工核对
     （补断言的落点见 §实际交付 遗留项）。
 11. **`.help` 的文案在渲染时求值，可能比点击结果乐观**：谓词回答的是**查询那一刻**的答案，句柄随 10 秒窗口过期；
     行渲染与用户悬停之间跨过窗口边界时，文案会说「同时关掉系统通知」而点击实际只移除。接受它（不为它引入

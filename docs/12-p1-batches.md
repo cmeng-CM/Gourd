@@ -132,9 +132,9 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 - **测试**：`DynamicIslandTests` **315 条 0 失败**（`HomeStripLayoutTests` 17 → **21**：新增四组预留位用例——不丢块不预留 / 生产档 702 可见块数不变 / 边界档 660 多丢一块 / 缺省 0 等价）。改动文件新增告警 0。
 - **覆盖审计**：`workflow.py check p2-honesty` 零 ERROR；本条覆盖表五行的产物（`DynamicIslandTests/HomeStripLayoutTests.swift`、`DynamicIsland/Host/HomeStripView.swift`、`DynamicIsland/Modules/NotificationsModule.swift`、`docs/21-strip-honesty.md`）均在；验收 grep 全命中（`blockWidths` / `droppedHintWidth` 在 `HomeStripView.swift`；`removeFromList` 在模块与 xcstrings 各一处；`willAlsoCloseSystemBanner` 有定义 `:422` 与调用点 `:1272`）。
 - **零权限边界**：不新增 TCC 权限、不引入私有 API、不新增出站请求、不新增子进程（与 `p2-home-strip` / `p2-takeover` 同一条）。
-- **遗留**（详见 [21](21-strip-honesty.md) §实际交付）：实机 `＋1` 观感与「点通知 × 之后 `performAndVerify` 的返回」都**没有本批的现场证据**（后者受已装实例的 DB 通道被 TCC 拒绝 + 本机无横幅上屏所限）；两处无自动化断言（`HomeStripLayout` 的 Cache 复用判据、通知谓词与新 key）；浮层 × 的无障碍标签仍是缺口。
+- **遗留**（详见 [21](21-strip-honesty.md) §实际交付）：实机 `＋1` 观感与「点通知 × 之后 `performAndVerify` 的返回」都**没有本批的现场证据**（后者受已装实例的 DB 通道被 TCC 拒绝 + 本机无横幅上屏所限）；通知谓词无断言（`HomeStripLayout` 的 Cache 复用判据也没有）；**新 key 已有断言**（`ModuleKernelTests` 的解析名单，删 catalog 该 key 会红）；浮层 × 的无障碍标签仍是缺口。
 
-提交范围 `682b4bd8..d23ede48`（T1 `8eafb8be`：纯函数预留位 + 同源重构 + 提示视图 + 4 条用例；T2 `d23ede48`：只读谓词分档文案 + `docs/09` §5.5 四格表）。`docs/17` 已知限制 22 已就地改判（"strip 没有 `+N` 提示"那条关闭）。
+提交范围 `682b4bd8..c6799692`（T1 `8eafb8be`：纯函数预留位 + 同源重构 + 提示视图 + 4 条用例；T2 `d23ede48`：只读谓词分档文案 + `docs/09` §5.5 四格表；T3 `14261efe`：文档回写；末尾 `c6799692`：**T2 修复**——新 key 进 `ModuleKernelTests` 解析名单。范围非连续，修复那一笔夹在 T3 之后）。`docs/17` 已知限制 22 已就地改判（"strip 没有 `+N` 提示"那条关闭）。
 
 ### 下一批 · 登记（2026-09-29）
 
