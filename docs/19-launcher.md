@@ -137,6 +137,24 @@ sequenceDiagram
 
 **成功度量**：展开面板能列出本机应用并能一键启动；常用 App 排在前面（固定过的永远在前）。
 
+## 备选与取舍
+
+| 取舍 | 选定 | 备选与没选的理由 |
+|---|---|---|
+| 应用清单来源 | **目录扫描**（三个根、一层） | 读 LaunchServices 数据库 / 私有 API：`docs/15` 要维持"零私有 API"的登记，且私有格式会随系统改版失效 |
+| 排序数据 | **Spotlight**（`kMDItemLastUsedDate` / `kMDItemUseCount`） | 自己记账（每次我们启动就 +1）：只能统计"我们从岛上启动过"的，用系统别处启动的学不到；作为**备选保留**，若实测 Spotlight 数据不可用再切 |
+| 表面（surface） | **只声明 `expanded`** | 声明 `compact`：左右槽位未落地，会与待办抢中央槽位；声明 `home`：用户没要求，且首页已有一排块 |
+| 固定项形态 | **`pinnedApps: [String]`（bundle id 优先）** | 存路径：App 移动后失效；存完整模型：要新表/新文件，超出"配置进 Defaults"的口径 |
+
+## 明确不做
+
+- **两级目录扫描**（`~/Applications/Setapp/…` 这类会漏，见 §已知限制 1）
+- **拖拽排序 / 分组 / 文件夹 / 卸载 / 重命名**：只做搜索 + 固定
+- **自己维护使用统计**（先用 Spotlight，见上表）
+- **占折叠态槽位或首页块**（D-02；等左右槽位落地再补 `compact` + `slot: right`）
+- **应用内搜索/打开文件**（那是 Spotlight 与 Launcher 的分工边界）
+- **快捷指令（Shortcuts）模块**：那是另一个模块（`com.cmeng.gourd.shortcuts`，`docs/14` P2b 第 3、capability `shortcuts:run`），不在本批
+
 ## 接口与数据形状
 
 ### 1. 扫描（新文件）
