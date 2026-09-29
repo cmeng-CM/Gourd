@@ -68327,13 +68327,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Failed to start — restart Gourd to try again."
+            "value" : "Failed to start. Restart Gourd, then turn it on again."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启动失败，需重启应用后重试。"
+            "value" : "启动失败；重启应用后再打开一次这个开关"
           }
         }
       }
