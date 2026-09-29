@@ -3058,6 +3058,8 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.closeSystemNotification",
             // 一次取数多条新通知时，浮层第二行末尾的计数后缀（浮层仍只展示最新一条）
             "module.notifications.moreCount",
+            // 列表行 × 无句柄时的 .help / .accessibilityLabel（T2：有句柄才走 closeSystemNotification）
+            "module.notifications.removeFromList",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
