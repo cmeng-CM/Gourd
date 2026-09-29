@@ -38,7 +38,7 @@
 
 本文承接 `docs/16-nookx-reference.md` §4.2 A 组（"值得参考"6 项）与 §5（首页专节），继承它的三条结论：① 首页应是"已开启组件的横向拼装"；② 每块宽度按内容自适应、非等分网格；③ 不用多行滚动承载信息，焦点位用大字号、辅助信息用小字号 chip。
 
-本文是**本次增量**，不是那份文档的替代：A 组的 6 项里本批只做 1、3、6 三项的可落地部分（见 §明确不做），其余留在源文档里按批次推进。
+本文是**本次增量**，不是那份文档的替代：A 组 6 项里本批只做**第 1 项（组件卡片化的设置页）与第 3 项（首页一条 strip）**，其余留在源文档里按批次推进（见 §明确不做）。
 
 ### 目标与可衡量指标
 
@@ -65,7 +65,7 @@ flowchart TB
     end
     subgraph 模块
         T["todos"] -->|"content(for: .home)"| STRIP
-        P["progress（默认关）"] -->|"content(for: .home)"| STRIP
+        P["progress<br/>（保留代码，本批不声明 home）"] -.->|"下一批"| STRIP
     end
     subgraph 宿主内置块
         MU["音乐块"] --> STRIP
@@ -81,7 +81,7 @@ flowchart TB
 
 **机制二 · 谁是块由三件事共同决定。** 一个块出现在首页，当且仅当：模块已注册且 `state == .active`、manifest 的 `surfaces` 含 `home`、且用户开关为开（`moduleEnableOverrides` 有键取键值，无键取 manifest 的 `defaultEnabled`）。宿主内置块（音乐 / 日历 / 镜子）不在此列，它们仍由上游 `Defaults` 键（`showStandardMediaControls` / `showCalendar` / `showMirror`）门控——本批不把接管模块提前模块化（依据 [14](14-module-manifests.md) T-3：接管模块的 config 一律映射上游既有键，不新造）。
 
-**机制三 · 宽度由测量决定，不由声明决定。** strip 用一个 SwiftUI `Layout` 实现：先按各块的"理想宽度"求和，与可用宽度比较——**不足**时按"最小宽度 → 按缺口的比例压缩"收敛，**富余**时各块保持理想宽度、余量留在尾部（绝不拉伸）。理想宽度默认由 `Layout` 向子视图测量（`sizeThatFits(.unspecified)`）得到，块也可以用 `.layoutValue(key: HomeBlockWidthKey.self, …)` 显式声明最小 / 理想宽度，用于测量不可靠的块（如含 `ScrollView`、`GeometryReader` 的块）。
+**机制三 · 宽度由"声明 + 收敛"决定。** strip 用一个 SwiftUI `Layout` 实现：先按各块的"理想宽度"求和，与可用宽度比较——**不足**时按"最小宽度 → 按缺口的比例压缩"收敛，**富余**时各块保持理想宽度、余量留在尾部（绝不拉伸）。本批**所有块都显式声明宽度**（`.layoutValue(key: HomeBlockWidthKey.self, …)`）：内置三块各自声明，模块块由宿主统一声明 `180 / 240`。测量（`sizeThatFits(.unspecified)`）只作未声明块的回退——含 `GeometryReader` 的视图在测量下只报约 10pt，靠它会算出约 6pt 的块。
 
 **机制四 · 组件开关是运行期状态迁移。** 注册表新增"单个模块的启用 / 停用"入口：置开时按 `bootstrap()` 的同一条路径实例化并 `activate()`，置关时 `deactivate()` 并摘除实例。设置页的卡片直接调它，注册表的 `@Published` 投影变化驱动首页与 tab 列表重绘——这就是"开关即上屏"的全部链路，没有第二份状态。
 
@@ -277,6 +277,14 @@ stateDiagram-v2
 4. **minimalistic UI 与歌词侧栏两条路径不接 strip**：这两条路径下首页仍是旧布局（两块 / 播放器 + 侧栏）。因此"首页 = strip"只在标准路径成立。
 5. **接管模块（音乐 / 日历 / 镜子）不随组件开关走**：它们由上游 `Defaults` 键控制，因此设置页「组件」页**不显示**它们——用户会看到"组件页只有 3 张卡，但首页有 5 块"的不一致。接受理由：提前模块化会与上游设置页形成双份真源（14 号文档 T-3）。**缓解**：卡片页顶部有一行说明。
 6. **`failed` 是终态**：组件启动失败后开关会回弹为关，用户再次打开不会重试（06 §3.3 硬性规则 1）。用户要恢复只能重启应用。
+7. **所有模块首页块共用一份宽度声明**（`180 / 240`）：模块不能自定义自己在首页的宽度。本批不做宽度协商（D-11），模块内容（如歌词、长列表）只能在这个宽度里自适应。
+8. **日历块没有日期选择轮**：`CalendarView` 的 `WheelPicker` 日期条是横向滚动控件，与"无横向滚动"的取向冲突，因此首页块只显示今天；切日期与月历在独立日历 tab。
+9. **本批只有 `todos` 声明 `home`**：`progress` 代码与 manifest 保留但**不声明** `home`（默认关，声明了也没内容）；`notifications` 不做首页块（通知是瞬时事件，不是常驻信息）。
+
+**回写期补充（T1，2026-09-29）**：
+
+10. **`HomeStripLayoutMath.plan` 的浮点边界**（独立审查实测，本批四条声明全为整数故均不可达）：① `min` / `ideal` 落在非 0.5 网格时，规则② 的比例可能因浮点误差略超 1，向下取整后可产出 **-0.5pt** 的宽度（需同时 `min == 0`）；② 规则③ 的逐块递减会因残差**多丢一块**（前两块的最小宽度和恰好等于可用宽度时）；③ 前置条件里的"有限数"只覆盖 `min` / `ideal`——`available` 传 `NaN` 会得到 `widths == [0]`、传 `±∞` 不会被拦。三条都属调用方违约或非整数声明才会出现，本批不修，改为把契约写死（见 §接口与数据形状 5 的前置条件）。
+11. **`leftover` 在规则③ 下可能很大**（丢块空出的空间，可达数百 pt）：它只表示"未被使用的尾部空间"，**不是"还有多少块能塞进去"**，宿主不得据此做居中或对齐。
 
 **回写期补充**：无（尚未实现）。
 
@@ -331,13 +339,13 @@ public struct ModuleHomeEntry: Identifiable, Equatable {
 /// active 且 surfaces 含 .home，排序键 (order, id)——与 tabEntries / compactEntries 同一比较器
 public var homeEntries: [ModuleHomeEntry] { get }
 
-/// 模块提供"首页块"内容时的请求形状
-extension ContentRequest {
-    static let home: ContentRequest   // surface: .home, phase: .expanded,
-                                      // slot: nil, sizeHint: .zero, reason: .initial,
-                                      // isLowPower: false
-}
+/// 模块提供"首页块"内容时的请求形状（常量挂在注册表上，与 compactSlotRequest / tabEntries 同址）
+public static let home: ContentRequest   // surface: .home, phase: .expanded,
+                                         // slot: nil, sizeHint: .zero, reason: .initial,
+                                         // isLowPower: false
 ```
+
+> **回写（2026-09-29，T1 实际实现）**：`home` 实现为 `ModuleRegistry.home` 静态常量，**不是** `extension ContentRequest` 上的成员——`ContentRequest` 是既有的协议层类型，宿主侧常量不该挂到它上面（与 `compactSlotRequest` 放在注册表内同一口径）。T3 请用 `ModuleRegistry.home`。
 
 **`ContentRequest` 复用既有字段**：不新增字段。`slot` 用既有可选值（首页无槽位语义 → nil）；`sizeHint` 传 `.zero`——**宽度不由请求传递**，块拿到的是 SwiftUI 提案宽度（见 §改动点设计 2）。模块若返回 `.none`，该块在本次渲染中不出现（宿主不画空壳）。
 
@@ -387,18 +395,23 @@ public enum HomeStripLayoutMath {
     public struct Plan: Equatable {
         public let widths: [CGFloat]
         public let visibleCount: Int     // 从头开始可见的块数（= widths.count）
-        public let leftover: CGFloat     // 尾部余量（富余时 > 0；不足时 == 0）
+        public let leftover: CGFloat     // 未被使用的尾部空间（见下式）；≠ 0 不代表块被铺满
     }
     /// 规则（三条，顺序固定）：
-    /// 1. 富余（available ≥ sum(ideal) + spacing×(n-1)）：widths == ideal，leftover 为余量；
+    /// 1. 富余（available ≥ sum(ideal) + spacing×(n-1)）：widths == ideal；
     /// 2. 不足但够最小宽度和：每块 min + (ideal-min) × (1 - deficit/总可压缩量)，向下取整到 0.5pt；
-    /// 3. 连最小宽度和都不够：按 order 降序（尾部优先）丢弃，直到剩余块的 min 和 + spacing 放得下；
-    ///    若单块也放不下，则只保留第一块并以 available 为其宽度（不为负）。
+    /// 3. 连最小宽度和都不够：按尾部（order 大的一端）优先丢弃，直到剩余块的 min 和 + spacing
+    ///    放得下；若单块也放不下，则只保留第一块并以 available 为其宽度（不为负）。
+    /// leftover = max(0, available - sum(widths) - spacing × max(0, visibleCount - 1))
+    /// （三条规则统一口径：① 为富余量、② 为取整零头、③ 为丢块空出的空间。
+    ///   **leftover 不等于 0 不代表块被铺满**，宿主不得拿它做居中/对齐依据。）
+    /// 空数组：widths == []、visibleCount == 0、leftover == available。
+    /// 前置条件：min / ideal / available 为有限数、0 ≤ min ≤ ideal、available ≥ 0、spacing ≥ 0；本函数不做防御。
     public static func plan(items: [Item], available: CGFloat, spacing: CGFloat) -> Plan
 }
 ```
 
-**不变量**：`widths.count == visibleCount`；`widths.allSatisfy { $0 >= 0 }`；`sum(widths) + spacing × max(0, count-1) <= available`（第 3 条规则的兜底例外：`available` 小于单块最小宽度时按 `available` 给宽度）。
+**不变量**：`widths.count == visibleCount`；`widths.allSatisfy { $0 >= 0 }`；`sum(widths) + spacing × max(0, count-1) <= available`（第 3 条规则的单块兜底例外同样满足该式）；`leftover` 为上面那个式子的取值（≥ 0）。
 
 ### 6. 块宽声明（SwiftUI 侧）
 
@@ -412,25 +425,28 @@ struct HomeBlockWidthKey: LayoutValueKey {
 }
 ```
 
+**取值（本批固定，不得在实现时另取一套）**：音乐 `300 / 420`、日历 `200 / 260`、镜子 `140 / 160`、模块块（宿主统一）`180 / 240`。
+
 ### 7. 改动清单（宿主侧）
 
 | 类别 | 落点 |
 |---|---|
 | 新文件 | `DynamicIsland/Host/HomeStripView.swift`、`DynamicIsland/Host/HomeStripLayoutMath.swift`、`DynamicIsland/components/Settings/ModuleSettingsSection.swift`（组件卡片页视图） |
 | 新测试文件 | `DynamicIslandTests/HomeStripLayoutTests.swift`、`DynamicIslandTests/ModuleToggleTests.swift`（**须在 `project.pbxproj` 的 4 处登记**：PBXFileReference / PBXBuildFile / group children / Sources phase） |
-| 改 | `DynamicIsland/components/Notch/NotchHomeView.swift`（标准路径改渲染 strip）、`DynamicIsland/Kernel/ModuleTypes.swift`、`ModuleRegistry.swift`、`KernelBootstrap.swift`、`models/Constants.swift`、`components/Settings/SettingsView.swift`（新增 tab 的 7 处 `switch`）、`Modules/TodosModule.swift`（声明 `.home` + 块内容） |
+| 改 | `DynamicIsland/components/Notch/NotchHomeView.swift`（标准路径改渲染 strip）、`DynamicIsland/Kernel/ModuleTypes.swift`、`ModuleRegistry.swift`、`KernelBootstrap.swift`、`models/Constants.swift`、`components/Settings/SettingsView.swift`（新增 tab 的六处 `switch` + `availableTabs` 数组）、`Modules/TodosModule.swift`（声明 `.home` + 块内容）、`Modules/ProgressModule.swift` 与 `Modules/NotificationsModule.swift`（**加枚举值的编译必需改动**：三处 `switch request.surface` 是穷尽的，各补一个 `case .lockscreen, .home: return .none`——语义与既有 `.none` 口径逐字一致） |
+| 改（既有测试的两处断言） | `DynamicIslandTests/ModuleKernelTests.swift`：`Surface.allCases` 词表断言（加 `home` 后必红）与 todos 的 `surfaces` 断言 |
 
 ### 改动点设计
 
 | # | 改动点 | 终态 | 落点 | 关键实现约束 | 陷阱 |
 |---|---|---|---|---|---|
 | 1 | `NotchHomeView` 标准路径 | 走 strip；minimalistic / 歌词侧栏两条路径**逐字保留** | `NotchHomeView.swift:840-896` 的 `mainContent` | strip 只在 `!enableMinimalisticUI && !shouldShowSideLyrics` 分支出现 | 别动 `padding(8)` 与既有 `.transition`——面板展开动画依赖它；改错会让展开时内容跳一下 |
-| 2 | `HomeStripView` | `Layout` 实现 + 块封装（内置块与模块块同构） | 新文件 | 用 `Layout` 的 `sizeThatFits` 测量理想宽度；对子视图一律按分配宽度给 `.frame(width:)`；块间距单一常量 | 测量含 `ScrollView` / `GeometryReader` 的视图会得到无意义值——这类块**必须**声明 `HomeBlockWidthKey` |
-| 3 | 内置块（音乐 / 日历 / 镜子） | 三块封装成各自声明宽度的块视图，门控仍读上游键 | 同 2 的文件内 | 音乐块最小宽度 300、理想 420；日历块最小 200、理想 260；镜子块最小 140、理想 160（取值依据：1051pt 面板宽下三块 + 待办块（180/240）合计理想 1080 > 可用 ≈1010，走比例压缩后仍都在最小宽度之上） | 镜子块的可见性判据是 `showMirror && webcamManager.cameraAvailable`（原逻辑），别把它写成只看 `showMirror` |
+| 2 | `HomeStripView` | `Layout` 实现 + 块封装（内置块与模块块同构） | 新文件 | `sizeThatFits` 只对**未声明宽度**的块调测量作回退；对子视图一律按分配宽度给提案；块间距单一常量 `12` | 含 `GeometryReader` 的视图测不出宽度（`.unspecified` 下约 10pt）——所有块**必须**声明 `HomeBlockWidthKey`，模块块由宿主统一声明 |
+| 3 | 内置块（音乐 / 日历 / 镜子） | 三块封装成各自声明宽度的块视图，门控仍读上游键 | 同 2 的文件内 | 音乐 `300 / 420`、日历 `200 / 260`、镜子 `140 / 160`（取值依据：1051pt 面板宽下三块 + 待办块（180/240）合计理想 1080 > 可用 ≈1010，走比例压缩后仍都在最小宽度之上）。**日历块要自建**：`StandaloneCalendarView` 是"双栏月历 + 滚动事件面板"（顶层 `GeometryReader` 宽度对半、高度取 `vm.notchSize`、右栏是滚动 `List`），塞进 200–260pt 的块里既横滚又撑高；块内改用 `EventListView`（今日竖向紧凑多行，`DynamicIslandCalendar.swift` 内 internal 声明）+ 一行日期头，无条目时用 `EmptyEventsView`，**不带 `WheelPicker` 日期轮**（横向滚动） | 镜子块的可见性判据是 `showMirror && webcamManager.cameraAvailable && vm.notchState == .open`（原逻辑），别把它写成只看 `showMirror` |
 | 4 | `todos` 模块 | manifest `surfaces` 加 `home`；`content(for: .home)` 返回首页块 | `Modules/TodosModule.swift` | 块内容 = 三环横排（今日 / 本周 / 所有）+ 今日清单前 N 条；宽度 < 220 时只画三环 | 复用既有 `TodoBucketing`，不要为首页块另算一套聚合 |
-| 5 | 设置页「组件」 | 新 tab，卡片列表 | `SettingsView.swift`（7 处 `switch`：`group` / `title` / `systemImage` / `tint` / `detailView` / `availableTabs` / `isTabVisible`）+ 新视图文件 | 卡片读 `ModuleRegistry.shared.manifests`（全量，含未启用）而不是 `tabEntries`（只有已激活）；开关读 `states` | `SettingsView` 是 `@ObservedObject` 还是 `@StateObject` 决定重绘——卡片视图须自己 `@ObservedObject private var registry = ModuleRegistry.shared` |
-| 6 | `setEnabled` | 见 §接口与数据形状 3 | `ModuleRegistry.swift` | 复用 `bootstrap()` 里的实例化 + context 构造（**抽出私有方法**，两条路径共用）；置关走 `deactivate()` + 摘实例 | `activating` 期间被置关时，`activate()` 的收尾不得把 `states[id]` 写回 `active`——用代数（generation）比对 |
-| 7 | 组合根 | 门读 `moduleEnableOverrides` | `KernelBootstrap.swift:40` | 保持一行闭包 | 注册表是单例，测试里要 `deactivateAll()` 隔离；`Defaults` 键在测试中要清理（避免污染真实偏好） |
+| 5 | 设置页「组件」 | 新 tab，卡片列表 | `SettingsView.swift`（**六处 `switch` + 一个手写数组**：`group` / `title` / `systemImage` / `tint` / `detailView`（无 `default:`，漏改即编译错）/ `isTabVisible`（有 `default: return true`，漏改不报错）/ `availableTabs`（手写数组，漏改则 tab 静默不出现））+ 新视图文件 | 卡片读 `ModuleRegistry.shared.manifests`（全量，含未启用）而不是 `tabEntries`（只有已激活）；开关读 `states`，`nil`（已注册未判定）按关处理 | `SettingsView` 是 `@ObservedObject` 还是 `@StateObject` 决定重绘——卡片视图须自己 `@ObservedObject private var registry = ModuleRegistry.shared`；搜索索引是 `settingsSearchIndex`（`searchSuggestions` 只是过滤器，别改它） |
+| 6 | `setEnabled` | 见 §接口与数据形状 3 | `ModuleRegistry.swift` | 复用 `bootstrap()` 里的实例化 + context 构造（**抽出私有方法**，两条路径共用）；`collapse` 闭包由 `bootstrap(collapse:)` 存进实例字段（初值 `{}`），`setEnabled` 不再需要该形参 | `activating` 期间被置关时，`activate()` 的收尾不得把 `states[id]` 写回 `active`——用代数（generation）比对 |
+| 7 | 组合根 | 启用门抽成 `KernelBootstrap.enablementGate(registry:)`（内部可见，便于测试），内部读 `Defaults[.moduleEnableOverrides][id] ?? manifests[id]?.defaultEnabled ?? false` | `KernelBootstrap.swift:40` | 保持一行调用 | 注册表是单例，`deactivateAll()` **会连 `manifests` 一起清**，测试每个用例必须重新 `register(...)`；`Defaults` 键在测试中要清理（避免污染真实偏好） |
 
 ---
 
