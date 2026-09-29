@@ -1110,6 +1110,13 @@ final class ModuleKernelTests: XCTestCase {
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID])
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
+        // 首页块投影（P2 / T4）：只有声明 `.home` 的 todos 进块名单——notifications 不声明，
+        // 因此首页上是「内置块 + 待办块」；todos 的首页请求拿到 `.view`（不是 `.none`：那意味着首页没有块）
+        XCTAssertEqual(registry.homeEntries.map(\.id), [todosID], "首页块名单 = 声明 .home 的已激活模块")
+        XCTAssertFalse(registry.homeEntries.contains { $0.id == notificationsID }, "notifications 不声明 home")
+        guard case .view = registry.content(for: todosID, request: ModuleRegistry.home) else {
+            return XCTFail("todos 声明了 home，首页块内容应是 .view")
+        }
         guard case .view = registry.compactSlotContent() else {
             return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }
@@ -1927,7 +1934,9 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.summary?.key, "module.todos.summary")
         XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "checklist"))
         XCTAssertEqual(manifest.kind, "builtin")
-        XCTAssertEqual(manifest.surfaces, [.expanded, .compact], "展开面板 + 折叠态中央槽位")
+        // 顺序 + 内容都钉住：P2（T4）起多一个 `.home`（首页 strip 的一块），值的顺序即声明顺序
+        XCTAssertEqual(manifest.surfaces, [.expanded, .compact, .home], "展开面板 + 折叠态中央槽位 + 首页块")
+        XCTAssertTrue(manifest.surfaces.contains(.home), "首页块是 manifest 驱动的：todos 必须声明 .home")
         XCTAssertEqual(manifest.defaultEnabled, true)
         XCTAssertEqual(manifest.defaultPlacement, Placement(slot: .center, order: 20))
         XCTAssertTrue(manifest.permissions.isEmpty, "06 §7.1 无「提醒」词条：提醒走系统 TCC，不声明 capability")
@@ -2056,6 +2065,40 @@ final class ModuleKernelTests: XCTestCase {
             TodoRingLayout.minimumDiameter,
             "极矮的面板（用户把高度拖到最小）也保底 30，不缩成看不见的点"
         )
+    }
+
+    /// 首页块的两条取舍口径（P2 / T4，纯函数）：**块宽 < 220pt 只画三环**、清单只取**今日前 5 条**。
+    ///
+    /// 三环横排本身不受块高约束（用设计定稿的 52），因此这里钉的是「宽度的门槛」与「行数的上限」，
+    /// 以及 180pt（宿主给模块块的最小宽）下「环放得下、清单不画」这一条不变量。
+    func testTodosHomeBlockLayoutWidthThresholdAndRowCap() {
+        XCTAssertEqual(TodosHomeBlockLayout.listMinimumWidth, 220, "阈值是规格值")
+        XCTAssertEqual(TodosHomeBlockLayout.maxListRows, 5, "今日清单前 5 条是规格值")
+        XCTAssertEqual(
+            TodosHomeBlockLayout.ringDiameter,
+            TodoRingLayout.maximumDiameter,
+            "横排三环沿用设计定稿直径，不另取一套"
+        )
+
+        // 阈值两侧：220pt 画清单，219.9pt / 200pt 只画环
+        XCTAssertTrue(TodosHomeBlockLayout.showsList(blockWidth: 220), "恰好在阈值上要画清单")
+        XCTAssertFalse(TodosHomeBlockLayout.showsList(blockWidth: 219.9), "差一点就不画")
+        XCTAssertFalse(TodosHomeBlockLayout.showsList(blockWidth: 200), "200pt 只画三环（宽度压窄不溢出）")
+        XCTAssertTrue(TodosHomeBlockLayout.showsList(blockWidth: 240), "宿主的理想宽 240 要画清单")
+
+        // 宽度取不到（首帧 0 / 非有限数）时只画环：环一定放得下，清单宁少不溢出
+        XCTAssertFalse(TodosHomeBlockLayout.showsList(blockWidth: 0))
+        XCTAssertFalse(TodosHomeBlockLayout.showsList(blockWidth: .nan))
+
+        // 模块块的最小宽（宿主统一声明 180）下：三环横排 + 间距要真的放得进块里
+        let ringRowWidth = TodosHomeBlockLayout.ringDiameter * 3 + TodosHomeBlockLayout.ringSpacing * 2
+        XCTAssertLessThanOrEqual(ringRowWidth, 180, "180pt 的块里三环横排必须放得下")
+
+        // 行数上限：今日 5 条全画、6 条只画前 5 条（顺序沿用 TodoBucketing，不在这里重排）
+        let items = (1...6).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
+        XCTAssertEqual(TodosHomeBlockLayout.listedItems(items).map(\.id), ["t1", "t2", "t3", "t4", "t5"])
+        XCTAssertEqual(TodosHomeBlockLayout.listedItems(Array(items.prefix(3))).map(\.id), ["t1", "t2", "t3"])
+        XCTAssertTrue(TodosHomeBlockLayout.listedItems([]).isEmpty, "今日 0 条 → 清单为空（只画三环）")
     }
 
     /// `TODO` 日期选项的文案 key 与 `DueOption` 同源（加选项必须同时给 key，否则面板上出现裸 key）。

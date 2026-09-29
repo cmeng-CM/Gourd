@@ -8,7 +8,10 @@
 //    未选中一律 `.white.opacity(0.4)`；环直径按可用高度收缩（上限 52 = 设计定稿）。
 //    2026-09-28 第二轮反馈「三个圈不要在最上面，占用可视区域太大的，放在左侧」：从顶部横排改到左列。
 //  - 折叠态 = 图标 + **今日**的 `已办/总量`（自带 60s `TimelineView`，宿主不起定时器，与 progress 同口径）；
-//  - 分类与计数口径全在 `TodoBucketing`（纯函数，单测覆盖）。
+//  - **首页块**（P2 / T4）= **三环横排**（今日 / 本周 / 所有，复用展开 tab 的同一个 `TodoScopeRing`，
+//    只把排布从竖排改成横排）+ **今日清单前 5 条**；块宽 < 220pt 时只画三环
+//    （块宽由宿主 `HomeStripLayoutMath` 分配，本批 180 ～ 240pt；见 `TodosHomeBlockLayout`）；
+//  - 分类与计数口径全在 `TodoBucketing`（纯函数，单测覆盖）——**三个 surface 共用同一份聚合**。
 
 //
 //  **取数是本模块自己的 `EKEventStore`**（不改上游 `CalendarServiceProviding`，也不进 `CalendarManager`）：
@@ -417,7 +420,8 @@ final class TodoStore: ObservableObject {
 final class TodosModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
-    /// - `surfaces`：`expanded`（三环 + 清单）+ `compact`（折叠态中央槽位：图标 + 今日 `已办/总量`）；
+    /// - `surfaces`：`expanded`（三环 + 清单）+ `compact`（折叠态中央槽位：图标 + 今日 `已办/总量`）
+    ///   + `home`（**首页块** = 三环横排 + 今日清单前 N 条，块宽 < 220pt 时只画三环）；
     /// - `defaultPlacement`：`slot == .center`、`order == 20`——与 progress（order 30）同槽位时排在它前面
     ///   （`ModuleRegistry` 的候选按 `(order, id)` 升序，只取第一个），即中央槽位的默认内容；
     /// - `defaultEnabled: true`：待办是新的中央槽位默认内容（用户定稿）；
@@ -432,7 +436,7 @@ final class TodosModule: GourdModule {
         version: "1.0.0",
         apiVersion: HostInfo.currentAPIVersion,
         kind: "builtin",
-        surfaces: [.expanded, .compact],
+        surfaces: [.expanded, .compact, .home],
         defaultPlacement: Placement(slot: .center, order: 20),
         defaultEnabled: true,
         permissions: [],
@@ -457,15 +461,19 @@ final class TodosModule: GourdModule {
         store.stop()
     }
 
-    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 与 `home` 返回 `.none`（不占位、也不算失败）。
-    /// （首页块内容属 P2 / T4：那时 `surfaces` 会声明 `home`，这里再换成真正的块视图。）
+    /// 三个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、也不算失败）。
+    ///
+    /// 首页块与展开 tab **同源**：同一份 `TodoBucketing` 聚合、同一个 `TodoScopeRing`，
+    /// 差别只在排布（三环横排 + 今日前 N 条，窄块只画环）与「只读」。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .compact:
             return .view(AnyView(TodosCompactView(store: store)))
         case .expanded:
             return .view(AnyView(TodosModuleView(store: store)))
-        case .lockscreen, .home:
+        case .home:
+            return .view(AnyView(TodosHomeBlockView(store: store)))
+        case .lockscreen:
             return .none
         }
     }
@@ -521,6 +529,7 @@ private struct TodosModuleView: View {
 /// 左列竖排三环的**尺寸预算**（纯函数，无 SwiftUI 依赖，单测覆盖三条边界）。
 ///
 /// 抽成命名空间是为了让「环直径随可用高度收缩」这段算术能被单测钉住（视图本身是 private）。
+/// **首页块的三环横排**沿用同一个环视图与这里的设计定稿直径（不受高度约束），见 `TodosHomeBlockLayout`。
 enum TodoRingLayout {
     /// 左列固定宽度：环（52）+ 标签的最宽需求 + 一点余量。
     static let columnWidth: CGFloat = 120
@@ -627,6 +636,143 @@ private struct TodoScopeRing: View {
         case .today: return .blue
         case .week: return .green
         case .all: return .orange
+        }
+    }
+}
+
+// MARK: - 首页块（三环横排 + 今日前 N 条）
+
+/// 首页块的**尺寸与取舍**（纯函数，无 SwiftUI 依赖，单测覆盖阈值两侧）。
+///
+/// 规格（[17](../../docs/17-nookx-adoption.md) §改动点设计 4）：块内容 = 三环横排（今日 / 本周 / 所有）
+/// + 今日清单前 5 条；**块宽 < 220pt 时只画三环**。块宽由宿主 `HomeStripLayoutMath` 分配
+/// （本批模块块统一声明 180 / 240），模块自己**不声明宽度、不读 `.layoutValue`**。
+enum TodosHomeBlockLayout {
+    /// 画今日清单的最小块宽（规格：220）。判据取**放置后**的宽度（`GeometryReader`），不用测量。
+    static let listMinimumWidth: CGFloat = 220
+    /// 今日清单最多画几行（规格：前 5 条；超出的不显示）。
+    static let maxListRows = 5
+    /// 三环**横排**的环间距（竖排的间距是 `TodoRingLayout.ringSpacing`）。
+    static let ringSpacing: CGFloat = 8
+    /// 三环直径：横排不受块高约束，用设计定稿的 52（与展开 tab 同源，不另取一套尺寸）。
+    static let ringDiameter: CGFloat = TodoRingLayout.maximumDiameter
+
+    /// 是否画今日清单：**放置后宽度 ≥ 220** 才画。
+    ///
+    /// 宽度取不到（首帧给 0）或非有限数时返回 false（只画环）——环一定放得下（3 × 52 + 2 × 8 = 172
+    /// ≤ 模块块最小宽 180），清单要按宽度取舍，因此宁可少画一段也不让标题溢出块宽。
+    static func showsList(blockWidth: CGFloat) -> Bool {
+        blockWidth >= listMinimumWidth
+    }
+
+    /// 清单要画的条目：今日的**前 5 条**。顺序沿用 `TodoBucketing` 的排序（不在这里另排一遍）。
+    static func listedItems(_ items: [TodoBucketing.Item]) -> [TodoBucketing.Item] {
+        Array(items.prefix(maxListRows))
+    }
+}
+
+/// 首页块：**横排三环 + 今日清单前 5 条**（[17](../../docs/17-nookx-adoption.md) §改动点设计 4）。
+///
+/// 与展开 tab **同源**：聚合是同一个 `TodoBucketing.classify`（**不另写一套统计**），环是同一个
+/// `TodoScopeRing`（只把排布从竖排换成横排——180 ～ 240pt 的块里竖排练三环放不下）。
+///
+/// **只读**（控制器裁决 2）：勾选 / 新增 / 删除都留在展开 tab，这里不挂任何手势——首页块是
+/// 「一眼看进度」，不是第二个操作台。
+///
+/// 宽度用 `GeometryReader` 读**放置后**的尺寸（不是测量）：`< 220pt` 时只画三环。
+/// 未授权时 `store.items` 为空 → 画三个 `0/0` 的空环，**不在这里引导授权**（授权入口在展开 tab，
+/// 首页块没有交互面）。今日 0 条时同样只留三环（控制器裁决 3：不做空态文案）。
+///
+/// 重绘走本模块既有做法——观察 `store` 的 `@Published`（折叠态那 60s 的 `TimelineView` 是给**常驻**视图
+/// 跨零点用的；首页块只在展开面板里存在，每次出现 `.task` 重取一次数即可，不去新建定时器）。
+private struct TodosHomeBlockView: View {
+    @ObservedObject var store: TodoStore
+
+    /// 分类在每次重算时按**当下**做（与展开 tab 同口径）。
+    private var summary: TodoBucketing.Summary { TodoBucketing.classify(store.items) }
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                TodoHomeRingRow(summary: summary)
+
+                if TodosHomeBlockLayout.showsList(blockWidth: proxy.size.width) {
+                    TodoHomeTodayList(items: TodosHomeBlockLayout.listedItems(summary.today.items))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .task { await store.refresh() }
+    }
+}
+
+/// 首页块顶部的**横排**三环：今日 / 本周 / 所有，环心 `已办/总量`。
+///
+/// 复用展开 tab 的 `TodoScopeRing`（只换排布方向），两个 surface 的环因此不会视觉漂移。
+/// 首页块里的环**不是筛选器**（不做交互），所以三个都按「选中」画——各自用类别色 + 实心标签；
+/// 未选中的灰态是给可点选的竖排环做对比用的，整排灰掉在这里只是变暗。
+private struct TodoHomeRingRow: View {
+    let summary: TodoBucketing.Summary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: TodosHomeBlockLayout.ringSpacing) {
+            ForEach(TodoBucketing.Bucket.allCases, id: \.self) { bucket in
+                TodoScopeRing(
+                    bucket: bucket,
+                    result: summary.result(for: bucket),
+                    isSelected: true,
+                    diameter: TodosHomeBlockLayout.ringDiameter
+                )
+            }
+        }
+    }
+}
+
+/// 首页块的今日清单：**只读**的简化行（勾选圈只是状态字形，不是按钮）。
+///
+/// 画的是 `TodoBucketing` 的「今日」类别——含过期未完成 / 今天完成的，与展开 tab 的今日环
+/// **同一份成员**；空清单不画空态文案（上游已保证今天数不为 0，这里不做二次判定）。
+private struct TodoHomeTodayList: View {
+    let items: [TodoBucketing.Item]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(items) { item in
+                TodoHomeRow(item: item)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 首页块的一行：状态圈 + 标题（单行尾部截断）+ 过期红字。
+///
+/// 是展开 tab `TodoRow` 的简化形态：去掉勾选按钮（只读）、去掉所属列表名与到期时刻
+/// （今日条目都到期在今天，逐行重复同一个日期只是噪音），保留「已完成置灰 + 删除线」与「已过期」。
+private struct TodoHomeRow: View {
+    let item: TodoBucketing.Item
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(item.isCompleted ? 0.35 : 0.8))
+
+            Text(item.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
+                .strikethrough(item.isCompleted, color: .white.opacity(0.4))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            if TodoText.isOverdue(item) {
+                Text(LocalizedStringKey("module.todos.overdue"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .fixedSize()
+            }
         }
     }
 }
