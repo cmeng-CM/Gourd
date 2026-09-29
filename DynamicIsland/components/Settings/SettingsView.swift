@@ -66,6 +66,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case shortcuts
     case notes
     case terminal
+    case modules
     case about
 
     var id: String { rawValue }
@@ -80,7 +81,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .clipboard, .screenAssistant, .colorPicker, .shelf,
              .downloads, .shortcuts:                                         return .utilities
         case .stats, .terminal:                                              return .developer
-        case .extensions:                                                    return .integrations
+        case .extensions, .modules:                                          return .integrations
         case .about:                                                         return .info
         }
     }
@@ -107,6 +108,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .shortcuts: return String(localized: "Shortcuts")
         case .notes: return String(localized: "Notes")
         case .terminal: return String(localized: "Terminal")
+        case .modules: return String(localized: "settings.modules.title")
         case .about: return String(localized: "About")
         }
     }
@@ -133,6 +135,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .shortcuts: return "keyboard"
         case .notes: return "note.text"
         case .terminal: return "apple.terminal"
+        case .modules: return "square.grid.2x2"
         case .about: return "info.circle"
         }
     }
@@ -159,6 +162,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .shortcuts: return .orange
         case .notes: return Color(red: 0.979, green: 0.716, blue: 0.153, opacity: 1.000)
         case .terminal: return Color(red: 0.2, green: 0.8, blue: 0.4)
+        case .modules: return .mint
         case .about: return .secondary
         }
     }
@@ -509,6 +513,7 @@ struct SettingsView: View {
             .terminal,
             // Integrations
             .extensions,
+            .modules,
             // Info
             .about
         ]
@@ -880,6 +885,9 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .extensions, title: "Enable extension diagnostics logging", keywords: ["extensions", "diagnostics", "logging"], highlightID: SettingsTab.extensions.highlightID(for: "Enable extension diagnostics logging")),
             SettingsSearchEntry(tab: .extensions, title: "Manage app permissions", keywords: ["extensions", "permissions", "apps"], highlightID: SettingsTab.extensions.highlightID(for: "App permissions list")),
 
+            // Modules
+            SettingsSearchEntry(tab: .modules, title: "Modules", keywords: ["modules", "components", "enable", "home strip"], highlightID: nil),
+
             // Shortcuts
             SettingsSearchEntry(tab: .shortcuts, title: "Enable global keyboard shortcuts", keywords: ["keyboard", "shortcut"], highlightID: SettingsTab.shortcuts.highlightID(for: "Enable global keyboard shortcuts")),
 
@@ -947,6 +955,10 @@ struct SettingsView: View {
 
     private func isTabVisible(_ tab: SettingsTab) -> Bool {
         switch tab {
+        // `modules` 与 `.appearance` 同处置：mini 模式下也保留——组件开关决定的是首页
+        // 有哪些块，与界面风格无关（docs/17 §改动点设计 5）。
+        case .modules:
+            return true
         case .timer, .stats, .clipboard, .screenAssistant, .colorPicker, .shelf, .notes, .terminal:
             return !enableMinimalisticUI
         default:
@@ -1036,6 +1048,10 @@ struct SettingsView: View {
         case .terminal:
             SettingsForm(tab: .terminal) {
                 TerminalSettings()
+            }
+        case .modules:
+            SettingsForm(tab: .modules) {
+                ModuleSettingsSection()
             }
         case .about:
             if let controller = updaterController {
