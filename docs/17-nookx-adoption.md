@@ -157,12 +157,13 @@ stateDiagram-v2
 | 当前态 | 事件 | 目标态 | 说明 |
 |---|---|---|---|
 | `disabled` | `setEnabled(true)` | `activating` → `active` \| `failed` | 与 `bootstrap()` 同一条实例化路径；抛错即 `failed` |
-| `active` | `setEnabled(false)` | `disabled` | 先 `deactivate()` 再摘实例；`deactivate()` 抛错不改变结果（记录日志） |
+| `active` | `setEnabled(false)` | `disabled` | `deactivate()` 之后置 `disabled`；`deactivate()` 不抛错（协议非 throwing），失败只记日志 |
 | `failed` | `setEnabled(true)` | `failed`（不变） | **不重试**（06 §3.3 硬性规则 1）；UI 据此显示"该组件启动失败"并禁用开关 |
+| `failed` | `setEnabled(false)` | `failed`（不变） | **D-13：置关不把它降级成 `disabled`**——否则"置关 → 置开"会给 `failed` 开出一条隐藏的重试通道，与"要恢复只能重启"的承诺矛盾 |
 | 任意 | `setEnabled(同现值)` | 不变 | **幂等**：不重复实例化、不重复 `activate` |
-| `activating` | `setEnabled(false)` | `disabled` | 上一次 `activate()` 的收尾仍会执行，但结果不写回状态（比对代数） |
+| `activating` | `setEnabled(false)` | `disabled` | 在飞的那次 `activate()` 收尾时**对 `instances` / `states` 一律不写**（只对自己那个悬挂实例 `deactivate()`），因此不会摘掉后来者的实例 |
 
-**并发与幂等**：`setEnabled` 是 `@MainActor` 的 `async` 方法；同一模块的并发调用按调用顺序串行执行（主 actor 保证），后一次调用以最后一次显式意图为准；重复请求（如卡片被连点）不产生第二次 `activate()`——实现以 `states[id]` 现值做前置判定，而非依赖 UI 节流。注册表的单例性保证同一时刻只有一个 `activating` 序列。
+**并发与幂等**：`setEnabled` 在 `@MainActor` 上，调用之间按提交顺序进入，但方法是 `async`、内含 `await` 挂起点——**挂起期间别的调用可以穿插**，因此"同一模块的并发调用串行执行"是不成立的（本条为 T2 审查实测后的更正）。实现用**全局单调代次**做相等性令牌：只有"代号仍是本 id 当前号"的那一次激活才允许写 `states` / `instances`，从而保证 `.activating` 期间被置关时状态不被错误写回、且后来者的实例不被抹掉。代次**不**保证 `instances` 与 `states` 永远同进同退（那是另一条不变量，本批不作承诺）。
 
 ### 横切关注点
 
@@ -466,6 +467,7 @@ struct HomeBlockWidthKey: LayoutValueKey {
 | D-10 | minimalistic UI 与歌词侧栏两条路径本批不动，strip 只在标准路径生效 | agent | 两条路径当前都未被用户启用（`enableMinimalisticUI = false`、`enableLyrics = false`），同一批改动里重写三条渲染路径会放大回归面 |
 | D-11 | 模块块只走 `ModuleContent.view`，不做高度协商、不新增 descriptor | agent | 沿用 docs/13 的既有裁定（descriptor 属 P4、自报高度属 P2 余项）；本批的 `sizeHint` 不参与块宽决策 |
 | D-12 | 不新增 capability / TCC 权限 / 出站请求 | agent | 组件开关只写本机偏好；首页块都是进程内视图，与现状同一边界 |
+| D-13 | `failed` 是**不可逃逸**的终态：置关不把它改成 `.disabled`，置开不重试 | agent | 06 §3.3 硬性规则 1 与本文 §已知限制 6（"要恢复只能重启应用"）都承诺不重试；T2 审查实测"置关 → 置开"能给 failed 开出一条隐藏的重试通道，与承诺矛盾。代价：组件启动失败后本次运行内无法恢复，只能重启（这是原本就写下的口径，现在代码也守它） |
 
 ---
 
