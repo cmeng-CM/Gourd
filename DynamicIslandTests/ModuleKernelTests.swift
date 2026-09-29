@@ -46,6 +46,11 @@
 //  以及玻璃底顶部的**不透明黑带高度** `panelTopOpaqueBandHeight`：取「刘海高度 / 菜单栏高度」里
 //  更高的那个再 +1、异常输入夹到 0——2026-09-28「菜单栏图标被玻璃糊变形」与
 //  2026-09-29「顶部比系统黑区窄」的判据）。
+//  P2 启动台——扫描（`LauncherAppScanner`：只扫一层、按 url 去重、跳过 `.app` 内的嵌套包、
+//  非 `.app` 与非目录跳过、名称三级回落、根目录可注入且单根失败不空表）与
+//  排序 / 过滤（`LauncherRanking`：固定优先 → 最近使用 → 使用次数 → 名称、无使用数据回落名称、
+//  未知固定 id 忽略、大小写不敏感地匹配显示名或文件名）。
+//  **扫描用例一律用临时目录树 fixture**——不扫真实 `/Applications`（机器状态会让断言抖动）。
 //
 
 import AppKit
@@ -5489,6 +5494,327 @@ final class HomeBlockOrderingTests: XCTestCase {
         XCTAssertEqual(suite.dictionary(forKey: key.name) as? [String: Int], table, "盘上存的是字典（不是字符串）")
         Defaults[key] = [:]
         XCTAssertEqual(Defaults[key], [:], "清空同样往返（回到「用户未表达」）")
+    }
+}
+
+// MARK: - 启动台：扫描 / 排序 / 过滤（P2 / T1）
+
+/// `LauncherAppScanner` 与 `LauncherRanking` 的口径（docs/19-launcher.md §接口与数据形状 1、2、
+/// §改动点设计 1；两个类型都是纯函数 / 纯 I/O，无 UI 依赖）。
+///
+/// **夹具一律是临时目录树**：`<root>/Foo.app/Contents/Info.plist` 这一级形态就够
+/// （`Bundle(url:)` 读的是 `Contents/Info.plist`，不需要真的可执行文件）。绝不扫真实
+/// `/Applications`——那种用例会随「这台机器装了什么 App」而绿或红。
+final class LauncherScannerRankingTests: XCTestCase {
+
+    /// 每个用例一份临时目录树，`tearDown` 清掉。
+    private var fixtureRoot: URL!
+
+    override func setUpWithError() throws {
+        fixtureRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-launcher-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let root = fixtureRoot { try? FileManager.default.removeItem(at: root) }
+        fixtureRoot = nil
+    }
+
+    /// 在 fixture 根下建一个子目录（当一个「应用目录」用）。
+    private func makeFixtureDirectory(_ name: String) throws -> URL {
+        let directory = fixtureRoot.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// 造一个 `.app` 目录：`<directory>/<folderName>/Contents/Info.plist`。
+    /// `plist == nil` 时不写 Info.plist（模拟没有清单的空壳包）。
+    @discardableResult
+    private func makeApp(in directory: URL, named folderName: String, plist: [String: String]? = nil) throws -> URL {
+        let app = directory.appendingPathComponent(folderName, isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        if let plist {
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: contents.appendingPathComponent("Info.plist"))
+        }
+        return app
+    }
+
+    /// 排序 / 过滤用例的输入形状（`url` 只是个值，不碰文件系统；
+    /// `file` 用来造出「显示名与文件名不同」的用例）。
+    private func app(_ id: String, _ name: String, file: String? = nil) -> LauncherApp {
+        LauncherApp(id: id, name: name, url: URL(fileURLWithPath: "/fixture-apps/\(file ?? name).app"))
+    }
+
+    // MARK: 扫描
+
+    /// 基本列举：一层里的 `.app` 全列出（含没有 Info.plist 的），非 `.app` 的目录与普通文件不列。
+    func testScanListsTopLevelAppsOnly() throws {
+        let root = try makeFixtureDirectory("Root")
+        try makeApp(in: root, named: "Alpha.app", plist: ["CFBundleIdentifier": "com.example.alpha"])
+        try makeApp(in: root, named: "Beta.app", plist: ["CFBundleIdentifier": "com.example.beta"])
+        let shell = try makeApp(in: root, named: "NoPlist.app")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("NotAnApp", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("readme".utf8).write(to: root.appendingPathComponent("readme.txt"))
+
+        let apps = LauncherAppScanner.scan(rootURLs: [root])
+
+        XCTAssertEqual(
+            Set(apps.map(\.id)),
+            ["com.example.alpha", "com.example.beta", shell.standardizedFileURL.path],
+            "无 plist 的 `.app` 用路径当 id；非 `.app` 目录与文件不列"
+        )
+        XCTAssertEqual(apps.map(\.name), ["Alpha", "Beta", "NoPlist"], "无 plist 时名称回落文件名（去 .app）")
+        XCTAssertTrue(apps.allSatisfy { $0.url.path.hasSuffix(".app") })
+    }
+
+    /// 去重按 **`url.standardizedFileURL`**：同一个根被传两次、以及带尾斜杠的同一路径，都只留一项。
+    func testScanDeduplicatesByStandardizedURL() throws {
+        let root = try makeFixtureDirectory("Root")
+        try makeApp(in: root, named: "Alpha.app", plist: ["CFBundleIdentifier": "com.example.alpha"])
+        try makeApp(in: root, named: "Beta.app", plist: ["CFBundleIdentifier": "com.example.beta"])
+
+        let once = LauncherAppScanner.scan(rootURLs: [root])
+        let twice = LauncherAppScanner.scan(rootURLs: [root, root])
+        let withTrailingSlash = LauncherAppScanner.scan(
+            rootURLs: [root, URL(fileURLWithPath: root.path + "/", isDirectory: true)]
+        )
+
+        XCTAssertEqual(once.count, 2)
+        XCTAssertEqual(twice.map(\.id), once.map(\.id), "同一个根传两次不该出现重复项")
+        XCTAssertEqual(withTrailingSlash.map(\.id), once.map(\.id), "带尾斜杠的同一路径是同一个根")
+        XCTAssertEqual(Set(twice.map(\.url)).count, 2)
+    }
+
+    /// `.app` **内部的嵌套 `.app`** 不是独立应用：只扫一层，嵌套包不出现在清单里。
+    func testScanSkipsAppsNestedInsideAppBundles() throws {
+        let root = try makeFixtureDirectory("Root")
+        let outer = try makeApp(in: root, named: "Outer.app", plist: ["CFBundleIdentifier": "com.example.outer"])
+        try makeApp(
+            in: outer.appendingPathComponent("Contents/Applications", isDirectory: true),
+            named: "Inner.app",
+            plist: ["CFBundleIdentifier": "com.example.inner"]
+        )
+
+        let apps = LauncherAppScanner.scan(rootURLs: [root])
+
+        XCTAssertEqual(apps.map(\.id), ["com.example.outer"])
+        XCTAssertEqual(apps.map(\.url), [outer.standardizedFileURL])
+        XCTAssertFalse(apps.contains { $0.name == "Inner" }, "嵌套包不进网格")
+    }
+
+    /// 名称三级回落：`CFBundleDisplayName` → `CFBundleName` → 文件名（去 `.app`）；
+    /// 空串 / 纯空白等同于「没这个键」（否则网格里会留一行看不见的标题）。
+    func testScanNameFallsBackThroughBundleKeys() throws {
+        let root = try makeFixtureDirectory("Root")
+        try makeApp(in: root, named: "Display.app", plist: [
+            "CFBundleIdentifier": "com.example.display",
+            "CFBundleDisplayName": "显示名",
+            "CFBundleName": "包名",
+        ])
+        try makeApp(in: root, named: "BundleNameOnly.app", plist: [
+            "CFBundleIdentifier": "com.example.bundlename",
+            "CFBundleName": "只有包名",
+        ])
+        try makeApp(in: root, named: "NoKeys.app", plist: ["CFBundleIdentifier": "com.example.nokeys"])
+        try makeApp(in: root, named: "BlankDisplay.app", plist: [
+            "CFBundleIdentifier": "com.example.blank",
+            "CFBundleDisplayName": "   ",
+            "CFBundleName": "空白回落",
+        ])
+
+        let names = Dictionary(uniqueKeysWithValues: LauncherAppScanner.scan(rootURLs: [root]).map { ($0.id, $0.name) })
+
+        XCTAssertEqual(names["com.example.display"], "显示名", "① 显示名优先")
+        XCTAssertEqual(names["com.example.bundlename"], "只有包名", "② 缺显示名 → 包名")
+        XCTAssertEqual(names["com.example.nokeys"], "NoKeys", "③ 两个键都缺 → 文件名去 .app")
+        XCTAssertEqual(names["com.example.blank"], "空白回落", "显示名是纯空白 → 当没有，继续回落")
+    }
+
+    /// 单个根读失败（不存在 / 是文件 / 无权限）**只跳过它**：其余根正常返回，不抛错、不空表。
+    func testScanToleratesMissingOrUnreadableRoots() throws {
+        let root = try makeFixtureDirectory("Root")
+        try makeApp(in: root, named: "Alpha.app", plist: ["CFBundleIdentifier": "com.example.alpha"])
+        let missing = fixtureRoot.appendingPathComponent("Nope", isDirectory: true)
+        let notADirectory = fixtureRoot.appendingPathComponent("plain.txt")
+        try Data("text".utf8).write(to: notADirectory)
+
+        let onlyMissing = LauncherAppScanner.scan(rootURLs: [missing])
+        let mixed = LauncherAppScanner.scan(rootURLs: [missing, notADirectory, root])
+
+        XCTAssertTrue(onlyMissing.isEmpty, "只有坏根时给空表（不是崩）")
+        XCTAssertEqual(mixed.map(\.id), ["com.example.alpha"], "坏根不影响好根")
+    }
+
+    /// 同名不同路径是**两个**应用（去重只看 url，不看名字）——这正是不用路径当唯一键的原因之一。
+    func testScanKeepsSameNameAppsFromDifferentPaths() throws {
+        let one = try makeFixtureDirectory("One")
+        let two = try makeFixtureDirectory("Two")
+        let first = try makeApp(in: one, named: "Same.app", plist: ["CFBundleDisplayName": "同名"])
+        let second = try makeApp(in: two, named: "Same.app", plist: ["CFBundleDisplayName": "同名"])
+
+        let apps = LauncherAppScanner.scan(rootURLs: [one, two])
+
+        XCTAssertEqual(apps.count, 2)
+        XCTAssertEqual(apps.map(\.name), ["同名", "同名"])
+        XCTAssertEqual(Set(apps.map(\.url)), [first.standardizedFileURL, second.standardizedFileURL])
+        XCTAssertEqual(Set(apps.map(\.id)).count, 2, "没有 bundle id 时 id 回落各自的绝对路径")
+    }
+
+    /// `defaultRoots` 的形状（**只断言取值，不扫目录**——扫真实目录的用例会随机器状态抖动）。
+    func testDefaultRootsAreTheThreeApplicationDirectories() {
+        let roots = LauncherAppScanner.defaultRoots
+
+        XCTAssertEqual(roots.count, 3)
+        XCTAssertTrue(roots.allSatisfy { $0.isFileURL && $0.lastPathComponent == "Applications" })
+        XCTAssertEqual(roots[1].path, FileManager.default.homeDirectoryForCurrentUser.path + "/Applications")
+    }
+
+    // MARK: 排序
+
+    /// 固定项恒在前——**即便它没有任何使用数据**，而没固定的项最近刚用过（固定是本地数据，
+    /// Spotlight 查询失败不该把固定项丢了：docs/19 §改动点设计 4 的陷阱）。
+    func testRankPutsPinnedFirst() {
+        let apps = [app("hot", "Zeta"), app("pin", "Alpha"), app("cold", "Beta")]
+        let usage = ["hot": LauncherUsage(lastUsed: Date(timeIntervalSince1970: 900), useCount: 50)]
+
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: ["pin"], usage: usage).map(\.id),
+            ["pin", "hot", "cold"]
+        )
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: ["cold", "pin"], usage: usage).map(\.id),
+            ["pin", "cold", "hot"],
+            "多个固定项之间仍按同一套键：都无使用数据 → 名称升序（Alpha 在 Beta 前）"
+        )
+    }
+
+    /// 最近使用降序；**没有 `lastUsed` 的项排在有数据的之后**（`useCount` 再大也不能越位）。
+    func testRankOrdersByLastUsedDescending() {
+        let apps = [app("old", "Alpha"), app("new", "Beta"), app("counted", "Gamma")]
+        let usage: [String: LauncherUsage] = [
+            "old": LauncherUsage(lastUsed: Date(timeIntervalSince1970: 100), useCount: 1),
+            "new": LauncherUsage(lastUsed: Date(timeIntervalSince1970: 300), useCount: 1),
+            "counted": LauncherUsage(lastUsed: nil, useCount: 99),
+        ]
+
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: [], usage: usage).map(\.id),
+            ["new", "old", "counted"],
+            "新的在前；只有次数没有时间的排在所有有时间的之后"
+        )
+    }
+
+    /// `lastUsed` 相同时按使用次数降序（两个字段都缺才是「无数据」）。
+    func testRankOrdersByUseCountDescending() {
+        let sameMoment = Date(timeIntervalSince1970: 500)
+        let apps = [app("few", "Alpha"), app("many", "Beta"), app("none", "Gamma")]
+        let usage: [String: LauncherUsage] = [
+            "few": LauncherUsage(lastUsed: sameMoment, useCount: 2),
+            "many": LauncherUsage(lastUsed: sameMoment, useCount: 8),
+            "none": LauncherUsage(lastUsed: sameMoment, useCount: nil),
+        ]
+
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: [], usage: usage).map(\.id),
+            ["many", "few", "none"],
+            "同一时刻：次数多的在前，没次数的垫底"
+        )
+    }
+
+    /// 没有使用数据时**一律按名称**（`localizedStandardCompare`，数字按数值比而不是字典序）；
+    /// `usage` 里有条目但两个字段都是 `nil`，仍按「无数据」处理。
+    func testRankFallsBackToNameWithoutUsage() {
+        let apps = [app("ten", "App 10"), app("two", "App 2"), app("zebra", "Zebra")]
+
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: [], usage: [:]).map(\.id),
+            ["two", "ten", "zebra"],
+            "App 2 在 App 10 之前（本地化比较按数值，不是字典序）"
+        )
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: [], usage: ["ten": LauncherUsage(lastUsed: nil, useCount: nil)]).map(\.id),
+            ["two", "ten", "zebra"],
+            "usage 里存在但两个字段都空 = 无数据"
+        )
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: [], usage: ["zebra": LauncherUsage(lastUsed: Date(timeIntervalSince1970: 1), useCount: 1)]).map(\.id),
+            ["zebra", "two", "ten"],
+            "有数据的提到前面，其余照旧按名称"
+        )
+    }
+
+    /// `pinned` 里清单中没有的 id（已卸载 / 已移动的 App 留下的残留）**一律忽略**：不崩、不乱序。
+    func testRankIgnoresUnknownPinnedIDs() {
+        let apps = [app("b", "Beta"), app("a", "Alpha")]
+
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: ["ghost", "b"], usage: [:]).map(\.id),
+            ["b", "a"],
+            "未知 id 忽略，已知的固定项照样优先"
+        )
+        XCTAssertEqual(
+            LauncherRanking.rank(apps, pinned: ["ghost"], usage: [:]).map(\.id),
+            ["a", "b"],
+            "全是未知 id：等价于没有固定项"
+        )
+        XCTAssertTrue(LauncherRanking.rank([], pinned: ["ghost"], usage: [:]).isEmpty)
+    }
+
+    /// 四项键全相等（同名且都没使用数据）时按 `id` 定序：同样的输入换个顺序进来，输出一致
+    /// （否则界面顺序取决于文件系统枚举顺序，会随机跳动）。
+    func testRankIsDeterministicForIdenticalKeys() {
+        let apps = [app("zeta", "同名"), app("alpha", "同名")]
+
+        XCTAssertEqual(LauncherRanking.rank(apps, pinned: [], usage: [:]).map(\.id), ["alpha", "zeta"])
+        XCTAssertEqual(
+            LauncherRanking.rank(apps.reversed(), pinned: [], usage: [:]).map(\.id),
+            ["alpha", "zeta"],
+            "输入顺序不影响输出"
+        )
+    }
+
+    // MARK: 过滤
+
+    /// 大小写不敏感（`localizedCaseInsensitiveContains`）。
+    func testFilterIsCaseInsensitive() {
+        let apps = [app("safari", "Safari"), app("calc", "Calculator")]
+
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "saf").map(\.id), ["safari"])
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "CALC").map(\.id), ["calc"])
+        XCTAssertTrue(LauncherRanking.filter(apps, query: "edge").isEmpty)
+    }
+
+    /// 显示名与文件名都要匹配：中文本地化的 App 用英文名也能搜到。
+    func testFilterMatchesDisplayNameOrFileName() {
+        let apps = [app("chrome", "谷歌浏览器", file: "Google Chrome"), app("safari", "Safari")]
+
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "浏览").map(\.id), ["chrome"], "显示名命中")
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "chrome").map(\.id), ["chrome"], "显示名不中 → 文件名命中")
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "SAFARI").map(\.id), ["safari"])
+    }
+
+    /// 空查询 / 纯空白返回**原列表**（同一顺序，不是空表）；首尾空白对命中无影响。
+    func testFilterEmptyQueryReturnsOriginalList() {
+        let apps = [app("b", "Beta"), app("a", "Alpha")]
+
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "").map(\.id), ["b", "a"], "空查询原样返回")
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "   ").map(\.id), ["b", "a"], "纯空白同上")
+        XCTAssertEqual(LauncherRanking.filter([], query: "x"), [])
+    }
+
+    /// 中文名匹配 + 查询串首尾空白（与「纯空白 = 空查询」同口径，命中的关键词是去掉空白后的）。
+    func testFilterMatchesChineseNameWithSurroundingWhitespace() {
+        let apps = [app("notes", "备忘录"), app("photos", "照片")]
+
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "备忘").map(\.id), ["notes"])
+        XCTAssertEqual(LauncherRanking.filter(apps, query: " 备忘录 ").map(\.id), ["notes"])
+        XCTAssertEqual(LauncherRanking.filter(apps, query: "照片").map(\.id), ["photos"])
     }
 }
 
