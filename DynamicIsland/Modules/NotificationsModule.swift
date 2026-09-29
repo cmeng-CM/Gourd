@@ -65,8 +65,10 @@
 //
 //  ## 本批形态
 //  - 展开面板：标题行（模块名 + 状态 + **清除**（列表非空时）+ 刷新）+ 可滚动通知列表
-//    （点击左侧内容 → 打开对应 App **并收起刘海**；行右侧 `xmark.circle.fill` → **关闭这一条，
-//    仅从岛上移除**；近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
+//    （点击左侧内容 → 打开对应 App **并收起刘海**；行右侧 `xmark.circle.fill` → **关闭这一条**：
+//    近 10 秒内有同指纹的 AX 横幅句柄时**顺带真关掉那条系统通知**、否则只从列表移除；
+//    结果由文案说清——悬停与无障碍标签按 `willAlsoCloseSystemBanner` 分档：
+//    「同时关掉系统通知」/「从列表移除」，见 D-04 与 `docs/09` §5.5 的四格表）
 //    + 一行能力边界说明；
 //  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，到期自动消失
 //    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条，其余在第二行末尾以
@@ -106,8 +108,10 @@
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
-//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss` /
-//  `.closeSystemNotification`（AX 通道真关闭时浮层 × 的提示文案）/
+//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss`（浮层 ×
+//  无句柄时的「关闭」）/
+//  `.closeSystemNotification`（**有句柄时浮层 × 与列表行 × 共用**的「同时关掉系统通知」）/
+//  `.removeFromList`（列表行 × 无句柄时的「从列表移除」，D-04）/
 //  `.moreCount`（一次多条新通知时浮层第二行末尾的计数后缀，`and %d more` / `等 %d 条`）/
 //  `.homeRecent`（首页块标题行的条数口径，`Notifications · %d recent` / `通知 · 最近 %d 条`；
 //  0 条时不带这个后缀，标题行只剩 `.name`）/
@@ -396,6 +400,29 @@ final class NotificationStore: ObservableObject {
         ledger.closeHandle(for: Self.fingerprint(for: item), now: now)
     }
 
+    /// 列表行 × 的**唯一一份判据**：这一刻命中的真关闭句柄（`nil` = 只从列表移除）。
+    ///
+    /// 行为侧（`dismiss` 真的拿它去关）与文案侧（`willAlsoCloseSystemBanner` 只问真假）都调这一个
+    /// 函数——判据不复制第二份，文案与行为因此不会各说各话（D-04）。
+    /// 判据本体仍在 `closeHandle(for:now:)` → `NotificationBannerLedger`（近 10s 同指纹窗口）。
+    private func listRowCloseHandle(for item: NotificationItem, now: Date = Date()) -> NotificationBannerCloseHandle? {
+        closeHandle(for: item, now: now)
+    }
+
+    /// **只读谓词**（D-04，文案专用）：列表行的 × 这一刻是否**也会真关掉系统通知**。
+    ///
+    /// 与 `dismiss` 里的那条判据**同一份**（`listRowCloseHandle`）——列表行 × 的文案按它分档：
+    /// 真 → 「同时关掉系统通知」，假 → 「从列表移除」。
+    /// **只查不改**：除台账自身的过期清理（`prune`）外不碰任何状态，因此视图在 body / `.help()`
+    /// 里直接读它是安全的（不触发 `objectWillChange`）。
+    ///
+    /// 口径边界（如实说）：它回答的是**查询这一刻**的答案，句柄随 10s 窗口过期。
+    /// `.help()` 的文案在视图渲染时求值一次，之后不会因为窗口过期而自己刷新——
+    /// 渲染与悬停之间跨过了窗口边界时，文案可能比行为乐观（`docs/09` §5.5 的四格表）。
+    func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -> Bool {
+        listRowCloseHandle(for: item, now: now) != nil
+    }
+
     /// **真关闭一条系统通知**（AX 动作，**必须在后台队列执行**：AX 是同步 IPC）。
     ///
     /// 成功 = 动作返回成功且元素失效（见 `NotificationBannerCloseHandle.performAndVerify`）。
@@ -426,8 +453,11 @@ final class NotificationStore: ObservableObject {
     /// 增量部分（2026-09-28）：若该条与**近 10 秒内的 AX 横幅**指纹匹配且仍有可用的关闭句柄，
     /// 一并执行 AX 关闭动作**真关掉系统通知中心里的那一条**——这是「能真正关掉系统通知」的
     /// 列表侧入口（浮层侧的入口是浮层右上角的 ×）。匹配不到 / 句柄失效 → 只隐藏，不报错。
+    ///
+    /// 判据取自 `listRowCloseHandle`——**与文案谓词 `willAlsoCloseSystemBanner` 同一份**：
+    /// 行内文案说「同时关掉系统通知」时，这里就一定拿得到句柄去关。
     func dismiss(_ item: NotificationItem) {
-        let handle = closeHandle(for: item)
+        let handle = listRowCloseHandle(for: item)
         guard !dismissedRecordIDs.contains(item.id) else {
             items.removeAll { $0.id == item.id }  // 已在集合里（例如上一次运行关过）：只保证列表里没有
             return
@@ -1214,7 +1244,8 @@ private struct NotificationRow: View {
         }
     }
 
-    /// 关闭按钮：**只从岛上移除这一条**（系统通知中心不动，见文件头「能力边界」）。
+    /// 关闭按钮：**只从岛上移除这一条**（系统通知中心不动），**近 10 秒内有同指纹 AX 句柄时
+    /// 顺带真关掉那一条**（判据见 `NotificationStore.willAlsoCloseSystemBanner`，与 `dismiss` 同一份）。
     /// 常态 `.white.opacity(0.6)`，鼠标进入（行内或按钮上）提亮到 `.white`。
     private var dismissButton: some View {
         Button {
@@ -1228,7 +1259,19 @@ private struct NotificationRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isDismissHovered = $0 }
-        .help(NotificationText.localized("module.notifications.dismiss"))
+        // 文案与无障碍标签**同源同口径**：句柄在 → 「同时关掉系统通知」，不在 → 「从列表移除」。
+        // 悬停（`.help`）与读屏（`.accessibilityLabel`）各读一份，两处由 `dismissHelpKey` 一次决定。
+        .help(NotificationText.localized(dismissHelpKey))
+        .accessibilityLabel(NotificationText.localized(dismissHelpKey))
+    }
+
+    /// × 的文案 key（**唯一落点**）：按 store 的只读谓词分档（D-04）。
+    /// 谓词为真 = 点下去会**顺带真关掉系统通知**，因此不说「从列表移除」；为假才退回「从列表移除」。
+    /// 谓词本身与 `dismiss` 内的判据同一份（`NotificationStore.listRowCloseHandle`）。
+    private var dismissHelpKey: String {
+        store.willAlsoCloseSystemBanner(for: item)
+            ? "module.notifications.closeSystemNotification"
+            : "module.notifications.removeFromList"
     }
 }
 
