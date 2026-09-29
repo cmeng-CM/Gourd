@@ -685,6 +685,9 @@ struct ContentView: View {
     ///   **强制深色外观**（口径同通知浮层卡片）：浅色系统外观下玻璃会渲染成浅色，而面板内的文字
     ///   一律显式白色（会看不清）→ 玻璃上再压一层 `Color.black.opacity(0.35)`；圆角交给下面的
     ///   `.clipShape(resolvedClipShape)`（玻璃半径取裁剪形状的半径，见 `panelGlassCornerRadius`）。
+    ///   **关闭组件自带的边缘高光**（`hidesEdgeHighlight: true`，2026-09-29 用户反馈「glass 模式下
+    ///   有两个白条」）：这条镜面高光紧贴玻璃轮廓（上边最亮、下边次之），面板上就是紧挨黑带下面是
+    ///   一条亮白带、面板底部再来一条。只有**面板这一处用法**关掉它（其余玻璃用法是上游观感）。
     /// - `.frostedGlass`：`NSVisualEffectView` 的 `.hudWindow` + `.behindWindow`，材质层强制
     ///   `darkAqua`（口径同 `EditPanelView.VisualEffectView.forcedAppearance`：`hudWindow` 在浅色
     ///   系统外观下会渲染成浅色磨砂玻璃，与面板内的白字冲突）。
@@ -694,7 +697,8 @@ struct ContentView: View {
     /// **玻璃两档的顶部另有不透明黑带**（2026-09-28 用户反馈「菜单栏里面的图标都变形了」）：
     /// 玻璃是 behindWindow 材质，会采样窗口背后的菜单栏图标 → 图标被糊成一片。因此玻璃底的构成是
     /// 「顶部黑带（高度见 `panelTopOpaqueBandHeight(safeAreaTop:menuBarHeight:)`）+ 其下的玻璃」
-    /// （见 `panelOpaqueTopBand(_:)`）。`.solidBlack` **不受影响**（整块纯黑，本来就没有采样问题）。
+    /// （见 `panelOpaqueTopBand(_:)`，黑带压在玻璃上层）。`.solidBlack` **不受影响**
+    /// （整块纯黑，本来就没有采样问题）。
     @ViewBuilder
     private var panelBackground: some View {
         if panelBackgroundUsesStyle(isOpen: vm.notchState == .open, isDynamicIslandMode: isDynamicIslandMode) {
@@ -703,7 +707,11 @@ struct ContentView: View {
                 Color.black
             case .liquidGlass:
                 panelOpaqueTopBand(
-                    LiquidGlassBackground(variant: .defaultVariant, cornerRadius: panelGlassCornerRadius) {
+                    LiquidGlassBackground(
+                        variant: .defaultVariant,
+                        cornerRadius: panelGlassCornerRadius,
+                        hidesEdgeHighlight: true
+                    ) {
                         Color.black.opacity(0.35)
                             .environment(\.colorScheme, .dark)
                     }
@@ -721,17 +729,24 @@ struct ContentView: View {
         }
     }
 
-    /// 玻璃底的**两段构成**：顶部不透明黑带 + 其下的玻璃（`spacing: 0`，两段无缝）。
+    /// 玻璃底的**两段构成**：顶部不透明黑带 + 其下的玻璃（黑带压在玻璃**上面**，两段无缝）。
     ///
     /// 黑带高度取**当前这块屏**的口径（刘海高度 / 菜单栏高度）：面板顶边与系统 UI 带同高，
     /// 玻璃若从顶边起画就会把菜单栏图标采进来（用户截图里「图标变形」的根因）。
     /// 整块背景仍由 `.clipShape(resolvedClipShape)` 裁剪——**面板形状一点没变**，
     /// 只是顶部那一条由不透明黑替代了玻璃。
+    ///
+    /// **为什么是 `ZStack` 而不是 `VStack`**（2026-09-29 用户反馈「glass 模式下有两个白条」）：
+    /// `NSGlassEffectView` 会在自己的轮廓上画一条镜面高光（上边最亮、下边次之，见
+    /// `LiquidGlassBackground.hidesEdgeHighlight`）。液态玻璃这一档因此让玻璃四边外扩
+    /// （`LiquidGlassEdgeHighlight.overhang`）：外扩之后玻璃的**上边沿被抬到黑带区间
+    /// 之内**——`VStack` 里玻璃画在黑带**之后**，高光会浮在黑带上面（仍是白条）；只有把黑带放在
+    /// 玻璃**上层**才能压住它。玻璃下边沿与左右两边则被面板自己的裁剪形状切掉。
     private func panelOpaqueTopBand<Glass: View>(_ glass: Glass) -> some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .top) {
+            glass
             Color.black
                 .frame(height: panelTopOpaqueBandHeightOnCurrentScreen)
-            glass
         }
     }
 

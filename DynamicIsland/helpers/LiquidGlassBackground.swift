@@ -142,6 +142,18 @@ public enum LiquidGlassVariant: Int, CaseIterable, Identifiable, Defaults.Serial
     }
 }
 
+/// 「玻璃边缘高光」把玻璃画到**自己边界之外**的距离（pt）——见 `LiquidGlassBackground.hidesEdgeHighlight`。
+///
+/// 独立成非泛型命名空间：`LiquidGlassBackground` 是泛型类型，Swift 不允许泛型类型里有静态存储属性。
+///
+/// 取值依据（2026-09-29 本机 macOS 27.0 实测，`screencapture` 逐行取像素）：玻璃顶边起
+/// `+0pt` 亮度 167、`+2pt` 151、`+4pt` 136、`+8pt` 122、`+16pt` 128 → 内侧 ~110，
+/// 即这条高光连着内侧渐变一共吃掉约 **16pt**；底边同理（边缘处 255 纯白，向内 8pt 才落回底噪）。
+/// 取 20 留出余量：外扩 20pt 后，高光与它的渐变尾全部落在宿主（面板）可见区之外。
+public enum LiquidGlassEdgeHighlight {
+    public static let overhang: CGFloat = 20
+}
+
 /// A SwiftUI view that embeds its content inside Apple’s private liquid‑glass material.
 ///
 /// ```swift
@@ -159,19 +171,30 @@ public struct LiquidGlassBackground<Content: View>: NSViewRepresentable {
     private let content: Content
     private let cornerRadius: CGFloat
     private let variant: LiquidGlassVariant
+    private let hidesEdgeHighlight: Bool
     /// Creates a new liquid‑glass container.
     /// - Parameters:
     ///   - variant: Any ``LiquidGlassVariant`` (0–19). Defaults to `.v11`, which is visually super pleasing
     ///   - cornerRadius: Corner radius in points. Defaults to `10`.
+    ///   - hidesEdgeHighlight: 让玻璃**连自己的边缘高光一起**画到宿主边界之外（外扩
+    ///     `LiquidGlassEdgeHighlight.overhang`），宿主可见区里就只剩玻璃的平坦材质——高光被宿主裁掉/盖住。
+    ///     默认 `false`：锁屏 / OSD / Vertical HUD 那些上游设计里的玻璃观感一概不变。
     ///   - content: Your SwiftUI hierarchy.
     public init(
         variant: LiquidGlassVariant = .defaultVariant,
         cornerRadius: CGFloat = 10,
+        hidesEdgeHighlight: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.variant      = variant
         self.cornerRadius = cornerRadius
+        self.hidesEdgeHighlight = hidesEdgeHighlight
         self.content      = content()
+    }
+
+    /// 玻璃视图相对宿主的四边外扩量（`hidesEdgeHighlight` 关闭时为 0）。
+    private var overhang: CGFloat {
+        hidesEdgeHighlight ? LiquidGlassEdgeHighlight.overhang : 0
     }
 
 
@@ -225,11 +248,14 @@ public struct LiquidGlassBackground<Content: View>: NSViewRepresentable {
             glass.setValue(hosting, forKey: "contentView")
 
             container.addSubview(glass)
+            // 外扩量走约束常量（负数）：容器**不裁剪**（NSView 默认 `masksToBounds = false`），
+            // 因此玻璃连边缘高光一起画在容器之外，由宿主（面板）的裁剪形状决定可见范围。
+            let overhang = self.overhang
             NSLayoutConstraint.activate([
-                glass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                glass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                glass.topAnchor.constraint(equalTo: container.topAnchor),
-                glass.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+                glass.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: -overhang),
+                glass.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: overhang),
+                glass.topAnchor.constraint(equalTo: container.topAnchor, constant: -overhang),
+                glass.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: overhang)
             ])
 
             container.glassView = glass
