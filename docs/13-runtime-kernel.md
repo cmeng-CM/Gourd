@@ -363,7 +363,7 @@ public func setEnabled(_ enabled: Bool, for id: String) async -> ModuleRuntimeSt
 **4. `Defaults[.moduleEnableOverrides]` 的缺键语义**
 
 ```swift
-// DynamicIsland/models/Constants.swift（// MARK: - Modules 段）
+// DynamicIsland/models/Constants.swift（// MARK: Module Kernel (P1) 段，键定义在 :1526）
 /// 组件开关的用户显式选择。**缺键 = 用户未表达**（回落到 manifest.defaultEnabled），
 /// 不是 false——升级用户的首次行为必须与升级前一致。
 static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
@@ -413,7 +413,7 @@ registry.register(builtinModules, enabled: enablementGate(registry: registry))
 22. **单测里 `builtinModules.count == 1` 是批内契约**：加第二个内置模块时该断言会红，需放宽为 `contains`。同一用例里还有一条 `ObjectIdentifier` 逐项相等断言（`ModuleKernelTests.swift:896-900`，断言数组恰为 `[ProgressModule.self]`），加第二个模块时**同样会红**，需一并放宽。**（2026-09-28 已按本条执行）**：T5 加 `TodosModule` 时两处一并放宽——现断言 `count == 2` 与 `[ProgressModule, TodosModule]`，并把该用例扩成「真启用门（progress 默认关 / todos 默认开）+ 手动全放行保 progress 内容路径」两段（见 D-20）。
 23. **百分比取整的临景观感**：`Int((progress*100).rounded())` 在区间末段会显示 `100%`（如 12-31 23:59:30 的年进度）。
 24. **三个新 capability 待落 [06](06-module-protocol.md) §7.1**：`notifications:read`（读通知中心）、`network:local`（LocalSend 局域网）、`calendar:read-titles`（07 §3.5 已引用但 06 §7.1 缺表）——已在 [14-module-manifests.md](14-module-manifests.md) 相应行标注。
-25. **`defaultPlacement.order` 本批兼作 expanded tab 的确定性排序键**（对 06 §6.2 的语义扩展）：06 §2.2/§6.2 规定 `defaultPlacement` 仅当 `surfaces` 含 `compact` 时有意义、否则忽略，而 progress 本批未声明 `compact`（D-07），实现仍用 `manifest.defaultPlacement?.order ?? Int.max` 给 `tabEntries` 排序（`ModuleRegistry.swift:165`）。理由：本批没有 compact 消费者，而 tab 列表需要确定性顺序（同 `order` 再按 id 字典序）。代价：一个字段承载双关语义（"compact 槽位的插入序"与"expanded tab 排序键"）。**约束**：compact 槽位在 P2 落地时**必须**拆字段或明确写下双语义，否则同一个 `order` 会被两套布局逻辑读走；在此期间 progress 的 `slot` 恒为 nil（`Placement(slot: nil, order: 30)`，与 [14](14-module-manifests.md) 的 T-1 给折叠态预留的 `left` / order 40 不是同一个值）。**落地回写（2026-09-27）**：中央槽位走「明确写下双语义」这条路——`order` 同时是 expanded tab 与折叠态槽位候选的排序键，两处共用同一个比较器 `(order, id)`（`ModuleRegistry.swift` 的 `tabEntries` / `compactEntries`），`slot` 只记归属（progress 现为 `center`）；左/右槽位与三槽布局仍延后，若届时同一 `order` 要表达两套布局顺序，仍须拆字段。
+25. **`defaultPlacement.order` 本批兼作 expanded tab 的确定性排序键**（对 06 §6.2 的语义扩展）：06 §2.2/§6.2 规定 `defaultPlacement` 仅当 `surfaces` 含 `compact` 时有意义、否则忽略，而 progress 本批未声明 `compact`（D-07），实现仍用 `manifest.defaultPlacement?.order ?? Int.max` 给 `tabEntries` 排序（`ModuleRegistry.swift:165`）。理由：本批没有 compact 消费者，而 tab 列表需要确定性顺序（同 `order` 再按 id 字典序）。代价：一个字段承载双关语义（"compact 槽位的插入序"与"expanded tab 排序键"）。**约束**：compact 槽位在 P2 落地时**必须**拆字段或明确写下双语义，否则同一个 `order` 会被两套布局逻辑读走；在此期间 progress 的 `slot` 恒为 nil（`Placement(slot: nil, order: 30)`，与 [14](14-module-manifests.md) 的 T-1 给折叠态预留的 `left` / order 40 不是同一个值）。**落地回写（2026-09-27）**：中央槽位走「明确写下双语义」这条路——`order` 同时是 expanded tab 与折叠态槽位候选的排序键，两处共用同一个比较器 `(order, id)`（`ModuleRegistry.swift` 的 `tabEntries` / `compactEntries`），`slot` 只记归属（progress 现为 `center`）；左/右槽位与三槽布局仍延后，若届时同一 `order` 要表达两套布局顺序，仍须拆字段。**第三次复用（p2-home-strip，2026-09-29）**：首页 strip 的块顺序**也**用同一个 `order`——`ModuleRegistry.homeEntries` 的排序键与 `tabEntries` / `compactEntries` **逐字同一个比较器** `(order, id)`（[17](17-nookx-adoption.md) D-04 明确不新增排序字段）。因此 `order` 现同时供**三处**排序（expanded tab / compact 槽位候选 / 首页块），三处共用 `(order, id)`；已知限制 31 的"尾部丢块"丢的是 strip 数组尾部——内置三块固定排在模块块之前（[09](09-features-and-mechanisms.md) §5.8），故模块块段按 `(order, id)` 大的一端先丢。
 
 26. **折叠态中央槽位与 live activity 共用一条优先级链**：槽位是在 `ContentView` 关闭态的 `if/else if` 链里插的**低优先**分支（D-19 的落地方式，分支位置在 `showNotHumanFace` 人脸动画之前），因此**只在其它 live activity 都没占用关闭态时**显示——音乐 / 计时器 / 提醒 / 录屏 / 下载 / LocalSend / 专注 / 锁屏 / 隐私 / Shelf / 扩展载荷任意一个出现，槽位就自动让位（不叠加、不缩窄）。这是「不改 HStack 结构」的代价；真并存（左侧图标 + 中央模块 + 右侧图标）仍要等三槽布局。
 
@@ -431,7 +431,7 @@ registry.register(builtinModules, enabled: enablementGate(registry: registry))
 32. **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 走极简播放器、`shouldShowSideLyrics` 走"播放器 + 歌词侧栏"，两条路径逐字未动（[17](17-nookx-adoption.md) D-10）。因此"首页 = 已开启组件的 strip"**只在标准路径成立**。
 33. **宿主内置三块不出现在设置页「组件」页**：音乐 / 日历 / 镜子由上游 `Defaults` 键（`showStandardMediaControls` / `showCalendar` / `showMirror`）门控，不是模块，因此组件页只有模块卡片——用户会看到"组件页只有几张卡，但首页有更多块"的**不一致**。接受理由：提前把接管模块模块化会与上游设置页形成双份真源（[14-module-manifests.md](14-module-manifests.md) T-3）；缓解措施是卡片页顶部那一行说明。
 34. **`failed` 只能"重启应用 + 再打开一次"恢复**：`failed` 不可逃逸（[17](17-nookx-adoption.md) D-13，见本文「本批新增 / 变更的口径」3），开关在 `.failed` 上禁用点击，失败回弹只把偏好写回 `false`。**本次运行内没有任何恢复路径**——不重试、不做指数退避、不提供"重试"按钮；用户要恢复只能重启应用再打开开关。
-35. **待办块有 220pt 阈值，默认面板宽下只画三环**：首页块宽度由 `HomeStripLayoutMath` 分配，三块并列时真实分配约 `[325, 212.5, 192.5]`（770pt 面板 / 可用 754），待办块 192.5 < 220 → **只画三环、不画今日清单**。要让清单出现，面板需约 **1000pt** 宽（或减少并列块）；也就是说默认配置下"首页看到待办清单"这一条**不成立**。这是宽度预算的必然结果而非缺陷，判据取放置后的实测宽度（`GeometryReader`）不是测量值。
+35. **待办块有 220pt 阈值，默认面板宽下只画三环**：首页块宽度由 `HomeStripLayoutMath` 分配，三块并列时**可用宽 ≈ 706**（面板 770 − `NotchHomeView` 的 8pt×2 − `notchHorizontalPadding` 展开态 14pt×2（`opened.top` 19 − 5）− 12pt×2，出处 `ContentView.swift:749-750` 与 `matters.swift:250`），按 `plan` 得 ≈ `[301, 200.5, 180.5]`——**三块都压在最小宽度附近**；待办块 180.5 < 220 → **只画三环、不画今日清单**。要让清单出现，面板需约 **930pt** 宽（可用 ≥ 864 时待办块才到 220；或减少并列块）；也就是说默认配置下"首页看到待办清单"这一条**不成立**。这是宽度预算的必然结果而非缺陷，判据取放置后的实测宽度（`GeometryReader`）不是测量值。
 
 ## 验收标准
 

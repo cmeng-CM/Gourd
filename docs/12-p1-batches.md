@@ -84,7 +84,7 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 | T2 | 内核：运行期模块开关 | `ModuleRegistry.setEnabled(_:for:)`（幂等；未知 id 记 warning 返回 `.disabled`）＋偏好键 `Defaults[.moduleEnableOverrides]`（**缺键 = 用户未表达**，回落 `manifest.defaultEnabled`）＋组合根启用门 `KernelBootstrap.enablementGate(registry:)`；**`failed` 定为不可逃逸终态**（置开不重试、置关不降级，D-13），`.activating` 期间的异步写回由**全局单调代次**作废 |
 | T3 | 首页 strip 渲染器 + `NotchHomeView` 接缝（内置块） | 新建 `HomeStripView` + `HomeStripLayoutMath`；`NotchHomeView` 的**标准分支**改为渲染 strip，minimalistic UI 与歌词侧栏两条路径未动；内置三块（音乐 `300/420`、日历 `200/260`、镜子 `140/160`）就其位；日历块**自建**（日期头 + hover 日期轮 + 竖向多行），保留翻日期能力；`sizeThatFits`/`placeSubviews` 共用缓存 plan、丢块显式零提案两条硬约束写进 [17](17-nookx-adoption.md) 已知限制 12~15 |
 | T4 | 待办模块的首页块 | `com.cmeng.gourd.todos` 的 `surfaces` 加上 `home`；首页块 = 三环横排（复用同一个 `TodoScopeRing`）+ 今日清单前 5 条，**块宽 < 220pt 时只画三环**（判据取放置后实测宽度）。默认面板宽下只有三环，已知限制 16~19 |
-| T5 | 设置页「组件」卡片（新增 tab） | 新增第 22 个 `SettingsTab.modules`：一张卡 = 一个已注册模块（数据源 `ModuleRegistry.manifests` **全量**）；写路径定死「先落盘 `moduleEnableOverrides` 再 `setEnabled`」，失败回弹只把偏好写回 `false`；卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关 |
+| T5 | 设置页「组件」卡片（新增 tab） | 新增 `SettingsTab.modules`（第 21 个 tab，第 22 个是 `about`）：一张卡 = 一个已注册模块（数据源 `ModuleRegistry.manifests` **全量**）；写路径定死「先落盘 `moduleEnableOverrides` 再 `setEnabled`」，失败回弹只把偏好写回 `false`；卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关 |
 | T6 | 文档回写 | 本表 + [06](06-module-protocol.md)（`home` 入词表）/ [09](09-features-and-mechanisms.md) §5.8（首页 strip）/ [13](13-runtime-kernel.md)（本批小节与已知限制 31~35）/ [14](14-module-manifests.md)（todos 行）/ [16](16-nookx-reference.md)（§4.2 本批状态列） |
 
 **本批边界（零新增权限）**：没有新 capability、没有新 TCC 授权、没有新出站请求。首页块都是进程内视图，组件开关只写本机偏好。
