@@ -6189,6 +6189,47 @@ final class LauncherModuleTests: XCTestCase {
         XCTAssertEqual(store.ranked.map(\.name), ["Alpha", "Zebra"], "顺序 = 固定（空）→ 名称")
     }
 
+    // MARK: 点图标 → 启动 → 收起
+
+    /// **「点图标 → 启动 → 收起」整条链路**（P2 复审修 1）：经两个注入点驱动**生产的** `launch`
+    /// （`openApp` = 记录型假体、`collapse` = 记录型假体），于是"点了没反应 / 点了不收起"这两种
+    /// 失败都能被断言，而用例本身不会真的拉起任何 App。
+    ///
+    /// 断言三件：启动的是**这一项**的 URL、两个动作**各一次**、顺序是**先打开后收起**
+    /// （`docs/19` §处理链路的两步：先发启动不等完成，再请求收起）。
+    func testLauncherLaunchOpensAppThenCollapses() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+
+        /// 两个动作都往同一串里记，先后顺序因此可判（跨闭包的共享可变状态只在这个用例内）。
+        var calls: [String] = []
+        var openedURLs: [URL] = []
+        let store = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: PinDisk().pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: false) },
+            collapse: { calls.append("collapse") },
+            openApp: { url in
+                calls.append("open")
+                openedURLs.append(url)
+            }
+        )
+        await store.load()
+
+        let app = try XCTUnwrap(store.apps.first, "临时目录里应扫到一个 `.app`")
+        store.launch(app)
+
+        XCTAssertEqual(openedURLs, [app.url], "打开的正是这一项的 URL（一次）")
+        XCTAssertEqual(calls, ["open", "collapse"], "先启动、后收起，各一次")
+
+        // 再点一次：仍然是"这一项各一次"（没有攒状态、也没有漏掉收起）
+        store.launch(app)
+        XCTAssertEqual(openedURLs, [app.url, app.url], "重复点击 = 再启动一次（`openApplication` 对已启动的 App 只是激活）")
+        XCTAssertEqual(calls, ["open", "collapse", "open", "collapse"], "重复点击同样两次调用都发生")
+    }
+
     /// 使用数据的映射：**键 = `LauncherApp.id`**（与固定项同源）；清单里没有的路径忽略；
     /// 同一个 bundle id 的两份拷贝合并（最近使用取更晚、次数取更大）。
     func testLauncherUsageMappingUsesAppIDAsKey() throws {
@@ -6241,6 +6282,85 @@ final class LauncherModuleTests: XCTestCase {
         XCTAssertEqual(usage["com.example.alpha"]?.useCount, 3, "使用次数取更大的一个")
         XCTAssertNil(usage["/fixture/Shell.app"]?.lastUsed)
         XCTAssertNil(usage["/fixture/Shell.app"]?.useCount, "两个字段都缺 = 无数据（不是 0）")
+    }
+
+    /// **属性映射**（P2 复审修 2）：`samples(from:)` 里把 `NSMetadataItem` 的属性变成样本的那段逻辑，
+    /// 经"属性名 → 值"的闭包接缝（`LauncherUsageQuery.sample(attribute:)`）用构造的数据钉住。
+    ///
+    /// 这条用例存在的理由：真查询在**没开索引 / 属性名写错**时都返回空表，"降级成按名称"是静默的；
+    /// 只有把映射抽出来才能让"读的是哪三个属性、类型不对怎么处理"变成可失败断言。
+    func testLauncherUsageSampleMappingReadsDocumentedAttributes() throws {
+        // ① 属性名（被改错就红）：路径 / 最近使用用 SDK 导出的常量，使用次数是文档里的属性名
+        XCTAssertEqual(LauncherUsageQuery.pathAttribute, "kMDItemPath")
+        XCTAssertEqual(LauncherUsageQuery.lastUsedAttribute, NSMetadataItemLastUsedDateKey, "SDK 常量，别再抄字面量")
+        XCTAssertEqual(LauncherUsageQuery.lastUsedAttribute, "kMDItemLastUsedDate")
+        XCTAssertEqual(LauncherUsageQuery.useCountAttribute, "kMDItemUseCount", "公开的 Spotlight 元数据属性名")
+
+        // ② 正常值（日期 = Date、次数 = NSNumber）→ 映射正确，且**读的就是这三个属性名**
+        let lastUsed = Date(timeIntervalSince1970: 1_700_000_000)
+        var asked: [String] = []
+        let sample = try XCTUnwrap(LauncherUsageQuery.sample(attribute: { key -> Any? in
+            asked.append(key)
+            switch key {
+            case LauncherUsageQuery.pathAttribute: return "/Applications/Alpha.app"
+            case LauncherUsageQuery.lastUsedAttribute: return lastUsed
+            case LauncherUsageQuery.useCountAttribute: return NSNumber(value: 42)
+            default: return nil
+            }
+        }))
+
+        XCTAssertEqual(
+            sample,
+            LauncherUsageSample(path: "/Applications/Alpha.app", lastUsed: lastUsed, useCount: 42)
+        )
+        XCTAssertEqual(
+            Set(asked),
+            [LauncherUsageQuery.pathAttribute, LauncherUsageQuery.lastUsedAttribute, LauncherUsageQuery.useCountAttribute],
+            "映射问的就是这三个属性名（名字在这条断言里被钉住）"
+        )
+
+        // ③ 次数是**数字字符串**（索引的另一种形态，含首尾空白）：照样认
+        let stringCount = try XCTUnwrap(LauncherUsageQuery.sample(attribute: { key -> Any? in
+            switch key {
+            case LauncherUsageQuery.pathAttribute: return "/Applications/Beta.app"
+            case LauncherUsageQuery.useCountAttribute: return " 17 "
+            default: return nil
+            }
+        }))
+        XCTAssertEqual(stringCount.useCount, 17)
+        XCTAssertNil(stringCount.lastUsed, "没有最近使用属性 → nil（不是当前时间）")
+
+        // ④ 属性缺失 / 类型不对（nil、非数字字符串、别的类型）：不崩、按"无数据"处理
+        let missing = try XCTUnwrap(LauncherUsageQuery.sample(attribute: { key -> Any? in
+            key == LauncherUsageQuery.pathAttribute ? "/Applications/Gamma.app" : nil
+        }))
+        XCTAssertNil(missing.lastUsed)
+        XCTAssertNil(missing.useCount)
+
+        let wrongTypes = try XCTUnwrap(LauncherUsageQuery.sample(attribute: { key -> Any? in
+            switch key {
+            case LauncherUsageQuery.pathAttribute: return "/Applications/Delta.app"
+            case LauncherUsageQuery.lastUsedAttribute: return "昨天"   // 不是 Date
+            case LauncherUsageQuery.useCountAttribute: return "很多次"  // 不是数字
+            default: return nil
+            }
+        }))
+        XCTAssertNil(wrongTypes.lastUsed)
+        XCTAssertNil(wrongTypes.useCount)
+
+        // ⑤ 没有路径 = 这条结果用不上（不是"拿空路径建一条"）
+        XCTAssertNil(LauncherUsageQuery.sample(attribute: { _ in nil }))
+        XCTAssertNil(LauncherUsageQuery.sample(attribute: { key -> Any? in
+            key == LauncherUsageQuery.useCountAttribute ? NSNumber(value: 1) : nil
+        }))
+
+        // ⑥ `useCount(from:)` 的形态表
+        XCTAssertEqual(LauncherUsageQuery.useCount(from: NSNumber(value: 7)), 7)
+        XCTAssertEqual(LauncherUsageQuery.useCount(from: "12"), 12)
+        XCTAssertNil(LauncherUsageQuery.useCount(from: "abc"))
+        XCTAssertNil(LauncherUsageQuery.useCount(from: ""))
+        XCTAssertNil(LauncherUsageQuery.useCount(from: nil))
+        XCTAssertNil(LauncherUsageQuery.useCount(from: Date()), "表外类型一律无数据")
     }
 
     /// 图标的**惰性缓存**：同路径第二次不再读盘（返回同一个对象）。

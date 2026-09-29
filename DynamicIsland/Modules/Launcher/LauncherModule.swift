@@ -57,8 +57,11 @@ enum LauncherConfigDefaults {
 
 /// 本模块 config 的**一次快照**（三个键都经 `ConfigHandle` 解析：manifest 默认值 + 用户覆盖）。
 ///
-/// 取快照的时机是"每次取内容 / 每次读设置"：用户改了值，**下一次进 tab 就是新值**
-/// （不需要重启，也不需要模块自己订阅配置变更——`configChanged` 那条事件链属 P1-3）。
+/// 取快照的时机：`iconSize` / `density` 是**每次 `content(for: .expanded)`** 现读现用——
+/// 用户改了值，下一次进 tab（或任何一次重绘）就是新尺寸，不需要重启；
+/// 但 `showRecents` **不是**同一档：它只在模块激活后的**第一次取数**被读一次
+///（`LauncherStore.loadUsage` 的 `hasLoadedUsage` 闸门：一次激活只查一次 Spotlight），
+/// 因此 **false → true 要关了再开模块（或重启应用）才生效**，改动时别把这两档混为一谈。
 struct LauncherSettings: Equatable {
     var iconSize: Double
     var density: Double
@@ -179,21 +182,55 @@ struct LauncherUsageSample: Equatable {
 @MainActor
 enum LauncherUsageQuery {
 
+    /// `kMDItemPath` 的属性名（SDK 导出的常量，不抄字面量）。
+    nonisolated static let pathAttribute = NSMetadataItemPathKey
+
+    /// `kMDItemLastUsedDate` 的属性名（同上，SDK 导出）。
+    nonisolated static let lastUsedAttribute = NSMetadataItemLastUsedDateKey
+
     /// `kMDItemUseCount` 的属性名。**SDK 只导出了 `kMDItemLastUsedDate` 的常量**
     /// （`NSMetadataItemLastUsedDateKey`），使用次数只有文档里的属性名——它是一个**公开的
     /// Spotlight 元数据属性**（`mdfind "kMDItemUseCount > 0"` 可复现），不是私有 API，
     /// 因此这里写字符串字面量而不是 `kMDItem*` 常量（那个常量在 SDK 里不存在）。
-    static let useCountAttribute = "kMDItemUseCount"
+    nonisolated static let useCountAttribute = "kMDItemUseCount"
 
     /// `.app` 的内容类型（与 `mdfind "kMDItemContentType == 'com.apple.application-bundle'"` 同口径）。
-    static let applicationBundleContentType = "com.apple.application-bundle"
+    nonisolated static let applicationBundleContentType = "com.apple.application-bundle"
 
     /// 查询的等待上限（秒）：超过就按**无使用数据**回落（固定 → 名称），绝不把首屏拖住。
     /// 本机实测三个根目录首次收集 ~20ms，3s 是给"索引正忙 / 大目录"留的余量。
-    static let defaultTimeout: TimeInterval = 3
+    nonisolated static let defaultTimeout: TimeInterval = 3
 
     /// 轮询间隔（秒）：等 `isGathering` 变 false。
     private static let pollInterval: TimeInterval = 0.05
+
+    /// 一条 Spotlight 结果的**属性读数接缝**：给属性名，给值（`nil` = 这条结果没有该属性）。
+    ///
+    /// 抽这个接缝的理由是**可测性**：映射逻辑（含三个属性名常量）与 `NSMetadataQuery` 之间
+    /// 只隔着这一个闭包，于是"属性名写错 / 取值类型变了"能被构造的数据钉住，而不是靠
+    /// 一次真查询碰运气（真查询在没开索引的机器上照样返回空表，属性名写错会**静默**降级成
+    /// "按名称排序"，套件全绿）。真实实现只有一行，见 `samples(from:)`。
+    nonisolated static func sample(attribute: (String) -> Any?) -> LauncherUsageSample? {
+        // 没有路径 = 这条结果用不上（路径同时是清单与使用数据之间的唯一桥梁）。
+        guard let path = attribute(pathAttribute) as? String else { return nil }
+
+        return LauncherUsageSample(
+            path: path,
+            lastUsed: attribute(lastUsedAttribute) as? Date,
+            useCount: useCount(from: attribute(useCountAttribute))
+        )
+    }
+
+    /// `kMDItemUseCount` 的读数 → `Int?`：`NSNumber` 与数字字符串两种形态都认，
+    /// 其余（nil / 非数字字符串 / 别的类型）一律当**无数据**处理——不崩、不猜、不写成 0
+    /// （0 与"没有这个属性"在排序里是两件事）。
+    nonisolated static func useCount(from value: Any?) -> Int? {
+        if let number = value as? NSNumber { return number.intValue }
+        if let text = value as? String {
+            return Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
 
     /// 在 `rootURLs` 上取 `.app` 的使用数据（**键 = 路径**）。
     ///
@@ -218,8 +255,8 @@ enum LauncherUsageQuery {
         query.searchScopes = rootURLs
         query.predicate = NSPredicate(format: "kMDItemContentType == '\(applicationBundleContentType)'")
         query.valueListAttributes = [
-            NSMetadataItemPathKey,
-            NSMetadataItemLastUsedDateKey,
+            pathAttribute,
+            lastUsedAttribute,
             useCountAttribute,
         ]
         guard query.start() else { return [:] }
@@ -241,19 +278,17 @@ enum LauncherUsageQuery {
         return samples
     }
 
-    /// 查询结果 → 样本表（键 = 路径）。取不到的属性一律留空（**不猜**）。
+    /// 查询结果 → 样本表（键 = 路径）。
+    ///
+    /// 这里只剩"把 `NSMetadataItem` 变成属性读数接缝"这一件事，映射本身在 `sample(attribute:)`
+    /// （纯函数，用例直接钉）。没有路径的结果直接跳过。
     private static func samples(from query: NSMetadataQuery) -> [String: LauncherUsageSample] {
         var samples: [String: LauncherUsageSample] = [:]
         for index in 0..<query.resultCount {
             guard let item = query.result(at: index) as? NSMetadataItem,
-                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
+                  let sample = sample(attribute: { item.value(forAttribute: $0) })
             else { continue }
-
-            samples[path] = LauncherUsageSample(
-                path: path,
-                lastUsed: item.value(forAttribute: NSMetadataItemLastUsedDateKey) as? Date,
-                useCount: (item.value(forAttribute: useCountAttribute) as? NSNumber)?.intValue
-            )
+            samples[sample.path] = sample
         }
         return samples
     }
@@ -287,6 +322,11 @@ enum LauncherUsageQuery {
 /// （用例因此不必等一次真查询，也不受本机 Spotlight 状态影响）。
 typealias LauncherUsageFetcher = @MainActor (_ rootURLs: [URL]) async -> [String: LauncherUsageSample]
 
+/// 启动一个 App 的注入点（参数 = `.app` 的 URL）。默认实现走 `NSWorkspace`（见 `LauncherStore.init`）；
+/// 单测注入记录型假体，于是"点图标 → 启动 → 收起"这条链路可以被断言，
+/// 而不必在用例里真的拉起一个 App。
+typealias LauncherAppOpener = @MainActor (_ appURL: URL) -> Void
+
 // MARK: - LauncherStore
 
 /// 启动台的取数与状态：扫描（缓存）、固定项（本地数据）、使用数据（Spotlight，异步）。
@@ -314,11 +354,14 @@ final class LauncherStore: ObservableObject {
     }
 
     private let logger: ModuleLogger
-    /// config 快照的读取（每次读盘前问一次，用户改了 `showRecents` 立刻生效）。
+    /// config 快照的读取。`iconSize` / `density` 是"每次取内容现读现用"，`showRecents` 另有一道闸门
+    /// （见 `LauncherSettings` 的注释与 `loadUsage()`）。
     private let settings: () -> LauncherSettings
     private let roots: [URL]
     private let pins: LauncherPins
     private let fetchUsage: LauncherUsageFetcher
+    /// 启动一个 App（默认走 `NSWorkspace`；注入点见 `LauncherAppOpener`）。
+    private let openApp: LauncherAppOpener
     /// 启动后收起面板（模块侧注入的 `context.ui.requestCollapse()`；视图不碰窗口）。
     private let collapse: () -> Void
 
@@ -335,6 +378,7 @@ final class LauncherStore: ObservableObject {
             showRecents: LauncherConfigDefaults.showRecents
         ) },
         collapse: @escaping () -> Void = {},
+        openApp: LauncherAppOpener? = nil,
         fetchUsage: LauncherUsageFetcher? = nil
     ) {
         self.logger = logger
@@ -342,6 +386,17 @@ final class LauncherStore: ObservableObject {
         self.pins = pins
         self.settings = settings
         self.collapse = collapse
+        self.openApp = openApp ?? { [logger] appURL in
+            // 生产实现（唯一一处 `NSWorkspace` 启动调用）：`activates = true` **显式写出**
+            //（同通知卡片的口径）：点图标的目的就是"去那个 App"，目标必须被带到前台。
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+                if let error {
+                    logger.warn("启动失败：\(appURL.path)：\(String(describing: error))")
+                }
+            }
+        }
         self.fetchUsage = fetchUsage ?? { await LauncherUsageQuery.fetch(rootURLs: $0) }
     }
 
@@ -412,20 +467,18 @@ final class LauncherStore: ObservableObject {
 
     /// 点图标：启动 App → **收起面板**（与待办 / 通知同口径：动作完成即收起，不要求用户再按一次）。
     ///
-    /// - 启动走 `NSWorkspace.shared.openApplication(at:configuration:)`，`activates = true`
-    ///   **显式写出**（同通知卡片的口径）：点图标的目的就是"去那个 App"，目标必须被带到前台；
+    /// - 启动走注入的 `openApp`（默认实现 = `NSWorkspace.shared.openApplication(at:configuration:)`，
+    ///   `activates = true` **显式写出**，同通知卡片的口径）：点图标的目的就是"去那个 App"，
+    ///   目标必须被带到前台；
     /// - **先发启动、再收起**（§处理链路的两步顺序）：不等启动完成——否则点一下要等系统往返；
     ///   完成回调只用来记失败（包已被删 / 系统拒绝时日志里留一行，不静默、也不假装成功）；
     /// - 重复点击是幂等的：`openApplication` 对已启动的 App 只是激活，不会开出第二个实例。
+    ///
+    /// 两步各自的执行体都是**注入点**（`openApp` / `collapse`），因此这条链路可以被用例逐字断言：
+    /// 打开的是哪一项的 URL、各调用了几次、先后顺序（见 `testLauncherLaunchOpensAppThenCollapses`）。
     func launch(_ app: LauncherApp) {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
         logger.info("启动：\(app.name)（\(app.id)）")
-        NSWorkspace.shared.openApplication(at: app.url, configuration: configuration) { [logger] _, error in
-            if let error {
-                logger.warn("启动失败：\(app.name)（\(app.url.path)）：\(String(describing: error))")
-            }
-        }
+        openApp(app.url)
         collapse()
     }
 }
