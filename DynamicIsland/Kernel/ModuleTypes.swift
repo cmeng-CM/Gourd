@@ -2,26 +2,36 @@
 //  ModuleTypes.swift
 //  Gourd 模块内核 · 类型层（P1 批次 / T1）
 //
-//  取值词汇表逐字沿用 docs/06-module-protocol.md（§3.1 / §6.1 / §6.2）；
+//  取值词汇表逐字沿用 docs/06-module-protocol.md（§3.1 / §6.1 / §6.2），
+//  唯一增量是 P2 批次加的 `Surface.home`（docs/17-nookx-adoption.md §接口与数据形状 1）；
 //  本文件不含任何行为，只有共享的枚举。
 //
 
 import Foundation
 
-/// 06 §6.1 的三个 surface：模块内容可以出现在哪里。
+/// 06 §6.1 的 surface：模块内容可以出现在哪里。
 ///
 /// | 取值 | 语义 | 承载 |
 /// |---|---|---|
 /// | `compact` | 折叠态 | 槽位（`Slot`） |
 /// | `expanded` | 展开面板 | 展开区的 tab |
 /// | `lockscreen` | 锁屏小组件 | 锁屏 widget |
+/// | `home` | 展开面板**首页的一条 strip 块** | 首页横向 strip（P2 批次新增） |
 ///
-/// 不新增 `hud` 之类的 surface——瞬时浮层是 `expanded` 的一种呈现方式（06 §6.1），
-/// 本批不声明 `lockscreen`（D-12，ADR-0011 第 4 条「锁屏维持现状」）。
+/// `home` 与 `compact` / `expanded` **并列**（docs/17-nookx-adoption.md §接口与数据形状 1）：
+/// 声明它 = 「这个模块愿意在首页 strip 里占一块」，与「有没有展开 tab」（`expanded`）互不蕴含。
+///
+/// **既有校验规则不变**：`surfaces` 仍是非空子集，元素合法性由本枚举的解码保证
+///（`ModuleManifest.validate()` 只管「非空」这一条，不认识有哪些取值）；`defaultPlacement`
+/// 仍只在含 `compact` 时有意义，首页块的顺序只是复用 `defaultPlacement.order` 这个排序键（D-04）。
+///
+/// 不新增 `hud` 之类的 surface——瞬时浮层是 `expanded` 的一种呈现方式（06 §6.1）。
+/// `lockscreen` 本批不声明（D-12，ADR-0011 第 4 条「锁屏维持现状」）。
 public enum Surface: String, Codable, Sendable, CaseIterable {
     case compact
     case expanded
     case lockscreen
+    case home
 }
 
 /// 06 §6.2 的槽位模型：仅在 `surface == .compact` 时有意义。

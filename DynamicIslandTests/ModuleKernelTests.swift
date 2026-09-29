@@ -344,8 +344,11 @@ final class ModuleKernelTests: XCTestCase {
     // MARK: - 取值词汇表与权限白名单
 
     /// 06 §3.1 / §6.1 / §6.2 的取值词汇表是本批对外契约（D-02 / D-11：逐字沿用、不得漂移）。
+    /// `Surface` 的第四个取值 `home`（首页 strip 的一块）是 P2 批次的增量
+    ///（docs/17-nookx-adoption.md §接口与数据形状 1），排在既有三个取值**之后**——
+    /// 既有取值的语义与顺序不变。
     func testProtocolVocabularyMatchesProtocolDoc() {
-        XCTAssertEqual(Surface.allCases.map(\.rawValue), ["compact", "expanded", "lockscreen"])
+        XCTAssertEqual(Surface.allCases.map(\.rawValue), ["compact", "expanded", "lockscreen", "home"])
         XCTAssertEqual(Slot.allCases.map(\.rawValue), ["left", "right", "center"])
         // 四态定死；本批只有 collapsed / expanded 可达（D-04 包装路线，hoverPreview / dragging 属 P1-2）
         XCTAssertEqual(NotchPhase.allCases.map(\.rawValue), ["collapsed", "hoverPreview", "expanded", "dragging"])

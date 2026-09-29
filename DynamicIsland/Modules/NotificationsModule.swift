@@ -936,7 +936,7 @@ final class NotificationsModule: GourdModule {
         return fallback.isEmpty ? item.displayName : fallback
     }
 
-    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、不算失败）。
+    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 与 `home` 返回 `.none`（不占位、不算失败）。
     ///
     /// 展开面板多交一条 `onCollapse`：列表行点击的「收起刘海」出口——模块**只调注入的
     /// `UIHandle`**（`requestCollapse()` → 应用侧注入的闭包），自己不碰窗口（06 §3.3 R1）。
@@ -955,7 +955,7 @@ final class NotificationsModule: GourdModule {
                     self.context.ui.requestCollapse()
                 }
             )))
-        case .lockscreen:
+        case .lockscreen, .home:
             return .none
         }
     }

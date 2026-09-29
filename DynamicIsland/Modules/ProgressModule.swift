@@ -110,7 +110,7 @@ final class ProgressModule: GourdModule {
 
     func deactivate() async {}
 
-    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`
+    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 与 `home` 返回 `.none`
     ///（06 §3.2 的「该 surface 此刻无内容」：不占位、也不算失败）。
     ///
     /// 配置在**每次请求时重读**：宿主 `requestRedraw()` 触发重算时，视图拿到的是新的
@@ -121,7 +121,7 @@ final class ProgressModule: GourdModule {
             return .view(AnyView(ProgressCompactView(scopes: scopes)))
         case .expanded:
             return .view(AnyView(ProgressModuleView(scopes: scopes)))
-        case .lockscreen:
+        case .lockscreen, .home:
             return .none
         }
     }

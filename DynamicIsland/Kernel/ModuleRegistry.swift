@@ -44,6 +44,22 @@ public struct ModuleTabEntry: Identifiable, Equatable {
     public let order: Int
 }
 
+/// 首页 strip 的一个块条目（模块清单在「展开面板首页」上的投影；docs/17 §接口与数据形状 2）。
+///
+/// 与 `ModuleTabEntry` 同形不同语义：tab 条目属于展开面板的 tab 列表，本条目属于首页那一条
+/// 横向 strip。两者都复用 `defaultPlacement.order` 作为排序键（D-04），但**各自独立投影**——
+/// 声明 `home` 不意味着有 tab，反之亦然。
+public struct ModuleHomeEntry: Identifiable, Equatable {
+    /// 模块 id（`com.cmeng.gourd.<shortID>`）。
+    public let id: String
+    /// 已本地化标题（解析顺序见 `ModuleRegistry.label(for:)`，与 tab 条目同一份）。
+    public let label: String
+    /// SF Symbol 名（生产路径不调 `validate()`，本批未校验符号可解析性，见 docs/13「已知限制」17）。
+    public let symbolName: String
+    /// `defaultPlacement.order`，无 placement 时 `Int.max`（排在最后）。
+    public let order: Int
+}
+
 /// 一条**瞬时浮层**（09 §5.5 呈现 ①：新事件到达时在折叠态刘海上短暂展示）。
 ///
 /// 与 `ModuleCompactSlotView` / `ModuleHostView` 的关系：那两处渲染的是**常驻内容**
@@ -221,6 +237,29 @@ public final class ModuleRegistry: ObservableObject {
             .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
     }
 
+    /// 首页 strip 的块列表：`active` 且 `surfaces` 含 `.home`，
+    /// 按 `order` 升序、同 `order` 按 id 字典序（与 `tabEntries` / `compactEntries` 同一比较器）。
+    ///
+    /// 与另两条投影一样**不做缓存**：每次读都现算（`manifests` / `states` 都是 `@Published`
+    /// 的派生量，缓存会让「注册后 / 激活后 / 停用后」三个时刻的视图不一致）。
+    ///
+    /// 宿主侧（T3）对返回的条目还要再过滤一次「本次 `content(for:request:.home)` 答 `.none`」的
+    /// 条目——投影层不做这件事：投影是**声明**（manifest 说愿意在首页占一块），
+    /// 内容是**表态**（这一刻有没有东西可画），两者分开才不会让一次 `.none` 影响后续刷新。
+    public var homeEntries: [ModuleHomeEntry] {
+        manifests.values
+            .filter { states[$0.id] == .active && $0.surfaces.contains(.home) }
+            .map { manifest in
+                ModuleHomeEntry(
+                    id: manifest.id,
+                    label: Self.label(for: manifest),
+                    symbolName: manifest.icon.name ?? "",
+                    order: manifest.defaultPlacement?.order ?? Int.max
+                )
+            }
+            .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
+    }
+
     /// 折叠态中央槽位的内容：取 `compactEntries` 的**第一个**转发；无候选、或模块答 `.none` → `.none`
     ///（不占位，关闭态自然回落到人脸动画 / 空矩形等既有分支）。
     ///
@@ -236,6 +275,21 @@ public final class ModuleRegistry: ObservableObject {
         surface: .compact,
         phase: .collapsed,
         slot: .center,
+        sizeHint: .zero,
+        reason: .initial,
+        isLowPower: false
+    )
+
+    /// 首页 strip 的块请求（宿主渲染首页块时用，docs/17 §接口与数据形状 2）。
+    ///
+    /// **宽度不由请求传递**：`sizeHint` 是 `.zero`，块拿到的是 SwiftUI 的提案宽度——
+    /// 分配由 `HomeStripLayoutMath.plan` 在布局层算完（富余不拉伸、不足按最小宽度收敛）。
+    /// `slot` 为 nil：首页没有槽位语义（`Slot` 只在 `surface == .compact` 时有意义）。
+    /// 与 `compactSlotRequest` 同档——定值、静态、无实例状态；`ContentRequest` 的字段一个不加。
+    public static let home: ContentRequest = ContentRequest(
+        surface: .home,
+        phase: .expanded,
+        slot: nil,
         sizeHint: .zero,
         reason: .initial,
         isLowPower: false

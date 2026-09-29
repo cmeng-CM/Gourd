@@ -457,14 +457,15 @@ final class TodosModule: GourdModule {
         store.stop()
     }
 
-    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、也不算失败）。
+    /// 两个 surface 各给一份内容；未声明的 `lockscreen` 与 `home` 返回 `.none`（不占位、也不算失败）。
+    /// （首页块内容属 P2 / T4：那时 `surfaces` 会声明 `home`，这里再换成真正的块视图。）
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .compact:
             return .view(AnyView(TodosCompactView(store: store)))
         case .expanded:
             return .view(AnyView(TodosModuleView(store: store)))
-        case .lockscreen:
+        case .lockscreen, .home:
             return .none
         }
     }
