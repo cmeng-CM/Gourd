@@ -13,7 +13,8 @@
 //  - 单块兜底：`widths == [max(0, available)]`、不出现负宽；
 //  - 空数组：`leftover == available`；`spacing == 0` 与「间隙只出现在块与块之间」；
 //  - 三条不变量（`widths.count == visibleCount` / 无负宽 / 总和约束）的批量复检；
-//  - 仲裁 #1 的兜底 `shavingOverflow`：越界时从最宽块继续扣 0.5pt（直测，见该用例注释）。
+//  - `leftover` 一律是**未被使用的尾部空间总量**（规则 ② 的取整零头、规则 ③ 丢块空出来的
+//    空间都计入），`> 0` 不等于「没铺满」，所以断言一律走公式而不是 `== 0`。
 //
 //  **协议与投影**
 //  - `Surface.home`：词汇表取值与保序解码（四个取值，既有三个不变）；
@@ -74,6 +75,18 @@ final class HomeStripLayoutTests: XCTestCase {
         }
     }
 
+    /// `leftover` 只有一个口径：**未被使用的尾部空间总量**
+    ///（`max(0, available − sum(widths) − spacing × max(0, count−1))`）。
+    /// 规则 ② 的取整零头、规则 ③ 丢块空出来的空间都算在里面，所以不能拿 `== 0` 当「用满」判据。
+    private func expectedLeftover(
+        _ plan: HomeStripLayoutMath.Plan,
+        available: CGFloat,
+        spacing: CGFloat
+    ) -> CGFloat {
+        let used = plan.widths.reduce(CGFloat.zero, +) + gaps(plan.visibleCount, spacing: spacing)
+        return max(0, available - used)
+    }
+
     // MARK: - 规则 ①：富余不放大（D-02）
 
     /// 富余时块保持**理想宽度**（不得被拉伸）、`leftover` 是余量、块数不变。
@@ -117,7 +130,10 @@ final class HomeStripLayoutTests: XCTestCase {
         // raw：371.077 / 235.538 / 151.846 / 215.538 → 向下取整到 0.5
         XCTAssertEqual(plan.widths, [371, 235.5, 151.5, 215.5])
         XCTAssertEqual(plan.visibleCount, 4, "够最小宽度和时一块都不丢")
-        XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9, "压缩路径不留余量")
+        // 向下取整留下 0.5pt 零头（1010 − 973.5 − 36）：它是 leftover，但块并没有少
+        XCTAssertGreaterThan(plan.leftover, 0, "取整零头也是尾部余量")
+        XCTAssertLessThanOrEqual(plan.leftover, 0.5 * CGFloat(plan.visibleCount) + 1e-9, "零头不超过 0.5 × 块数")
+        XCTAssertEqual(plan.leftover, expectedLeftover(plan, available: available, spacing: Self.spacing), accuracy: 1e-9)
         assertOnHalfPointGrid(plan.widths)
         assertInvariants(plan, available: available, spacing: Self.spacing)
 
@@ -156,13 +172,16 @@ final class HomeStripLayoutTests: XCTestCase {
         // 可用 201.5：compressible = 2、deficit = 0.5、scale = 0.75 → raw 100.75 → **100.5**
         let loose = HomeStripLayoutMath.plan(items: items, available: 201.5, spacing: 0)
         XCTAssertEqual(loose.widths, [100.5, 100.5], "100.75 向下取整到 100.5（不得进位到 101）")
-        XCTAssertEqual(loose.leftover, 0, accuracy: 1e-9)
+        // 取整零头 0.5pt（201.5 − 201）留在尾部：它不属于任何块，但仍是未被使用的空间
+        XCTAssertEqual(loose.leftover, 0.5, accuracy: 1e-9, "取整零头计入尾部余量")
+        XCTAssertEqual(loose.leftover, expectedLeftover(loose, available: 201.5, spacing: 0), accuracy: 1e-9)
         assertOnHalfPointGrid(loose.widths)
         assertInvariants(loose, available: 201.5, spacing: 0)
 
         // 可用 200.5：deficit = 1.5、scale = 0.25 → raw 100.25 → **100.0**
         let tight = HomeStripLayoutMath.plan(items: items, available: 200.5, spacing: 0)
         XCTAssertEqual(tight.widths, [100, 100], "100.25 向下取整到 100.0")
+        XCTAssertEqual(tight.leftover, expectedLeftover(tight, available: 200.5, spacing: 0), accuracy: 1e-9)
         assertInvariants(tight, available: 200.5, spacing: 0)
     }
 
@@ -176,7 +195,10 @@ final class HomeStripLayoutTests: XCTestCase {
 
         XCTAssertEqual(plan.widths, [300, 200], "丢的是尾部那一块（镜子 140），留下的取各自 min")
         XCTAssertEqual(plan.visibleCount, 2)
-        XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9, "丢块路径不留余量")
+        // 丢块空出来的空间（520 − 300 − 200 − 12 = 8）也是尾部余量：**不为 0 不代表没铺满**
+        XCTAssertEqual(plan.leftover, 8, accuracy: 1e-9, "丢块空出来的空间计入尾部余量")
+        XCTAssertGreaterThan(plan.leftover, 0, "丢块路径的 leftover > 0")
+        XCTAssertEqual(plan.leftover, expectedLeftover(plan, available: available, spacing: Self.spacing), accuracy: 1e-9)
         XCTAssertFalse(plan.widths.contains(140), "被丢的应是数组最后一项")
         assertInvariants(plan, available: available, spacing: Self.spacing)
     }
@@ -198,7 +220,9 @@ final class HomeStripLayoutTests: XCTestCase {
 
         XCTAssertEqual(plan.widths, [300], "只剩第一块时不留间隙（单块不乘 spacing）")
         XCTAssertEqual(plan.visibleCount, 1)
-        XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9)
+        // 460 里只用掉 300，余下 160 是尾部余量（丢块路径同理）
+        XCTAssertEqual(plan.leftover, 160, accuracy: 1e-9, "只剩一块时没用到的宽度也是尾部余量")
+        XCTAssertEqual(plan.leftover, expectedLeftover(plan, available: 460, spacing: Self.spacing), accuracy: 1e-9)
         assertInvariants(plan, available: 460, spacing: Self.spacing)
     }
 
@@ -274,7 +298,7 @@ final class HomeStripLayoutTests: XCTestCase {
     // MARK: - 不变量批量复检
 
     /// 在代表性预算上扫一遍：三条不变量恒成立；「富余 ⟺ 走规则 ①」的判据也要对得上
-    ///（富余时宽度就是 ideal；非富余时 `leftover == 0`）。
+    ///（富余时宽度就是 ideal）；`leftover` 一律等于「未被使用的尾部空间总量」。
     func testInvariantsHoldAcrossRepresentativeBudgets() {
         let itemSets: [[HomeStripLayoutMath.Item]] = [
             [Self.music, Self.calendar, Self.mirror, Self.moduleBlock],
@@ -297,9 +321,14 @@ final class HomeStripLayoutTests: XCTestCase {
                     if available >= sumIdeal + gapTotal {
                         XCTAssertEqual(plan.widths, items.map(\.ideal), "富余时宽度应逐字等于 ideal")
                         XCTAssertEqual(plan.visibleCount, items.count)
-                    } else {
-                        XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9, "非富余路径不留余量")
                     }
+                    // `leftover` 三条规则同一个口径（非富余路径完全可以 > 0，例如丢块之后）
+                    XCTAssertEqual(
+                        plan.leftover,
+                        expectedLeftover(plan, available: available, spacing: spacing),
+                        accuracy: 1e-9,
+                        "leftover 应是未使用的尾部空间（available \(available)，spacing \(spacing)）"
+                    )
 
                     if available >= sumMin + gapTotal {
                         XCTAssertEqual(plan.visibleCount, items.count, "够最小宽度和时一块都不丢")
@@ -316,37 +345,6 @@ final class HomeStripLayoutTests: XCTestCase {
                 }
             }
         }
-    }
-
-    // MARK: - 仲裁 #1 的兜底（直测内部接缝）
-
-    /// 向下取整后若总和仍越界（浮点残差；精确算术下走不到），`shavingOverflow` 必须
-    /// 把差距从**最宽的那一块**继续扣、每次 0.5pt、扣到不为负，直到不变量重新成立。
-    ///
-    /// 这条兜底由仲裁 #1 要求保留，且要求有用例钉住；但它经 `plan(...)` 不可达
-    ///（等比压缩的总和恰好等于可用宽度，向下取整只会更小），故直测这个 internal 接缝。
-    func testShavingOverflowRestoresInvariantFromWidestBlock() {
-        // 超 32pt：最宽的那块（420）独自让出 32 → 388
-        let shaved = HomeStripLayoutMath.shavingOverflow([420, 300], gaps: 12, available: 700)
-        XCTAssertEqual(shaved, [388, 300], "差距应全部由最宽的那块承担（每次 0.5pt）")
-        XCTAssertLessThanOrEqual(shaved.reduce(0, +) + 12, 700 + 1e-9)
-
-        // 三块、两块要先被削：420 让到 400 后总和恰好落地 → [400, 400, 300]
-        let three = HomeStripLayoutMath.shavingOverflow([420, 400, 300], gaps: 0, available: 1100)
-        XCTAssertEqual(three, [400, 400, 300])
-
-        // 收手条件：刚好满足即停（再多扣一次就越过 0.5pt 粒度）
-        let tied = HomeStripLayoutMath.shavingOverflow([200, 200], gaps: 0, available: 350)
-        XCTAssertEqual(tied.reduce(0, +), 350, accuracy: 1e-9)
-        XCTAssertTrue(tied.allSatisfy { $0 >= 0 && $0 <= 200 }, "不得为负、也不得超过原宽")
-        XCTAssertGreaterThan(tied.reduce(0, +) + 0.5, 350, "满足后立刻停手（0.5pt 粒度）")
-
-        // 本来就没越界：原样返回
-        XCTAssertEqual(HomeStripLayoutMath.shavingOverflow([100, 100], gaps: 12, available: 212), [100, 100])
-
-        // 退化输入：空数组原样；全 0 宽度不得死循环（无法再让，直接退出）
-        XCTAssertEqual(HomeStripLayoutMath.shavingOverflow([], gaps: 12, available: 0), [])
-        XCTAssertEqual(HomeStripLayoutMath.shavingOverflow([0, 0], gaps: 0, available: 0), [0, 0])
     }
 
     // MARK: - `Surface.home`

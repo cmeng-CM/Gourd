@@ -5,7 +5,9 @@
 //  **纯几何，无 SwiftUI**：本文件只做算术，不引入任何 SwiftUI 符号（P2 全局约束）——
 //  分配规则与渲染分离，规则才能被单测穷举（`DynamicIslandTests/HomeStripLayoutTests.swift`）。
 //
-//  规格逐字沿用 docs/17-nookx-adoption.md §接口与数据形状 5（三条规则 + 四条不变量）。
+//  规格逐字沿用 docs/17-nookx-adoption.md §接口与数据形状 5 的三条规则；`leftover` 的口径
+//  按 T1 审查裁定改为「**未被使用的尾部空间总量**」（原「非规则 ① 恒为 0」的说法在恰好放满
+//  与丢块路径下都与实际不符，见 `.workflow/p2-home-strip/reports/T1.md`）。
 //  决策：D-02（富余不拉伸：块保持理想宽度、余量留尾部）、D-03（不足不滚动不分页：
 //  按最小宽度收敛，仍不足则按 `order` 从尾部丢块）。
 //
@@ -37,19 +39,25 @@ public enum HomeStripLayoutMath {
         public let widths: [CGFloat]
         /// 从头开始可见的块数（恒等于 `widths.count`，分开给出是为了渲染侧可读）。
         public let visibleCount: Int
-        /// 尾部余量：走规则 ① 时是 `available - sum(ideal) - spacing × (n-1)`（恰好放满时为 0），
-        /// 其余情况恒为 0（规则 ② / ③ 都把宽度用满或主动丢弃）。
+        /// **未被使用的尾部空间总量**：
+        /// `max(0, available - sum(widths) - spacing × max(0, visibleCount-1))`。
+        ///
+        /// 三条规则共用这一个式子：规则 ① 是富余量、规则 ② 是向下取整剩下的零头
+        ///（≤ 0.5 × 块数）、规则 ③ 是丢块空出来的空间（可达数百 pt；恰好用满时为 0）。
+        /// **它不等于 0 不代表块被铺满**——丢块路径下宽度取的是各自 `min`，
+        /// 与可用宽度无关，T3 若拿它做尾部对齐/铺满判据必须先看 `visibleCount`。
         public let leftover: CGFloat
     }
 
     /// 分配规则（三条，**按序判定**，命中即返回）：
     ///
     /// 1. **富余**（`available >= sum(ideal) + spacing × (n-1)`）：`widths == ideal`——
-    ///    块保持理想宽度、**不拉伸**（D-02），余量留在尾部（`leftover`）。
+    ///    块保持理想宽度、**不拉伸**（D-02），余量留在尾部。
     /// 2. **不足但够最小宽度和**（`available >= sum(min) + spacing × (n-1)`）：按可压缩量等比压缩，
     ///    每块 `min + (ideal - min) × (1 - deficit / compressible)`，再**向下取整到 0.5pt**
-    ///   （`floor(x × 2) / 2`：向上取整会让总和越过可用宽度，违反不变量）。
-    ///    其中 `deficit = sum(ideal) - (available - spacing × (n-1))`、
+    ///   （`floor(x × 2) / 2`：乘以 2 是精确的 2 的幂缩放，向下取整后每块必 ≤ 压缩前的值，
+    ///    因此总和不越界、无需事后收敛）。其中
+    ///    `deficit = sum(ideal) - (available - spacing × (n-1))`、
     ///    `compressible = sum(ideal - min)`；`compressible == 0` 时全部取 `min`（防御分支）。
     /// 3. **连最小宽度和都不够**：从**尾部**逐块丢弃，直到
     ///    `sum(min) + spacing × max(0, k-1) <= available`（D-03：丢块比压扁更可读）；
@@ -57,8 +65,12 @@ public enum HomeStripLayoutMath {
     ///
     /// 空数组：`widths == []`、`visibleCount == 0`、`leftover == available`。
     ///
-    /// **不变量**（三条，规则 ① 与 ③ 的单块兜底同样满足）：
-    /// `widths.count == visibleCount`；`widths.allSatisfy { $0 >= 0 }`；
+    /// **前置条件（调用方保证，本函数不做防御）**：`items` 的 `min` / `ideal` 与 `available`
+    /// 都是有限数，且 `0 <= min <= ideal`、`spacing >= 0`。本批不加运行时守卫——非有限输入
+    ///（NaN / ±∞）会静默产出 NaN 宽度，坏输入应由调用点自己挡住（生产调用点的取值是宿主写死的
+    /// 宽度声明，见 docs/17 §接口与数据形状 6）。
+    ///
+    /// **不变量**（三条）：`widths.count == visibleCount`；`widths.allSatisfy { $0 >= 0 }`；
     /// `sum(widths) + spacing × max(0, count-1) <= available`。
     public static func plan(items: [Item], available: CGFloat, spacing: CGFloat) -> Plan {
         guard !items.isEmpty else {
@@ -71,20 +83,17 @@ public enum HomeStripLayoutMath {
         let sumIdeal = items.reduce(CGFloat.zero) { $0 + $1.ideal }
         let sumMin = items.reduce(CGFloat.zero) { $0 + $1.min }
 
-        // ① 富余：不放大，余量留尾部
-        if available >= sumIdeal + gaps {
-            return Plan(
-                widths: items.map(\.ideal),
-                visibleCount: count,
-                leftover: available - sumIdeal - gaps
-            )
-        }
+        let widths: [CGFloat]
+        let visibleCount: Int
 
-        // ② 不足但够最小宽度和：按可压缩量等比压缩，向下取整到 0.5pt
-        if available >= sumMin + gaps {
+        if available >= sumIdeal + gaps {
+            // ① 富余：不放大，余量留尾部
+            widths = items.map(\.ideal)
+            visibleCount = count
+        } else if available >= sumMin + gaps {
+            // ② 不足但够最小宽度和：按可压缩量等比压缩，向下取整到 0.5pt
             let compressible = items.reduce(CGFloat.zero) { $0 + ($1.ideal - $1.min) }
             let deficit = sumIdeal - (available - gaps)
-            let widths: [CGFloat]
             if compressible == 0 {
                 // 无可压缩量（理论上进不来：compressible == 0 意味着 sumMin == sumIdeal，
                 // 与本分支的 available < sumIdeal + gaps 矛盾）——真进来了就按最小宽度给。
@@ -96,50 +105,27 @@ public enum HomeStripLayoutMath {
                     return (raw * 2).rounded(.down) / 2
                 }
             }
-            return Plan(
-                widths: shavingOverflow(widths, gaps: gaps, available: available),
-                visibleCount: count,
-                leftover: 0
-            )
+            visibleCount = count
+        } else {
+            // ③ 连最小宽度和都不够：从尾部逐块丢弃
+            var keep = count
+            var keptMinSum = sumMin
+            while keep > 1, keptMinSum + spacing * CGFloat(keep - 1) > available {
+                keptMinSum -= items[keep - 1].min
+                keep -= 1
+            }
+            if keptMinSum + spacing * CGFloat(max(0, keep - 1)) <= available {
+                widths = items.prefix(keep).map(\.min)
+                visibleCount = keep
+            } else {
+                // 单块也放不下：只保留第一块，宽度 = 可用宽度（不为负）
+                widths = [max(0, available)]
+                visibleCount = min(1, count)
+            }
         }
 
-        // ③ 连最小宽度和都不够：从尾部逐块丢弃
-        var keep = count
-        var keptMinSum = sumMin
-        while keep > 1, keptMinSum + spacing * CGFloat(keep - 1) > available {
-            keptMinSum -= items[keep - 1].min
-            keep -= 1
-        }
-        if keptMinSum + spacing * CGFloat(max(0, keep - 1)) <= available {
-            return Plan(widths: items.prefix(keep).map(\.min), visibleCount: keep, leftover: 0)
-        }
-
-        // 单块也放不下：只保留第一块，宽度 = 可用宽度（不为负）
-        return Plan(widths: [max(0, available)], visibleCount: min(1, count), leftover: 0)
-    }
-
-    /// 仲裁 #1 的兜底：向下取整后若总和仍越界（浮点残差），把差距从**最宽的那一块**继续扣，
-    /// 每次 0.5pt，扣到不为负为止，直到 `sum(widths) + gaps <= available` 重新成立。
-    ///
-    /// **内部可见（非 public）**：规格里的 public 面只有 `plan(...)`。这条兜底在精确算术下
-    /// 不可达（等比压缩的总和恰好等于可用宽度，向下取整只会更小），只有浮点残差才可能踩到，
-    /// 因此留一个可直测的接缝由单测钉住（`HomeStripLayoutTests` 的 `shavingOverflow` 用例）。
-    ///
-    /// 终止性：调用点的分支判定保证 `available - gaps >= 0`，每轮要么把某块降 0.5、
-    /// 要么在「最宽的一块已是 0」（即全部为 0）时退出——全部为 0 时总和必不越界。
-    static func shavingOverflow(_ widths: [CGFloat], gaps: CGFloat, available: CGFloat) -> [CGFloat] {
-        guard !widths.isEmpty else { return widths }
-
-        var result = widths
-        var total = result.reduce(CGFloat.zero) { $0 + $1 }
-        while total + gaps > available {
-            guard
-                let widest = result.indices.max(by: { result[$0] < result[$1] }),
-                result[widest] > 0
-            else { break }
-            result[widest] = max(0, result[widest] - 0.5)
-            total = result.reduce(CGFloat.zero) { $0 + $1 }
-        }
-        return result
+        // `leftover` 只有一个口径：**未被使用的尾部空间总量**（三条规则共用这个式子）
+        let used = widths.reduce(CGFloat.zero) { $0 + $1 } + spacing * CGFloat(max(0, visibleCount - 1))
+        return Plan(widths: widths, visibleCount: visibleCount, leftover: max(0, available - used))
     }
 }
