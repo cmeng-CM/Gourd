@@ -95,33 +95,55 @@ func panelBackgroundUsesStyle(isOpen: Bool, isDynamicIslandMode: Bool) -> Bool {
 /// 非刘海屏上浮动药丸的顶边在屏顶下方 `dynamicIslandTopOffset`。于是菜单栏图标被采进玻璃里，
 /// 看上去就是「图标被糊成一团 / 被拉伸变形」。
 ///
-/// 判据与 `ModuleHUDWindowHost.topInset(safeAreaTop:frameMaxY:visibleFrameMaxY:)` 同口径：
-/// - **刘海屏**（`safeAreaTop > 0`）→ 取**刘海高度**（`safeAreaInsets.top`，与菜单栏同高）；
-/// - **非刘海屏** → 取**菜单栏高度**（屏顶与 `visibleFrame` 顶之差）。
+/// 判据与 `ModuleHUDWindowHost.topInset(safeAreaTop:frameMaxY:visibleFrameMaxY:)` 同口径，
+/// 但**取两者的较大值再 +1**（2026-09-29 用户反馈「顶部的高度不够，比系统的黑色区域要窄」）：
+/// - **刘海屏**（`safeAreaTop > 0`）→ 刘海高度（`safeAreaInsets.top`）与菜单栏高度取大；
+/// - **非刘海屏** → 菜单栏高度（屏顶与 `visibleFrame` 顶之差）。
 ///
-/// 两种情况下这段都是「系统的 UI 带」，面板在那里的底必须不透明：与折叠态纯黑同口径
+/// **为什么要 max 再 +1**：刘海屏上 `safeAreaInsets.top`（本机内置屏实测 32）比「屏顶 −
+/// `visibleFrame` 顶」（同一块屏实测 33）**小 1pt**——两者不是同一个量（前者是系统给的安全区，
+/// 后者是菜单栏占掉的区域，含窗口顶边那一像素的取整差）。只取刘海高度时，玻璃从黑带下面露出的
+/// 正是这 1pt，于是面板顶部与系统黑区之间露出一条缝（用户看到的「高度不够」）。
+/// 取 `max(刘海, 菜单栏) + 1` 后这条带至少盖住系统黑区，并对两种屏、两种口径都对得上。
+///
+/// 这段是「系统的 UI 带」，面板在那里必须不透明：与折叠态纯黑同口径
 /// （折叠态本来就是纯黑，见 `panelBackgroundUsesStyle`）。
 ///
-/// 负值（取不到屏 / 异常可见框）夹到 0：等于「不加黑带」，退回改造前的观感，不产生负高度。
+/// **`panelTopBleed`：面板框的顶边比**屏顶**高出多少**（刘海屏 = `notchTopScreenBleedAmount`，
+/// 非刘海屏的浮动药丸 = 0；见 `mainLayoutBase` 的 `.padding(.top, ...)`）。黑带是从**面板框顶边**
+/// 往下画的，而「系统 UI 带」是从**屏顶**往下量的；两者起点不同，所以要把这段差额补进高度里，
+/// 否则屏幕上能看到的黑带只有 `高度 − bleed`（本机实测：配 34 时屏幕上只有 0…29.5 这一段是黑的，
+/// 露出 4pt 玻璃 —— 正是用户说的「比系统黑区窄」）。
 ///
-/// 抽成纯函数是为了可测：入参是**两个数值**，调用点从屏上取完再传进来，
+/// 负值 / 非有限值一律夹到 0（= 不加黑带，退回改造前观感，不产生负高度）；
+/// 系统 UI 带 ≤ 0 时同样返回 0（「取不到屏」与「根本没有系统 UI 带」都不该凭空多出一条黑边）。
+///
+/// 抽成纯函数是为了可测：入参都是**数值**，调用点从屏上取完再传进来，
 /// 判据本身不读单例、不碰视图状态（同 `panelBackgroundUsesStyle`）。
-/// 取屏的那层壳是 `panelTopOpaqueBandHeight(for:)`。
-func panelTopOpaqueBandHeight(safeAreaTop: CGFloat, menuBarHeight: CGFloat) -> CGFloat {
-    if safeAreaTop.isFinite, safeAreaTop > 0 { return safeAreaTop }
-    guard menuBarHeight.isFinite else { return 0 }
-    return max(menuBarHeight, 0)
+/// 取屏的那层壳是 `panelTopOpaqueBandHeight(for:panelTopBleed:)`。
+func panelTopOpaqueBandHeight(
+    safeAreaTop: CGFloat,
+    menuBarHeight: CGFloat,
+    panelTopBleed: CGFloat = 0
+) -> CGFloat {
+    let notch = safeAreaTop.isFinite ? safeAreaTop : 0
+    let menuBar = menuBarHeight.isFinite ? menuBarHeight : 0
+    let systemUIBand = max(notch, menuBar, 0)
+    guard systemUIBand > 0 else { return 0 }
+    let bleed = panelTopBleed.isFinite ? max(panelTopBleed, 0) : 0
+    return bleed + systemUIBand + 1
 }
 
 /// 某块屏上「面板顶部不透明黑带」的高度；**取不到屏时 0**（不加黑带，退回改造前观感）。
 ///
 /// 两个数值的取法与 `ModuleHUDWindowHost.topInset` 一致：刘海屏用 `safeAreaInsets.top`，
 /// 非刘海屏用 `frame.maxY - visibleFrame.maxY`（菜单栏高度）。
-func panelTopOpaqueBandHeight(for screen: NSScreen?) -> CGFloat {
+func panelTopOpaqueBandHeight(for screen: NSScreen?, panelTopBleed: CGFloat = 0) -> CGFloat {
     guard let screen else { return 0 }
     return panelTopOpaqueBandHeight(
         safeAreaTop: screen.safeAreaInsets.top,
-        menuBarHeight: screen.frame.maxY - screen.visibleFrame.maxY
+        menuBarHeight: screen.frame.maxY - screen.visibleFrame.maxY,
+        panelTopBleed: panelTopBleed
     )
 }
 
@@ -731,32 +753,41 @@ struct ContentView: View {
 
     /// 玻璃底的**两段构成**：顶部不透明黑带 + 其下的玻璃（黑带压在玻璃**上面**，两段无缝）。
     ///
-    /// 黑带高度取**当前这块屏**的口径（刘海高度 / 菜单栏高度）：面板顶边与系统 UI 带同高，
-    /// 玻璃若从顶边起画就会把菜单栏图标采进来（用户截图里「图标变形」的根因）。
+    /// 黑带高度取**当前这块屏**的口径（`max(刘海高度, 菜单栏高度) + 1 + 面板顶边相对屏顶的外扩`，
+    /// 见 `panelTopOpaqueBandHeight(safeAreaTop:menuBarHeight:panelTopBleed:)`）：面板顶边与系统 UI 带
+    /// 同高，玻璃若从顶边起画就会把菜单栏图标采进来（用户截图里「图标变形」的根因）。
     /// 整块背景仍由 `.clipShape(resolvedClipShape)` 裁剪——**面板形状一点没变**，
     /// 只是顶部那一条由不透明黑替代了玻璃。
     ///
-    /// **为什么是 `ZStack` 而不是 `VStack`**（2026-09-29 用户反馈「glass 模式下有两个白条」）：
+    /// **为什么黑带画在玻璃上层**（2026-09-29 用户反馈「glass 模式下有两个白条」）：
     /// `NSGlassEffectView` 会在自己的轮廓上画一条镜面高光（上边最亮、下边次之，见
     /// `LiquidGlassBackground.hidesEdgeHighlight`）。液态玻璃这一档因此让玻璃四边外扩
     /// （`LiquidGlassEdgeHighlight.overhang`）：外扩之后玻璃的**上边沿被抬到黑带区间
     /// 之内**——`VStack` 里玻璃画在黑带**之后**，高光会浮在黑带上面（仍是白条）；只有把黑带放在
     /// 玻璃**上层**才能压住它。玻璃下边沿与左右两边则被面板自己的裁剪形状切掉。
     private func panelOpaqueTopBand<Glass: View>(_ glass: Glass) -> some View {
-        ZStack(alignment: .top) {
-            glass
+        // 黑带做成玻璃的**顶端 overlay**（画在玻璃上层），而不是 `VStack` 的兄弟节点：
+        // 外扩之后玻璃的上边沿落在黑带区间内，`VStack` 里玻璃后画 → 高光会浮在黑带上面（白条照旧）。
+        // overlay 的框 = 玻璃自己的框，不参与背景的尺寸计算（`ZStack` 会取各子视图最大值，
+        // 背景根一超标就会被 `.background` 按居中摆放而整体上移，黑带跟着浮上去）。
+        glass.overlay(alignment: .top) {
             Color.black
                 .frame(height: panelTopOpaqueBandHeightOnCurrentScreen)
         }
     }
 
-    /// 当前这块屏的顶部不透明黑带高度（`panelTopOpaqueBandHeight(for:)` 的取屏壳）。
+    /// 当前这块屏的顶部不透明黑带高度（`panelTopOpaqueBandHeight(for:panelTopBleed:)` 的取屏壳）。
     /// 取屏口径同 `isNonNotchScreen`：按 `currentScreenName` 在 `NSScreen.screens` 里找。
+    /// `panelTopBleed` 取 `isIslandMode ? 0 : notchTopScreenBleedAmount`——与 `mainLayoutBase` 的
+    /// `.padding(.top, ...)` 同源（面板框比屏顶高出多少，黑带就要多高才盖得住系统 UI 带）。
     ///
     /// 刻意**不**与全局函数同名：同名时 Swift 会把属性体里的裸名字解析成这个实例属性自己，
     /// 全局函数就调不到了（编译期报 "refers to instance method rather than global function"）。
     private var panelTopOpaqueBandHeightOnCurrentScreen: CGFloat {
-        panelTopOpaqueBandHeight(for: NSScreen.screens.first { $0.localizedName == currentScreenName })
+        panelTopOpaqueBandHeight(
+            for: NSScreen.screens.first { $0.localizedName == currentScreenName },
+            panelTopBleed: isIslandMode ? 0 : notchTopScreenBleedAmount
+        )
     }
 
     /// 玻璃背景的圆角：与 `resolvedClipShape` 的半径取**同一来源**，并取上下两档中的**较大值**。

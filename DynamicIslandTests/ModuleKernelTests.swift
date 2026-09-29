@@ -41,8 +41,9 @@
 //  的默认档与写盘往返）。
 //  **主面板背景可配**（D-26：`notchPanelBackgroundStyle` 的默认纯黑 / 三档词汇表 / 写盘往返、
 //  `panelBackgroundUsesStyle` 的「玻璃只在展开态与浮动药丸上生效、刘海屏折叠态保持纯黑」四条组合、
-//  以及玻璃底顶部的**不透明黑带高度** `panelTopOpaqueBandHeight`：刘海取刘海高度 / 非刘海取菜单栏高度、
-//  异常输入夹到 0——2026-09-28「菜单栏图标被玻璃糊变形」的判据）。
+//  以及玻璃底顶部的**不透明黑带高度** `panelTopOpaqueBandHeight`：取「刘海高度 / 菜单栏高度」里
+//  更高的那个再 +1、异常输入夹到 0——2026-09-28「菜单栏图标被玻璃糊变形」与
+//  2026-09-29「顶部比系统黑区窄」的判据）。
 //
 
 import AppKit
@@ -2579,28 +2580,44 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
-    /// **面板顶部的不透明黑带高度**（2026-09-28 用户反馈「不能强硬拉伸，菜单栏里面的图标都变形了」）：
+    /// **面板顶部的不透明黑带高度**（2026-09-28 用户反馈「不能强硬拉伸，菜单栏里面的图标都变形了」；
+    /// 2026-09-29 用户反馈「顶部的高度不够，比系统的黑色区域要窄」→ 改为 `max(刘海, 菜单栏) + 1`）：
     /// 玻璃两档都是 behindWindow 材质（`NSGlassEffectView` / `NSVisualEffectView.hudWindow`），
     /// 采样的就是窗口背后的画面；面板顶边与系统 UI 带同高，于是菜单栏图标被采进玻璃里糊成一片。
-    /// 因此刘海屏取**刘海高度**（`safeAreaInsets.top`，与菜单栏同高）——这条带必须不透明。
-    ///
-    /// 刘海屏上**不读菜单栏高度**（两者同高，但刘海高度是系统给出的权威值；外接屏的
-    /// 「屏顶 - visibleFrame 顶」在某些缩放下会偏小，不足以盖住刘海）。
+    /// 因此这条带必须不透明，高度取**系统 UI 带（刘海与菜单栏里更高的那个）+ 1pt**——
+    /// 刘海屏上 `safeAreaInsets.top`（本机内置屏实测 32）比「屏顶 − visibleFrame 顶」（33）小 1pt，
+    /// 只取刘海高度会从面板顶部露出 1pt 玻璃（用户看到的「比系统黑区窄」）。
     func testPanelTopOpaqueBandHeightPrefersNotchHeight() {
         XCTAssertEqual(
             panelTopOpaqueBandHeight(safeAreaTop: 38, menuBarHeight: 24),
-            panelTopOpaqueBandHeight(safeAreaTop: 38, menuBarHeight: 0),
-            "刘海屏：只认刘海高度，菜单栏高度不参与"
+            39,
+            "刘海屏：刘海高度（38）是两者里更高的那个 → 38 + 1"
         )
         XCTAssertEqual(
-            panelTopOpaqueBandHeight(safeAreaTop: 38, menuBarHeight: 24),
-            38,
-            "有刘海（内置屏实测 32～38pt）：黑带 = 刘海高度，盖住刘海与菜单栏那一条"
+            panelTopOpaqueBandHeight(safeAreaTop: 32, menuBarHeight: 33),
+            34,
+            "本机内置屏的实测口径：刘海 32 < 菜单栏 33 → 取菜单栏 33 + 1（盖住系统黑区）"
         )
         XCTAssertEqual(
-            panelTopOpaqueBandHeight(safeAreaTop: 32, menuBarHeight: 999),
-            32,
-            "菜单栏高度离谱也不影响：刘海屏的判据是刘海高度"
+            panelTopOpaqueBandHeight(safeAreaTop: 32, menuBarHeight: 0),
+            33,
+            "菜单栏取不到（0）时只用刘海高度，仍 +1"
+        )
+    }
+
+    /// **菜单栏比刘海高时取菜单栏高度**（2026-09-29 新增要求）：外接屏 / 缩放分辨率下
+    /// 「屏顶 − visibleFrame 顶」可能比 `safeAreaInsets.top` 更大，这时黑带必须跟着菜单栏走，
+    /// 否则玻璃会把菜单栏图标采进来（同 2026-09-28 那条反馈的根因）。
+    func testPanelTopOpaqueBandHeightTakesMenuBarWhenTallerThanNotch() {
+        XCTAssertEqual(
+            panelTopOpaqueBandHeight(safeAreaTop: 24, menuBarHeight: 38),
+            39,
+            "菜单栏 38 > 刘海 24 → 取 38 + 1（不再是「只认刘海高度」）"
+        )
+        XCTAssertEqual(
+            panelTopOpaqueBandHeight(safeAreaTop: 30, menuBarHeight: 999),
+            1000,
+            "悬殊口径下同样取大者：判据是 max 而不是「谁优先」"
         )
     }
 
@@ -2611,8 +2628,8 @@ final class ModuleKernelTests: XCTestCase {
     func testPanelTopOpaqueBandHeightFallsBackToMenuBarHeight() {
         XCTAssertEqual(
             panelTopOpaqueBandHeight(safeAreaTop: 0, menuBarHeight: 24),
-            24,
-            "非刘海屏：黑带 = 菜单栏高度"
+            25,
+            "非刘海屏：黑带 = 菜单栏高度 + 1"
         )
         XCTAssertEqual(
             panelTopOpaqueBandHeight(safeAreaTop: 0, menuBarHeight: -5),
@@ -2623,6 +2640,16 @@ final class ModuleKernelTests: XCTestCase {
             panelTopOpaqueBandHeight(safeAreaTop: 0, menuBarHeight: .nan),
             0,
             "非有限值同样夹到 0，不把 NaN 传进 frame(height:)"
+        )
+        XCTAssertEqual(
+            panelTopOpaqueBandHeight(safeAreaTop: .nan, menuBarHeight: 0),
+            0,
+            "两个入参都取不到 → 0：不该凭空多出 1pt 黑边"
+        )
+        XCTAssertEqual(
+            panelTopOpaqueBandHeight(safeAreaTop: 0, menuBarHeight: 0),
+            0,
+            "没有系统 UI 带（都为 0）→ 0，而不是 1"
         )
         XCTAssertEqual(
             panelTopOpaqueBandHeight(for: nil),
