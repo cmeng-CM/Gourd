@@ -123,7 +123,9 @@ struct NotchTimerView: View {
                             TimerPresetCard(preset: preset, isActive: timerManager.activePresetId == preset.id) {
                                 timerManager.startTimer(duration: preset.duration, name: preset.name, preset: preset)
                                 if !enableMinimalisticUI {
-                                    coordinator.currentView = .timer
+                                    // 点预设是计时器的第三条生产路径：接管后必须经模块 tab 选中，
+                                    // 把 `currentView` 直接置成 `.timer` 会落进无 tab 高亮的死分支（docs/20 §做法 机制六）。
+                                    coordinator.selectModule(TimerModule.moduleID)
                                 }
                             }
                             .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
@@ -527,7 +529,8 @@ struct NotchTimerView: View {
         withAnimation(.smooth) {
             timerManager.startTimer(duration: customDurationInSeconds, name: String(localized: "Custom Timer"))
             if !enableMinimalisticUI {
-                coordinator.currentView = .timer
+                // 与点预设同一条路径（见 `presetColumn`）：接管后经模块 tab 选中（docs/20 §做法 机制六）。
+                coordinator.selectModule(TimerModule.moduleID)
             }
         }
     }

@@ -533,7 +533,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: shouldUseDynamicIslandMode(for: vm.screen)) : openNotchSize
         
         // Use a consistent height for different view types
-        if coordinator.currentView == .timer {
+        // 计时器的 250pt 高度档：判据认模块路径（docs/20 §做法 机制六，与 `ContentView` 同一处口径），
+        // 只比 `.timer` 会让「计时器在跑 + 悬浮展开」回落到默认高度档。
+        if coordinator.isTimerSurfaceSelected() {
             baseSize.height = 250 // Extra space for timer presets
         } else if coordinator.currentView == .notes {
             let preferredHeight = coordinator.notesLayoutState.preferredHeight

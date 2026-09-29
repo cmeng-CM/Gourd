@@ -27,6 +27,12 @@
 //  - **计数回归**（docs/20 §做法 机制五）：上游那条 `+1` 删掉后，计时器对
 //    `enabledStandardTabCount()` 的贡献仍是 1 / 0 / 0（启用 × 显示方式三种组合）。
 //
+//  P2 接管批次 / T3 追加（计时器页判据——第二入口与 250pt 高度档）：
+//  - **`isTimerSurfaceSelected()`**（docs/20 §做法 机制六 / D-11）三档：
+//    `.timer`（老路径，枚举成员按机制六保留）与 `.module` + `TimerModule.moduleID`
+//    （今天唯一的生产形态：悬浮聚焦 / 点预设 / `startCustomTimer` 三条路径都走它）都答 true；
+//    `.module` + 别的模块 id、以及 `.home`（哪怕 `selectedModuleID` 残留着计时器 id）答 false。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -377,9 +383,9 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 三点刻意写死（改动前先读）：
     /// 1. **自己置全夹具**：`enabledStandardTabCount()` 读到的每条上游键都压到 false——
     ///    那一段读的是**测试域**（Debug 域 `com.cmeng.gourd.dev`，不是 Release 域 `com.cmeng.gourd`）
-    ///    盘上的值，不能当常数用。本机测试域此刻是 `enableTimerFeature = 0`、`timerDisplayMode`
-    ///    **缺键**（`defaults read com.cmeng.gourd.dev <键>`；缺键走 Defaults 默认 `.tab`）——
-    ///    不置夹具的话启用真源那条是 0：模块不激活、不进 tab 投影，① 期望 1 实到 0，直接红；
+    ///    盘上的值，不能当常数用：这一域写这段注释时的读数是 `enableTimerFeature = 0`、
+    ///    `timerDisplayMode` **缺键**（`defaults read com.cmeng.gourd.dev <键>`；缺键走 Defaults 默认
+    ///    `.tab`）——不置夹具的话启用真源那条是 0：模块不激活、不进 tab 投影，① 期望 1 实到 0，直接红；
     /// 2. **注册走真门**（`KernelBootstrap.enablementGate`）：接管键是启用的唯一真源——
     ///    旧门（`manifests[$0]?.defaultEnabled` 或用户 overrides）根本读不到上游键；
     /// 3. 三种组合各自**重新注册**（`deactivateAll` → `register` → `bootstrap`）：门只在注册那一刻
@@ -446,6 +452,77 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(enabledStandardTabCount(), 0, "③ 计时器的贡献 = 0")
     }
 
+    // MARK: - 计时器页判据：第二入口与 250pt 高度档（T3）
+
+    /// `isTimerSurfaceSelected()` 三档：① `.timer` → true（老路径，枚举成员按机制六保留）；
+    /// ② `.module` + `TimerModule.moduleID` → true（今天唯一的生产形态）；③ `.module` + 别的 id
+    /// **与** `.home` → false（判据两段是「且」，且第二段要比对 id）。
+    ///
+    /// 四项刻意写死（改动前先读）：
+    /// 1. **判据是纯读**：三档只调 `isTimerSurfaceSelected()`，不写 `Defaults` 的计时器键、
+    ///    不注册模块——`.timer` 与 `.module` 都是枚举成员，判定与注册表 / 上游开关无关；
+    /// 2. **读写的是共享协调器**（`DynamicIslandViewCoordinator.shared`，`private init` 只能取单例）：
+    ///    它同时被宿主 UI 观察，用例留下的 `.module` + 计时器 id 会变成别的用例的初始状态，
+    ///    因此进入时记下 `currentView` / `selectedModuleID`、`defer` 逐字还原（T3 派发片段的要求）；
+    /// 3. **`enableMinimalisticUI` 必须置假**：`currentView` 的 `didSet` 在极简 UI 开着时把非 `.home`
+    ///    的选中**强制打回 `.home`**（`DynamicIslandViewCoordinator.currentView`），于是 `selectModule`
+    ///    只剩 `selectedModuleID` 生效、第 ①② 档必红——这是「共享协调器 + 盘上偏好」这一对的固有坑
+    ///    （同款处理见 `ModuleKernelTests.testSelectModuleSetsSelectedIDAndView`）。夹具与文件内其它键
+    ///    同款：持久域原值 → 置定值 → `defer` 逐字还原（原本有键写回原值、原本没键删键）；
+    /// 4. **三档各一条用例**：判据的每一段都要有能单独变红的断言（变异验证见 T3 报告 §3）。
+    ///
+    /// 本文件的三档用例**不写**任何计时器键（第 1 条），因此只做「协调器字段 + 极简 UI 开关」的卫生。
+    func testTimerSurfaceSelectedOnLegacyTimerView() {
+        let coordinator = DynamicIslandViewCoordinator.shared
+        let snapshot = snapshotTimerSurface()
+        defer { restoreTimerSurface(snapshot) }
+        Defaults[.enableMinimalisticUI] = false
+
+        coordinator.selectedModuleID = nil
+        coordinator.currentView = .timer
+
+        XCTAssertTrue(coordinator.isTimerSurfaceSelected(), "① 老路径 `.timer` 仍是计时器页")
+
+        // 判据第一段短路：`.timer` 档下 `selectedModuleID` 是谁都不影响结论
+        coordinator.selectedModuleID = id
+        XCTAssertTrue(coordinator.isTimerSurfaceSelected(), "① `.timer` 档不依赖 `selectedModuleID`")
+    }
+
+    /// ② **模块 tab + 计时器 id → true**：这是接管后唯一的生产形态——悬浮聚焦、点预设与
+    /// `startCustomTimer` 三条路径都改走 `selectModule(TimerModule.moduleID)`（docs/20 §做法 机制六），
+    /// 判据不认它就会出现「内容在、tab 条上没有任何 tab 高亮」且高度回落到默认档（D-11）。
+    func testTimerSurfaceSelectedOnTimerModuleTab() {
+        let coordinator = DynamicIslandViewCoordinator.shared
+        let snapshot = snapshotTimerSurface()
+        defer { restoreTimerSurface(snapshot) }
+        Defaults[.enableMinimalisticUI] = false
+
+        coordinator.selectModule(TimerModule.moduleID)
+
+        XCTAssertEqual(coordinator.selectedModuleID, TimerModule.moduleID, "前置：selectModule 同时记下模块 id")
+        XCTAssertEqual(coordinator.currentView, .module, "前置：selectModule 切到模块视图")
+        XCTAssertTrue(coordinator.isTimerSurfaceSelected(), "② 模块 tab + 计时器 id = 计时器页")
+    }
+
+    /// ③ **别的模块 tab 与首页都不是计时器页**：第二段要比对模块 id（同一个 `.module` 下可以有多个
+    /// 模块 tab，与 `TabSelectionView.isSelected` 同一口径）；`.home` 即使 `selectedModuleID`
+    /// 还留着计时器 id 也不是（两段是「且」不是「或」）。
+    func testTimerSurfaceSelectedIsFalseForOtherModuleTabAndHome() {
+        let coordinator = DynamicIslandViewCoordinator.shared
+        let snapshot = snapshotTimerSurface()
+        defer { restoreTimerSurface(snapshot) }
+        Defaults[.enableMinimalisticUI] = false
+
+        coordinator.selectModule(id)
+        XCTAssertFalse(coordinator.isTimerSurfaceSelected(), "③ `.module` + 别的模块 id 不是计时器页")
+
+        // 残留「上次选中的是计时器」也不能算：`.home` 档下判据第一段就不成立
+        coordinator.selectedModuleID = TimerModule.moduleID
+        coordinator.currentView = .home
+        XCTAssertEqual(coordinator.selectedModuleID, TimerModule.moduleID, "前置：首页上仍挂着计时器 id（残留选择）")
+        XCTAssertFalse(coordinator.isTimerSurfaceSelected(), "③ `.home` 不是计时器页")
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。
@@ -491,6 +568,37 @@ final class TakeoverEnablementTests: XCTestCase {
     private func persistedValue(of key: String) -> Any? {
         guard let domain = Bundle.main.bundleIdentifier else { return nil }
         return UserDefaults.standard.persistentDomain(forName: domain)?[key]
+    }
+
+    // MARK: - 协调器页面字段（T3）
+
+    /// 共享协调器的页面字段 + `enableMinimalisticUI` 的持久域原值。
+    ///
+    /// 前者是 T3 三档用例读写的状态；后者是它们的前置条件（`currentView` 的 `didSet` 在极简 UI
+    /// 开着时把非 `.home` 的选中打回 `.home`），因此也要纳入卫生——夹具取值见各用例的注释。
+    private struct TimerSurfaceSnapshot {
+        let currentView: NotchViews
+        let selectedModuleID: String?
+        let enableMinimalisticUI: Any?
+    }
+
+    /// 进入时记下协调器两个字段 + 极简 UI 键的**持久域**原值（不读 `Defaults[...]`，理由同 `persistedValue(of:)`）。
+    private func snapshotTimerSurface() -> TimerSurfaceSnapshot {
+        let coordinator = DynamicIslandViewCoordinator.shared
+        return TimerSurfaceSnapshot(
+            currentView: coordinator.currentView,
+            selectedModuleID: coordinator.selectedModuleID,
+            enableMinimalisticUI: persistedValue(of: Defaults.Keys.enableMinimalisticUI.name)
+        )
+    }
+
+    /// 逐字还原（顺序有意）：先还原极简 UI 键（它决定 `didSet` 要不要打回 `.home`），再写回两个字段，
+    /// 这样即使原 `currentView` 不是 `.home`，落盘的最后一个值也与进入前一致。
+    private func restoreTimerSurface(_ snapshot: TimerSurfaceSnapshot) {
+        restore(snapshot.enableMinimalisticUI, to: Defaults.Keys.enableMinimalisticUI.name)
+        let coordinator = DynamicIslandViewCoordinator.shared
+        coordinator.selectedModuleID = snapshot.selectedModuleID
+        coordinator.currentView = snapshot.currentView
     }
 
     /// 一次记下若干键的持久域原值（**只装「盘上真有」的键**：缺的键不在表里 → 还原成删键）。

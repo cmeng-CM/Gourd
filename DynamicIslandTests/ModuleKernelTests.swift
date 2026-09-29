@@ -1084,8 +1084,11 @@ final class ModuleKernelTests: XCTestCase {
         defaults.set(true, forKey: flagKey)
 
         // 计时器接管（T2）后，本条用例的期望**不再能由开发机偏好决定**：启用门读上游总开关
-        // （`enableTimerFeature`）、tab 可见性读显示方式（`timerDisplayMode`）——本机显示方式
-        // 实测是 "popover"（不是 manifest 默认的 "tab"），不置夹具的话「计时器进 tab」必红。
+        // （`enableTimerFeature`）、tab 可见性读显示方式（`timerDisplayMode`）——这两个键读的是
+        // **测试域**（Debug 域 `com.cmeng.gourd.dev`，不是 Release 域 `com.cmeng.gourd`）盘上的值：
+        // 该域此刻是 `enableTimerFeature = 0`、`timerDisplayMode` **缺键**（缺键走 `Defaults` 默认
+        // `.tab`），驱动量是前者——不置夹具的话计时器不过门、不进 tab 投影，「计时器进 tab」必红
+        // （`defaults read com.cmeng.gourd.dev <键>` 可复核；Release 域里的 `popover` 与本条无关）。
         // 夹具写法与首启闸门键同款：先读持久域现值（nil = 盘上原本没有这个键）→ 置定值 → `defer` 逐字还原
         // （原本有键写回原值、原本没键删键，不把 Defaults 注册域里的默认值写进持久域）。
         let timerKeyNames = [

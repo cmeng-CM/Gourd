@@ -105,6 +105,10 @@ class DynamicIslandViewCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var hoverOpenSuppressedUntil: Date = .distantPast
     
+    /// 展开面板的 tab 次序（只用来算切换方向：`tabSwitchForward`）。
+    /// 其中的 `.timer` **保留但已无生产路径**：计时器接管成模块后走模块 tab（`docs/20` §做法 机制六），
+    /// 而这一项还是动画方向的尺度来源（删掉会让 `.timer` 与 `.stats` 之间的方向判定换档），
+    /// 因此按机制六保留、不参与运行时选中。
     private static let tabOrder: [NotchViews] = [.home, .shelf, .timer, .stats, .llmUsage, .colorPicker, .notes, .clipboard, .terminal, .extensionExperience, .module]
     
     /// Direction of the most recent tab switch (true = forward/right, false = backward/left)
@@ -267,14 +271,18 @@ class DynamicIslandViewCoordinator: ObservableObject {
     }
 
     private func handleTimerDisplayModeChange(_ mode: TimerDisplayMode) {
-        guard mode == .popover, currentView == .timer else { return }
+        // 判据走 `isTimerSurfaceSelected()`：接管后计时器页是**模块 tab**（docs/20 §做法 机制六），
+        // 只比 `currentView == .timer` 的话「显示方式切成 popover 时把视图收回 Home」在模块路径下失效
+        // （切走显示方式后视图停在计时器——本任务的失败信号之一）。
+        guard mode == .popover, isTimerSurfaceSelected() else { return }
         withAnimation(.smooth) {
             currentView = .home
         }
     }
 
     private func handleTimerFeatureToggle(_ isEnabled: Bool) {
-        guard !isEnabled, currentView == .timer else { return }
+        // 同上：上游总开关关掉时，计时器页（模块 tab）也要收回 Home。
+        guard !isEnabled, isTimerSurfaceSelected() else { return }
         withAnimation(.smooth) {
             currentView = .home
         }
@@ -469,6 +477,22 @@ class DynamicIslandViewCoordinator: ObservableObject {
     func selectModule(_ id: String) {
         selectedModuleID = id
         currentView = .module
+    }
+
+    /// 「计时器这个页面此刻是不是被选中」——计时器的第二入口（悬浮聚焦 / 点预设）与它自己的
+    /// 250pt 高度档都问这一条（`docs/20-component-page.md` §做法 机制六，D-11）。
+    ///
+    /// 接管（T2）后计时器页由**模块 tab** 渲染（`TimerModule`），因此判据有两段：
+    /// - `.timer`：批前的旧路径——枚举成员与 `case .timer: NotchTimerView()` 分支按机制六**保留**
+    ///   （删除会牵动 `NotchViews` 的哈希与 `tabOrder` 的动画方向语义），但三条上游生产路径
+    ///   （悬浮聚焦 / 点预设 / `startCustomTimer`）已全部改走 `selectModule(TimerModule.moduleID)`，
+    ///   故这一档今天只为「老路径 / 测试」而留；
+    /// - `.module` + `selectedModuleID == TimerModule.moduleID`：今天唯一的生产形态。
+    ///
+    /// 只判 `currentView == .module` 是不够的：同一个 `.module` 下可以有别的模块 tab
+    /// （与 `TabSelectionView.isSelected` 同一口径）。
+    func isTimerSurfaceSelected() -> Bool {
+        currentView == .timer || (currentView == .module && selectedModuleID == TimerModule.moduleID)
     }
     
     // MARK: - Clipboard Management

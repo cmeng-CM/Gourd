@@ -357,7 +357,9 @@ struct ContentView: View {
             }
         }
         
-        if coordinator.currentView == .timer {
+        // 计时器的 250pt 高度档：判据认模块路径（docs/20 §做法 机制六），只比 `.timer` 会让
+        // 「计时器在跑 + 悬浮展开」回落到默认高度档。
+        if coordinator.isTimerSurfaceSelected() {
             return CGSize(width: baseSize.width, height: 250) // Extra height for timer presets
         }
         
@@ -1686,6 +1688,10 @@ struct ContentView: View {
                               case .shelf:
                                   NotchShelfView()
                               case .timer:
+                                  // **已无生产路径**：计时器接管成模块后，新路径经模块 tab
+                                  // （`coordinator.selectModule(TimerModule.moduleID)`，docs/20 §做法 机制六）；
+                                  // 这个枚举成员与分支保留（删除会牵动 `NotchViews` 的哈希与 `tabOrder`
+                                  // 的动画方向语义），今天只有老路径 / 测试会落到这里。
                                   NotchTimerView()
                               case .stats:
                                   NotchStatsView()
@@ -2747,7 +2753,10 @@ struct ContentView: View {
 
                     if shouldFocusTimerTab {
                         withAnimation(.smooth) {
-                            self.coordinator.currentView = .timer
+                            // 计时器的第二入口（悬浮聚焦）：接管后计时器页是**模块 tab**，
+                            // 走 `selectModule` 才有点亮 tab 与 250pt 高度档（docs/20 §做法 机制六）。
+                            // `shouldFocusTimerTab` 的判据与随后的 `openNotch()` 保持原样。
+                            self.coordinator.selectModule(TimerModule.moduleID)
                         }
                     }
                     self.openNotch()
