@@ -114,7 +114,17 @@ sequenceDiagram
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）。
+**已交付**（工作流 `p2-launcher`，2026-09-30；提交 `71c5d0d1`、`f486eaa1`、`e7b505e5`）。
+
+**代码**：`Modules/Launcher/LauncherAppScanner.swift`（新；`LauncherApp` / `scan(rootURLs:fileManager:)` / `defaultRoots`，扫描输出按路径升序保证确定性）、`Modules/Launcher/LauncherRanking.swift`（新；`LauncherUsage` / `rank(_:pinned:usage:)` / `filter(_:query:)` 纯函数）、`Modules/Launcher/LauncherModule.swift`（新；manifest 只声明 `.expanded`、`defaultEnabled = false`、`permissions = []`、config `iconSize`/`density`/`showRecents`；tab = 搜索框 + 自适应网格；`LauncherAppOpener` 注入点；`LauncherUsageQuery`；固定/取消固定）、`Kernel/KernelBootstrap.swift`（+1 行）、`models/Constants.swift`（+`pinnedApps`）、`Localizable.xcstrings`（`module.launcher.*` 8 条）。
+
+**测试**：新增 31 条（T1 17 / T2 12 / T2 修复 2），全量 **284 条 0 失败**；其中两条经**变异验证**（删掉 `collapse()` → 收起用例红；`kMDItemUseCount` 打错 → 属性名用例红）。原始日志 `.workflow/p2-launcher/reports/t2-tests.log`。
+
+**文档**：本文 + `docs/09` §5.1 与展开面板 tab 行、`docs/14` launcher 行（`surfaces` 收敛为只 `expanded`）、`docs/16` §4.2 6.1（规划中 → 已落地）、`docs/12`。
+
+**与计划的偏离及原因**：① 扫描输出按路径升序（枚举顺序不稳，加确定性；规格只要求去重）；② `.app` 扩展名大小写不敏感；③ 空/纯空白 plist 值当缺键继续回落；④ 四项排序键全等时追加 `id` 定序（避免不稳定排序）；⑤ 两个结构体加 `Sendable`；⑥ 固定项的写盘做了"表不变不写"的幂等短路。
+
+**遗留**：**真人目视未做**（本机长时间锁屏，只有离屏渲染证据：真扫 107 个应用 / 129 条使用数据 / 真图标）；"悬停展开 → 手点图标 / 右键固定"待用户确认；Spotlight 未索引的主机上"最近使用"整体回落成按名称（§已知限制 2）；符号链接与"同 bundle id 出现在两个路径"的定序未定义（畸形输入）。
 
 ## 已知限制
 
@@ -235,6 +245,9 @@ static let pinnedApps = Key<[String]>("pinnedApps", default: [])
 | D-02 | 本批只声明 `expanded`（**不声明 `compact`**），也不占首页块 | agent | 折叠态左右槽位未落地（`p2-todos-facelift` D-04）；声明 `compact` 会与待办抢中央槽位，声明 `home` 会让首页再多一块而用户没要求。等左右槽位落地时再补 `compact` + `slot: right` |
 | D-03 | 固定项用 `pinnedApps: [String]`（bundle id 优先、无 id 存路径） | agent | 用户数据最小可用形态；不引入新模型、不写文件（与内核"配置进 Defaults"的口径一致） |
 | D-04 | 新增模块 `defaultEnabled = false` | agent | 沿用 `docs/14` T-12 的口径：新增模块一律默认关（用户显式开启），避免"装了自动上屏" |
+| D-05 | Spotlight 查询必须**跑在主线程的 run loop 上**（类型级 `@MainActor` + "先见 `isGathering=true` 再见 `false`" 判据） | agent | 执行期实测真缺陷：原来写成 `nonisolated` + `await`，落到协作线程池后 `NSMetadataQuery` **永远收集不完**（0 条 / 6.05s）→"最近使用"静默失效；修后 129 条 / 0.079s。代价：查询期间占主线程（实测 <0.1s，可接受） |
+| D-06 | "启动 → 收起"与"属性映射"两组列为**必测**，并用变异验证（删 `collapse()` / 打错 `kMDItemUseCount` 必须让用例变红） | agent | 复审指出的两条测试缺口恰好都是"静默失效型"：不测就永远是绿的，而用户看不到"最近使用"排序 |
+| D-07 | 排序键全等时追加 `id` 定序；扫描输出按路径升序 | agent | 枚举顺序与相等元素的相对顺序在 Swift 里都不保证，加确定性避免"每次打开顺序都变" |
 
 ---
 
