@@ -1972,6 +1972,43 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// 左列竖排三环的直径是**可用高度的纯函数**（2026-09-28 用户改版：「三个圈…放在左侧」）：
+    /// 高度够就回到设计定稿的 52，不够就三等分剩余空间，缩到下限 30 为止；
+    /// 高度取不到（GeometryReader 给 0）时不能出现 0 直径的环。
+    func testTodoRingPickerDiameterFitsAvailableHeight() {
+        XCTAssertEqual(
+            TodoRingLayout.ringDiameter(fittingHeight: 400),
+            TodoRingLayout.maximumDiameter,
+            "面板调高后回到设计定稿的 52（不再因竖排缩小）"
+        )
+        XCTAssertEqual(
+            TodoRingLayout.ringDiameter(fittingHeight: 0),
+            TodoRingLayout.maximumDiameter,
+            "高度取不到（0）时按上限，不出现 0 直径"
+        )
+        XCTAssertEqual(
+            TodoRingLayout.ringDiameter(fittingHeight: TodoRingLayout.maximumDiameter * 3 + 200),
+            TodoRingLayout.maximumDiameter,
+            "远超所需的高度同样封顶在 52"
+        )
+
+        // 默认 200pt 面板扣掉上下 padding ≈ 180：三个环收缩后必须真的放得下（含标签与间距）
+        let defaultHeight: CGFloat = 180
+        let fitted = TodoRingLayout.ringDiameter(fittingHeight: defaultHeight)
+        XCTAssertLessThan(fitted, TodoRingLayout.maximumDiameter, "默认高度下要收缩（52 三个环放不进 180）")
+        XCTAssertGreaterThanOrEqual(fitted, TodoRingLayout.minimumDiameter)
+        let used = fitted * 3
+            + TodoRingLayout.ringSpacing * 2
+            + TodoRingLayout.itemTextHeight * 3
+        XCTAssertLessThanOrEqual(used, defaultHeight, "收缩后的三环 + 标签必须落在可用高度内")
+
+        XCTAssertEqual(
+            TodoRingLayout.ringDiameter(fittingHeight: 10),
+            TodoRingLayout.minimumDiameter,
+            "极矮的面板（用户把高度拖到最小）也保底 30，不缩成看不见的点"
+        )
+    }
+
     /// `TODO` 日期选项的文案 key 与 `DueOption` 同源（加选项必须同时给 key，否则面板上出现裸 key）。
     func testTodoComposerDueOptionLabelKeys() {
         XCTAssertEqual(

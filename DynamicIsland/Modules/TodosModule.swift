@@ -3,11 +3,13 @@
 //  Gourd 内置模块 · 待办（今日 / 本周 / 所有三环，P1 批次 / T5）
 //
 //  形态定稿（2026-09-28 用户反馈）：
-//  - 展开态 = 顶部**三个环**（今日 / 本周 / 所有，52×52，环心为 `已办/总量`）+ 下方**该类别清单**；
-//    三个环同时是**筛选器**（点击切换清单类别，默认今日）；选中态用环的类别色 + 标签加粗表达，
-//    未选中一律 `.white.opacity(0.4)`；
+//  - 展开态 = **左侧竖排三个环**（今日 / 本周 / 所有，环心为 `已办/总量`）+ **右侧**该类别清单；
+//    三个环同时是**筛选器**（点击切换清单类别，默认今日）；选中态用环的类别色 + 标签加粗，
+//    未选中一律 `.white.opacity(0.4)`；环直径按可用高度收缩（上限 52 = 设计定稿）。
+//    2026-09-28 第二轮反馈「三个圈不要在最上面，占用可视区域太大的，放在左侧」：从顶部横排改到左列。
 //  - 折叠态 = 图标 + **今日**的 `已办/总量`（自带 60s `TimelineView`，宿主不起定时器，与 progress 同口径）；
 //  - 分类与计数口径全在 `TodoBucketing`（纯函数，单测覆盖）。
+
 //
 //  **取数是本模块自己的 `EKEventStore`**（不改上游 `CalendarServiceProviding`，也不进 `CalendarManager`）：
 //  上游 `fetchReminders(from:to:calendars:)` 只取**未完成且按 dueDate 过滤**的提醒，
@@ -480,16 +482,18 @@ final class TodosModule: GourdModule {
     }
 }
 
-// MARK: - 展开面板视图（顶部三环 + 清单）
+// MARK: - 展开面板视图（左侧三环 + 右侧清单）
 
-/// 展开面板：**顶部三环**（今日 / 本周 / 所有，环心 `已办/总量`，同时是筛选器）+ 下方选中类别的清单。
+/// 展开面板：**左侧三环竖排**（今日 / 本周 / 所有，环心 `已办/总量`，同时是筛选器）+ **右侧**选中类别的清单。
 ///
+/// 2026-09-28 用户反馈（「三个圈不要在最上面，占用可视区域太大的，放在左侧」）：环从**顶部横排**
+/// 改为**左侧竖排**，清单占右侧（空态与写回失败提示也都在右侧列表区）。
 /// 分类在每次重算时按**当下**做（展开面板是瞬时视图；常驻的折叠态另有 60s `TimelineView` 负责跨零点）。
 /// `.task` 只重取数据（**不碰权限**）：面板每次出现都刷一次，避免看到上一次的陈旧计数。
 private struct TodosModuleView: View {
     @ObservedObject var store: TodoStore
 
-    /// 当前筛选的类别，默认「今日」（设计定稿）。
+    /// 当前筛选的类别，默认「今日」（设计定稿）。**增删只重取数据，不动这个值**——筛选保持不变。
     @State private var scope: TodoBucketing.Bucket = .today
 
     private var summary: TodoBucketing.Summary { TodoBucketing.classify(store.items) }
@@ -497,8 +501,9 @@ private struct TodosModuleView: View {
     var body: some View {
         Group {
             if store.hasFullAccess {
-                VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     TodoRingPicker(summary: summary, selection: $scope)
+                        .frame(width: TodoRingLayout.columnWidth)
                     TodoListView(result: summary.result(for: scope), store: store)
                 }
             } else {
@@ -512,59 +517,100 @@ private struct TodosModuleView: View {
     }
 }
 
-/// 三环横排：**环本身即筛选器**（点击切换下方清单的类别）。
+/// 左列竖排三环的**尺寸预算**（纯函数，无 SwiftUI 依赖，单测覆盖三条边界）。
+///
+/// 抽成命名空间是为了让「环直径随可用高度收缩」这段算术能被单测钉住（视图本身是 private）。
+enum TodoRingLayout {
+    /// 左列固定宽度：环（52）+ 标签的最宽需求 + 一点余量。
+    static let columnWidth: CGFloat = 120
+    /// 环与环之间的垂直间距。
+    static let ringSpacing: CGFloat = 4
+    /// 每个环下方「环心 → 标签」这一段的固定高度预算（环与标签的 2pt 间距 + 一行 10pt 标签）。
+    static let itemTextHeight: CGFloat = 15
+    /// 设计定稿的环直径（放得下就用它）。
+    static let maximumDiameter: CGFloat = 52
+    /// 下限：再小环心的 `已办/总量` 就挤成一团了。
+    static let minimumDiameter: CGFloat = 30
+
+    /// 竖排三环在给定可用高度下的直径：优先用设计定稿的 52，放不下就三等分剩余空间，
+    /// 下限 30。
+    ///
+    /// 高度取不到（首帧 `GeometryReader` 给 0 / 非有限值）时按**上限**：那时布局还没算出来，
+    /// 画成设计定稿的尺寸比画成一个 30pt 的小圈更稳；真正矮的面板（如 10pt）走的还是下限那一支。
+    static func ringDiameter(fittingHeight height: CGFloat) -> CGFloat {
+        guard height > 0, height.isFinite else { return maximumDiameter }
+        let reserved = 2 * ringSpacing + 3 * itemTextHeight
+        let budget = (height - reserved) / 3
+        guard budget > minimumDiameter else { return minimumDiameter }
+        return min(maximumDiameter, budget)
+    }
+}
+
+/// 三环**竖排**在左列：**环本身即筛选器**（点击切换右侧清单的类别）。
+///
+/// 左列**固定宽度**（`TodoRingLayout.columnWidth`）：面板宽度可配（400 ～ 屏宽），左列定宽才能让右侧
+/// 清单的可用宽度随面板变宽而变宽。环的直径按**可用高度**收缩（`TodoRingLayout.ringDiameter`）：
+/// 默认 200pt 面板下三个环 + 标签也放得下，面板调高后回到设计定稿的 52（见 2026-09-28 的「高度可调」）。
 private struct TodoRingPicker: View {
     let summary: TodoBucketing.Summary
     @Binding var selection: TodoBucketing.Bucket
 
     var body: some View {
-        HStack(spacing: 20) {
-            ForEach(TodoBucketing.Bucket.allCases, id: \.self) { bucket in
-                TodoScopeRing(
-                    bucket: bucket,
-                    result: summary.result(for: bucket),
-                    isSelected: bucket == selection
-                )
-                .onTapGesture { selection = bucket }
+        GeometryReader { proxy in
+            let diameter = TodoRingLayout.ringDiameter(fittingHeight: proxy.size.height)
+            VStack(spacing: TodoRingLayout.ringSpacing) {
+                ForEach(TodoBucketing.Bucket.allCases, id: \.self) { bucket in
+                    TodoScopeRing(
+                        bucket: bucket,
+                        result: summary.result(for: bucket),
+                        isSelected: bucket == selection,
+                        diameter: diameter
+                    )
+                    .onTapGesture { selection = bucket }
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 }
 
 /// 一个类别环：底环 + `trim` 进度环 + 环心 `已办/总量`，下方是类别标签。
 ///
-/// 52×52（设计定稿）。`trim` 的进度 = 该类别的 `已办/总量`；总量为 0 时环为空、环心显示 `0/0`。
+/// 直径由 `TodoRingPicker.ringDiameter(fittingHeight:)` 给（上限 52 = 设计定稿）。
+/// `trim` 的进度 = 该类别的 `已办/总量`；总量为 0 时环为空、环心显示 `0/0`。
 /// 选中态用类别色 + 标签加粗；未选中一律 `.white.opacity(0.4)`（黑底面板上的选中/未选中对比）。
 private struct TodoScopeRing: View {
     let bucket: TodoBucketing.Bucket
     let result: TodoBucketing.BucketResult
     let isSelected: Bool
+    let diameter: CGFloat
 
-    /// 环的直径与线宽（设计定稿 52）。
-    private static let diameter: CGFloat = 52
-    private static let lineWidth: CGFloat = 4
+    /// 线宽随直径等比（52 → 4，缩小后不至于糊成一圈）。
+    private var lineWidth: CGFloat { max(3, diameter / 13) }
+    /// 环心字号：缩小到 46 以下时退一档，避免 `已办/总量` 顶到环边。
+    private var counterFontSize: CGFloat { diameter >= 46 ? 12 : 11 }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             ZStack {
                 Circle()
-                    .stroke(.white.opacity(0.15), lineWidth: Self.lineWidth)
+                    .stroke(.white.opacity(0.15), lineWidth: lineWidth)
 
                 Circle()
                     .trim(from: 0, to: result.progress)
-                    .stroke(arcColor, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
+                    .stroke(arcColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
 
                 // 环心：`已办/总量`（先拼 String 再给 Text，走 verbatim 重载，不做本地化查表）。
                 Text(result.counterText)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: counterFontSize, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(isSelected ? 1 : 0.4))
             }
-            .frame(width: Self.diameter, height: Self.diameter)
+            .frame(width: diameter, height: diameter)
 
             Text(LocalizedStringKey(bucket.labelKey))
-                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
                 .foregroundStyle(.white.opacity(isSelected ? 1 : 0.4))
         }
         .contentShape(Rectangle())
@@ -574,7 +620,7 @@ private struct TodoScopeRing: View {
         isSelected ? Self.accent(for: bucket) : .white.opacity(0.4)
     }
 
-    /// 三个类别的强调色（纯观感，不参与计算）。
+    /// 三个类别的强调色（纯观感，不参与计算，也不随竖排改变）。
     private static func accent(for bucket: TodoBucketing.Bucket) -> Color {
         switch bucket {
         case .today: return .blue

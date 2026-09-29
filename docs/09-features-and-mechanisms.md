@@ -67,7 +67,7 @@
 | 蓝牙设备电量 | ⬜️ | `system_profiler` + `pmset` + `ioreg` 三子进程（属蓝牙管理功能，不投入） |
 | 进程列表 | ✅ | `proc_pidinfo` |
 | **日/周/月/季/年进度** | 🆕 **默认关** | **零私有 API、零依赖**：`Calendar.current.dateInterval(of:for:)` 取区间算 elapsed/total。细节见 §5.3。**2026-09-28 用户判定「时间进度」无行动价值 → `defaultEnabled` 改 `false`**（代码保留、可手动开回；中央槽位的默认内容改由待办 `todos` 承担，见 §5.7） |
-| **待办（今日/本周/所有）** | 🆕 | **零私有 API**：EventKit 取提醒（未完成 + 最近 7 天已完成）+ 写回 `EKReminder.isCompleted`；环心是 `已办/总量`。细节见 §5.7 |
+| **待办（今日/本周/所有）** | 🆕 | **零私有 API**：EventKit 取提醒（未完成 + 最近 7 天已完成）+ 写回 `EKReminder.isCompleted`，**并可新增 / 删除（写的是系统提醒）**；环心是 `已办/总量`。细节见 §5.7 |
 
 **采样策略（上游已符合性能基线，沿用）**：默认 1s，clamp [1,60]；只在刘海展开且停在 stats tab 时采样，关闭后延迟 3s 停；进程列表独立节流 2s。
 
@@ -76,7 +76,7 @@
 | 功能 | 动作 | 机制 |
 |---|---|---|
 | 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce） |
-| 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数与三环视图** |
+| 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数、左侧三环视图与增删**（写入 / 删除系统提醒） |
 | 日程提前提醒 | ✅ | `reminderLeadTime` + 独立 Live Activity 管理器 |
 | 本地计时器 | 🔧 | `Timer.scheduledTimer` 1s tick → 上游**退出即丢状态、无 UserNotifications** → 补持久化 + 到点通知 |
 | 锁屏计时器面板 | ✅ | 用 `TimerManager.shared` |
@@ -336,12 +336,13 @@
 |---|---|
 | 定位 | **取代进度成为折叠态中央槽位的默认内容**（13 号文档 D-20）：`已办/总量` 是真实进度，「今天过了 62%」不是 |
 | 取数 | **模块自己持有 `EKEventStore`**（不改上游 `CalendarServiceProviding`，也不进 `CalendarManager`）。未完成 = `predicateForReminders(in: nil)`（跨所有列表，**含无到期时间**）；已完成 = `predicateForCompletedReminders(withCompletionDateStarting: 最近 7 天起点, ending: nil, calendars: nil)`。上游的 `fetchReminders(from:to:)` 只取「未完成 + 按 dueDate 过滤」的条目，拿不到无到期时间与已完成的，因此不复用 |
-| 呈现 | **展开态 = 顶部三环（今日 / 本周 / 所有）+ 下方该类别清单**：环 52×52、环心为 `已办/总量`，三个环同时是**筛选器**（点击切换清单类别，默认今日；选中态用类别色 + 标签加粗，未选中 `.white.opacity(0.4)`）。清单一行 = 勾选框（点击写回 `EKReminder.isCompleted`）+ 标题 + 到期时间（**有才显示**，过期红 + 「已过期」标）+ 所属列表名；已完成项排最后、置灰 + 删除线。**折叠态 = 图标 + 今日的 `已办/总量`**（自带 60s `TimelineView`，宿主不起定时器） |
+| 呈现 | **展开态 = 左侧竖排三环（今日 / 本周 / 所有）+ 右侧该类别清单**：环上限 52×52（按可用高度收缩，下限 30）、环心为 `已办/总量`，三个环同时是**筛选器**（点击切换清单类别，默认今日；选中态用类别色 + 标签加粗，未选中 `.white.opacity(0.4)`）。清单一行 = 勾选框（点击写回 `EKReminder.isCompleted`）+ 标题 + 到期时间（**有才显示**，过期红 + 「已过期」标）+ 所属列表名；已完成项排最后、置灰 + 删除线。**折叠态 = 图标 + 今日的 `已办/总量`**（自带 60s `TimelineView`，宿主不起定时器）。<br>**2026-09-28 用户改版**：三环从「顶部横排 + 下方清单」改为「**左侧竖排 + 右侧清单**」（「三个圈不要在最上面，占用可视区域太大的，放在左侧」），左列定宽 120 |
+| 增删 | **可增删（写的是系统「提醒」里的真数据）**：① **新增** = 列表顶部 `+` 展开一行内联输入（`TextField` 标题 + 今天 / 明天 / 无日期三选一，**不引入 `DatePicker`**）→ 回车或「添加」建 `EKReminder`（标题 + 可选 `dueDateComponents`）写进 `defaultCalendarForNewReminders()`（取不到时兜到第一个可用列表）→ 重取；② **删除** = 每行 hover 出现的垃圾桶 → **确认对话框**（明说「会同时删除系统提醒中的该条」）→ `store.remove(reminder, commit: true)` → 重取。两者失败都在列表上方回显**一行**提示（`module.todos.writeFailed`，细节进日志），**不静默、不崩、不新增权限请求**；增删只重取数据，**当前尺度筛选保持不变** |
 | 分类口径 | **今日** = ① 到期在今天 ∪ ② 已过期（到期 < 今天 00:00）且未完成 ∪ ③ 今天完成；**本周** = 到期落在 `dateInterval(of: .weekOfYear, for: now)` 内 ∪ 今日（**刻意重叠**：本周是更大窗口，今日 ⊆ 本周 ⊆ 所有）；**所有** = 全集。**无到期时间的待办只进「所有」**，不进今日 / 本周（单列的硬规则） |
 | 已办/总量 | 分子分母**同源**：该类别的成员条数 = 总量，其中已完成的条数 = 已办（不做「应办」的另一套口径）。**已完成只取最近 7 天**——窗口理由与替代方案见 13 号文档 D-21 |
-| 权限 | **提醒（系统 TCC）**。**不在模块初始化 / 视图出现时请求**（沿用「每次安装最多问一次 / 不打扰」策略）：未授权时展开面板显示一句说明 + 「请求访问提醒」（**点击才** `requestFullAccessToReminders()`）+ 「打开系统设置」（`x-apple.systempreferences:…?Privacy_Reminders`）两颗按钮 |
+| 权限 | **提醒（系统 TCC）**。**不在模块初始化 / 视图出现时请求**（沿用「每次安装最多问一次 / 不打扰」策略）：未授权时展开面板显示一句说明 + 「请求访问提醒」（**点击才** `requestFullAccessToReminders()`）+ 「打开系统设置」（`x-apple.systempreferences:…?Privacy_Reminders`）两颗按钮。**增删不新增权限**：未授权时新增 / 删除入口都不渲染 |
 | 配置 | **第一版不做配置**（`config: nil`，见 [14](14-module-manifests.md) 的 todos 行） |
-| 测试 | `TodoBucketing` 是纯函数（注入 `Calendar` + `now`）：分类与计数、`0/0` 边界、周区间随 `firstWeekday`、自然日半开区间边界、manifest 契约、10 条本地化 key 可解析 |
+| 测试 | `TodoBucketing` 是纯函数（注入 `Calendar` + `now`）：分类与计数、`0/0` 边界、周区间随 `firstWeekday`、自然日半开区间边界、manifest 契约、本地化 key 可解析。**增删的校验与构造同样是纯函数**（`TodoComposer` / `TodoRingLayout`）：标题去空白后为空 → 拒绝、今天 / 明天 → 当天 00:00 的年月日组件（不带时分 = 全天口径）、无日期 → nil、默认列表为 nil 的兜底、三环直径随可用高度收缩 |
 | 工作量 | 低～中（1～2 天；**已落地**，P1 批次 T5） |
 
 ---
