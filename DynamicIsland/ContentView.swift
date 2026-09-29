@@ -86,6 +86,45 @@ func panelBackgroundUsesStyle(isOpen: Bool, isDynamicIslandMode: Bool) -> Bool {
     isOpen || isDynamicIslandMode
 }
 
+/// 面板背景**顶部不透明黑带**的高度（pt）——玻璃两档不得进入这一段。
+///
+/// **为什么必须有这一段**（2026-09-28 用户反馈「不能强硬拉伸，菜单栏里面的图标都变形了」）：
+/// 玻璃两档都是 **behindWindow** 的材质——`NSGlassEffectView`（`LiquidGlassBackground`）与
+/// `NSVisualEffectView`（`.hudWindow` + `.behindWindow`）采样的都是**窗口背后**的画面。
+/// 而面板的顶边与**系统 UI 带**同高：刘海屏上窗口顶边在 `screen.maxY + notchTopScreenBleedAmount`，
+/// 非刘海屏上浮动药丸的顶边在屏顶下方 `dynamicIslandTopOffset`。于是菜单栏图标被采进玻璃里，
+/// 看上去就是「图标被糊成一团 / 被拉伸变形」。
+///
+/// 判据与 `ModuleHUDWindowHost.topInset(safeAreaTop:frameMaxY:visibleFrameMaxY:)` 同口径：
+/// - **刘海屏**（`safeAreaTop > 0`）→ 取**刘海高度**（`safeAreaInsets.top`，与菜单栏同高）；
+/// - **非刘海屏** → 取**菜单栏高度**（屏顶与 `visibleFrame` 顶之差）。
+///
+/// 两种情况下这段都是「系统的 UI 带」，面板在那里的底必须不透明：与折叠态纯黑同口径
+/// （折叠态本来就是纯黑，见 `panelBackgroundUsesStyle`）。
+///
+/// 负值（取不到屏 / 异常可见框）夹到 0：等于「不加黑带」，退回改造前的观感，不产生负高度。
+///
+/// 抽成纯函数是为了可测：入参是**两个数值**，调用点从屏上取完再传进来，
+/// 判据本身不读单例、不碰视图状态（同 `panelBackgroundUsesStyle`）。
+/// 取屏的那层壳是 `panelTopOpaqueBandHeight(for:)`。
+func panelTopOpaqueBandHeight(safeAreaTop: CGFloat, menuBarHeight: CGFloat) -> CGFloat {
+    if safeAreaTop.isFinite, safeAreaTop > 0 { return safeAreaTop }
+    guard menuBarHeight.isFinite else { return 0 }
+    return max(menuBarHeight, 0)
+}
+
+/// 某块屏上「面板顶部不透明黑带」的高度；**取不到屏时 0**（不加黑带，退回改造前观感）。
+///
+/// 两个数值的取法与 `ModuleHUDWindowHost.topInset` 一致：刘海屏用 `safeAreaInsets.top`，
+/// 非刘海屏用 `frame.maxY - visibleFrame.maxY`（菜单栏高度）。
+func panelTopOpaqueBandHeight(for screen: NSScreen?) -> CGFloat {
+    guard let screen else { return 0 }
+    return panelTopOpaqueBandHeight(
+        safeAreaTop: screen.safeAreaInsets.top,
+        menuBarHeight: screen.frame.maxY - screen.visibleFrame.maxY
+    )
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -651,6 +690,11 @@ struct ContentView: View {
     ///   系统外观下会渲染成浅色磨砂玻璃，与面板内的白字冲突）。
     ///
     /// 三种样式都**只换底**：`.clipShape` / 阴影 / padding / 内容布局一概不动。
+    ///
+    /// **玻璃两档的顶部另有不透明黑带**（2026-09-28 用户反馈「菜单栏里面的图标都变形了」）：
+    /// 玻璃是 behindWindow 材质，会采样窗口背后的菜单栏图标 → 图标被糊成一片。因此玻璃底的构成是
+    /// 「顶部黑带（高度见 `panelTopOpaqueBandHeight(safeAreaTop:menuBarHeight:)`）+ 其下的玻璃」
+    /// （见 `panelOpaqueTopBand(_:)`）。`.solidBlack` **不受影响**（整块纯黑，本来就没有采样问题）。
     @ViewBuilder
     private var panelBackground: some View {
         if panelBackgroundUsesStyle(isOpen: vm.notchState == .open, isDynamicIslandMode: isDynamicIslandMode) {
@@ -658,21 +702,46 @@ struct ContentView: View {
             case .solidBlack:
                 Color.black
             case .liquidGlass:
-                LiquidGlassBackground(variant: .defaultVariant, cornerRadius: panelGlassCornerRadius) {
-                    Color.black.opacity(0.35)
-                        .environment(\.colorScheme, .dark)
-                }
+                panelOpaqueTopBand(
+                    LiquidGlassBackground(variant: .defaultVariant, cornerRadius: panelGlassCornerRadius) {
+                        Color.black.opacity(0.35)
+                            .environment(\.colorScheme, .dark)
+                    }
+                )
                 // 玻璃是 AppKit 视图（`NSGlassEffectView`）：不参与命中测试，别吃掉面板上
                 // 「点一下就收起 / 拖拽」这一类落在留白上的手势（口径同 `LockScreenMusicPanel`
-                // 的 `customLiquidPanelBackdrop`）。
+                // 的 `customLiquidPanelBackdrop`）。顶部黑带一并不参与（保持玻璃档改造前的命中口径）。
                 .allowsHitTesting(false)
             case .frostedGlass:
-                PanelFrostedGlassBackground()
+                panelOpaqueTopBand(PanelFrostedGlassBackground())
                     .allowsHitTesting(false)
             }
         } else {
             Color.black
         }
+    }
+
+    /// 玻璃底的**两段构成**：顶部不透明黑带 + 其下的玻璃（`spacing: 0`，两段无缝）。
+    ///
+    /// 黑带高度取**当前这块屏**的口径（刘海高度 / 菜单栏高度）：面板顶边与系统 UI 带同高，
+    /// 玻璃若从顶边起画就会把菜单栏图标采进来（用户截图里「图标变形」的根因）。
+    /// 整块背景仍由 `.clipShape(resolvedClipShape)` 裁剪——**面板形状一点没变**，
+    /// 只是顶部那一条由不透明黑替代了玻璃。
+    private func panelOpaqueTopBand<Glass: View>(_ glass: Glass) -> some View {
+        VStack(spacing: 0) {
+            Color.black
+                .frame(height: panelTopOpaqueBandHeightOnCurrentScreen)
+            glass
+        }
+    }
+
+    /// 当前这块屏的顶部不透明黑带高度（`panelTopOpaqueBandHeight(for:)` 的取屏壳）。
+    /// 取屏口径同 `isNonNotchScreen`：按 `currentScreenName` 在 `NSScreen.screens` 里找。
+    ///
+    /// 刻意**不**与全局函数同名：同名时 Swift 会把属性体里的裸名字解析成这个实例属性自己，
+    /// 全局函数就调不到了（编译期报 "refers to instance method rather than global function"）。
+    private var panelTopOpaqueBandHeightOnCurrentScreen: CGFloat {
+        panelTopOpaqueBandHeight(for: NSScreen.screens.first { $0.localizedName == currentScreenName })
     }
 
     /// 玻璃背景的圆角：与 `resolvedClipShape` 的半径取**同一来源**，并取上下两档中的**较大值**。
