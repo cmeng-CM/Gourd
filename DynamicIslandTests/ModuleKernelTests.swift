@@ -1065,10 +1065,11 @@ final class ModuleKernelTests: XCTestCase {
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
-    /// **这条用例的 `count == 7` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
-    /// 加第八个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
+    /// **这条用例的 `count == 8` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第九个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
     /// P2 启动台批次从 3 放宽到 4、P2 接管批次 / T2 从 4 放宽到 5、T4 从 5 放宽到 6、
-    /// T5 落 `MusicModule` 时从 6 放宽到 7，都是这一条）。
+    /// T5 落 `MusicModule` 时从 6 放宽到 7、P2 快捷指令与前台应用批次 / T2 落 `ShortcutsModule`
+    /// 时从 7 放宽到 8，都是这一条）。
     func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
@@ -1126,8 +1127,8 @@ final class ModuleKernelTests: XCTestCase {
 
         XCTAssertEqual(
             KernelBootstrap.builtinModules.count,
-            7,
-            "A3：内置模块清单 = 七行（progress + todos + notifications + launcher + timer + mirror + music）"
+            8,
+            "A3：内置模块清单 = 八行（progress + todos + notifications + launcher + timer + mirror + music + shortcuts）"
         )
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
@@ -1139,8 +1140,9 @@ final class ModuleKernelTests: XCTestCase {
                 ObjectIdentifier(TimerModule.self),
                 ObjectIdentifier(MirrorModule.self),
                 ObjectIdentifier(MusicModule.self),
+                ObjectIdentifier(ShortcutsModule.self),
             ],
-            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule、TimerModule、MirrorModule 与 MusicModule"
+            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule、TimerModule、MirrorModule、MusicModule 与 ShortcutsModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1153,6 +1155,7 @@ final class ModuleKernelTests: XCTestCase {
         let todosID = "com.cmeng.gourd.todos"
         let notificationsID = "com.cmeng.gourd.notifications"
         let launcherID = "com.cmeng.gourd.launcher"
+        let shortcutsID = ShortcutsModule.moduleID
         let timerID = TimerModule.moduleID
         let mirrorID = MirrorModule.moduleID
         let musicID = MusicModule.moduleID
@@ -1167,6 +1170,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertNil(registry.instance(for: id), "disabled 的模块不实例化")
         XCTAssertEqual(registry.states[launcherID], .disabled, "launcher 默认关（docs/14 T-12 / D-04）")
         XCTAssertNil(registry.instance(for: launcherID), "默认关的模块不实例化，也不占任何 surface")
+        XCTAssertEqual(registry.states[shortcutsID], .disabled, "快捷指令默认关（docs/22 D-06：新增模块一律默认关）")
+        XCTAssertNil(registry.instance(for: shortcutsID), "默认关的模块不实例化，也不占任何 surface")
         XCTAssertEqual(registry.states[timerID], .active, "接管模块的启用门读上游键（夹具 true），不看 defaultEnabled")
         XCTAssertNotNil(registry.instance(for: timerID) as? TimerModule, "过门的计时器照常实例化")
         XCTAssertEqual(registry.states[mirrorID], .active, "镜子的真源是 `showMirror`（夹具 true）——不看 `defaultEnabled`（上游默认 false）")
@@ -1188,6 +1193,12 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID, timerID])
         XCTAssertFalse(registry.tabEntries.contains { $0.id == mirrorID }, "镜子只声明 home → 不进 tab 投影")
         XCTAssertFalse(registry.tabEntries.contains { $0.id == musicID }, "音乐只声明 home → 不进 tab 投影")
+        // 快捷指令默认关（docs/22 D-06）：**不进任何投影**——这条是"新增模块默认关"的判据，
+        // 与下面「全部放行」那一段的 `tabEntries` 期望互为反面。
+        XCTAssertFalse(
+            registry.tabEntries.contains { $0.id == shortcutsID },
+            "默认关的快捷指令不得进 tab 投影（门不放行）"
+        )
         XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
         XCTAssertFalse(registry.compactEntries.contains { $0.id == mirrorID }, "镜子不声明 compact（D-09）")
         XCTAssertFalse(registry.compactEntries.contains { $0.id == musicID }, "音乐不声明 compact（D-09：本批不占折叠槽位）")
@@ -1280,16 +1291,45 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(registry.states[id], .active)
         XCTAssertNotNil(registry.instance(for: id) as? ProgressModule)
         XCTAssertEqual(registry.states[launcherID], .active, "launcher 声明了 expanded，放行后进 tab 投影")
+        XCTAssertEqual(registry.states[shortcutsID], .active, "快捷指令声明了 expanded，放行后进 tab 投影")
 
         // tab 候选按 `order` 升序：todos（20）→ progress（30）→ notifications（40）→
-        // launcher 与计时器（**都无 placement → `Int.max`**，排在所有给了 order 的模块之后；
-        // 同 order 按 id 字典序，故 launcher 在 timer 之前）
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, id, notificationsID, launcherID, timerID])
+        // launcher、快捷指令与计时器（**都无 placement → `Int.max`**，排在所有给了 order 的模块之后；
+        // 同 order 按 id 字典序，故 launcher → shortcuts → timer）
+        XCTAssertEqual(
+            registry.tabEntries.map(\.id),
+            [todosID, id, notificationsID, launcherID, shortcutsID, timerID]
+        )
         let launcherEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == launcherID }, "launcher 应进展开面板的 tab 投影")
         XCTAssertEqual(launcherEntry.symbolName, "square.grid.2x2")
         XCTAssertTrue(
             ["Launcher", "启动台"].contains(launcherEntry.label),
             "tab 文案应已本地化（module.launcher.name），实到 \(launcherEntry.label)"
+        )
+        let shortcutsEntry = try XCTUnwrap(
+            registry.tabEntries.first { $0.id == shortcutsID },
+            "快捷指令应进展开面板的 tab 投影（无 placement → `Int.max` 段内按 id 字典序排在 launcher 之后）"
+        )
+        XCTAssertEqual(shortcutsEntry.symbolName, "bolt.square")
+        XCTAssertTrue(
+            ["Shortcuts", "快捷指令"].contains(shortcutsEntry.label),
+            "tab 文案应已本地化（module.shortcuts.name），实到 \(shortcutsEntry.label)"
+        )
+        guard case .view = registry.content(for: shortcutsID, request: request(.expanded)) else {
+            return XCTFail("快捷指令声明了 expanded，展开请求应拿到 .view")
+        }
+        for surface in [Surface.compact, .lockscreen, .home] {
+            guard case .none = registry.content(for: shortcutsID, request: request(surface)) else {
+                return XCTFail("快捷指令未声明 \(surface.rawValue) → 必须答 .none（不占位）")
+            }
+        }
+        XCTAssertFalse(
+            registry.compactEntries.contains { $0.id == shortcutsID },
+            "快捷指令不声明 compact → 不得进折叠槽位候选"
+        )
+        XCTAssertFalse(
+            registry.homeEntries.contains { $0.id == shortcutsID },
+            "快捷指令不声明 home → 首页块名单里不得出现它"
         )
         let timerEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == timerID }, "计时器应进展开面板的 tab 投影")
         XCTAssertEqual(timerEntry.symbolName, "timer")
