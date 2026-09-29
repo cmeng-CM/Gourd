@@ -1515,6 +1515,16 @@ extension Defaults.Keys {
     /// `enableScreenAssistant = false` 后置 true，之后永不再覆盖用户手动改回的值。
     static let gourdFirstLaunchDefaultsApplied = Key<Bool>("gourdFirstLaunchDefaultsApplied", default: false)
 
+    /// 组件开关的**用户显式选择**（docs/17-nookx-adoption.md §接口与数据形状 4）。
+    ///
+    /// **缺键 = 用户未表达**（回落 manifest 的 `defaultEnabled`），**不是 false**——升级用户
+    /// 首次启动时的行为因此与升级前逐字一致（`todos` 仍是开、`progress` 仍是关），无需数据迁移。
+    ///
+    /// 消费点唯一：`KernelBootstrap.enablementGate(registry:)`（组合根的启用门，只在启动注册时
+    /// 读一次）；写入点是设置页「组件」卡片。内核的 `setEnabled` **不碰**这个键——运行期开关
+    /// 只改内存状态，持久化属用户偏好那一层（D-05）。
+    static let moduleEnableOverrides = Key<[String: Bool]>("moduleEnableOverrides", default: [:])
+
     /// 通知浮层是否显示正文（09 §5.5 的配置项 `showBodyInHUD`；键名与设计稿一致）。
     ///
     /// **默认 true（用户 2026-09-28 明确要求默认显示正文）**；设计稿原口径为 false

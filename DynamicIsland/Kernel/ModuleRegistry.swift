@@ -104,6 +104,12 @@ public final class ModuleRegistry: ObservableObject {
     private var instances: [String: any GourdModule] = [:]
     /// id → 类型。`manifests` 只够判启用与排序，实例化还需要元类型。
     private var moduleTypes: [String: any GourdModule.Type] = [:]
+    /// 应用侧注入的「收起刘海」闭包（`bootstrap(collapse:)` 第一步落进来）。
+    /// 初值 `{}`：`setEnabled` 与「从未 `bootstrap()` 过」的路径拿到的都是空操作闭包。
+    private var collapseHandler: () -> Void = {}
+    /// id → 激活代次。每次进入 `activateIfNeeded` 自增；`setEnabled(false)` 也自增（作废在飞的结果）。
+    /// 用途只有一个：`activate()` 悬挂期间被置关时，**结果不写回**（docs/17 §状态机与流程）。
+    private var activationGeneration: [String: Int] = [:]
     private let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "registry")
 
     private init() {}
@@ -147,35 +153,116 @@ public final class ModuleRegistry: ObservableObject {
     /// `collapse` 是应用侧注入的「收起刘海」闭包（`UIHandle.requestCollapse()` 的唯一出口），
     /// 注册表只把它转交给每个模块的 context——**透传、不改写、不做裁决**（docs/13 D-28）。
     /// 默认 `{}` 让既有调用点（单测、未接线的启动路径）保持原语义：请求了也什么都不发生。
+    /// 收到后存在 `collapseHandler`：`setEnabled` 因此不必再要一个 `collapse` 形参
+    ///（docs/17 §改动点设计 6）。
     public func bootstrap(collapse: @escaping () -> Void = {}) async {
+        collapseHandler = collapse
         for manifest in manifests.values.sorted(by: { $0.id < $1.id }) {
-            guard states[manifest.id] == nil, let type = moduleTypes[manifest.id] else { continue }
-
-            states[manifest.id] = .activating
-            let instance = type.init(context: ModuleContextFactory.make(
-                manifest: manifest,
-                // requestRedraw 的路由：注册表是模块与 UI 之间唯一的可观测点，
-                // T3 的 ModuleHostView 观察注册表即可被模块的重绘请求驱动。
-                redraw: { [weak self] in
-                    guard let self else { return }
-                    self.objectWillChange.send()
-                },
-                // requestCollapse 的路由：注册表没有窗口能力，也不该有——原样交给应用侧。
-                collapse: collapse
-            ))
-
-            do {
-                try await instance.activate()
-                instances[manifest.id] = instance
-                states[manifest.id] = .active
-            } catch {
-                // 半激活的实例不留：先摘出注册表，再兜底 deactivate 清理它已起的副作用。
-                instances[manifest.id] = nil
-                states[manifest.id] = .failed(reason: String(describing: error))
-                await instance.deactivate()
-                log.error("模块 \(manifest.id, privacy: .public) activate() 抛错：\(String(describing: error), privacy: .public)")
-            }
+            // 跳过规则（见上）：已有判定结果的 id 不进激活路径。
+            guard states[manifest.id] == nil else { continue }
+            _ = await activateIfNeeded(manifest.id)
         }
+    }
+
+    /// 实例化 + `activate()` 的**唯一路径**（`bootstrap()` 与 `setEnabled(_:for:)` 共用）。
+    ///
+    /// **跳过规则由调用方负责**：`bootstrap()` 只把「尚无判定结果」的 id 送进来，
+    /// `setEnabled(true)` 只把 `.disabled`（或尚无结果）的 id 送进来——两条路径的前置判定不同，
+    /// 放在这里会让 `setEnabled(true)` 被 `states[id] == nil` 的守卫挡回。本方法自身只要求
+    /// 「id 已注册」（有 manifest 与元类型），因此对 id 的作用是**无条件激活一次**。
+    ///
+    /// 单模块失败只把自己置 `.failed(reason:)` 并继续（06 §3.3 硬性规则 1）；日志文案与
+    /// `bootstrap()` 抽取前逐字一致。
+    ///
+    /// **代次（generation）**：进入时自增并记下本代次，**每次写回 `states[id]` 前比对**——
+    /// `activate()` 悬挂期间被 `setEnabled(false)` 干预过（代次不匹配）时结果一律作废：
+    /// 不写回状态、只对自己 `deactivate()` 收尾（docs/17 §状态机与流程「并发与幂等」）。
+    private func activateIfNeeded(_ id: String) async -> ModuleRuntimeState {
+        guard let type = moduleTypes[id], let manifest = manifests[id] else {
+            return states[id] ?? .disabled
+        }
+        let generation = (activationGeneration[id] ?? 0) + 1
+        activationGeneration[id] = generation
+
+        states[id] = .activating
+        let instance = type.init(context: ModuleContextFactory.make(
+            manifest: manifest,
+            // requestRedraw 的路由：注册表是模块与 UI 之间唯一的可观测点，
+            // T3 的 ModuleHostView 观察注册表即可被模块的重绘请求驱动。
+            redraw: { [weak self] in
+                guard let self else { return }
+                self.objectWillChange.send()
+            },
+            // requestCollapse 的路由：注册表没有窗口能力，也不该有——原样交给应用侧。
+            collapse: collapseHandler
+        ))
+
+        do {
+            try await instance.activate()
+            guard activationGeneration[id] == generation else {
+                // 期间被 setEnabled(false) 干预过：状态已由它落定，本次结果作废、只收自己的尾。
+                await instance.deactivate()
+                log.info("模块 \(id, privacy: .public) 的 activate() 已完成但已被 setEnabled(false) 作废，不写回状态")
+                return states[id] ?? .disabled
+            }
+            instances[id] = instance
+            states[id] = .active
+        } catch {
+            // 半激活的实例不留：先摘出注册表，再兜底 deactivate 清理它已起的副作用。
+            instances[id] = nil
+            if activationGeneration[id] == generation {
+                states[id] = .failed(reason: String(describing: error))
+            } else {
+                log.info("模块 \(id, privacy: .public) 的 activate() 失败结果已被 setEnabled(false) 作废，不写回状态")
+            }
+            await instance.deactivate()
+            log.error("模块 \(id, privacy: .public) activate() 抛错：\(String(describing: error), privacy: .public)")
+        }
+        return states[id] ?? .disabled
+    }
+
+    /// 运行期开关：置开按 `bootstrap()` 的同一条路径激活，置关 `deactivate()` 后摘除实例。
+    ///
+    /// - **未注册的 id**（`manifests[id] == nil`）：记 warning 并返回 `.disabled`——不崩、
+    ///   也不凭空造状态（设置页拿到了过期的 id 时是这样）。
+    /// - **置开**：`.active` / `.activating` / `.failed` **原样返回**（幂等：不重复实例化；
+    ///   `failed` 是终态**不重试**，06 §3.3 硬性规则 1）；`states[id] == nil` 或 `.disabled`
+    ///   才真的走 `activateIfNeeded`。返回时通常是 `.active` / `.failed`；并发下可能拿到
+    ///   `.activating`（在飞），调用方按「进行中」处理即可，不需要自旋等待。
+    /// - **置关**：`.active` → `deactivate()` + 摘实例 + 落 `.disabled`；其它状态只落 `.disabled`
+    ///   （`.activating` 的收尾由代次比对拦下，实例本就还没入驻）。
+    /// - **只改内存状态，不写偏好**：`Defaults[.moduleEnableOverrides]` 由设置页负责落盘，
+    ///   内核不知道「用户偏好」这一层（D-05 / docs/17 §改动点设计 5+6）。
+    /// - 每次调用记一条 `os.Logger`（`setEnabled(id:on:from:to:)`），便于排查「关了还在跑」。
+    @discardableResult
+    public func setEnabled(_ enabled: Bool, for id: String) async -> ModuleRuntimeState {
+        guard manifests[id] != nil else {
+            log.warning("setEnabled 忽略未注册的模块 \(id, privacy: .public)（on: \(enabled, privacy: .public)）")
+            return .disabled
+        }
+
+        let from = states[id]
+        let to: ModuleRuntimeState
+        if enabled {
+            if let current = from, current != .disabled {
+                // 幂等 / 终态：不重复实例化、不重试，原样返回现值。
+                to = current
+            } else {
+                to = await activateIfNeeded(id)
+            }
+        } else {
+            if from == .active {
+                await instances[id]?.deactivate()
+                instances[id] = nil
+            }
+            // 代次自增：任何在飞的 `activate()` 结果就此作废（它比对的是自增前的那个值）。
+            activationGeneration[id] = (activationGeneration[id] ?? 0) + 1
+            states[id] = .disabled
+            to = .disabled
+        }
+
+        log.info("setEnabled(id: \(id, privacy: .public), on: \(enabled, privacy: .public), from: \(String(describing: from), privacy: .public), to: \(String(describing: to), privacy: .public))")
+        return to
     }
 
     /// 停用全部模块并**清空注册表**（instances / states / manifests / moduleTypes）。
@@ -190,6 +277,8 @@ public final class ModuleRegistry: ObservableObject {
         states.removeAll()
         manifests.removeAll()
         moduleTypes.removeAll()
+        // 代次一并清：清空后任何在飞的 `activate()` 结果都作废（比对到 nil 即不匹配）。
+        activationGeneration.removeAll()
         // 浮层属于「某个模块的一次弹出」：注册表清空后它没有归属，必须一并撤掉
         //（否则单测之间会串味，退出路径上也会留下一帧孤儿视图）。
         clearHUD()

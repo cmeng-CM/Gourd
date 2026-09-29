@@ -36,9 +36,22 @@ public enum KernelBootstrap {
         applyFirstLaunchDefaults()
 
         let registry = ModuleRegistry.shared
-        // 启用门逐字取 `defaultEnabled`（缺省 false，06 §2.2）。下一行的数组就是「新增模块 = 加一行」。
-        registry.register(builtinModules, enabled: { registry.manifests[$0]?.defaultEnabled ?? false })
+        // 启用门 = `enablementGate`（docs/17 §接口与数据形状 3）：先看用户显式选择，再回落 manifest。
+        registry.register(builtinModules, enabled: enablementGate(registry: registry))
         await registry.bootstrap(collapse: collapse)
+    }
+
+    /// 组合根注入的启用门（docs/17 §接口与数据形状 3；D-05）：
+    /// **键在 `moduleEnableOverrides` 里就取键值**（用户显式表达，压过 manifest），
+    /// **缺键回落 `manifest.defaultEnabled`**，未注册的 id 回落 `false`（06 §2.2 缺省 false）。
+    ///
+    /// 为什么在组合根而不是注册表：门是「怎么判定启用」，读偏好属组合根职责——注册表只接收
+    /// 一个闭包，不知道用户偏好的存在（D-05 / 放 `ModuleRegistry` 上会把偏好读取漏进内核）。
+    /// internal 便于单测直接验两档回落，不必跑整个 `bootstrap()`。
+    static func enablementGate(registry: ModuleRegistry) -> (String) -> Bool {
+        { id in
+            Defaults[.moduleEnableOverrides][id] ?? (registry.manifests[id]?.defaultEnabled ?? false)
+        }
     }
 
     /// 首启默认值：把不需要的上游功能用**默认值**表达，不改上游源码（09 §8.1 / D-08）。
