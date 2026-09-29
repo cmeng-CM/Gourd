@@ -43,38 +43,90 @@ struct HomeBlockWidthKey: LayoutValueKey {
 ///
 /// 高度**不协商**（沿用 docs/13 的既有裁定）：块拿到的是整条 strip 的高度，自己决定内部怎么排；
 /// 因此 `sizeThatFits` 原样接受提案高度，横向的分配才是本布局唯一做的事。
+///
+/// **一次布局只算一次 `plan`**：`sizeThatFits` 把结果连同输入（`items` / `available`）写进 cache，
+/// `placeSubviews` 读它、**不重算**。两边各算一次的失败案例是规则 ②——`sizeThatFits` 的输入是
+/// `proposal.width`，而 `placeSubviews` 能看到的 `bounds.width` 是上一份 plan 的**已压缩输出**，
+/// 规则 ② 不幂等（实测 available 684 → 上报 `[414.5, 257.0]`；用 683.5 重算得 `[414.0, 257.0]`），
+/// 于是「摆放用的宽度」与「上报的宽度」不是同一组数。所以这里用 `Layout` 的 cache 传递结果，
+/// 而不是靠「同一算式重算一遍」这种假设。
 struct HomeStripLayout: Layout {
     /// 块间距：单一常量（docs/17「做法」机制三）。T1 的用例与算式也共用这个数。
     static let spacing: CGFloat = 12
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let items = Self.items(of: subviews)
+    /// 一次布局的输入形状与算出的结果。
+    struct Cache {
+        /// 各块的宽度约束（声明优先、测量回退）。子视图变化时由 `updateCache` 重新取一次。
+        var items: [HomeStripLayoutMath.Item] = []
+        /// 下面这份 `plan` 是拿哪个可用宽度算出来的（`plan == nil` 时无意义）。
+        var available: CGFloat = .nan
+        /// nil = 还没有任何人为当前的输入算过。
+        var plan: HomeStripLayoutMath.Plan?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(items: Self.items(of: subviews))
+    }
+
+    /// 子视图变了（块被加上 / 去掉、宽度声明变了）→ 重新取声明，并把宽度分配结果作废，
+    /// 由下一次 `sizeThatFits` 按新的输入重算。测量只在这里（和 `makeCache`）发生。
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.items = Self.items(of: subviews)
+        cache.available = .nan
+        cache.plan = nil
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         // 无宽提案（`.unspecified`）时按「各块理想宽度之和」当可用宽度：命中规则 ①（富余），
         // 于是向上报的就是这条 strip 的自然宽度——`plan` 的前置条件要求有限数，不能传 `.infinity`。
-        let available = proposal.width ?? Self.naturalWidth(of: items)
-        let plan = HomeStripLayoutMath.plan(items: items, available: available, spacing: Self.spacing)
+        let available = proposal.width ?? Self.naturalWidth(of: cache.items)
+        let plan = resolvedPlan(available: available, cache: &cache)
         // 间隙只存在于**可见**的块之间：规则 ③ 丢块后 n 是 `visibleCount`，不是 `subviews.count`。
         let gaps = Self.spacing * CGFloat(max(0, plan.visibleCount - 1))
         return CGSize(width: plan.widths.reduce(CGFloat.zero, +) + gaps, height: proposal.height ?? 0)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        // 与 `sizeThatFits` 同一条算式、同一份输入形状（宽度取 bounds 的）：`sizeThatFits` 报出的
-        // 宽度就是各块分配宽度之和，因此这里重算得到的是同一组宽度。被规则 ③ 丢掉的尾部块
-        // **不摆放**——`Layout` 允许不摆放所有 subview，被丢的块因此不显示、不占位。
-        let plan = HomeStripLayoutMath.plan(
-            items: Self.items(of: subviews),
-            available: bounds.width,
-            spacing: Self.spacing
-        )
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        // 摆放用的就是 `sizeThatFits` 当初决定上报宽度的那一份结果（那是本布局唯一的分配）。
+        // cache 为空属极端情况（这次布局没经过 `sizeThatFits`），按 `bounds` 现算一份兜底。
+        let plan: HomeStripLayoutMath.Plan
+        if let cached = cache.plan {
+            plan = cached
+        } else {
+            plan = resolvedPlan(available: bounds.width, cache: &cache)
+        }
+
         var x = bounds.minX
-        for (index, width) in plan.widths.enumerated() {
+        for index in subviews.indices {
+            guard index < plan.widths.count else {
+                // **被规则 ③ 丢掉的尾部块必须显式摆放**（提案为零，什么都不画）：
+                // `place(at:anchor:proposal:)` 的文档写明——没为某个 subview 调用它时，该 subview
+                // 会**以容器的尺寸提案居中叠画在容器中央**。即「不摆放」不等于「不显示」，
+                // 而是把被丢掉的块铺满整条 strip 叠在已摆放块之上；默认 `openNotchWidth = 640`
+                // 且镜子打开时（三块最小宽度和 664 > 可用 ≈572）就会命中规则 ③，T4 加上待办块后
+                // 四块更是常态。零提案让被丢的块既不占位也不可见。
+                subviews[index].place(at: CGPoint(x: x, y: bounds.minY), proposal: .zero)
+                continue
+            }
+            let width = plan.widths[index]
             subviews[index].place(
                 at: CGPoint(x: x, y: bounds.minY),
                 proposal: ProposedViewSize(width: width, height: bounds.height)
             )
             x += width + Self.spacing
         }
+    }
+
+    /// 取本次布局的 `plan`：输入形状（`available`）与 cache 里记的一致就直接复用，
+    /// 否则按 cache 里的声明算一次并写回。`items` 的失效由 `updateCache` 负责。
+    private func resolvedPlan(available: CGFloat, cache: inout Cache) -> HomeStripLayoutMath.Plan {
+        if let plan = cache.plan, cache.available == available {
+            return plan
+        }
+        let plan = HomeStripLayoutMath.plan(items: cache.items, available: available, spacing: Self.spacing)
+        cache.available = available
+        cache.plan = plan
+        return plan
     }
 
     /// 每个 subview 的宽度约束：声明优先，取不到才回退到测量（`ideal` = 测得的宽度，
@@ -234,17 +286,26 @@ struct HomeStripView: View {
 
 // MARK: - 内置块：日历
 
-/// 日历块：**一行日期头 + 今日竖向紧凑多行**（复用 `CalendarView` 收起态的两个部件）。
+/// 日历块：**一行日期头 + 悬停展开的日期轮 + 所选日期的竖向紧凑多行**（三个部件都复用上游声明）。
 ///
 /// 为什么自建而不挂 `StandaloneCalendarView`：后者是「双栏月历 + 可滚动事件面板」（顶层
 /// `GeometryReader` 宽度对半、高度取 `vm.notchSize`、右栏是滚动 `List`），塞进 200–260pt 的块里
-/// 既横滚又撑高（docs/17 §改动点设计 3）。这里**不带** `WheelPicker` 日期选择轮——它是横向
-/// 滚动控件，与「首页不横向滚动」的取向冲突；切日期与月历仍在独立日历 tab（已知限制 8）。
+/// 既横滚又撑高（docs/17 §改动点设计 3）。
+///
+/// **翻日期的能力保留在本块内**：日期轮（`WheelPicker`）照 `CalendarView` 的收起 / 展开做法
+/// （收起高度 0、悬停展开 50pt、`.easeInOut(duration: 0.18)`）挂回块里，选中的日期同时驱动
+/// 日期头、`EventListView` 与 `CalendarManager.updateCurrentDate`——否则「首页日历」只能看今天，
+/// 而月历 `StandaloneCalendarView` 在本批没有入口（已记入 docs/17 已知限制 8）。
 private struct HomeStripCalendarBlock: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var calendarManager = CalendarManager.shared
+    @State private var selectedDate = Date()
+    @State private var dateExpanded = false
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
+
+    /// 日期轮展开时占用的高度：`WheelPicker` 的自然高度（照 `CalendarView` 的 `50`）。
+    private static let dateStripHeight: CGFloat = 50
 
     /// 与 `CalendarView` 完全同一套过滤（已完成提醒 / 全天条目按偏好隐藏），
     /// 空态判据因此与首页日历栏一致。
@@ -256,40 +317,74 @@ private struct HomeStripCalendarBlock: View {
         )
     }
 
-    /// 与 `CalendarView` 收起态逐字同形的一行日期头。
+    /// 与 `CalendarView` 收起态逐字同形的一行日期头；显示**选中**的日期（与日期轮、列表同源）。
     private var headerText: String {
-        let now = Date.now
-        return now.formatted(.dateTime.weekday(.abbreviated))
-            + ", " + now.formatted(.dateTime.month(.abbreviated))
-            + " " + now.formatted(.dateTime.day())
+        selectedDate.formatted(.dateTime.weekday(.abbreviated))
+            + ", " + selectedDate.formatted(.dateTime.month(.abbreviated))
+            + " " + selectedDate.formatted(.dateTime.day())
     }
 
     var body: some View {
         // `GeometryReader` 取的是**放置后**的真实分配尺寸（不是测量值）：块拿到的是整条 strip
-        // 的高度，减去日期头就是今日列表能用的高度。
+        // 的高度，减去日期头（与展开后的日期轮）就是列表能用的高度。
         GeometryReader { geo in
-            let listHeight = max(0, geo.size.height - HomeTodayListLayout.collapsedHeaderHeight)
+            let listHeight = max(
+                0,
+                geo.size.height - HomeTodayListLayout.collapsedHeaderHeight
+                    - (dateExpanded ? Self.dateStripHeight : 0)
+            )
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(headerText)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .padding(.top, 2)
-                    .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
+                // 日期头与日期轮在**同一个 hover 容器**里（照 `CalendarView`）：光标从日期头移进
+                // 展开后的日期轮时 hover 不退出，轮子才用得住。
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(headerText)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                        .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ZStack {
+                        WheelPicker(selectedDate: $selectedDate, config: Config())
+                            .frame(maxWidth: .infinity)
+                        // 边侧渐隐：提示这一条日期可以横向拨动（与 `CalendarView` 同形，随展开一起出现）。
+                        LinearGradient(colors: [Color.black.opacity(0.45), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        LinearGradient(colors: [.clear, Color.black.opacity(0.45)], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    // 收起 = 0 高（不占位）、悬停 = 日期轮的 50pt 自然高度，中间走同一条 0.18s 缓动。
+                    .frame(height: dateExpanded ? Self.dateStripHeight : 0)
+                    .opacity(dateExpanded ? 1 : 0)
+                    .allowsHitTesting(dateExpanded)
+                    .clipped()
+                }
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        dateExpanded = inside
+                    }
+                }
 
                 if filteredEvents.isEmpty {
-                    EmptyEventsView(selectedDate: Date.now)
+                    EmptyEventsView(selectedDate: selectedDate)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 6)
                 } else {
+                    // 不再给列表加 4pt 顶部间距：`HomeTodayListLayout.collapsedHeaderHeight`（26pt）
+                    // 的构成里**已经含**「与列表之间的 4pt 间距」，再加一次会让列表越出块底 4pt。
                     EventListView(
                         events: calendarManager.events,
-                        selectedDate: Date.now,
+                        selectedDate: selectedDate,
                         availableHeight: listHeight
                     )
-                    .padding(.top, 4)
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -301,10 +396,21 @@ private struct HomeStripCalendarBlock: View {
                 await calendarManager.updateCurrentDate(Date.now)
             }
         }
-        // 悬停遮罩（沿用旧 `NotchHomeView` 日历栏的 `onHover`）：`ContentView` 用它抑制
-        // 「向下滚动收起面板」与横向切歌手势，避免用户在日历上操作时面板被误收起。
+        // 拨动日期轮（或点某一天）→ 换到那一天的日程：口径照 `CalendarView` 的 `.onChange(of: selectedDate)`。
+        .onChange(of: selectedDate) {
+            Task {
+                await calendarManager.updateCurrentDate(selectedDate)
+            }
+        }
+        // 悬停遮罩（沿用旧 `NotchHomeView` 日历栏的 `onHover`，覆盖整块：日期头 + 日期轮 + 列表）：
+        // `ContentView` 用它抑制「向下滚动收起面板」与横向切歌手势，避免用户在日历上操作时面板被误收起。
         .onHover { isHovering in
             vm.isHoveringCalendar = isHovering
+        }
+        // 块被销毁（切 tab / 面板收起）时 `onHover` 不会再补发一次 false，必须显式归位——
+        // 否则 `vm.isHoveringCalendar` 悬空为 true，面板之后再也收不起来（同一个坑见 `ModuleHostView`）。
+        .onDisappear {
+            vm.isHoveringCalendar = false
         }
     }
 }

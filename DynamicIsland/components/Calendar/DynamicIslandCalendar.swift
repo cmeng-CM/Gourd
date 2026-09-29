@@ -1099,7 +1099,9 @@ enum HomeTodayListLayout {
     /// 3. 放不下 / 超上限 → 让出一行额度给 `+N` 提示行，剩余条目计入溢出。
     ///
     /// - Parameters:
-    ///   - availableHeight: 列表可用高度（首页由 `CalendarView` 按面板高度换算）。
+    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView` 按**面板高度**
+    ///     （`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），`HomeStripCalendarBlock`
+    ///     按**块自身的实测高度**（放置后的 `GeometryReader` 高度减去日期头，展开日期轮时再减 50pt）。
     ///   - itemCount: 今日条目数（全天 + 定时合计，已过 `filteredEvents` 与排序）。
     static func capacity(availableHeight: CGFloat, itemCount: Int) -> Capacity {
         guard itemCount > 0 else { return Capacity(visibleItemCount: 0, overflowCount: 0) }
@@ -1135,7 +1137,9 @@ struct EventListView: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     let events: [EventModel]
     let selectedDate: Date
-    /// 今日列表可用高度（由 `CalendarView` 按面板高度换算）——决定显示几行 + 是否溢出。
+    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView` 按**面板高度**
+    /// （`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），`HomeStripCalendarBlock`
+    /// 按**块自身的实测高度**（放置后的 `GeometryReader` 高度减去日期头，展开日期轮时再减 50pt）。
     let availableHeight: CGFloat
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
