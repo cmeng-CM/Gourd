@@ -3123,6 +3123,46 @@ final class ModuleKernelTests: XCTestCase {
 
     // MARK: - 展开态右下角拖动改宽高（2026-09-29，「刘海打开时直接拉动调整宽高」）
 
+    /// **1:1 跟手的量法**：位移由两次**屏幕光标**（`NSEvent.mouseLocation`，AppKit 全局坐标、
+    /// y 向上）算出，与视图 / 窗口怎么重排无关——这才是「手移动了多少」。
+    /// 向右 / 向下拖都是正的（y 取反：屏幕 y 向下变小）。
+    func testPanelResizeTranslationMatchesCursorDeltaOneToOne() {
+        let start = CGPoint(x: 1217, y: 462)
+        XCTAssertEqual(
+            panelResizeTranslation(from: start, to: CGPoint(x: 1317, y: 462)),
+            CGSize(width: 100, height: 0),
+            "右移 100pt → 宽度位移 +100（原样，不带任何放大 / 衰减）"
+        )
+        XCTAssertEqual(
+            panelResizeTranslation(from: start, to: CGPoint(x: 1217, y: 362)),
+            CGSize(width: 0, height: 100),
+            "下移 100pt（AppKit y 462 → 362）→ 高度位移 +100"
+        )
+        XCTAssertEqual(
+            panelResizeTranslation(from: start, to: CGPoint(x: 1117, y: 562)),
+            CGSize(width: -100, height: -100),
+            "左上移 → 宽高都为负（缩小）"
+        )
+        XCTAssertEqual(
+            panelResizeTranslation(from: start, to: start),
+            .zero,
+            "按下不移动 → 零位移（不会因为取整动一下）"
+        )
+    }
+
+    /// 非有限读数按 0 处理（口径同 `resizedPanelSize` 对非有限位移的处理）：不让一次异常读数
+    /// 把尺寸弹到边界。
+    func testPanelResizeTranslationFallsBackOnNonFiniteValues() {
+        XCTAssertEqual(
+            panelResizeTranslation(
+                from: CGPoint(x: CGFloat.nan, y: 0),
+                to: CGPoint(x: 10, y: CGFloat.infinity)
+            ),
+            CGSize(width: 0, height: 0),
+            "两端任一非有限 → 该方向按 0（不动），而不是弹到边界"
+        )
+    }
+
     /// 方向：把手在右下角 → 向右拖动变宽、向下拖动变高（两个方向一起动就是"同时改宽高"）。
     /// 边界取得足够宽，断言的是**纯位移**这一层（夹取另有用例）。
     func testResizedPanelSizeGrowsWithRightwardAndDownwardDrag() {

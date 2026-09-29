@@ -183,6 +183,12 @@ func currentOpenNotchResizeBounds() -> (
 /// 并触发面板 / 窗口重排，把手自己会跟着鼠标跑；若用当前值累加，下一帧读到的是"已经追过一次"的尺寸，
 /// 同一段位移被重复计入（越拖越快）。固定起点 + 累计位移是唯一稳定的口径。
 ///
+/// **位移必须由屏幕光标量出来**（`panelResizeTranslation(from:to:)`），不能直接用 SwiftUI
+/// `DragGesture` 的 `value.translation`：那套坐标空间会随着面板 / 窗口的**自身重排**移动
+/// （把手贴右下角、面板扩宽时窗口居中改位），量出来的是「光标位移 − 把手位移」，于是拖动位移
+/// 被自己放大或吃掉（本机实测 2026-09-29：光标右移 100pt，`openNotchWidth` 涨到 1106＝+136pt，
+/// 即 1.36×，且中途还会随帧率抖）。用屏幕光标只保留「手移动了多少」这一个量。
+///
 /// 非有限值一律退回下界（同 `clampedOpenNotchHeight` 对 `NaN` 的处理）：不把 `NaN` / `∞`
 /// 写进 `Defaults`（那会让面板尺寸整块失效），也不让一次异常事件把尺寸弹到边界。
 ///
@@ -204,6 +210,24 @@ func resizedPanelSize(
         width: min(max(startWidth + dx, minWidth), maxWidth),
         height: min(max(startHeight + dy, minHeight), maxHeight)
     )
+}
+
+/// 把「两次屏幕光标位置」换成 `resizedPanelSize` 要的位移（纯函数）：**正宽 = 向右、正高 = 向下**。
+///
+/// 为什么不用 `DragGesture.value.translation`：那个值是在**视图 / 窗口自身的坐标空间**里量的，
+/// 而拖动过程中面板每帧都在重排、窗口还在居中改位（宽每涨 1pt，右边缘只走 0.5pt、左边缘反向走 0.5pt），
+/// 于是量到的位移会把「面板自己动了多少」算进去——实测光标右移 100pt 得到 +136pt（1.36×，
+/// 见 `resizedPanelSize` 的注释）。屏幕光标（`NSEvent.mouseLocation`，AppKit 全局坐标、y 向上）
+/// 与视图 / 窗口怎么重排无关，量到的就是用户手移动了多少：这才是「1:1 跟手」的口径。
+///
+/// **y 取反**：AppKit 屏幕坐标 y 向上，而 `resizedPanelSize` 的 `height` 是「向下为正」——
+/// 用户向下拖（y 变小）得到正的 `height`，面板变高。
+///
+/// 非有限值按 0 处理（同 `resizedPanelSize` 对非有限位移的处理）：不让一次异常读数把尺寸弹到边界。
+func panelResizeTranslation(from start: CGPoint, to current: CGPoint) -> CGSize {
+    let dx = current.x - start.x
+    let dy = start.y - current.y
+    return CGSize(width: dx.isFinite ? dx : 0, height: dy.isFinite ? dy : 0)
 }
 
 @MainActor
@@ -396,10 +420,13 @@ struct ContentView: View {
     @State private var isHoveringClosedMusicWaveformControl: Bool = false
 
     // 展开态右下角拖动把手（D-29）
-    /// 拖动是否进行中（圆点提亮用）。
+    /// 拖动是否进行中（圆点提亮用，并让面板在拖动期间不因 hover 离开而收起，见 `shouldPreventAutoClose`）。
     @State private var isPanelResizing: Bool = false
     /// 拖动**起点**尺寸：第一次 `onChanged` 时捕获一次，整个拖动期间不再变（见 `resizedPanelSize` 的注释）。
     @State private var panelResizeDragStartSize: CGSize?
+    /// 拖动**起点光标**（`NSEvent.mouseLocation`，屏幕坐标、y 向上）：位移由它和当前光标算
+    /// （见 `panelResizeTranslation(from:to:)` 的注释——不能用 `DragGesture` 的坐标空间）。
+    @State private var panelResizeDragStartMouseLocation: CGPoint?
     /// 读数胶囊当前显示的尺寸（`nil` = 不显示）。
     @State private var panelResizeReadout: CGSize?
     /// 读数淡出的延时任务（新的拖动会取消它）。
@@ -463,10 +490,18 @@ struct ContentView: View {
     private let musicControlPauseGrace: TimeInterval = 5
     private let musicControlResumeDelay: TimeInterval = 0.24
 
-    // 展开态右下角拖动把手（D-29）的几何：9pt 圆点 + 20pt 命中框，命中框距面板右下角各 14pt
-    // （圆点中心因此在距边 24pt 处，落在面板右下圆角内侧，不越出裁剪形状）。
+    // 展开态右下角拖动把手（D-29）的几何：9pt 圆点 + 32pt 命中框，命中框距面板右下角各 14pt。
+    //
+    // **命中框 20 → 32pt（2026-09-29，用户反馈「很费劲」）**：原来的 20pt 框「看着够大」，但
+    // 可命中面积还被面板自己的内容形状（`NotchShape`）切掉一块——形状的右边在 `maxX − topR`
+    // （开态 topR = 19）处收进去，右下角那圈是二次曲线（不是圆角矩形），而 `.contentShape`
+    // 的裁剪对子树的手势命中同样生效。于是 20pt 框（距边 14pt、中心距边 24pt）实际只有
+    // 约 15×20pt 能按到，右侧那 5pt 是死区。放大到 32pt 后（边距仍 14pt、圆点中心改到距边 30pt），
+    // 可命中面积 ≈ 27×32pt（约 2.9×），只有最外那 5pt 仍压在裁剪线外。
+    // 取值取舍：再放大收益递减（可命中区左/上边界已经推进到面板内容区里），32pt 是可命中面积
+    // 接近翻三倍、而圆点只内移 6pt 的最小改动。
     private let panelResizeHandleDotDiameter: CGFloat = 9
-    private let panelResizeHandleHitSize: CGFloat = 20
+    private let panelResizeHandleHitSize: CGFloat = 32
     private let panelResizeHandleEdgeInset: CGFloat = 14
 
     // MARK: - Tab switch direction for smooth transitions
@@ -911,7 +946,7 @@ struct ContentView: View {
 
     /// 右下角拖动把手：9pt 小圆点（拖动 / 悬停时提亮）+ 拖动期间浮在它上方的「宽 × 高」读数胶囊。
     ///
-    /// 形态与命中：圆点在 20pt 命中框正中，命中框距面板右下角各 `panelResizeHandleEdgeInset`（14pt）；
+    /// 形态与命中：圆点在 32pt 命中框正中，命中框距面板右下角各 `panelResizeHandleEdgeInset`（14pt）；
     /// 读数胶囊贴命中框的右上角、抬到圆点上方（`allowsHitTesting(false)`，不吃拖动）。
     private var panelResizeHandle: some View {
         Circle()
@@ -932,13 +967,27 @@ struct ContentView: View {
             // `panGesture`（下拉收起等）。子视图的手势本就优先于祖先视图上的 `.gesture`，这里再显式
             // 提一档，保证按住圆点拖动时那几条手势一个都不抢——既不改动它们，也不需要它们配合。
             .highPriorityGesture(panelResizeDragGesture)
+            // 把手被移除（收起面板 / 切到极简）时显式归位：拖动被外部打断时 `onEnded` 不会补发
+            // （口径同日历行的 `onDisappear` 归位），否则 `isPanelResizing` 悬空为 true —— 面板
+            // 之后再也收不起来，下一次拖动还会拿着上一轮的起点尺寸继续算。
+            .onDisappear {
+                panelResizeDragStartSize = nil
+                panelResizeDragStartMouseLocation = nil
+                isPanelResizing = false
+            }
     }
 
     /// 读数胶囊：`840 × 400` 这样的纯数字（**不新增本地化 key**——只有数字与乘号）。
+    ///
+    /// `fixedSize()` 是必须的（2026-09-29 实测）：胶囊挂在把手的 `.overlay` 上，overlay 会把
+    /// **把手自己的尺寸（20 / 32pt）**当提案量给子视图，`Text` 于是被截断成 `$`（20pt 框）或
+    /// `…`（32pt 框）——读数胶囊是拖动时唯一的尺寸反馈，截断后整条交互就"看不出跟手"了。
+    /// `fixedSize()` 让文字按理想尺寸排版，胶囊再按 `.bottomTrailing` 贴住把手右上角、向右伸出。
     private func panelResizeReadoutLabel(_ size: CGSize) -> some View {
         Text("\(Int(size.width.rounded())) × \(Int(size.height.rounded()))")
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .monospacedDigit()
+            .fixedSize()
             .foregroundStyle(.white)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -946,32 +995,52 @@ struct ContentView: View {
             .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
     }
 
-    /// 拖动：起点尺寸在第一次 `onChanged` 捕获一次，之后每次都用「起点 + 本次累计位移」算新尺寸。
+    /// 拖动：起点尺寸与**起点光标**在第一次 `onChanged` 捕获一次，之后每次都用「起点 + 累计位移」算新尺寸。
+    ///
+    /// 位移取 `panelResizeTranslation(from:to:)`（屏幕光标之间量出来的），**不用** `value.translation`
+    /// ——后者的坐标空间会跟着面板 / 窗口的自身重排走，量到的位移不 1:1（见该函数的注释）。
     private var panelResizeDragGesture: some Gesture {
         DragGesture(minimumDistance: 0)
-            .onChanged { value in
+            .onChanged { _ in
+                let mouse = NSEvent.mouseLocation
                 let start: CGSize
-                if let captured = panelResizeDragStartSize {
-                    start = captured
+                let startMouse: CGPoint
+                if let capturedSize = panelResizeDragStartSize,
+                   let capturedMouse = panelResizeDragStartMouseLocation {
+                    start = capturedSize
+                    startMouse = capturedMouse
                 } else {
                     // 起点取**当前生效**的展开尺寸（已被 `openNotchSize` 夹过），拖动因此从屏幕上的
                     // 现状开始，不会因为存量默认值超界而先跳一下。
                     start = openNotchSize
+                    startMouse = mouse
                     panelResizeDragStartSize = start
+                    panelResizeDragStartMouseLocation = startMouse
                     isPanelResizing = true
                     panelResizeReadoutHideTask?.cancel()
                 }
-                applyPanelResize(resolvedPanelResizeSize(start: start, translation: value.translation))
+                applyPanelResize(
+                    resolvedPanelResizeSize(
+                        start: start,
+                        translation: panelResizeTranslation(from: startMouse, to: mouse)
+                    )
+                )
             }
-            .onEnded { value in
+            .onEnded { _ in
+                let mouse = NSEvent.mouseLocation
                 defer {
                     panelResizeDragStartSize = nil
+                    panelResizeDragStartMouseLocation = nil
                     isPanelResizing = false
                 }
                 guard let start = panelResizeDragStartSize else { return }
                 // 结束再写一次：拖动过程中的写入与最后一帧之间可能被系统合并（`Defaults` 是
                 // UserDefaults 的写穿缓存），再写一遍保证落盘的就是松手时的尺寸。
-                applyPanelResize(resolvedPanelResizeSize(start: start, translation: value.translation))
+                let translation = panelResizeTranslation(
+                    from: panelResizeDragStartMouseLocation ?? mouse,
+                    to: mouse
+                )
+                applyPanelResize(resolvedPanelResizeSize(start: start, translation: translation))
                 schedulePanelResizeReadoutFadeOut()
             }
     }
@@ -2777,7 +2846,18 @@ struct ContentView: View {
         // Without this, the hover-exit timer closes the panel mid-drag, tearing
         // down the NSView that is acting as the drag source and cancelling the
         // session — an independent second cause of "drag-out doesn't work".
-        coordinator.firstLaunch || hasAnyActivePopovers() || vm.isAutoCloseSuppressed || ShelfSelectionModel.shared.isDragging || ClipboardManager.shared.isDraggingItem || SharingStateManager.shared.preventNotchClose || (Defaults[.terminalStickyMode] && coordinator.currentView == .terminal)
+        //
+        // 2026-09-29（用户反馈「浏览很容易自动收回」）：「正在拖动右下角调整尺寸」是同一类情形，
+        // 也并进这条判据。拖动把手必然会把光标带出面板——面板扩宽是**居中**的，右边缘只走位移
+        // 的一半，光标只要往右多拖 ~40pt 就已经出了面板（本机实测：拖动 140ms 后 hover 离开
+        // 就触发了 `finishHoverExit`）。照常收起会把把手视图一起拆掉，拖动手势当场中断，
+        // 用户看到的就是「拖到一半自己收起来了」。抑制口径与 shelf / 剪贴板拖出**逐字同源**：
+        // 只挡「因 hover 离开而自动收起」这一族，不碰 `vm.close()` 的显式调用方
+        // （快捷键、锁屏、终端外侧点击等都不走这条判据）。
+        // 手移开后补的那次 hover 复检（`hiddenEdgeHoverPolling`）同样读这条判据，因此松手瞬间
+        // 也不会因为「光标还在面板外」而立刻收起——面板留在原地让用户看到结果，下一次真正的
+        // hover 进入 / 离开照旧按原判据收起。
+        coordinator.firstLaunch || hasAnyActivePopovers() || vm.isAutoCloseSuppressed || ShelfSelectionModel.shared.isDragging || ClipboardManager.shared.isDraggingItem || SharingStateManager.shared.preventNotchClose || (Defaults[.terminalStickyMode] && coordinator.currentView == .terminal) || isPanelResizing
     }
     
     // Helper to prevent rapid haptic feedback
