@@ -5193,8 +5193,9 @@ struct Appearance: View {
             Divider().padding(.vertical, 4)
 
             // 2026-09-28 用户反馈「这个高度最高就 400 吗，现在高度不够，这个要可以调」：
-            // 上限 400 → 1000，且**滑块上界与 `clampedOpenNotchHeight` 同源**
-            // （`effectiveOpenNotchHeightUpperBound`：可配上限 1000 与「当前屏 visibleFrame * 0.9」取小），
+            // 上限 400 → 1000；2026-09-29 用户明确「展开的高度最高是 850」→ 收到 850。
+            // 不管哪一版，**滑块上界都与 `clampedOpenNotchHeight` 同源**
+            // （`effectiveOpenNotchHeightUpperBound`：可配上限 850 与「当前屏 visibleFrame * 0.9」取小），
             // 否则滑块能拖到一个会被尺寸钳制悄悄改掉的值，用户看到的是「拖了没用」。
             let expandedHeightLower: CGFloat = openNotchHeightRange.lowerBound
             let expandedHeightUpper = effectiveOpenNotchHeightUpperBound(
