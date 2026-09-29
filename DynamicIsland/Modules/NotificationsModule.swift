@@ -65,8 +65,8 @@
 //
 //  ## 本批形态
 //  - 展开面板：标题行（模块名 + 状态 + **清除**（列表非空时）+ 刷新）+ 可滚动通知列表
-//    （点击左侧内容 → 打开对应 App；行右侧 `xmark.circle.fill` → **关闭这一条，仅从岛上移除**；
-//    近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
+//    （点击左侧内容 → 打开对应 App **并收起刘海**；行右侧 `xmark.circle.fill` → **关闭这一条，
+//    仅从岛上移除**；近 10 秒内有同指纹的 AX 横幅句柄时顺带真关掉那条系统通知）
 //    + 一行能力边界说明；
 //  - 折叠态**瞬时浮层**：通知到达时 `bell.badge` + App 名 + 标题/正文 + **×**，到期自动消失
 //    （内核 `ModuleRegistry.presentHUD`；一次取数多条新通知只弹最新一条，其余在第二行末尾以
@@ -82,6 +82,11 @@
 //    × 走 `.highPriorityGesture`（同一层上压过祖先的 `openNotch()` 普通手势，见
 //    `NotificationHUDView` 的手势优先级说明），点掉后调 `UIHandle.dismissTransient()` **立刻**撤浮层
 //    （内核 `ModuleRegistry.dismissHUD(id:)`），不等 ttl；
+//    **卡片本体可点**（2026-09-29 用户反馈「直接点消息不能弹出对应的应用」）：整块卡片是
+//    「打开对应 App（`activates = true`，把目标 App 带到前台）+ 撤浮层」的点击区，
+//    动作与顺序收在 `NotificationClickPolicy.hudCard`（普通 `.onTapGesture`；× 是内部 Button，
+//    会吃掉落在它身上的点击，故点 × 不会触发本体动作）。AX 通道没有 bundle id（`BannerEvent`
+//    只有 App 名），按名反查（`bundleIdentifier(forAppName:in:runningApps:)`）后走同一条打开路径；
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）。
@@ -468,18 +473,80 @@ final class NotificationStore: ObservableObject {
 
     /// 打开一条通知对应的 App（**公开 API**：取 bundleIdentifier → `NSWorkspace.openApplication(at:)`）。
     func openApp(for item: NotificationItem) {
-        guard !item.bundleIdentifier.isEmpty else {
-            log.warn("打开跳过：这条通知没有 bundleIdentifier（rec_id=\(item.id)）")
+        openApp(bundleIdentifier: item.bundleIdentifier, label: "rec_id=\(item.id)")
+    }
+
+    /// 打开「某 App 名」对应的应用（**AX 通道的浮层卡片专用**）。
+    ///
+    /// `BannerEvent` 只有 App 名、没有 bundle id（见 `NotificationBannerParser`），因此按名反查
+    /// （`bundleIdentifier(forAppName:in:runningApps:)`）后走**同一条**打开路径。反查不到时**不打开**：
+    /// 打开一个同名的别的 App 比不打开更糟。
+    func openApp(appNamed name: String) {
+        guard let bundleID = Self.bundleIdentifier(
+            forAppName: name,
+            in: items,
+            runningApps: Self.runningAppCandidates()
+        ) else {
+            log.warn("打开跳过：按 App 名「\(name)」解析不到 bundleIdentifier（AX 通道）")
             return
         }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: item.bundleIdentifier) else {
-            log.warn("打开跳过：解析不到 App（\(item.bundleIdentifier)，rec_id=\(item.id)）")
+        openApp(bundleIdentifier: bundleID, label: "app=\(name)")
+    }
+
+    /// **纯函数**：按 App 显示名反查一个可用的 bundle id（两条来源，**不猜**）。
+    ///
+    /// ① 列表里同名条目的 `bundleIdentifier`（列表来自 DB，带 bundle id）；
+    /// ② 运行中 App 的候选（`runningApps`，由调用方取 `NSWorkspace`）——能弹通知的 App 必然
+    ///    在运行，① 落空时（DB 还没落盘、列表为空）它几乎总能命中；判据是**本地化名**或
+    ///    **包文件名**（`/Applications/Safari.app` → `Safari`，两者对不同 App 各有可能对上横幅
+    ///    给的 App 名）。
+    /// 两条都落空返回 nil。运行中 App 走形参注入（不是就地读 `NSWorkspace`）：这条函数因此
+    /// 可以在单测里喂构造的候选，不受开发机上跑着什么影响。
+    static func bundleIdentifier(
+        forAppName name: String,
+        in items: [NotificationItem],
+        runningApps: [(localizedName: String?, bundleFileName: String?, bundleIdentifier: String?)] = []
+    ) -> String? {
+        guard !name.isEmpty else { return nil }
+        if let match = items.first(where: { $0.appName == name || $0.displayName == name }),
+           !match.bundleIdentifier.isEmpty {
+            return match.bundleIdentifier
+        }
+        for app in runningApps where app.localizedName == name || app.bundleFileName == name {
+            if let bundleID = app.bundleIdentifier, !bundleID.isEmpty { return bundleID }
+        }
+        return nil
+    }
+
+    /// 运行中 App 的候选三元组（`bundleIdentifier(forAppName:in:runningApps:)` 的默认来源）。
+    static func runningAppCandidates()
+        -> [(localizedName: String?, bundleFileName: String?, bundleIdentifier: String?)] {
+        NSWorkspace.shared.runningApplications.map {
+            ($0.localizedName, $0.bundleURL?.deletingPathExtension().lastPathComponent, $0.bundleIdentifier)
+        }
+    }
+
+    /// 打开的核心（列表行与浮层卡片共用）：解析 App 包 → 打开。
+    ///
+    /// `activates = true`（2026-09-29 显式写出）：点通知的目的就是「去那个 App 看看」，
+    /// 目标 App 必须被带到前台——这也是用户反馈「点消息不能弹出对应的应用」的一半诉求
+    /// （另一半是卡片本体此前没有点击处理器）。开关（`configuration.activates`）默认就是 true，
+    /// 写出来是为了不让它被后续改动顺手带走。
+    private func openApp(bundleIdentifier: String, label: String) {
+        guard !bundleIdentifier.isEmpty else {
+            log.warn("打开跳过：没有 bundleIdentifier（\(label)）")
+            return
+        }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            log.warn("打开跳过：解析不到 App（\(bundleIdentifier)，\(label)）")
             return
         }
         let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        log.info("打开 App \(bundleIdentifier)（\(label)，activates=true）")
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [log] _, error in
             if let error {
-                log.warn("打开 App \(item.bundleIdentifier) 失败：\(String(describing: error))")
+                log.warn("打开 App \(bundleIdentifier) 失败：\(String(describing: error))")
             }
         }
     }
@@ -548,6 +615,52 @@ enum NotificationHUDPolicy {
     /// 生产路径入口：读当前设置 → 夹取后的 ttl。两条通道（AX / DB）都走这里。
     static func ttlFromDefaults() -> TimeInterval {
         ttl(forSettingSeconds: Defaults[.notificationHUDDurationSeconds])
+    }
+}
+
+// MARK: - 点击动作序列
+
+/// 一条通知被点开后要做的动作（**词汇表**，不是行为）。
+///
+/// 2026-09-29 用户反馈驱动：「直接点消息不能弹出对应的应用」（浮层卡片本体此前没有任何点击
+/// 处理器）与「在消息面板点击消息后，刘海要自动收起」。
+enum NotificationClickAction: Equatable {
+    /// 打开通知对应的 App（`NotificationStore.openApp(...)`，配置 `activates = true`）。
+    case openApp
+    /// 请求宿主收起刘海（`UIHandle.requestCollapse()`）。
+    case collapseNotch
+    /// 撤掉本模块的瞬时浮层（`UIHandle.dismissTransient()`，立刻撤、不等 ttl）。
+    case dismissTransient
+}
+
+/// 两处点击（列表行 / 浮层卡片）的**动作序列**与执行器。
+///
+/// 为什么把顺序写成数据而不是在两处各写一次调用：**顺序是契约**——
+/// - 列表行必须「先开应用、再收起刘海」：收起会触发面板动画，顺序反过来会让前台切换被动画
+///   延迟到面板收完之后（用户看到的是「点了半天没反应」）；
+/// - 浮层卡片必须「先开应用、再撤浮层」，且**不做 `collapseNotch`**：浮层出现时刘海本就是
+///   收起态（浮层是独立窗口，见 D-23），再请求收起是空操作、徒增一次日志。
+/// 顺序写成数组后，两处的差异只剩数据，单测直接断言数组与执行顺序。
+enum NotificationClickPolicy {
+    /// 列表行：打开 App → 收起刘海。
+    static let row: [NotificationClickAction] = [.openApp, .collapseNotch]
+    /// 浮层卡片本体：打开 App → 撤浮层（**不动刘海**）。
+    static let hudCard: [NotificationClickAction] = [.openApp, .dismissTransient]
+
+    /// 按序执行动作。未提供的闭包按空操作跳过（生产路径两处都齐备；单测只喂关心的那几个）。
+    static func run(
+        _ actions: [NotificationClickAction],
+        openApp: () -> Void = {},
+        collapseNotch: () -> Void = {},
+        dismissTransient: () -> Void = {}
+    ) {
+        for action in actions {
+            switch action {
+            case .openApp: openApp()
+            case .collapseNotch: collapseNotch()
+            case .dismissTransient: dismissTransient()
+            }
+        }
     }
 }
 
@@ -751,6 +864,9 @@ final class NotificationsModule: GourdModule {
                     backgroundStyle: presentation.backgroundStyle,
                     moreCount: moreCount,
                     closeHelpKey: handle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
+                    // 卡片本体（2026-09-29 用户反馈「直接点消息不能弹出对应的应用」）：打开 App + 撤浮层。
+                    onOpenApp: { [store] in store.openApp(for: item) },
+                    onDismissTransient: { [ui] in ui.dismissTransient() },
                     onClose: { [store, ui] in
                         // ① **内核侧撤浮层（先做）**：注册表里那一条被清掉 → 浮层窗口淡出
                         //   （D-23 后浮层是独立窗口，`isHidden` 只是让卡片当场变空的那一帧；
@@ -796,6 +912,10 @@ final class NotificationsModule: GourdModule {
                     backgroundStyle: presentation.backgroundStyle,
                     moreCount: 0,
                     closeHelpKey: event.closeHandle == nil ? "module.notifications.dismiss" : "module.notifications.closeSystemNotification",
+                    // AX 通道的卡片本体：`BannerEvent` 只有 App 名 → 按名反查 bundle id 后打开
+                    // （反查不到就只撤浮层、不猜一个 App 打开）。
+                    onOpenApp: { [store] in store.openApp(appNamed: event.appName) },
+                    onDismissTransient: { [ui] in ui.dismissTransient() },
                     onClose: { [store, ui] in
                         // 与 DB 路径同口径：内核侧撤浮层在前（窗口随即淡出），真关闭在后。
                         ui.dismissTransient()
@@ -817,12 +937,24 @@ final class NotificationsModule: GourdModule {
     }
 
     /// 两个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、不算失败）。
+    ///
+    /// 展开面板多交一条 `onCollapse`：列表行点击的「收起刘海」出口——模块**只调注入的
+    /// `UIHandle`**（`requestCollapse()` → 应用侧注入的闭包），自己不碰窗口（06 §3.3 R1）。
+    /// 每次取内容时新建闭包：`content(for:)` 由 `ModuleHostView` 在 body 里调用，闭包不会跨渲染留存。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .compact:
             return .view(AnyView(NotificationsCompactView(store: store)))
         case .expanded:
-            return .view(AnyView(NotificationsModuleView(store: store)))
+            return .view(AnyView(NotificationsModuleView(
+                store: store,
+                onCollapse: { [weak self] in
+                    guard let self else { return }
+                    // 日志与请求成对：实测（`log stream`）能按时间戳看到「先开 App、后收起刘海」。
+                    self.context.logger.info("列表行点击：已打开 App，请求收起刘海（requestCollapse）")
+                    self.context.ui.requestCollapse()
+                }
+            )))
         case .lockscreen:
             return .none
         }
@@ -831,11 +963,13 @@ final class NotificationsModule: GourdModule {
 
 // MARK: - 展开面板视图
 
-/// 展开面板：标题行（模块名 + 状态 + 刷新）+ 通知列表（点击整行打开对应 App）+ 能力边界说明。
+/// 展开面板：标题行（模块名 + 状态 + 刷新）+ 通知列表（点击整行打开对应 App **并收起刘海**）+ 能力边界说明。
 ///
 /// `.task` 做两件事：取一次最新数据（**不碰权限**）+ 把未读数清零（「自上次打开面板以来」）。
 private struct NotificationsModuleView: View {
     @ObservedObject var store: NotificationStore
+    /// 行点击的「收起刘海」出口（模块注入：`UIHandle.requestCollapse()`）。
+    let onCollapse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -924,7 +1058,7 @@ private struct NotificationsModuleView: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                NotificationListView(store: store)
+                NotificationListView(store: store, onCollapse: onCollapse)
             }
         }
     }
@@ -939,15 +1073,17 @@ private struct NotificationsModuleView: View {
     }
 }
 
-/// 通知列表：一行一条，点击整行按 `bundleIdentifier` 打开对应 App。
+/// 通知列表：一行一条，点击整行按 `bundleIdentifier` 打开对应 App，随后收起刘海。
 private struct NotificationListView: View {
     @ObservedObject var store: NotificationStore
+    /// 行点击的「收起刘海」出口（由模块注入，见 `NotificationsModule.content(for:)`）。
+    let onCollapse: () -> Void
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 2) {
                 ForEach(store.items) { item in
-                    NotificationRow(item: item, store: store)
+                    NotificationRow(item: item, store: store, onCollapse: onCollapse)
                 }
             }
             .padding(.vertical, 2)
@@ -958,12 +1094,17 @@ private struct NotificationListView: View {
 
 /// 列表的一行：`App 名（粗体）· 相对时间` + 标题 + 正文（最多 2 行）+ 右侧「关闭」按钮。
 ///
-/// **两个手势刻意不重叠**：点击区（打开 App）只盖左侧内容列，关闭按钮在它右侧、自己的 frame 里。
-/// 这样两个动作天然互不干扰——不需要靠「谁的手势优先级高」这种版本相关的规则。
+/// **两个手势刻意不重叠**：点击区（打开 App **+ 收起刘海**）只盖左侧内容列，关闭按钮在它右侧、
+/// 自己的 frame 里。这样两个动作天然互不干扰——不需要靠「谁的手势优先级高」这种版本相关的规则。
 /// （常见写法是在整行上挂 `.onTapGesture`、按钮叠在里面，那样点按钮时点击区仍可能吃到触摸。）
+///
+/// 点击的动作与顺序由 `NotificationClickPolicy.row` 给（打开 App → 收起刘海），本视图只负责
+/// 把两个闭包接上：`openApp` 走 store，收起走模块注入的 `onCollapse`。
 private struct NotificationRow: View {
     let item: NotificationItem
     @ObservedObject var store: NotificationStore
+    /// 行点击的「收起刘海」出口（模块注入）。
+    let onCollapse: () -> Void
 
     /// 整行 hover（背景高亮 + 关闭按钮提亮）。
     @State private var isHovered = false
@@ -1027,7 +1168,14 @@ private struct NotificationRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { store.openApp(for: item) }
+        .onTapGesture {
+            // 动作序列的唯一来源（顺序是契约：先开应用、再收起刘海，见 `NotificationClickPolicy`）。
+            NotificationClickPolicy.run(
+                NotificationClickPolicy.row,
+                openApp: { store.openApp(for: item) },
+                collapseNotch: onCollapse
+            )
+        }
     }
 
     /// 关闭按钮：**只从岛上移除这一条**（系统通知中心不动，见文件头「能力边界」）。
@@ -1193,6 +1341,16 @@ enum NotificationHUDCardLayout {
 /// 关闭态时期 × 收不到点击的根因是**祖先**的 `.onTapGesture { openNotch() }` 先吃掉了事件。
 /// 浮层搬进独立窗口后祖先手势已不在同一条链上，但 `.highPriorityGesture` 保留：换来的是
 /// 「窗口内任何一层再挂普通手势也不会抢走 ×」这条稳定性，成本为零。
+///
+/// ## 卡片本体可点（2026-09-29 用户反馈：「直接点消息不能弹出对应的应用」）
+/// 改造前只有右上角 × 有处理器，卡片本体（图标 + 两行文字 + 内边距）点了没反应。现在整块卡片
+/// （`.contentShape(Rectangle())`）是「**打开对应 App + 撤掉浮层**」的点击区（`NotificationClickAction`），
+/// 动作与顺序由 `NotificationClickPolicy.hudCard` 给。
+///
+/// 与 × 的分工：**本体 = 去看看（打开 App）**，**× = 这条不要了（有句柄时真关掉系统通知）**。
+/// 点 × 不会同时触发本体动作：× 是它内部的 `Button`（并且自己也挂了 `.highPriorityGesture`），
+/// SwiftUI 的按钮会吃掉落在它身上的那一次点击——本体手势收不到。两处再各自用 `isHidden` 兜一层
+/// 幂等（先点 × 再点本体不会打开 App，反之亦然）。
 private struct NotificationHUDView: View {
     let appName: String
     let title: String
@@ -1206,6 +1364,11 @@ private struct NotificationHUDView: View {
     let moreCount: Int
     /// × 的提示文案 key：有真关闭句柄时是「关闭系统通知」，否则是「关闭（仅从岛上移除）」。
     let closeHelpKey: String
+    /// 点击**卡片本体**：打开通知对应的 App（DB 通道按 rec_id 解析、AX 通道按 App 名反查）。
+    let onOpenApp: () -> Void
+    /// 点击**卡片本体**：撤掉浮层（`UIHandle.dismissTransient()`）——**只撤浮层**
+    /// （与 × 的区别：这里不真关系统通知，用户是「去看看」而不是「这条不要了」）。
+    let onDismissTransient: () -> Void
     /// 点击 ×：真关闭（有句柄时）——**「仅从岛上隐藏」由本视图的 `isHidden` 自己完成**。
     let onClose: () -> Void
 
@@ -1267,6 +1430,11 @@ private struct NotificationHUDView: View {
         // **固定尺寸**：卡片与内核窗口用同一个来源（`cardSize`），内容多少都不跳动。
         .frame(width: card.cardSize.width, height: card.cardSize.height, alignment: .leading)
         .background(cardBackground(cornerRadius: card.cornerRadius))
+        // 卡片本体 = 「打开对应 App + 撤浮层」的点击区（2026-09-29）：`contentShape` 让**整块卡片**
+        // （含图标、文字之间的空白与内边距）都可点——用户点的是「这条消息」，不是某一行文字。
+        // 普通 `.onTapGesture` 与 × 的 `.highPriorityGesture` 分工见类型文档：点 × 时按钮吃掉事件。
+        .contentShape(Rectangle())
+        .onTapGesture { openAppFromCard() }
     }
 
     /// 卡片底：按 `notificationHUDBackgroundStyle` 二选一（2026-09-28 用户要求「背景设置
@@ -1329,6 +1497,21 @@ private struct NotificationHUDView: View {
         guard !isHidden else { return }
         isHidden = true
         onClose()
+    }
+
+    /// 卡片本体的动作体（2026-09-29）：**打开 App → 撤浮层**，顺序由 `NotificationClickPolicy.hudCard`
+    /// 给（与列表行的 `row` 只差最后一条：列表行收起刘海、浮层撤浮层）。
+    ///
+    /// 幂等闸与 × 共用 `isHidden`：先点 × 再点本体不会打开 App；先点本体（浮层随即被撤掉）
+    /// 也不可能再点到 ×。
+    private func openAppFromCard() {
+        guard !isHidden else { return }
+        isHidden = true
+        NotificationClickPolicy.run(
+            NotificationClickPolicy.hudCard,
+            openApp: onOpenApp,
+            dismissTransient: onDismissTransient
+        )
     }
 
     /// 第二行：`showBodyInHUD` 为真时是「标题 · 正文（+ 多条计数后缀）」，否则是「新通知」。

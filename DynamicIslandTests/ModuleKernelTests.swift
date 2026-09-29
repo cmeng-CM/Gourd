@@ -2487,6 +2487,96 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(Defaults[key], .liquidGlass, "再切回默认档同样往返")
     }
 
+    // MARK: - 点击动作序列（2026-09-29：浮层卡片可点开 App / 列表行点完收起刘海）
+
+    /// **列表行**：动作序列 = 打开 App → 收起刘海，且**不碰浮层**。
+    ///
+    /// 顺序是契约（`NotificationClickPolicy` 的文档）：收起会触发面板动画，先开应用可保证
+    /// 前台切换不被动画延迟；执行器按数组顺序调用，这里用落地顺序做断言（不只是集合相等）。
+    func testNotificationRowClickOpensAppThenCollapsesNotch() {
+        var calls: [NotificationClickAction] = []
+
+        NotificationClickPolicy.run(
+            NotificationClickPolicy.row,
+            openApp: { calls.append(.openApp) },
+            collapseNotch: { calls.append(.collapseNotch) },
+            dismissTransient: { calls.append(.dismissTransient) }
+        )
+
+        XCTAssertEqual(
+            calls,
+            [.openApp, .collapseNotch],
+            "列表行：先打开 App、再收起刘海；不该动浮层（浮层与列表行是两条独立入口）"
+        )
+        XCTAssertEqual(NotificationClickPolicy.row, [.openApp, .collapseNotch], "序列本身是数据，直接钉住")
+    }
+
+    /// **浮层卡片本体**：动作序列 = 打开 App → 撤浮层（**不动刘海**——浮层出现时刘海本就是收起态）。
+    func testNotificationHUDCardClickOpensAppThenDismissesTransient() {
+        var calls: [NotificationClickAction] = []
+
+        NotificationClickPolicy.run(
+            NotificationClickPolicy.hudCard,
+            openApp: { calls.append(.openApp) },
+            collapseNotch: { calls.append(.collapseNotch) },
+            dismissTransient: { calls.append(.dismissTransient) }
+        )
+
+        XCTAssertEqual(
+            calls,
+            [.openApp, .dismissTransient],
+            "浮层卡片：先打开 App、再立刻撤浮层（不等 ttl）；收起刘海不在浮层的动作集里"
+        )
+        XCTAssertEqual(NotificationClickPolicy.hudCard, [.openApp, .dismissTransient], "序列本身是数据，直接钉住")
+    }
+
+    /// AX 通道的浮层没有 bundle id（`BannerEvent` 只有 App 名）：按名反查的两条来源——
+    /// ① 列表里同名条目的 bundle id；② 运行中 App 的本地化名 / 包文件名。都落空给 nil（**不猜**，
+    /// 打开一个同名的别的 App 比不打开更糟）。
+    func testNotificationBundleIdentifierResolutionByName() throws {
+        let item = NotificationItem(
+            id: 7,
+            bundleIdentifier: "com.apple.MobileSMS",
+            appName: "信息",
+            title: "标题",
+            subtitle: nil,
+            body: "正文",
+            deliveredDate: nil
+        )
+
+        XCTAssertEqual(
+            NotificationStore.bundleIdentifier(forAppName: "信息", in: [item], runningApps: []),
+            "com.apple.MobileSMS",
+            "来源 ①：列表里同名条目的 bundle id"
+        )
+        XCTAssertEqual(
+            NotificationStore.bundleIdentifier(
+                forAppName: "Safari",
+                in: [],
+                runningApps: [(localizedName: "Safari", bundleFileName: "Safari", bundleIdentifier: "com.apple.Safari")]
+            ),
+            "com.apple.Safari",
+            "来源 ②：运行中 App 的本地化名"
+        )
+        XCTAssertEqual(
+            NotificationStore.bundleIdentifier(
+                forAppName: "Safari",
+                in: [],
+                runningApps: [(localizedName: "浏览器", bundleFileName: "Safari", bundleIdentifier: "com.apple.Safari")]
+            ),
+            "com.apple.Safari",
+            "来源 ②：本地化名对不上时用包文件名（`Safari.app` → `Safari`）"
+        )
+        XCTAssertNil(
+            NotificationStore.bundleIdentifier(forAppName: "不存在的 App", in: [item], runningApps: []),
+            "两条来源都落空 → nil（不猜）"
+        )
+        XCTAssertNil(
+            NotificationStore.bundleIdentifier(forAppName: "", in: [], runningApps: []),
+            "空名直接给 nil（避免误配到某个名字为空的候选）"
+        )
+    }
+
     // MARK: - 通知浮层卡片的尺寸口径（D-23）
 
     /// **固定尺寸**（2026-09-28 用户：「尺寸不固定，要固定个初始大小」）：卡片 = **320 × 64 × 倍率**，
