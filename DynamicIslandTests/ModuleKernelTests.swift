@@ -2916,6 +2916,106 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
+    // MARK: - 展开态右下角拖动改宽高（2026-09-29，「刘海打开时直接拉动调整宽高」）
+
+    /// 方向：把手在右下角 → 向右拖动变宽、向下拖动变高（两个方向一起动就是"同时改宽高"）。
+    /// 边界取得足够宽，断言的是**纯位移**这一层（夹取另有用例）。
+    func testResizedPanelSizeGrowsWithRightwardAndDownwardDrag() {
+        let resized = resizedPanelSize(
+            start: CGSize(width: 840, height: 400),
+            translation: CGSize(width: 60, height: 120),
+            minWidth: 640, maxWidth: 1452,
+            minHeight: 120, maxHeight: 850
+        )
+        XCTAssertEqual(resized.width, 900, "向右拖 60pt → 840 + 60")
+        XCTAssertEqual(resized.height, 520, "向下拖 120pt → 400 + 120（宽高同时变）")
+    }
+
+    /// 反方向：向左拖变窄、向上拖变矮（把手在右下角，向内拖就是缩小）。
+    func testResizedPanelSizeShrinksWithLeftwardAndUpwardDrag() {
+        let resized = resizedPanelSize(
+            start: CGSize(width: 840, height: 400),
+            translation: CGSize(width: -60, height: -120),
+            minWidth: 640, maxWidth: 1452,
+            minHeight: 120, maxHeight: 850
+        )
+        XCTAssertEqual(resized.width, 780)
+        XCTAssertEqual(resized.height, 280)
+    }
+
+    /// 越界夹取：继续往右 / 往下拖到超出上界（宽上界 = 屏宽 − 60，高上界 = min(850, 屏高 × 0.9)），
+    /// 继续往左 / 往上拖到低于下界，两个方向都停在边界上——与 `openNotchSize` / `clampedOpenNotchHeight`
+    /// 的 `min(max(v, 下界), 上界)` 同一口径。
+    func testResizedPanelSizeClampsBothDirections() {
+        let oversized = resizedPanelSize(
+            start: CGSize(width: 840, height: 400),
+            translation: CGSize(width: 10_000, height: 10_000),
+            minWidth: 640, maxWidth: 1452,
+            minHeight: 120, maxHeight: 850
+        )
+        XCTAssertEqual(oversized.width, 1452, "拖过宽上界 → 停在屏宽 − 60")
+        XCTAssertEqual(oversized.height, 850, "拖过高上界 → 停在 850（或屏高 × 0.9 更小者）")
+
+        let undersized = resizedPanelSize(
+            start: CGSize(width: 840, height: 400),
+            translation: CGSize(width: -10_000, height: -10_000),
+            minWidth: 640, maxWidth: 1452,
+            minHeight: 120, maxHeight: 850
+        )
+        XCTAssertEqual(undersized.width, 640, "拖过宽下界 → 停在推荐最小宽度")
+        XCTAssertEqual(undersized.height, 120, "拖过高下界 → 停在 120")
+    }
+
+    /// 零位移不动：按下就松手（`DragGesture(minimumDistance: 0)` 的单击）不改变尺寸。
+    func testResizedPanelSizeKeepsStartOnZeroTranslation() {
+        let start = CGSize(width: 840, height: 400)
+        XCTAssertEqual(
+            resizedPanelSize(
+                start: start,
+                translation: .zero,
+                minWidth: 640, maxWidth: 1452,
+                minHeight: 120, maxHeight: 850
+            ),
+            start,
+            "零位移 → 原样返回起点（不会因为取整 / 夹取动一下）"
+        )
+        XCTAssertEqual(
+            resizedPanelSize(
+                start: start,
+                translation: .zero,
+                minWidth: 880, maxWidth: 1452,
+                minHeight: 500, maxHeight: 850
+            ),
+            CGSize(width: 880, height: 500),
+            "起点本身越界时，零位移也被抬到下界（存量默认值超界时拖动会先落到合法区间）"
+        )
+    }
+
+    /// 非有限值一律退回下界 / 按 0 处理（同 `clampedOpenNotchHeight` 对 NaN 的处理）：
+    /// 不把 NaN / ∞ 写进 `Defaults`（那会让面板尺寸整块失效）。
+    func testResizedPanelSizeFallsBackOnNonFiniteValues() {
+        XCTAssertEqual(
+            resizedPanelSize(
+                start: CGSize(width: 840, height: 400),
+                translation: CGSize(width: CGFloat.nan, height: .infinity),
+                minWidth: 640, maxWidth: 1452,
+                minHeight: 120, maxHeight: 850
+            ),
+            CGSize(width: 840, height: 400),
+            "非有限位移按 0 处理 → 尺寸不变（不是弹到边界）"
+        )
+        XCTAssertEqual(
+            resizedPanelSize(
+                start: CGSize(width: CGFloat.nan, height: CGFloat.nan),
+                translation: CGSize(width: 100, height: 100),
+                minWidth: 640, maxWidth: 1452,
+                minHeight: 120, maxHeight: 850
+            ),
+            CGSize(width: 740, height: 220),
+            "非有限起点退回下界，再叠加位移（640 + 100 / 120 + 100）"
+        )
+    }
+
     /// 判据与**档位数量**同源：给 `NotchPanelBackgroundStyle` 加第四档时，这条会失败并提醒
     /// 「新档要不要显示遮罩」必须显式表态（而不是默默沿用某个默认）。
     func testScrollFadeMaskDecisionCoversEveryPanelBackgroundStyle() {

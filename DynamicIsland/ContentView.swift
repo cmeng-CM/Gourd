@@ -147,6 +147,65 @@ func panelTopOpaqueBandHeight(for screen: NSScreen?, panelTopBleed: CGFloat = 0)
     )
 }
 
+// MARK: - 展开态「右下角拖动调宽高」的纯函数与可调范围
+
+/// 展开态尺寸的**可调范围**（宽下界 / 宽上界 / 高下界 / 高上界），与 `openNotchSize` 的夹取**逐字同源**：
+///
+/// - 宽下界 = `max(currentRecommendedMinimumNotchWidth(), sideLyricsRequiredNotchWidth())`
+///   ——`openNotchSize` 的 `min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)`
+///   里那两个下界项；宽上界 = `maxAllowedNotchWidth()`（屏宽 − 60，最小 400）——同一个上界函数；
+/// - 高下界 = `openNotchHeightRange.lowerBound`（120）；高上界 =
+///   `effectiveOpenNotchHeightUpperBound(screenVisibleHeight:)`（`min(850, 屏 visibleFrame.height × 0.9)`）
+///   ——与 `clampedOpenNotchHeight`、设置页滑块同一个上界函数。
+///
+/// **为什么必须同源**：拖出来的值会原样写进 `Defaults`，而 `openNotchSize` 每次还会再夹一遍；
+/// 若这里放行一个会被夹回去的值，用户看到的是「拖了没用」（与设置页滑块上界的取舍同一条理由）。
+/// 取屏口径也刻意与 `openNotchSize` 保持一致（`NSScreen.main`），否则读数会与实际生效的尺寸错开半个档。
+@MainActor
+func currentOpenNotchResizeBounds() -> (
+    minWidth: CGFloat, maxWidth: CGFloat, minHeight: CGFloat, maxHeight: CGFloat
+) {
+    (
+        minWidth: max(currentRecommendedMinimumNotchWidth(), sideLyricsRequiredNotchWidth()),
+        maxWidth: maxAllowedNotchWidth(),
+        minHeight: openNotchHeightRange.lowerBound,
+        maxHeight: effectiveOpenNotchHeightUpperBound(screenVisibleHeight: NSScreen.main?.visibleFrame.height)
+    )
+}
+
+/// 展开态「右下角拖动改宽高」的尺寸计算（纯函数）：**拖动起点尺寸 + 累计位移 → 夹取后的新尺寸**。
+///
+/// 位移方向（把手在面板右下角）：向右拖（`translation.width > 0`）变宽、向下拖（`translation.height > 0`）
+/// 变高；向左 / 向上拖则缩小。两个方向都按 `min…max` 夹取，夹取式与
+/// `openNotchSize` / `clampedOpenNotchHeight` 一致（`min(max(v, 下界), 上界)`；下界大于上界时上界生效）。
+///
+/// **起点必须由调用方在拖动开始时捕获一次**（不是每帧读当前值再累加）：拖动的每一帧都会写 `Defaults`
+/// 并触发面板 / 窗口重排，把手自己会跟着鼠标跑；若用当前值累加，下一帧读到的是"已经追过一次"的尺寸，
+/// 同一段位移被重复计入（越拖越快）。固定起点 + 累计位移是唯一稳定的口径。
+///
+/// 非有限值一律退回下界（同 `clampedOpenNotchHeight` 对 `NaN` 的处理）：不把 `NaN` / `∞`
+/// 写进 `Defaults`（那会让面板尺寸整块失效），也不让一次异常事件把尺寸弹到边界。
+///
+/// 抽成纯函数是为了可测：入参都是纯值，不读 `Defaults`、不取屏、不碰视图状态
+/// （同 `panelBackgroundUsesStyle` 一族）。
+func resizedPanelSize(
+    start: CGSize,
+    translation: CGSize,
+    minWidth: CGFloat,
+    maxWidth: CGFloat,
+    minHeight: CGFloat,
+    maxHeight: CGFloat
+) -> CGSize {
+    let dx = translation.width.isFinite ? translation.width : 0
+    let dy = translation.height.isFinite ? translation.height : 0
+    let startWidth = start.width.isFinite ? start.width : minWidth
+    let startHeight = start.height.isFinite ? start.height : minHeight
+    return CGSize(
+        width: min(max(startWidth + dx, minWidth), maxWidth),
+        height: min(max(startHeight + dy, minHeight), maxHeight)
+    )
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -336,6 +395,16 @@ struct ContentView: View {
     @State private var hiddenEdgeHoverPollingTask: Task<Void, Never>?
     @State private var isHoveringClosedMusicWaveformControl: Bool = false
 
+    // 展开态右下角拖动把手（D-29）
+    /// 拖动是否进行中（圆点提亮用）。
+    @State private var isPanelResizing: Bool = false
+    /// 拖动**起点**尺寸：第一次 `onChanged` 时捕获一次，整个拖动期间不再变（见 `resizedPanelSize` 的注释）。
+    @State private var panelResizeDragStartSize: CGSize?
+    /// 读数胶囊当前显示的尺寸（`nil` = 不显示）。
+    @State private var panelResizeReadout: CGSize?
+    /// 读数淡出的延时任务（新的拖动会取消它）。
+    @State private var panelResizeReadoutHideTask: Task<Void, Never>?
+
     @State private var gestureProgress: CGFloat = .zero
     @State private var skipGestureActiveDirection: MusicManager.SkipDirection?
     @State private var isMusicControlWindowVisible = false
@@ -393,6 +462,12 @@ struct ContentView: View {
     private let statsAdditionalRowHeight: CGFloat = statsSecondRowContentHeight + statsGridSpacingHeight
     private let musicControlPauseGrace: TimeInterval = 5
     private let musicControlResumeDelay: TimeInterval = 0.24
+
+    // 展开态右下角拖动把手（D-29）的几何：9pt 圆点 + 20pt 命中框，命中框距面板右下角各 14pt
+    // （圆点中心因此在距边 24pt 处，落在面板右下圆角内侧，不越出裁剪形状）。
+    private let panelResizeHandleDotDiameter: CGFloat = 9
+    private let panelResizeHandleHitSize: CGFloat = 20
+    private let panelResizeHandleEdgeInset: CGFloat = 14
 
     // MARK: - Tab switch direction for smooth transitions
     
@@ -676,6 +751,18 @@ struct ContentView: View {
             .padding(.top, isIslandMode ? 0 : notchTopScreenBleedAmount)
             .background(panelBackground)
             .clipShape(resolvedClipShape)
+            // 展开态右下角的拖动把手（D-29）：画在 `clipShape` **之后**（不受裁剪影响，位置由
+            // `panelResizeHandleEdgeInset` 保证落在面板内）与 `compositingGroup` / `shadow` 之前。
+            // 它不参与面板的尺寸计算（overlay 只是贴在 `mainLayoutBase` 的框上），
+            // 也不影响下面 `configuredMainLayout` 里的 `onTapGesture` / `panGesture`（见
+            // `panelResizeHandle` 的 `highPriorityGesture`）。
+            .overlay(alignment: .bottomTrailing) {
+                if showsPanelResizeHandle {
+                    panelResizeHandle
+                        .padding(.trailing, panelResizeHandleEdgeInset)
+                        .padding(.bottom, panelResizeHandleEdgeInset)
+                }
+            }
             .compositingGroup()
             .shadow(
                 color: ((vm.notchState == .open || isHovering) && Defaults[.enableShadow])
@@ -807,6 +894,184 @@ struct ContentView: View {
             ? activeCornerRadiusInsets.opened.bottom
             : activeCornerRadiusInsets.closed.bottom
         return max(topRadius, bottomRadius)
+    }
+
+    // MARK: - 展开态右下角拖动把手（D-29）
+
+    /// 把手是否出现：**只在展开态**，且**非极简模式**。
+    ///
+    /// 极简模式刻意不显示：那一档的尺寸来源是 `minimalisticOpenNotchSize`（固有基准 + 歌词 / 提醒 /
+    /// 计时器的附加高度），`openNotchSize` 与 `Defaults[.openNotchWidth]/[.openNotchHeight]` 完全不参与
+    /// ——`DynamicIslandViewModel` 的宽度 sink 自己也带着 `!enableMinimalisticUI` 前置。把手若照常出现，
+    /// 拖动只会写进一个**当场没有任何效果**的值（下次切回标准展开态才突然生效），正是代码里到处在避免的
+    /// 「拖了没用」。
+    private var showsPanelResizeHandle: Bool {
+        vm.notchState == .open && !enableMinimalisticUI
+    }
+
+    /// 右下角拖动把手：9pt 小圆点（拖动 / 悬停时提亮）+ 拖动期间浮在它上方的「宽 × 高」读数胶囊。
+    ///
+    /// 形态与命中：圆点在 20pt 命中框正中，命中框距面板右下角各 `panelResizeHandleEdgeInset`（14pt）；
+    /// 读数胶囊贴命中框的右上角、抬到圆点上方（`allowsHitTesting(false)`，不吃拖动）。
+    private var panelResizeHandle: some View {
+        Circle()
+            .fill(Color.white.opacity(isPanelResizing ? 0.85 : 0.45))
+            .frame(width: panelResizeHandleDotDiameter, height: panelResizeHandleDotDiameter)
+            .frame(width: panelResizeHandleHitSize, height: panelResizeHandleHitSize)
+            .contentShape(Rectangle())
+            .animation(.smooth(duration: 0.15), value: isPanelResizing)
+            .overlay(alignment: .bottomTrailing) {
+                if let readout = panelResizeReadout {
+                    panelResizeReadoutLabel(readout)
+                        .offset(y: -(panelResizeHandleHitSize / 2 + 8))
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            // `highPriorityGesture`：面板自己带着 `onTapGesture`（点一下展开 / 收起）与四条
+            // `panGesture`（下拉收起等）。子视图的手势本就优先于祖先视图上的 `.gesture`，这里再显式
+            // 提一档，保证按住圆点拖动时那几条手势一个都不抢——既不改动它们，也不需要它们配合。
+            .highPriorityGesture(panelResizeDragGesture)
+    }
+
+    /// 读数胶囊：`840 × 400` 这样的纯数字（**不新增本地化 key**——只有数字与乘号）。
+    private func panelResizeReadoutLabel(_ size: CGSize) -> some View {
+        Text("\(Int(size.width.rounded())) × \(Int(size.height.rounded()))")
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.black.opacity(0.6), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+    }
+
+    /// 拖动：起点尺寸在第一次 `onChanged` 捕获一次，之后每次都用「起点 + 本次累计位移」算新尺寸。
+    private var panelResizeDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let start: CGSize
+                if let captured = panelResizeDragStartSize {
+                    start = captured
+                } else {
+                    // 起点取**当前生效**的展开尺寸（已被 `openNotchSize` 夹过），拖动因此从屏幕上的
+                    // 现状开始，不会因为存量默认值超界而先跳一下。
+                    start = openNotchSize
+                    panelResizeDragStartSize = start
+                    isPanelResizing = true
+                    panelResizeReadoutHideTask?.cancel()
+                }
+                applyPanelResize(resolvedPanelResizeSize(start: start, translation: value.translation))
+            }
+            .onEnded { value in
+                defer {
+                    panelResizeDragStartSize = nil
+                    isPanelResizing = false
+                }
+                guard let start = panelResizeDragStartSize else { return }
+                // 结束再写一次：拖动过程中的写入与最后一帧之间可能被系统合并（`Defaults` 是
+                // UserDefaults 的写穿缓存），再写一遍保证落盘的就是松手时的尺寸。
+                applyPanelResize(resolvedPanelResizeSize(start: start, translation: value.translation))
+                schedulePanelResizeReadoutFadeOut()
+            }
+    }
+
+    /// 位移 → 最终尺寸：先按 `resizedPanelSize` 夹取，再取整并**用同一组边界复夹一次**。
+    ///
+    /// 取整后再夹的原因：上界可能是分数（`effectiveOpenNotchHeightUpperBound` = 屏高 × 0.9，
+    /// 例如 850.5），取整会越过它不到 1pt——复夹一次后读数与写入的尺寸永远一致
+    /// （读数不是"显示一个值、实际用另一个值"）。
+    private func resolvedPanelResizeSize(start: CGSize, translation: CGSize) -> CGSize {
+        let bounds = currentOpenNotchResizeBounds()
+        let clamped = resizedPanelSize(
+            start: start,
+            translation: translation,
+            minWidth: bounds.minWidth,
+            maxWidth: bounds.maxWidth,
+            minHeight: bounds.minHeight,
+            maxHeight: bounds.maxHeight
+        )
+        return resizedPanelSize(
+            start: CGSize(width: clamped.width.rounded(), height: clamped.height.rounded()),
+            translation: .zero,
+            minWidth: bounds.minWidth,
+            maxWidth: bounds.maxWidth,
+            minHeight: bounds.minHeight,
+            maxHeight: bounds.maxHeight
+        )
+    }
+
+    /// 写入 + 重排（**与设置页两个滑块同一条链路**）：写 `Defaults[.openNotchWidth]` /
+    /// `[.openNotchHeight]`，再 post `notchHeightChanged`（那条通知的观测者在 `DynamicIslandApp`，
+    /// 与滑块完全一致地走一遍"设置已改"的既有收尾：重新定位窗口、同步多屏）。
+    /// 值没变就不发通知（拖动中途反复落在同一个夹取值上是常态）。
+    ///
+    /// 通知之外**还要**推一次窗口尺寸（`syncWindowSizeAfterPanelResize`）：高度只有那一条会实时生效，
+    /// 原因见该函数的注释。
+    private func applyPanelResize(_ size: CGSize) {
+        panelResizeReadout = size
+        let changed = abs(Defaults[.openNotchWidth] - size.width) > 0.01
+            || abs(Defaults[.openNotchHeight] - size.height) > 0.01
+        Defaults[.openNotchWidth] = size.width
+        Defaults[.openNotchHeight] = size.height
+        guard changed else { return }
+        NotificationCenter.default.post(name: Notification.Name.notchHeightChanged, object: nil)
+        syncWindowSizeAfterPanelResize()
+    }
+
+    /// 把「当前要求的展开尺寸」推给刘海窗口（拖动时的高度**只有**这条链路会实时生效）。
+    ///
+    /// 为什么需要它：**宽度**有实时链路（`DynamicIslandApp` 自己订阅 `Defaults.publisher(.openNotchWidth)`
+    /// → 0.15s 防抖后重算窗口尺寸），**高度没有**——`notchHeightChanged` 的观察者只做
+    /// `positionWindow`（用当前 frame 的尺寸重新定位，不重算尺寸），所以高度是「下次展开才生效」
+    /// （设置页滑块同样如此：改完要重新展开一次才看得到）。拖动是连续交互，等不到下次展开。
+    ///
+    /// **为什么不调 `AppDelegate.ensureWindowSize`**：本机实测（2026-09-29，注入拖动 + `log show` 取证）
+    /// 从视图层取 `AppDelegate.shared` 取不到代理（`@NSApplicationDelegateAdaptor` 包的那一层不落在
+    /// `NSApplication.shared.delegate` 上），那条调用是**静默 no-op**（`DynamicIslandViewModel` 里那几处
+    /// 同形状的调用是否同样失效未逐一验证——宽度另有上面那条链路兜着，日常看不出来）。因此这里按
+    /// `AppDelegate.resizeWindow` 的同一口径直接改 frame：
+    /// 目标尺寸 = `addShadowPadding(to: 展开内容尺寸)`（+18pt 阴影），再按屏补外扩
+    /// （浮动药丸 +`dynamicIslandTopOffset` 与两侧 `dynamicIslandShadowInset`；刘海屏 +`notchTopScreenBleed`），
+    /// 宽按屏宽夹取，窗口**水平居中、顶边贴屏顶** —— 与那条私有实现逐字同一条式子。
+    ///
+    /// 多屏时与 `resizeWindow` 一样逐屏处理（`showOnAllDisplays` 下每屏一个窗口）。
+    /// 尺寸没变就整条跳过（`force: false` 的等价物），宽度那条链路照旧重复调用也不会打架。
+    private func syncWindowSizeAfterPanelResize() {
+        let padded = addShadowPadding(to: dynamicNotchSize, isMinimalistic: Defaults[.enableMinimalisticUI])
+        for window in NSApp.windows where window is DynamicIslandWindow {
+            guard let screen = window.screen ?? NSScreen.main else { continue }
+            var size = padded
+            if shouldUseDynamicIslandMode(for: screen.localizedName) {
+                size.width += dynamicIslandShadowInset * 2
+                size.height += dynamicIslandTopOffset
+            } else {
+                size.height += notchTopScreenBleed(for: screen.localizedName)
+            }
+            let screenFrame = screen.frame
+            let width = min(size.width, screenFrame.width).rounded()
+            let height = min(size.height, screenFrame.height + notchTopScreenBleed(for: screen.localizedName)).rounded()
+            let target = NSRect(
+                x: (screenFrame.midX - width / 2).rounded(),
+                y: (screenFrame.maxY + notchTopScreenBleed(for: screen.localizedName) - height).rounded(),
+                width: width,
+                height: height
+            )
+            guard window.frame != target else { continue }
+            window.setFrame(target, display: true)
+        }
+    }
+
+    /// 松手后 0.8s 让读数淡出（新的拖动会取消上一次的淡出）。
+    private func schedulePanelResizeReadoutFadeOut() {
+        panelResizeReadoutHideTask?.cancel()
+        panelResizeReadoutHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.smooth(duration: 0.25)) {
+                panelResizeReadout = nil
+            }
+        }
     }
 
     private var configuredMainLayout: some View {
