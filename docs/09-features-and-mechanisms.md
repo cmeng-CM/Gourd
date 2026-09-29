@@ -239,14 +239,14 @@
 
 | 项 | 设计 |
 |---|---|
-| 数据源 | 扫描 `/Applications`、`/System/Applications`（含 `Utilities`）、`~/Applications`（含子目录两层）找 `.app`；`Bundle(url:)` 读 `CFBundleDisplayName` / `CFBundleName` / `CFBundleIdentifier` |
-| 图标 | `NSWorkspace.shared.icon(forFile:)`，异步预热 + 缓存（首次全量约百毫秒级，可接受） |
-| 搜索 | 名称子串匹配 + 拼音首字母（`CFStringTransform` 转拼音，成本低）；结果按"使用频次 × 最近使用"排序 |
-| 启动 | `NSWorkspace.shared.openApplication(at:configuration:)`（`activates = true`） |
+| 数据源 | 扫描 `/Applications`、`/System/Applications`、`~/Applications` **一层** 找 `.app`（**实现口径**；`Utilities` 等子目录两层与"跳过不可执行空壳"**未做**——空壳也列出、名称回落，见 [19](19-launcher.md) §已知限制 9）
+| 图标 | `NSWorkspace.shared.icon(forFile:)` + 内存缓存、**按可见项惰性取**（无系统级预热）
+| 搜索 | 名称子串匹配（`localizedCaseInsensitiveContains`，大小写不敏感）；**未做**：拼音首字母
+| 启动 | `NSWorkspace.shared.openApplication(at:configuration:)`（`activates = true`）后 `context.ui.requestCollapse()` 收起
 | 常用/最近 | **自建使用计数**（**未做**：只用 Spotlight 的 `kMDItemUseCount`，见 [19](19-launcher.md) D-01）（记录从岛上启动的次数与时间）。不读 `com.apple.LSSharedFileList` 的 `.sfl3` 私有格式——私有格式随版本变，而我们只需要"我自己常用" |
-| 呈现 | 折叠态槽位图标（**未做**：只声明 `expanded`，见 [19](19-launcher.md) D-02）（点击展开）+ 展开面板一个 tab（网格 + 搜索框 + 固定区） |
-| 热键 | KeyboardShortcuts 全局热键（**未做**：本批无全局热键）唤出（默认留空，避免与系统冲突） |
-| 配置 | `pinnedApps`（appPicker 列表）、`showRecents`（bool）、`iconSize`、`density` |
+| 呈现 | 展开面板一个 tab（搜索框 + 自适应网格 + 右键固定）；**未做**：折叠态槽位图标（只声明 `expanded`，见 [19](19-launcher.md) D-02）
+| 热键 | **未做**：本批无全局热键
+| 配置 | manifest config（实现）= `showRecents`（bool）、`iconSize`（格子目标宽）、`density`（间距倍率），越界静默夹取；`pinnedApps` **不是** manifest config——它是 `Defaults` 键 `Key<[String]>`（bundle id 优先），UI 是右键固定，**没有** appPicker
 | 权限 | **无**（全部公开 API） |
 | 工作量 | 中（3～5 天） |
 
