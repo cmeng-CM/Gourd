@@ -967,8 +967,19 @@ struct NotchHomeView: View {
     /// 日历行的「开不开」仍是用户偏好（`showCalendar`，那条键在接缝里的读者是 `HomeBandedHomeView`）；
     /// 高度取舍的判据只有一处（`HomeVerticalFit.plan`），本视图不再自己比一次高度——两处各判一次
     /// 就会有两份阈值。
+    ///
+    /// **p5-home-blocks / T6 起本视图多给接缝两样宿主事实**（自适应高度要用，docs/29 §做法 机制六）：
+    /// ① 面板表头高（`max(24, vm.effectiveClosedNotchHeight)`，`NotchLayout` 就是这么给它钉的），
+    /// 接缝拿它把「面板高 → 流可用高」的差额算准；② 光标在不在面板里（`vm.isMouseHovering()`，
+    /// 宿主既有的那条 hover 判定），那是「光标在面板内时不缩」这条唯一单向规则的判据。
     private var standardHomeContent: some View {
-        HomeBandedHomeView(albumArtNamespace: albumArtNamespace)
+        HomeBandedHomeView(
+            albumArtNamespace: albumArtNamespace,
+            panelHeaderHeight: PanelAutoHeight.panelHeaderHeight(
+                effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
+            ),
+            pointerInsidePanel: vm.isMouseHovering()
+        )
     }
 
     private var sideLyricsContent: some View {

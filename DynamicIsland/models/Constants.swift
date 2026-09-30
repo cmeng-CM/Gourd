@@ -944,6 +944,11 @@ extension Defaults.Keys {
     // 与 openNotchWidth 一样只作用于标准（非极简）展开态：极简模式用 minimalisticOpenNotchSize 的固有基准
     // （420x180，动态岛模式 340x144），不读这个键。
     static let openNotchHeight = Key<CGFloat>("openNotchHeight", default: 200)
+    // Modified for Gourd (2026-09-30): 展开面板的高度模式（p5-home-blocks / T6，docs/29 §做法 机制六）。
+    // **裸字符串**（`"auto"` / `"manual"`）：与 `timerDisplayMode` 同形的存法，不引入枚举——
+    // 这一档只有两个取值、且没有任何既有枚举可复用；读取侧统一走 `PanelAutoHeight.isAuto(_:)`
+    // （未知值按默认档 `auto` 处理）。auto = 面板高度贴内容，manual = 滑块 / 拖动把手说了算。
+    static let panelHeightMode = Key<String>("panelHeightMode", default: "auto")
     static let closedNotchWidth = Key<CGFloat>("closedNotchWidth", default: 150)
     static let customizePhysicalNotchWidth = Key<Bool>("customizePhysicalNotchWidth", default: false)
         //static let openLastTabByDefault = Key<Bool>("openLastTabByDefault", default: false)

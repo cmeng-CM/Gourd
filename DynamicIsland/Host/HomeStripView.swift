@@ -809,7 +809,23 @@ struct HomeBandedHomeView: View {
     @Default(.homeBlockOrder) private var homeBlockOrder
     /// 日历行开不开（偏好，本视图读它，取舍算术本身不认偏好，见 `HomeVerticalFit` 文件头）。
     @Default(.showCalendar) private var showCalendar
+    /// 高度模式与手动高度（p5-home-blocks / T6）：**观测源**——读到它们，尺寸层的重算才会与
+    /// 「设置页拨了模式 / 拖了滑块」落到同一帧上（触发链见 `DynamicIslandApp` 里那五条 publisher）。
+    @Default(.panelHeightMode) private var panelHeightMode
+    @Default(.openNotchHeight) private var openNotchHeight
     let albumArtNamespace: Namespace.ID
+    /// **面板表头高**（`max(24, vm.effectiveClosedNotchHeight)`，由 `NotchHomeView` 从 vm 算好传入）：
+    /// 「面板高度 − 流可用高度」那份宿主开销里随屏变化的那一半（另一半是
+    /// `PanelAutoHeight.homeVerticalPadding`，常量）。
+    ///
+    /// **必须与 `ContentView` 给表头钉的那个高同源**（`max(24, vm.effectiveClosedNotchHeight)`，
+    /// 本值就是它的转发）：面板高 = 内容自然高 + 上下内边距，而画出来的那一份 plan 拿的是
+    /// 「面板高 − 表头 − 内边距」——少算表头就会让可用高比内容矮一截，最后一行被流方案整行丢掉。
+    /// 所以这个数只能由知道 vm 的那一层给，不能在 `PanelAutoHeight` 里写死。
+    let panelHeaderHeight: CGFloat
+    /// 光标是否停在面板里（边界 ①「不缩」的判据）：由 `NotchHomeView` 用宿主的既有 hover 判定
+    /// （`vm.isMouseHovering()`）算好传入——本视图拿不到 vm，也不该自己再写一份几何。
+    let pointerInsidePanel: Bool
 
     var body: some View {
         // 名单在本轮渲染里**只取一次**：块的 `content(for:request:)`（它同时决定「有没有块」——
@@ -829,6 +845,8 @@ struct HomeBandedHomeView: View {
                     height: HomeFlowView.blockHeight(for: $0.formFactor)
                 )
             }
+            // **画出来的那一份** plan 用的仍是当前可用高（今天那条，逐字未变）：面板多高就画多满，
+            // 预算里装不下的行不画（`HomeFlowLayout` 的整行进出）。
             let plan = HomeFlowLayout.plan(
                 items: items,
                 availableWidth: bandWidth,
@@ -836,6 +854,56 @@ struct HomeBandedHomeView: View {
                 calendarHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
                 metrics: Self.flowMetrics
             )
+
+            // —— 「面板贴内容」的高度账本（p5-home-blocks / T6，docs/29 §做法 机制六）——
+            // 尺寸层要的是**内容自然高**：按「流允许的最大预算」另算一份（不是无界——上界函数给的
+            // 就是有限数），流在这个预算下画满全部行与日历行。
+            //
+            // **为什么探针不按「当前面板高」算**（口径判断，见报告 §候选决策）：流方案在预算里装不下
+            // 的行会**整行丢掉**（那是画的口径），拿它当内容高就是一条单向棘轮——面板越小 → 丢的行
+            // 越多 → 算出来的内容高越小 → 面板再缩，越缩越少，最后停在「一行都不画」的不动点上；
+            // 而块的高度是**声明值**（`HomeFlowView.blockHeight`），不随面板变，所以「内容自然高」
+            // 本来就是与预算无关的一个数。收敛本身仍是双向的（见 `convergedPanelHeight`）：
+            // 种子高于它 → 收缩、低于它 → 长高，唯一单向的规则只有「光标在面板内时不缩」。
+            let hostChrome = panelHeaderHeight + PanelAutoHeight.homeVerticalPadding
+            let naturalContentHeight = PanelAutoHeight.contentHeight(
+                from: HomeFlowLayout.plan(
+                    items: items,
+                    availableWidth: bandWidth,
+                    availableHeight: PanelAutoHeight.naturalFlowBudget(
+                        hostChrome: hostChrome,
+                        screenVisibleHeight: NSScreen.main?.visibleFrame.height
+                    ),
+                    calendarHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
+                    metrics: Self.flowMetrics
+                ),
+                calendarHeight: HomeCalendarRow.rowHeight,
+                calendarSpacing: HomeCalendarRow.rowSpacing,
+                headerHeight: panelHeaderHeight
+            )
+            // 种子 = **当前面板高**（当前可用高 + 宿主垂直开销）：收敛从屏幕上的现状出发。
+            let seedPanelHeight = max(0, geometry.size.height) + hostChrome
+            let convergedPanelHeight = PanelAutoHeight.convergedPanelHeight(
+                seedPanelHeight: seedPanelHeight,
+                mode: panelHeightMode,
+                manualHeight: openNotchHeight,
+                screenVisibleHeight: NSScreen.main?.visibleFrame.height,
+                contentHeight: { _ in naturalContentHeight }
+            )
+            // 边界 ①（光标在面板里时不缩）在这里落地：收敛值比当前小、而光标还在面板里 → 保持当前。
+            let heldPanelHeight = PanelAutoHeight.heldForPointer(
+                converged: convergedPanelHeight,
+                currentPanelHeight: seedPanelHeight,
+                pointerInsidePanel: pointerInsidePanel
+            )
+            // 写持有者（`@MainActor` 静态）：尺寸层（`openNotchSize`）读它。**两种模式都写**——
+            // auto 下它决定面板高；manual 下尺寸层不读它，但写下来模式切换那一刻的值就是新鲜的
+            // （切模式的那条 publisher 会重算窗口，见 `DynamicIslandApp`）。
+            // 持有者的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它：
+            // 收敛值与被光标按住时的现值因此都能被尺寸层逐字还原（`clamp(内容 + 16)`）。
+            // `let _ =`：`ViewBuilder` 不接受 Void 类型的表达式语句（`type '()' cannot conform to 'View'`），
+            // 绑定给 `_` 是声明、不是语句，这条约束因此绕开（包的 `writeHomeContentHeight` 只是语法桥）。
+            let _ = writeHomeContentHeight(heldPanelHeight - PanelAutoHeight.homeVerticalPadding)
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
             // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`：极淡圆角底 + 横向 8pt 内边距，
@@ -867,6 +935,15 @@ struct HomeBandedHomeView: View {
             rowSpacing: HomeStripView.widgetRowSpacing,
             tailReserve: HomeStripView.droppedHintWidth
         )
+    }
+
+    /// 把算出来的内容高写进过渡持有者（`PanelAutoHeight.homeContentHeight`）。
+    ///
+    /// 包一层函数是**语法上的必须**：写入点在 `GeometryReader` 的 `ViewBuilder` 里，那里放不下
+    /// 一条裸赋值语句（`type '()' cannot conform to 'View'`）；调用一个返回 Void 的函数则是
+    /// 合法的表达式语句。`@MainActor`：`View.body` 本就在主 actor 上（持有者也是主 actor 隔离的）。
+    private func writeHomeContentHeight(_ height: CGFloat) {
+        PanelAutoHeight.homeContentHeight = height
     }
 }
 

@@ -108,9 +108,24 @@ var openNotchSize: CGSize {
     let minWidth = currentRecommendedMinimumNotchWidth()
     let maxWidth = maxAllowedNotchWidth()
     let width = min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)
-    // 高度按「当前屏可见高度的 90%」收敛（取不到屏时回落 850，同 `clampedOpenNotchHeight`）。
+    // 高度按 `panelHeightMode` 二选一（p5-home-blocks / T6，docs/29 §做法 机制六）：
+    // **auto** 读首页那一路算出来的内容高（过渡持有者的值，经 `panelHeight(...)` 加上宿主内边距
+    // 并夹在既有区间里）、**manual** 读用户滑块值（`panelHeight(...)` 原样返回手动值）。
+    // 两条最后都过 `clampedOpenNotchHeight`：manual 那条因此逐字还是今天那条（同一个函数、
+    // 同一个入参），auto 那条是幂等复夹（`panelHeight` 已经夹过一次，同区间）。
+    //
+    // 为什么落在这个**全局出口**而不是只改 `calculateRequiredNotchSize`：本变量是「当前展开态
+    // 尺寸」的唯一权威源——`calculateRequiredNotchSize`（窗口 resize 链）、
+    // `DynamicIslandViewModel.calculateDynamicNotchSize`（**打开面板那条**）与 `ContentView.dynamicNotchSize`
+    // （面板自身 frame）都读它。只改前者的话，auto 下打开面板仍按手动高度画，且没有第二个触发器
+    // 把它拉回来（§已知限制 2 的「首帧一拍」会变成「一直不贴合」）。
     let height = clampedOpenNotchHeight(
-        Defaults[.openNotchHeight],
+        PanelAutoHeight.panelHeight(
+            contentHeight: PanelAutoHeight.homeContentHeight ?? .nan,
+            mode: Defaults[.panelHeightMode],
+            manualHeight: Defaults[.openNotchHeight],
+            screenVisibleHeight: NSScreen.main?.visibleFrame.height
+        ),
         screenVisibleHeight: NSScreen.main?.visibleFrame.height
     )
     return .init(width: width, height: height)

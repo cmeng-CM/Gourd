@@ -535,9 +535,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Use a consistent height for different view types
         // 计时器的 250pt 高度档：判据认模块路径（docs/20 §做法 机制六，与 `ContentView` 同一处口径），
         // 只比 `.timer` 会让「计时器在跑 + 悬浮展开」回落到默认高度档。
+        //
+        // **p5-home-blocks / T6 起这几条是「下限」不是「替换」**（D-16 / docs/29 §做法 机制六 边界 ④）：
+        // auto 下取 `max(覆盖值, 内容高)`（`mergedTabHeight`），manual 下逐字还是今天那条
+        // （计时器 / 终端 = 直接替换，便签 / 剪贴板本来就是 `max`——它们两条不用改）。
+        // 把 auto 写成替换会让「计时器 tab 比首页还矮」这种反直觉结果成真：覆盖值只是某些 tab 的
+        // 下限，它们从来不是上限。
+        let panelHeightMode = Defaults[.panelHeightMode]
         if coordinator.isTimerSurfaceSelected() {
-            baseSize.height = 250 // Extra space for timer presets
+            baseSize.height = PanelAutoHeight.mergedTabHeight(
+                override: 250, // Extra space for timer presets
+                current: baseSize.height,
+                mode: panelHeightMode
+            )
         } else if coordinator.currentView == .notes {
+            // 这一条本来就是 `max(内容高, 覆盖值)`——auto 下它逐字就是既定口径，不需要换算式。
             let preferredHeight = coordinator.notesLayoutState.preferredHeight
             baseSize.height = max(baseSize.height, preferredHeight)
         } else if coordinator.currentView == .clipboard {
@@ -546,7 +558,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if coordinator.currentView == .terminal {
             let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
             let maxFraction = Defaults[.terminalMaxHeightFraction]
-            baseSize.height = min(screenHeight * maxFraction, max(300, screenHeight * maxFraction))
+            let terminalHeight = min(screenHeight * maxFraction, max(300, screenHeight * maxFraction))
+            baseSize.height = PanelAutoHeight.mergedTabHeight(
+                override: terminalHeight,
+                current: baseSize.height,
+                mode: panelHeightMode
+            )
         }
         
         let adjustedContentSize = statsAdjustedNotchSize(
@@ -792,6 +809,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }.store(in: &cancellables)
 
         Defaults.publisher(.openNotchWidth, options: []).sink { [weak self] _ in
+            self?.debouncedUpdateWindowSize()
+        }.store(in: &cancellables)
+
+        // 首页内容类键（p5-home-blocks / T6，docs/29 §做法 机制六 步骤 4）：auto 高度下面板高度
+        // 由**首页的内容高**决定，这几条键都会改内容高（关一块 / 摘一个模块 / 改顺序 / 开关日历行 /
+        // 切高度模式），窗口尺寸必须跟着重算。
+        //
+        // **走既有的 0.15s 防抖那条**（`debouncedUpdateWindowSize`），不新开第二条 resize 链：
+        // 内容高是在 `HomeBandedHomeView` 的 body 里写进持有者的，同步重算读到的是**上一帧**的内容高
+        // （写与读都在同一帧的渲染里，谁先谁后没有保证）——防抖之后的这一趟正好落在新一帧之后。
+        Defaults.publisher(.hiddenHomeModules, options: []).sink { [weak self] _ in
+            self?.debouncedUpdateWindowSize()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.moduleEnableOverrides, options: []).sink { [weak self] _ in
+            self?.debouncedUpdateWindowSize()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.homeBlockOrder, options: []).sink { [weak self] _ in
+            self?.debouncedUpdateWindowSize()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.showCalendar, options: []).sink { [weak self] _ in
+            self?.debouncedUpdateWindowSize()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.panelHeightMode, options: []).sink { [weak self] _ in
             self?.debouncedUpdateWindowSize()
         }.store(in: &cancellables)
 

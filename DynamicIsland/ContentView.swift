@@ -230,6 +230,25 @@ func panelResizeTranslation(from start: CGPoint, to current: CGPoint) -> CGSize 
     return CGSize(width: dx.isFinite ? dx : 0, height: dy.isFinite ? dy : 0)
 }
 
+/// 展开态右下角拖动把手**是否出现**（纯函数，D-16）：**只在展开态、非极简、且手动高度模式**。
+///
+/// 两条否掉的档都是同一条理由——**拖了没用**：
+/// - **极简模式**刻意不显示：那一档的尺寸来源是 `minimalisticOpenNotchSize`（固有基准 + 歌词 /
+///   提醒 / 计时器的附加高度），`openNotchSize` 与 `Defaults[.openNotchWidth]/[.openNotchHeight]`
+///   完全不参与——`DynamicIslandViewModel` 的宽度 sink 自己也带着 `!enableMinimalisticUI` 前置。
+///   把手若照常出现，拖动只会写进一个**当场没有任何效果**的值（下次切回标准展开态才突然生效）。
+/// - **自适应高度（auto）**同理：那一档的面板高度由**内容**决定（`PanelAutoHeight` 的收敛结果），
+///   拖动写的 `openNotchHeight` 是手动档的值，当场同样没有任何效果（p5-home-blocks / T6，
+///   docs/29 §做法 机制六 边界 ③ / §已知限制 6 的「手动高度模式下会留白」也是同一条）。
+///
+/// 抽成文件级纯函数的理由与 `resizedPanelSize` / `panelResizeTranslation` 一族相同：判据在视图里
+/// 是 `private var`，用例够不到，D-16 就只能靠"测试里重抄一遍表达式"假通过。
+/// `isOpen` 传 `vm.notchState == .open`、`isMinimalistic` 传 `Defaults[.enableMinimalisticUI]`、
+/// `heightMode` 传 `Defaults[.panelHeightMode]`（`PanelAutoHeight.modeManual` 才出现）。
+func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: String) -> Bool {
+    isOpen && !isMinimalistic && !PanelAutoHeight.isAuto(heightMode)
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -458,6 +477,10 @@ struct ContentView: View {
     @Default(.showNotHumanFace) var showNotHumanFace
     @Default(.useModernCloseAnimation) var useModernCloseAnimation
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
+    /// 面板高度模式（p5-home-blocks / T6，默认 `"auto"`）：右下角拖动把手是**手动档专属**
+    /// （D-16，判据在文件级 `showsPanelResizeHandle(...)`）——auto 下拖动写的键当场没有效果。
+    /// 用 `@Default` 而不是裸读：设置页切档后本视图要**当场**重绘，把手跟着出现 / 消失。
+    @Default(.panelHeightMode) var panelHeightMode
     /// 主面板背景样式（2026-09-28 新增，默认纯黑）；生效范围见 `panelBackgroundUsesStyle(isOpen:isDynamicIslandMode:)`。
     @Default(.notchPanelBackgroundStyle) var notchPanelBackgroundStyle
 
@@ -796,9 +819,14 @@ struct ContentView: View {
             // `panelResizeHandleEdgeInset` 保证落在面板内）与 `compositingGroup` / `shadow` 之前。
             // 它不参与面板的尺寸计算（overlay 只是贴在 `mainLayoutBase` 的框上），
             // 也不影响下面 `configuredMainLayout` 里的 `onTapGesture` / `panGesture`（见
-            // `panelResizeHandle` 的 `highPriorityGesture`）。
+            // `panelResizeHandle` 的 `highPriorityGesture`）。**出现判据是文件级纯函数**
+            // （展开 + 非极简 + 手动高度模式，三者缺一不出现；p5-home-blocks / T6 / D-16）。
             .overlay(alignment: .bottomTrailing) {
-                if showsPanelResizeHandle {
+                if showsPanelResizeHandle(
+                    isOpen: vm.notchState == .open,
+                    isMinimalistic: enableMinimalisticUI,
+                    heightMode: panelHeightMode
+                ) {
                     panelResizeHandle
                         .padding(.trailing, panelResizeHandleEdgeInset)
                         .padding(.bottom, panelResizeHandleEdgeInset)
@@ -939,18 +967,11 @@ struct ContentView: View {
 
     // MARK: - 展开态右下角拖动把手（D-29）
 
-    /// 把手是否出现：**只在展开态**，且**非极简模式**。
-    ///
-    /// 极简模式刻意不显示：那一档的尺寸来源是 `minimalisticOpenNotchSize`（固有基准 + 歌词 / 提醒 /
-    /// 计时器的附加高度），`openNotchSize` 与 `Defaults[.openNotchWidth]/[.openNotchHeight]` 完全不参与
-    /// ——`DynamicIslandViewModel` 的宽度 sink 自己也带着 `!enableMinimalisticUI` 前置。把手若照常出现，
-    /// 拖动只会写进一个**当场没有任何效果**的值（下次切回标准展开态才突然生效），正是代码里到处在避免的
-    /// 「拖了没用」。
-    private var showsPanelResizeHandle: Bool {
-        vm.notchState == .open && !enableMinimalisticUI
-    }
-
     /// 右下角拖动把手：9pt 小圆点（拖动 / 悬停时提亮）+ 拖动期间浮在它上方的「宽 × 高」读数胶囊。
+    ///
+    /// **出现判据在文件级纯函数 `showsPanelResizeHandle(isOpen:isMinimalistic:heightMode:)`**
+    /// （p5-home-blocks / T6 从本视图的 `private var` 抽出去的：判据在视图里用例够不到，
+    /// D-16 就只能靠"测试里重抄一遍表达式"假通过）——调用点在 `mainLayoutBase` 的 `.overlay` 里。
     ///
     /// 形态与命中：圆点在 32pt 命中框正中，命中框距面板右下角各 `panelResizeHandleEdgeInset`（14pt）；
     /// 读数胶囊贴命中框的右上角、抬到圆点上方（`allowsHitTesting(false)`，不吃拖动）。
