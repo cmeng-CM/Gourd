@@ -87,10 +87,15 @@ struct TabSelectionView: View {
             tabsArray.append(TabModel(label: "Usage", icon: "chart.bar.doc.horizontal", view: .llmUsage))
         }
 
-        if Defaults[.enableNotes] || (Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab) {
-            let label = Defaults[.enableNotes] ? "Notes" : "Clipboard"
-            let icon = Defaults[.enableNotes] ? "note.text" : "doc.on.clipboard"
-            tabsArray.append(TabModel(label: label, icon: icon, view: .notes))
+        // Notes / Clipboard tab：**只看剪贴板**（p3-widgets 收尾修复）——笔记设置页已从侧栏摘掉
+        //（T5，`SettingsTab.notes` 与 `NotesSettingsView` 全保留），若这里仍认笔记那个总开关
+        //（`enable` + `Notes` 拼出来的上游键），置 1 的用户会看到一个既不知道是什么、也
+        //**无处可关**的 tab（本机该键恰好就是 1）。故条件里删掉笔记那一半、label / icon 固定为
+        // Clipboard；笔记开关从此**惰性**（笔记代码与键一个字没删，只是不再产生任何入口）。
+        // 与统计开关（p3-widgets / T2）同款先例：键保留、tab 分支删除。
+        // 注意：`clipboardDisplayMode == .separateTab` 的用户仍必须能拿到这一支——不是整支删掉。
+        if Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab {
+            tabsArray.append(TabModel(label: "Clipboard", icon: "doc.on.clipboard", view: .notes))
         }
         if Defaults[.enableTerminalFeature] {
             tabsArray.append(TabModel(label: "Terminal", icon: "apple.terminal", view: .terminal))

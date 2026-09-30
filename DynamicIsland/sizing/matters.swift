@@ -167,8 +167,10 @@ func enabledStandardTabCount() -> Int {
     // 上游 `TabSelectionView` 的那条分支与本函数的对应 `+1` 同批删除。启用真源
     // `enableStatsFeature` 仍是同一个上游键，但它已经和「有几个 tab」无关（首页块不参与 tab 计数）。
 
-    // Notes / Clipboard tab
-    if Defaults[.enableNotes] || (Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab) {
+    // Notes / Clipboard tab：**只看剪贴板**（p3-widgets 收尾修复，与 `TabSelectionView` 同步）——
+    // 笔记设置页摘掉后，笔记那个总开关（`enable` + `Notes` 拼出来的上游键）置 1 只剩一个无处可关的
+    // tab，该分支连同它对计数的贡献一并删除；该键从此惰性（键与笔记代码保留），本函数不再读它。
+    if Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab {
         count += 1
     }
 

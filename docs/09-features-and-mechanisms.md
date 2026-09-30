@@ -453,16 +453,17 @@
 | 扩展 | `enableThirdPartyExtensions` 12、`enableExtensionNotchExperiences` 9（页内另外三个键的读点在扩展服务里） | 21（`ExtensionsSettings` 直接引用的两个键） | 有 | 扩展 tab / 扩展动态岛体验 | 保留 |
 | 组件 | 模块 manifest（`ModuleRegistry.manifests` 全量；键是各模块自己的启用真源，见 [14](14-module-manifests.md)） | 见各模块 | 有（开关 / 排序即时改首页块与面板 tab，T3） | 组件页即模块入口 | 保留 |
 | 关于 | `releaseName` / `updateChannel`（读点在设置目录内的 `SoftwareUpdater`） | 0 | 有（版本与更新通道） | 应用菜单 / 更新器 | 保留 |
-| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | 有（`enableNotes` 打开后展开面板多一个 Notes tab） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口是**本页自己** | **删页留码**（D-06） |
+| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | 有（`enableNotes` 打开后展开面板多一个 Notes tab） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口是**本页自己** | **删页留码**（D-06）；**tab 分支已摘，键惰性**（收尾修复：`TabSelectionView` 那条合并分支改成只看剪贴板，`enabledStandardTabCount()` 同步，键从此不再产生任何入口） |
 | **LLM 用量**（统计页里的一段，不是独立页） | `enableLLMUsageFeature` 1（`TabSelectionView` 的 Usage tab）、四个 `enable*Provider` 各 1（`UsageProvider`） | 5 | 有（同上：打开后多一个 Usage tab） | 同上（唯一入口是本页这一段自己） | **删段留码**（D-08） |
 
 **「无实际设置意义 → 删」的两处落点**（都**只摘入口**，上游代码与偏好键一个字没删）：
 
 1. **笔记设置页**（`SettingsTab.notes`）：从 `availableTabs` 摘掉（`title` / `systemImage` / `tint` / `group` /
    `detailView` 分支与 `NotesSettingsView` 全部原样保留，`isTabVisible` 里那一档也保留），将来把 `.notes`
-   加回数组即整页复活。**与 [26](26-home-widgets-and-settings.md) §背景与目标 表第 4 行的一处措辞不符**：
-   那里写「本产品没有任何入口指向它」——严格讲不成立（`enableNotes` 打开后 `TabSelectionView` 会真的多出
-   一个 Notes tab），准确表述是「**默认关且唯一入口在本页**」；判定结论（删）不变，理由换成"入口自举不算入口"。
+   加回数组即整页复活。**与 [26](26-home-widgets-and-settings.md) §背景与目标 表第 4 行的那处措辞
+   （那里写「本产品没有任何入口指向它」——当时严格讲不成立：`enableNotes` 打开后 `TabSelectionView`
+   会真的多出一个 Notes tab）已随收尾修复消除**：合并分支改成只看剪贴板、`enabledStandardTabCount()`
+   同步，该键从此惰性，那句话重新成立；判定结论（删）不变。
 2. **统计页的 LLM 用量段**：`Enable LLM Usage Monitor` 开关与 `LLM Providers`（Claude / Codex / Cursor /
    Antigravity）整段摘掉，连带五条搜索项一并删（否则搜索会给出"点进去什么都没有"的死建议）；
    `enableLLMUsageFeature` 与四个 provider 键、`UsageProvider`、`NotchLLMUsageView`、
