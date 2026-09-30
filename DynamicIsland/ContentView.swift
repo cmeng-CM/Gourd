@@ -1268,6 +1268,22 @@ struct ContentView: View {
                     // tab already selected, where the cursor never enters the notch).
                     syncStickyTerminalOutsideClickMonitor()
                 }
+
+                // **自适应高度（p5-home-blocks / T6，docs/29 §做法 机制六）**：打开面板的**第一拍**
+                // 读到的内容高还是上一帧的值——过渡持有者（`PanelAutoHeight.homeContentHeight`）
+                // 由 `HomeBandedHomeView` 的 body 写，展开这一帧才第一次写；而打开那条路
+                // （`DynamicIslandViewModel.open`）是**先定尺寸、再渲染**。
+                // 因此下一拍按已经写好的持有者再推一次窗口尺寸（`dynamicNotchSize` → `openNotchSize`
+                // → 持有者），这就是 §已知限制 2 说的「先按旧高度画一帧再贴合」——防抖那条 publisher
+                // 只在**偏好变化**时触发，打开面板本身不是偏好变化，所以这一拍只能由这里补。
+                // manual 档跳过（滑块 / 拖动各自那条链路已经把它推到当天值）；极简档的尺寸来自
+                // `minimalisticOpenNotchSize`，与持有者无关，同样跳过。
+                if newState == .open, !enableMinimalisticUI, PanelAutoHeight.isAuto(panelHeightMode) {
+                    runAfter(0.06) {
+                        guard vm.notchState == .open, !enableMinimalisticUI else { return }
+                        syncWindowSizeAfterPanelResize()
+                    }
+                }
             }
             .onChange(of: vm.isBatteryPopoverActive) { _, newPopoverState in
                 runAfter(0.1) {
