@@ -303,7 +303,10 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
     同一变异（从 `Localizable.xcstrings` 删掉该 key）现在让 315 条里**恰 1 条变红**
     （`testNotificationsLocalizationKeysResolve`，实到值即原始 key——正是"漏编 catalog 时 `.help()` /
     `.accessibilityLabel` 把原始 key 直接显示给用户"这种静默降级形态）。文案分档本批只经人工核对
-    （补断言的落点见 §实际交付 遗留项）。
+    （补断言的落点见 §实际交付 遗留项）。**→ 已补上（`p3-freeze` 的 T5，2026-09-30）**：
+    `DynamicIslandTests/ModuleKernelTests.swift` 的 `testNotificationListRowClosePredicateFollowsCloseHandleWindow`
+    覆盖谓词的三档（有句柄 → true / 无句柄 / 超 10 秒 → false），**同一变异（谓词改成恒 false）现在会红**；
+    上面那句"无一条变红"是补口之前的实测记录，原样保留（它正是补口的理由）。
 11. **`.help` 的文案在渲染时求值，可能比点击结果乐观**：谓词回答的是**查询那一刻**的答案，句柄随 10 秒窗口过期；
     行渲染与用户悬停之间跨过窗口边界时，文案会说「同时关掉系统通知」而点击实际只移除。接受它（不为它引入
     10s 级重渲的定时器，D-08），边界同时写在 `docs/09` §5.5 表下那段。
@@ -322,6 +325,19 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
     `t4-900.png` / `t4-1088.png`）。**反向提醒**：`＋N` 为 0 不等于"块都画出来了"——`p2-home-fit` 修复前
     770pt 下就出现过"视图那份 plan 算 2 块、Layout 那份只摆 1 块，而视图照显 `＋2`"（两份 plan 的输入宽度
     不同：尺寸反馈，根因与修法见 [23](23-home-fit.md) §已知限制 4）。
+
+**`p3-freeze` 补充（2026-09-30，冻结批次）**：
+
+14. **`＋N` 的悬停 tooltip 在非激活面板里出现较慢，是观感而不是缺陷**：列被丢掉的块名靠 `.help(_:)`
+    （AppKit tooltip），而刘海面板是**非激活窗口**——tooltip 由系统在"应用是否处于激活态"这套判定下调度，
+    这里可能**秒级**才浮出来（与第 5 条同一根因，那条说的是通知列表行 × 的悬停文案；`＋N` 这一处的
+    触发面积更小、更容易被读成"悬停没反应"）。**这是现有实现的观感边界，不是丢块的语义问题**：
+    ① 提示本身（`＋N` 这个胶囊）在屏上照常可见，悬停只是"想知道是哪几块"的附加信息；
+    ② 面板一旦是激活态（点过、正在交互）tooltip 就正常；
+    ③ 拉宽面板让块自己显示出来仍然是唯一的信息入口（第 7 条）。
+    本批**不改代码**（改它要自定义 tooltip 或自己起一个浮层，成本远超"秒级时延"这个代价；同 D-08 的取舍），
+    只把它记在这里，并写进 [25-release-smoke.md](25-release-smoke.md) 的 S10 观感注——发布冒烟时
+    **不要把"悬停半天才出列名"记成不通过**。
 
 ## 验收标准
 

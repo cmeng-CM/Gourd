@@ -1,9 +1,74 @@
 # Changelog
 
-All notable changes to Atoll will be documented in this file.
+All notable changes to Gourd (a fork of Atoll) will be documented in this file; upstream history retained below.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-09-30
+
+第一个冻结的自用版。本仓库是 [Atoll](https://github.com/Ebullioscopic/Atoll) 的**修改版本**
+（基线 `v2.3.3-beta.3` / `c7305ec`，2026-08-20），此段以下列出的都是 Gourd（壶中天）分支
+自 2026-09-27 起的**自有变更**，不出自上游；版本身份、归属与冻结口径见
+[docs/24-release-freeze.md](docs/24-release-freeze.md)。
+
+### 模块内核与组件页（docs/13 / 14 / 19 / 20）
+
+- **模块内核**：`GourdModule` 协议（manifest / 生命周期 / 内容请求）与注册表落地，
+  展开面板的 tab 列表与内容 switch 通过三处最小接线改为「从注册表读」——新增一个模块 =
+  实现协议 + 组合根注册一行；启用真源是 manifest 的 `defaultEnabled` 加用户覆盖表。
+- **三个接管模块**：计时器 / 镜子 / 音乐从上游写死的渲染点变成真模块（模块提供那个 tab 或首页块，
+  **启用真源就是上游那个开关键本身**——在组件页与在上游设置页拨的是同一个开关）；
+  首页块与模块块宽一一对应，接管后宿主侧不再保留内置块。
+- **启动台**：新增 `com.cmeng.gourd.launcher` 展开 tab（应用网格 / 搜索 / 点一下启动并收起 /
+  右键固定），扫描本机应用目录 + 按 Spotlight 使用数据排序，零权限、零私有 API。
+- **组件页**：第二段给不改渲染归属的七个功能各一张上游开关卡（卡即那个 `Defaults` 键的镜像 +
+  一行「开了会在哪看到什么」）；接管卡写出写路径与生效位置，跨模块顺序节按实现收敛。
+
+### 首页条与 `＋N`（docs/21 / 23）
+
+- **首页块顺序可调**：覆盖表 + 上下移（顺序的唯一权威源是宿主那一层，设置页展示用同一条算式）。
+- **丢块提示 `＋N`**：首页条因宽度不够从尾部整块丢弃时，条尾给一个 `＋N` 小胶囊（悬停列出被丢掉的
+  块名）——**丢块不再静默**。位置锚在尾部边缘，预留位只在「基线会丢块且预留后仍能显示 ≥1 块」时生效
+  （`tailReserve` 缺省 0 = 不预留，此时布局与之前一字不差）。
+- **名单同源 + 尺寸反馈修复**：`＋N` 列的块与真正没显示的块来自同一份输入；提案宽钉在 strip 的可用宽上，
+  消除「视图那份 plan 显示 ＋2、Layout 那份只摆 1 块」的错位。
+
+### 通知：× 到底关了什么（docs/09 §5.5 / docs/21 机制四）
+
+- **四格语义写成两档文案**：列表行的 × 在「近 10 秒内有同指纹 AX 关闭句柄」时**同时真关掉系统通知**，
+  否则只从岛上移除——两档文案按**同一个只读谓词**（`willAlsoCloseSystemBanner`）分档，
+  与 `dismiss` 的判据同一份，文案与行为不会各说各话。
+- **一键清除的语义收窄**：只清岛上这一屏，不逐条打 AX 动作真关。
+- 通知这一块的其余能力（前几批落地的本单位工作，一并列在这里）：AX 实时通道 + 数据库降级通道
+  （同指纹 10s 内去重、AX 优先）、浮层与列表两条关闭入口；关闭结果在日志里可查
+  （`有句柄但执行失败` 与 `本来就没有句柄` 是两行不同的日志）。
+
+### 快捷指令与前台应用（docs/22）
+
+- **快捷指令模块**（默认关）：展开面板一个 tab——搜系统快捷指令、点一下跑、固定常用的；
+  取数走 `/usr/bin/shortcuts list --show-identifiers` 并缓存进配置，运行时 `shortcuts run <identifier>`
+  限时 30s、禁止并发。
+- **前台应用模块**（默认关）：首页一块——当前前台应用的图标与名称 + 所有打开的常规 App 网格，
+  点一格切过去；内容现取 `NSWorkspace.runningApplications`，零私有 API。
+
+### 首页五条修正（docs/23，按实机反馈）
+
+- 日历行不再画上下两条渐变遮罩（滚动提示只在独立日历里需要）。
+- 面板高度不够时**先收日历行、保住首页条**（此前顺序相反）。
+- 前台应用块从「最近切换历史」改成「所有打开的常规 App」（只列可激活的常规 App，点一下必须切过去）。
+- 修最小宽度（770pt）下「块被分配了宽度却画不出来」的空白（实测复现：第二个之后的块空白、条尾 `＋2`）。
+- 音乐封面可配置显示（模块 config 新增 `showAlbumArt`，默认显示）。
+
+### 安装、改名与本次冻结
+
+- 打包与安装产物改名为 **壶中天.app**（`tools/build.sh --install` / `--dmg`；构建产物仍叫 `Gourd.app`，
+  `TEST_HOST` 依赖该路径），DMG 为 `dist/壶中天-<版本>.dmg`。
+- 版本身份与继承来的上游版本号分家：`VERSION` / `MARKETING_VERSION` 由 `2.3.3` 改为 `0.1.0`
+  （构建号 1196 → 1197），应用与 DMG 自报 0.1.0。
+- 许可与归属补口（NOTICE 的修改日期与改名、TRADEMARKS 的无背书声明、自建文件的版权头）。
+
+**以下为上游 Atoll 的历史变更，原样保留。**
 
 ## [Unreleased]
 

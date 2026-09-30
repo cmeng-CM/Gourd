@@ -728,7 +728,7 @@
 				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1196;
+				CURRENT_PROJECT_VERSION = 1197;
 				DEVELOPMENT_ASSET_PATHS = "\"DynamicIsland/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -772,7 +772,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 2.3.3;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.dev;
 				PRODUCT_MODULE_NAME = Gourd;
 				PRODUCT_NAME = Gourd;
@@ -804,7 +804,7 @@
 				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1196;
+				CURRENT_PROJECT_VERSION = 1197;
 				DEVELOPMENT_ASSET_PATHS = "\"DynamicIsland/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -848,7 +848,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 2.3.3;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd;
 				PRODUCT_MODULE_NAME = Gourd;
 				PRODUCT_NAME = Gourd;

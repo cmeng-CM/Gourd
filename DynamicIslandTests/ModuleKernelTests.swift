@@ -4514,6 +4514,121 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertNil(ledger.closeHandle(for: NotificationFingerprint(appName: "别的", title: "", body: ""), now: later))
     }
 
+    /// **列表行 × 的谓词**（`NotificationStore.willAlsoCloseSystemBanner`）——`d23ede48` 留的缺口的补口
+    /// （docs/21 §已知限制 10 记过：「谓词恒 false 时全量用例无一条变红」）。
+    ///
+    /// 构造方式照 `testNotificationBannerLedgerCloseHandleWindow` 的 `closeHandleFixture`：只建一个
+    /// **指向本进程**的 AX 对象（不申请权限、不读写任何元素、**不执行任何动作**），登记进台账后由谓词读。
+    /// 三档：**有句柄 → true；无句柄（AX 解析不到关闭控件 / DB 通道那条）→ false；超 10 秒窗口 → false**。
+    /// 谓词是只读的（§接口与数据形状 3），本用例因此不点任何真实界面——它只回答"文案该说哪一档"。
+    func testNotificationListRowClosePredicateFollowsCloseHandleWindow() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let item = Self.notificationItemFixture(id: 91, body: "来自张三")
+
+        // 偏好卫生：`NotificationStore.init` 会读 `dismissedNotificationIDs`（值超上限 / 有重复时顺带
+        // 裁剪回写）。本用例只想读谓词——先原样备份、结束时按"原来有没有这个键"原样恢复，
+        // **不给开发机的真实域留键、也不改值**（与 `ModuleToggleTests` 的清场口径同一条）。
+        let dismissedKey = Defaults.Keys.dismissedNotificationIDs.name
+        let savedDismissed = UserDefaults.standard.object(forKey: dismissedKey)
+        defer {
+            if let savedDismissed {
+                UserDefaults.standard.set(savedDismissed, forKey: dismissedKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: dismissedKey)
+            }
+        }
+
+        let store = Self.notificationStoreFixture()
+
+        // ① 什么都没登记：false（没有 AX 横幅就没有句柄，点 × 只从列表移除）
+        XCTAssertFalse(store.willAlsoCloseSystemBanner(for: item, now: start))
+        XCTAssertNil(store.closeHandle(for: item, now: start), "没登记过就没有句柄")
+
+        // ② 同指纹的 AX 横幅**带句柄**到来 → 窗口内 true（＝ `dismiss` 这一刻会顺带真关）
+        let handle = Self.closeHandleFixture()
+        XCTAssertTrue(
+            store.shouldPresentBanner(
+                BannerEvent(
+                    appName: "邮件",
+                    title: "新邮件",
+                    subtitle: "",
+                    body: "来自张三",
+                    closeHandle: handle,
+                    receivedAt: start
+                ),
+                now: start
+            ),
+            "首次同指纹：该弹浮层并登记句柄"
+        )
+        let inWindow = start.addingTimeInterval(9.9)
+        XCTAssertTrue(
+            store.willAlsoCloseSystemBanner(for: item, now: inWindow),
+            "近 10 秒内有同指纹句柄 → 文案说「同时关掉系统通知」，行为侧就必须拿得到句柄"
+        )
+        XCTAssertEqual(
+            store.willAlsoCloseSystemBanner(for: item, now: inWindow),
+            store.closeHandle(for: item, now: inWindow) != nil,
+            "谓词与 `dismiss` 的判据是同一份（只问真假，不复制第二份）"
+        )
+
+        // ③ 超 10 秒：句柄随窗口过期 → false（谓词不得比行为乐观，docs/21 §已知限制 11）
+        XCTAssertFalse(
+            store.willAlsoCloseSystemBanner(for: item, now: start.addingTimeInterval(10.1)),
+            "窗口过期后只从列表移除，谓词必须跟着变 false"
+        )
+
+        // ④ 同窗口内、另一个指纹**没有句柄**（横幅在，但解析不到关闭控件那一档）→ false
+        let handlelessItem = Self.notificationItemFixture(id: 92, body: "来自李四")
+        XCTAssertTrue(
+            store.shouldPresentBanner(
+                BannerEvent(
+                    appName: "邮件",
+                    title: "新邮件",
+                    subtitle: "",
+                    body: "来自李四",
+                    closeHandle: nil,
+                    receivedAt: start.addingTimeInterval(0.5)
+                ),
+                now: start.addingTimeInterval(0.5)
+            ),
+            "不同指纹不受影响（窗口按指纹分开）"
+        )
+        XCTAssertFalse(
+            store.willAlsoCloseSystemBanner(for: handlelessItem, now: start.addingTimeInterval(1)),
+            "登记过但没句柄 → 只从列表移除"
+        )
+
+        // ⑤ DB 通道那一条：窗口内登记成功，但句柄恒 nil（它本来就没有 AX 横幅）
+        let databaseItem = Self.notificationItemFixture(id: 93, body: "来自王五")
+        XCTAssertTrue(store.shouldPresentDatabaseItem(databaseItem, now: start.addingTimeInterval(2)))
+        XCTAssertFalse(
+            store.willAlsoCloseSystemBanner(for: databaseItem, now: start.addingTimeInterval(2.1)),
+            "数据库通道没有句柄，谓词恒 false"
+        )
+    }
+
+    /// 通知条目的最小夹具（id + 正文；其余字段固定）——指纹取自 `displayName + title + body`。
+    private static func notificationItemFixture(id: Int64, body: String) -> NotificationItem {
+        NotificationItem(
+            id: id,
+            bundleIdentifier: "com.apple.Mail",
+            appName: "邮件",
+            title: "新邮件",
+            subtitle: nil,
+            body: body,
+            deliveredDate: nil
+        )
+    }
+
+    /// 通知 store 夹具：**不取数、不监听、不碰 TCC、不碰真实通知库**——`reader` 只存一个不存在的路径
+    /// （`NotificationCenterReader.init(databasePath:)` 无 IO），用例只读那份内存台账。
+    private static func notificationStoreFixture() -> NotificationStore {
+        NotificationStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.notifications", shortID: "notifications"),
+            reader: NotificationCenterReader(databasePath: "/nonexistent/gourd-tests/notificationcenter.db")
+        )
+    }
+
     /// 模块接缝：DB 侧指纹取自 `NotificationItem`（`displayName + title + body`），
     /// 与 AX 侧的 `BannerEvent.fingerprint` 同一口径 —— 这条钉住「两条通道能对上」。
     func testNotificationFingerprintFromItemMatchesBannerEvent() {
