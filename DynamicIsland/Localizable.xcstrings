@@ -68306,54 +68306,6 @@
         }
       }
     },
-    "settings.features.effect.dynamicShelf" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shelf: the Shelf page in the expanded panel (drag files onto the notch to park them)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文件架：展开面板的架子页（把文件拖到刘海上暂存）"
-          }
-        }
-      }
-    },
-    "settings.features.effect.enableClipboardManager" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clipboard history: the Clipboard page in the expanded panel (its exact form depends on the display mode)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "剪贴板历史：展开面板的剪贴板页（形态取决于「显示方式」）"
-          }
-        }
-      }
-    },
-    "settings.features.effect.enableLockScreenWeatherWidget" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Weather widget on the lock screen"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "锁屏上的天气小组件"
-          }
-        }
-      }
-    },
     "settings.features.effect.enableNotes" : {
       "localizations" : {
         "en" : {
@@ -68370,38 +68322,6 @@
         }
       }
     },
-    "settings.features.effect.enableStatsFeature" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stats rings on the home strip (CPU / memory / GPU, one ring each)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "首页小组件带里的统计环（CPU / 内存 / GPU 三环，环心是百分比）"
-          }
-        }
-      }
-    },
-    "settings.features.effect.enableTerminalFeature" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Terminal page in the expanded panel"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "展开面板的终端页"
-          }
-        }
-      }
-    },
     "settings.features.effect.showCalendar" : {
       "localizations" : {
         "en" : {
@@ -68414,38 +68334,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "首页下方的全宽日历行 + 展开面板的「日历」页（同一个开关管两处）"
-          }
-        }
-      }
-    },
-    "settings.features.footer" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This section only registers the upstream master switches — flipping one here is the same as flipping it on its own settings page. Detailed options (display mode, shape, sources, …) still live there."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这一段只登记上游总开关，在这里拨动等于去上游那一页拨同一个开关；详细设置（显示方式、外形、来源等）仍在各自的上游设置页"
-          }
-        }
-      }
-    },
-    "settings.features.title" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Features"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "功能"
           }
         }
       }

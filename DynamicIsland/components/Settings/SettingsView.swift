@@ -5508,7 +5508,9 @@ struct LockScreenSettings: View {
             }
 
             Section {
-                Defaults.Toggle(key: .enableLockScreenWeatherWidget) {
+                // 键走 `lockScreenWeatherRowKey` 那一个常量（p5 / T4：功能段撤销后这一行是唯一入口，
+                // 用例按那个常量反查）；标签字面量保持原样（它是 catalog 里那条 key 的提取来源）。
+                Defaults.Toggle(key: Self.lockScreenWeatherRowKey) {
                     Text("Show lock screen weather")
                 }
                 .settingsHighlight(id: highlightID("Show lock screen weather"))
@@ -5831,6 +5833,21 @@ struct LockScreenSettings: View {
 }
 
 extension LockScreenSettings {
+    // MARK: - 锁屏天气那一行的登记（p5-home-blocks / T4：它是这个键的唯一入口）
+
+    /// 「Show lock screen weather」那一行的**开关键**（本节 `Section` 里那个 `Defaults.Toggle`）。
+    ///
+    /// **为什么要把这一个键提成常量**（p5 / T4）：`enableLockScreenWeatherWidget` 原先在「组件」页的
+    /// 「功能」段还挂着一张重复卡（同一个键、第二个开关），用户 2026-09-30 把那条判为重复项；
+    /// 功能段整段撤销之后**本页这一行是它在应用内唯一的入口**。本常量是给用例的锚：用例读这里，
+    /// 并断言组件页那两张生产表（`hostPanelRows` / `configControls`）里都没有这个键——两边一起钉住
+    /// 「唯一入口」这件事（口径与 `TabSelectionView.hostPanelGateKeys` / 组件页那几张表同一族）。
+    ///
+    /// 行里的**标签字面量 `"Show lock screen weather"` 保持原样**（`Text` 与 `settingsHighlight`
+    /// 各一处，一个字不改）：它是 catalog 里那条 key 的提取来源，改成间接引用会让本地化同步把这一条
+    /// 判成无人引用。
+    static let lockScreenWeatherRowKey = Defaults.Keys.enableLockScreenWeatherWidget
+
     private func enforceLockScreenGlassConsistency() {
         if lockScreenGlassStyle == .frosted && lockScreenGlassCustomizationMode != .standard {
             lockScreenGlassCustomizationMode = .standard

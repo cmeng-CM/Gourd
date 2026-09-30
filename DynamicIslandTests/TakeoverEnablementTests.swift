@@ -92,9 +92,12 @@
 //    截图 `.workflow/p2-home-fit/evidence/t5-ui-*.png`）。
 //
 //  P2 接管批次 / T6 追加（组件页的文案解析——功能卡段 + 接管卡的效果行）：
-//  - **功能卡的键解析**（P2 时七张；T6 收尾摘掉 `enableNotes` 那张后是**六张**）：数据源是生产表
-//    本身（`ModuleSettingsSection.featureCards`，为了这条
-//    用例它没写成 `private`）——`id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红；
+//  - **功能卡的键解析**（P2 时七张；T6 收尾摘掉 `enableNotes` 那张、2026-09-30 又摘掉
+//    `showCalendar` 一张；**p5 / T4 整段撤销**）：原数据源是生产表本身
+//    （`ModuleSettingsSection.featureCards`，为了这条用例它没写成 `private`）——
+//    `id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红。T4 把段、表与两个类型一起删了，
+//    这条用例因此改写成它的**负向承接形态**（`testFeatureSectionIsGoneAndItsOldKeysHaveASingleEntryPoint`：
+//    七条 key 已从 catalog 删除 + 五张卡的落点各自钉死 + 锁屏页那一行是唯一入口）；
 //  - **三个接管模块的名称 / 效果行 key 解析**：名称 key 取自真模块的 manifest（与 `label(for:)`
 //    同源）；
 //  - **回弹两档**用三个真模块的真源键再钉一遍（钉的是策略函数，不是视图接线——同见报告）。
@@ -146,7 +149,7 @@
 //
 //  p5-home-blocks / T5 追加（「面板组件」节的**宿主行**——模块行之外的另一半，docs/29 §做法 机制三 / D-07、D-08）：
 //  - **四条宿主行的键解析**（`testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys`）：数据源是生产表
-//    `ModuleSettingsSection.hostPanelRows`（与 `featureCards` 同口径）——顺序 / 键名 / `nameKey`
+//    `ModuleSettingsSection.hostPanelRows`（与本页其余几张生产表同口径）——顺序 / 键名 / `nameKey`
 //    四条上游字面量逐字钉死，`key` 必须是 `Defaults.Keys` 里那**一个对象**（`===`，不是另造的同名
 //    字面量）；用量（`enableLLMUsageFeature`）刻意不在表里（上一批「删页留码」的裁决，重新登记
 //    就是与已定决策矛盾）；
@@ -1023,7 +1026,7 @@ final class TakeoverEnablementTests: XCTestCase {
 
     /// **允许清单对生产事实**（docs/24-release-freeze.md §做法 机制四 / §验收标准 4）：迭代
     /// `ModuleSettingsSection.configControls` **这张生产表本身**（不是测试另抄的键表——同
-    /// `featureCards` / `effectKeysByModuleID` 口径），逐条断言：
+    /// `effectKeysByModuleID` 口径），逐条断言：
     ///
     /// ① 模块 id 是**已注册模块**的 id（模块改名 / 表里 id 写错 → 红）；
     /// ② config 键在**那个模块 manifest 的 `config.properties` 里**（键名写错一个字 → 红；
@@ -1394,7 +1397,7 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 因此这里的假句柄（`RecordingConfigHandle`，没有 manifest 默认值、`get` 给 nil）读到的是
     /// `false`：这正是「键名漂出 schema」的退化形态，**由上面那条解析用例把它钉死在 schema 内**。
     ///
-    /// 数据源是**生产表本身**（不是测试另抄的键表——同 `featureCards` / `effectKeysByModuleID` 口径）。
+    /// 数据源是**生产表本身**（不是测试另抄的键表——同 `effectKeysByModuleID` 口径）。
     func testMusicAlbumArtControlMatchesManifestAndCatalog() throws {
         let control = try XCTUnwrap(
             ModuleSettingsSection.configControls.first { $0.moduleID == MusicModule.moduleID && $0.key == "showAlbumArt" },
@@ -1919,66 +1922,105 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(registry.tabEntries.count, 0, "统计开着也不进 tab 投影（D-02）")
     }
 
-    // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
+    // MARK: - 组件页「功能」段已撤销（p5-home-blocks / T4；承接 T6 那条功能卡解析用例）
 
-    /// **五张**功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
-    /// 五条效果行 key + 五条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
-    /// （原七张里的 `enableNotes` 一张在 T6 收尾时摘掉——笔记页与 Notes tab 分支都已摘除、
-    /// 键惰性，卡片留着就是「拨了没反应」的那类；键与文案保留未删，判据见 `docs/09` §5.9 的
-    /// 判定表与 `docs/26` §已知限制 5。**2026-09-30 又摘掉 `showCalendar` 一张**：它是首页上的
-    /// 一个块，用户要求「日历也要在首页组件里开关」，于是搬进「首页组件」节成为 `HomeCalendarSettingsRow`
-    /// ——同一个键、只换了位置，见 `docs/28` §5 与紧随本条之后的那条用例。）
+    /// 「功能」段整段撤销（docs/29-home-blocks-and-panel.md §做法 机制三 / D-06），五张卡各自归位。
     ///
-    /// **数据源是生产表本身**（`ModuleSettingsSection.featureCards`——为了这条用例它没有写成
-    /// `private`）：表里把 `id` / `effectKey` / `nameKey` 写错、或文案没写进 catalog，这条都会红。
-    /// 测试另抄一份键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
+    /// 这条用例是 T6 的 `testFeatureCardKeysResolve` 的**迁移形态**：那张生产表（`featureCards`）连同
+    /// 它的两个类型（`FeatureCard` / `FeatureCardRow`）已随段一起从 `ModuleSettingsSection` 删除，
+    /// 「表里的键逐条解析得出来」这一半因此不再可断言（表不存在）；留下的是三件别处没钉住的事：
     ///
-    /// **语言无关**（T6 修复）：五条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
-    /// ——`XCTAssertResolves` 因此查的是宿主 bundle 的 **zh-Hans 那一份**，本机语言环境不再参与
-    /// （原先的 `Bundle.main.localizedString(...) != key` 在英语环境下会红）。
-    func testFeatureCardKeysResolve() {
-        let cards = ModuleSettingsSection.featureCards
-
-        XCTAssertEqual(
-            cards.map(\.id),
-            [
-                "enableClipboardManager", "enableLockScreenWeatherWidget",
-                "enableStatsFeature", "dynamicShelf", "enableTerminalFeature",
-            ],
-            "五行 = docs/20 §接口与数据形状 7 的七个上游键名去掉 `enableNotes` 与 `showCalendar` 后的五个，顺序与取值都不改"
-        )
-
-        for card in cards {
-            XCTAssertEqual(
-                card.effectKey,
-                "settings.features.effect.\(card.id)",
-                "\(card.id) 的效果行 key 必须是 `settings.features.effect.<键名>` 这一形态"
-            )
-            XCTAssertResolves(card.effectKey)
-            XCTAssertResolves(card.nameKey)
+    /// ① **七条文案 key 已随段一起从 catalog 消失**（段头 / 段脚注 + 五条
+    ///    `settings.features.effect.<键名>`）——用「zh-Hans 里解析不出来」判定。段在视图里、
+    ///    单测看不见，「它的文案 key 不再可达」是「段真的没了」唯一可自动判定的形态；
+    /// ② **五张卡各自的落点**（机制三那张枚举表逐条）：
+    ///    - 终端 / 暂存器 / 剪贴板 → 「面板组件」节的宿主行（`hostPanelRows`，T5 那张表）；
+    ///    - 统计 → 「首页组件」节的统计模块卡（接管真源 `enableStatsFeature` 本身就是它，
+    ///      且统计只声明 `.home` → 组件页里它只有那一张卡）；
+    ///    - 锁屏天气 → 锁屏设置页那一行（组件页不再提供开关）；
+    /// ③ **锁屏天气这个键只剩一处 UI**：锁屏页那一行的键就是 `Defaults.Keys.enableLockScreenWeatherWidget`
+    ///    那一个对象（`===`：另造同名字面量即红），标签字面量仍在 catalog 里解析得出（那一行还在）。
+    ///
+    /// 刻意**不**断的：`settings.features.effect.enableNotes` 与 `.showCalendar` 两条 key 仍在 catalog
+    /// 里（前者是上一批「恢复笔记入口」的可逆保留，后者是首页日历行搬走时留下的旧 key）——本批的
+    /// 删除清单只有那七条（docs/26 §已知限制 5）。
+    ///
+    /// **语言无关**（沿用 T6 修复）：负向断言与 `XCTAssertResolves` 取同一份 zh-Hans bundle，
+    /// 本机语言环境不参与。
+    ///
+    /// **边界如实记**：视图层面的接线（组件页真的只画两节）没有自动化断言——与
+    /// `testHostPanelRowKeysAreReallyInUseByTheTwoBackingViews` 那类「读生产常量」的口径同级，
+    /// 屏上那一半靠上屏截图验收（`.workflow/p5-home-blocks/evidence/t4-*.png`，控制器取证）。
+    func testFeatureSectionIsGoneAndItsOldKeysHaveASingleEntryPoint() {
+        // ① 七条 key 已从 catalog 里删掉（段与表一起撤销）
+        let removedKeys = [
+            "settings.features.title",
+            "settings.features.footer",
+            "settings.features.effect.enableClipboardManager",
+            "settings.features.effect.enableLockScreenWeatherWidget",
+            "settings.features.effect.enableStatsFeature",
+            "settings.features.effect.dynamicShelf",
+            "settings.features.effect.enableTerminalFeature",
+        ]
+        for key in removedKeys {
+            XCTAssertDoesNotResolve(key, "\(key) 仍解析得出 zh-Hans 文案——功能段的文案 key 没有随段一起删除")
         }
 
-        XCTAssertResolves("settings.features.title")
-        XCTAssertResolves("settings.features.footer")
+        // ②a 终端 / 暂存器 / 剪贴板：落点是「面板组件」节的宿主行（T5 那张表）
+        let hostIDs = Set(ModuleSettingsSection.hostPanelRows.map(\.id))
+        XCTAssertTrue(
+            hostIDs.isSuperset(of: ["dynamicShelf", "enableTerminalFeature", "enableClipboardManager"]),
+            "终端 / 暂存器 / 剪贴板三张由「面板组件」节的宿主行承接（D-06 的枚举表）"
+        )
+
+        // ②b 统计：落点是「首页组件」的统计模块卡——接管真源就是同一个键，它只声明 home
+        XCTAssertEqual(
+            StatsModule.takeoverEnableKey?.name,
+            Defaults.Keys.enableStatsFeature.name,
+            "统计卡的开关写的就是 `enableStatsFeature` —— 组件页不再需要第二张卡"
+        )
+        XCTAssertEqual(
+            StatsModule.manifest.surfaces,
+            [.home],
+            "统计只声明首页面 → 组件页里它只在「首页组件」有一张卡（不会在面板组件节再来一张）"
+        )
+
+        // ②c 锁屏天气：组件页两张表里都没有这个键（那张重复卡已删、也没有被改挂到别处）
+        let registeredOnComponentsPage = Set(ModuleSettingsSection.hostPanelRows.map(\.key.name))
+            .union(ModuleSettingsSection.configControls.map(\.key))
+        XCTAssertFalse(
+            registeredOnComponentsPage.contains(Defaults.Keys.enableLockScreenWeatherWidget.name),
+            "锁屏天气不再由「组件」页提供开关（重复卡已删，归位到锁屏设置页）"
+        )
+
+        // ③ 锁屏页那一行仍在：键是同一个对象，标签字面量在 catalog 里
+        XCTAssertTrue(
+            LockScreenSettings.lockScreenWeatherRowKey === Defaults.Keys.enableLockScreenWeatherWidget,
+            "锁屏页那一行的键必须是 `Defaults.Keys` 里那一个对象（另造同名字面量即红）"
+        )
+        XCTAssertResolves("Show lock screen weather")
     }
 
-    /// **首页日历行**（`HomeCalendarSettingsRow`）的两个 key 能解析，且它**不在** `featureCards` 里。
+    /// **首页日历行**（`HomeCalendarSettingsRow`）的两个 key 能解析，且它**不在**「面板组件」的宿主行表里。
     ///
     /// 用户 2026-09-30：「首页的日历组件也要在首页组件控制区域进行开关控制」——它从「功能」段那张
-    /// 卡搬进「首页组件」节，**键仍是同一个 `showCalendar`**（没有第二份状态）。这条用例钉两件事：
-    /// ① 文案 key 能解析；② 它**没有**留在功能卡表里（两边都挂 = 同一页两个开关管一件事）。
-    func testHomeCalendarSettingsRowKeysResolveAndLeftFeatureCards() {
+    /// 卡搬进「首页组件」节，**键仍是同一个 `showCalendar`**（没有第二份状态）。这条用例钉三件事：
+    /// ① 文案 key 能解析；② 它的效果行走 `settings.modules.*` 这一族（不再是功能段的
+    /// `settings.features.effect.<键名>`）；③ 它**没有挂在别的表上**（两边都挂 = 同一页两个开关管一件事）
+    /// ——功能段那张表已随段删除（见上一条用例），剩下可查的是「面板组件」的宿主行表（日历不是面板
+    /// 宿主元素）。
+    func testHomeCalendarSettingsRowKeysResolveAndItIsNotAHostPanelRow() {
         XCTAssertResolves(HomeCalendarSettingsRow.effectKey)
         XCTAssertResolves(HomeCalendarSettingsRow.nameKey)
 
-        XCTAssertFalse(
-            ModuleSettingsSection.featureCards.contains { $0.id == "showCalendar" },
-            "首页日历行搬进「首页组件」节之后，功能卡表里不应再有 showCalendar 那一张"
-        )
         XCTAssertEqual(
             HomeCalendarSettingsRow.effectKey,
             "settings.modules.calendarRow.effect",
             "效果行 key 的形态与本页其余组件文案一致（settings.modules.*）"
+        )
+        XCTAssertFalse(
+            ModuleSettingsSection.hostPanelRows.contains { $0.key.name == Defaults.Keys.showCalendar.name },
+            "首页日历行不是面板宿主元素（它在「首页组件」节末），不该出现在宿主行表里"
         )
     }
 
@@ -1988,13 +2030,13 @@ final class TakeoverEnablementTests: XCTestCase {
     /// D-07、D-08）。
     ///
     /// 数据源是生产表本身（`ModuleSettingsSection.hostPanelRows`——为了这条用例它没写成 `private`，
-    /// 与 `featureCards` / `effectKeysByModuleID` / `configControls` 同一条口径）：表里把 id / 键 /
+    /// 与 `effectKeysByModuleID` / `configControls` 同一条口径）：表里把 id / 键 /
     /// 文案 key / 顺序写错，这条都会红。
     ///
     /// 四条各自钉三件事：
     /// - **顺序与键名**：枚举表那四条 = 暂存器 / 终端 / 剪贴板 / 取色器——面板上由上游 `Defaults`
     ///   直接门控、不经模块注册表的 tab / 图标就这四个，顺序就是节里那四行的顺序；
-    /// - **`id` 与键名同源**（与 `FeatureCard` 同口径：id 就是上游键名），且 `key` 就是
+    /// - **`id` 与键名同源**（id 就是上游键名），且 `key` 就是
     ///   `Defaults.Keys` 里那**一个对象**（`===`：将来谁把它换成另造的同名字面量，这条红）；
     /// - **`nameKey` 在 zh-Hans 里解析得出**，且就是那四条上游字面量：名称写串成**另一条已存在的
     ///   key**（比如指到 `Enable Notes`）时解析断言抓不到，字面量断言抓得到。
@@ -2016,7 +2058,7 @@ final class TakeoverEnablementTests: XCTestCase {
         )
 
         for row in rows {
-            XCTAssertEqual(row.key.name, row.id, "id 就是上游键名（与 featureCards 同口径）")
+            XCTAssertEqual(row.key.name, row.id, "id 就是上游键名")
             XCTAssertResolves(row.nameKey)
         }
 
@@ -2742,6 +2784,33 @@ final class TakeoverEnablementTests: XCTestCase {
         let localized = bundle.localizedString(forKey: key, value: nil, table: nil)
         XCTAssertNotEqual(localized, key, "\(key) 没解析出 zh-Hans 文案（catalog 未编进宿主 bundle？）", file: file, line: line)
         XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串", file: file, line: line)
+    }
+
+    /// 本地化 key **不能**在宿主 bundle 的 zh-Hans 那一份里解析出文案（`Bundle` 查不到时原样返回 key，
+    /// 据此判定）——「这条 key 已从 catalog 里删掉」这一条的判据。
+    ///
+    /// 与 `XCTAssertResolves` 取同一份 bundle（语言锁定的理由见那里），只是断言方向相反。
+    /// 用途是钉**负向**事实（p5 / T4：「功能」段那七条文案 key 已随段删除）——段本身在视图里、
+    /// 单测够不到，可自动判定的形态就是「它的文案 key 不再可达」。
+    private func XCTAssertDoesNotResolve(
+        _ key: String,
+        _ message: String = "",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let localizationPath = Bundle.main.path(forResource: "zh-Hans", ofType: "lproj"),
+              let bundle = Bundle(path: localizationPath) else {
+            XCTFail("宿主 bundle 里找不到 zh-Hans.lproj（拿不到锁语言的解析口径）", file: file, line: line)
+            return
+        }
+        let localized = bundle.localizedString(forKey: key, value: nil, table: nil)
+        XCTAssertEqual(
+            localized,
+            key,
+            message.isEmpty ? "\(key) 仍解析得出文案（应当已从 catalog 删除）" : message,
+            file: file,
+            line: line
+        )
     }
 }
 

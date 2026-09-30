@@ -49,19 +49,20 @@
 //    读改写字典）；activate 失败的回弹值由 `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)`
 //    给出：返回 `nil`（接管模块）**什么都不写**——它的偏好就是上游总开关，回弹等于「因为模块
 //    激活失败，把用户的功能关了」；返回 `false`（非接管）才把用户的开关拨回去（D-13）。
-//  - **新增「功能」段**：**尚未模块化**的上游功能各一行（图标 + 名称 + 一行效果 + 开关），
+//  - **新增「功能」段**（**p5 / T4 已整段撤销，见文件末尾的 T4 增量**）：**尚未模块化**的上游功能
+//    各一行（图标 + 名称 + 一行效果 + 开关），
 //    开关直接读写那一个 `Defaults` 键——纯登记，不改渲染归属；详细设置仍在上游那一页，
 //    卡面文案（段脚注）写明这一点（docs/20 §做法 机制三 / D-07）。
 //    **T6 收尾**：原七行里的**笔记**那一张（`Enable Notes`）**摘掉**——笔记页与
 //    `TabSelectionView` 的 Notes tab 分支都已摘除、键惰性，卡片留着就是「拨了没反应」的那类
-//    （键名与判定见 docs/09 §5.9 的判定表）；段内今天是**六行**，键与文案（名称 / 效果行）
+//    （键名与判定见 docs/09 §5.9 的判定表）；段内最终是**六行**，键与文案（名称 / 效果行）
 //    都保留未删，恢复笔记入口时把那一行加回本表即复活。
 //  - **顺序节收敛**：接管后首页块只认模块 id，内置块里只剩首页日历行且它**不在 strip 里**
 //    （全宽日历行，不进顺序表），因此不再生成 `builtin.music` / `builtin.mirror` 两行。
 //
 //  P2 接管批次 / T6 **修复**：「效果 / 出现位置」的映射（原先是 `ModuleSettingsCard` 私有的
 //  `effectKey(for:)` switch）提成 `ModuleSettingsSection.effectKeysByModuleID` 这张 **internal
-//  静态表**，`effectKey(for:)` 只做一次查表——理由与 `featureCards` 逐字相同：映射表自己写错一个字
+//  静态表**，`effectKey(for:)` 只做一次查表——理由与 `configControls` 逐字相同：映射表自己写错一个字
 //  必须能被用例抓到（上一轮「把 `settings.modules.effect.music` 改成错字」是全绿的，
 //  见 T6 报告 §3 变异 ②b）。
 //
@@ -131,6 +132,21 @@
 //    config 控件 / 上游管理 / 失败态）——只是每张卡多了「上移 / 下移」两个按钮（沿用既有
 //    `Move Up` / `Move Down` 文案），并知道自己属于哪一节。
 //
+//  p5 批次 / T4 增量（**撤销「功能」段**，docs/29-home-blocks-and-panel.md §做法 机制三 / D-06）：
+//  本页从「两节 + 功能段」收敛成**只有两节**——`featuresSection`、`featureCards` 表、
+//  `FeatureCard` 与 `FeatureCardRow` 一并删除，五张卡各自回到真正管它的那一页：
+//  - **统计** `enableStatsFeature`：不再有第二张卡（「首页组件」节的统计模块卡写的就是这个键，
+//    它的接管真源见 `StatsModule.takeoverEnableKey`）；
+//  - **锁屏天气** `enableLockScreenWeatherWidget`：组件页不再提供开关——锁屏设置页那一行
+//    （`SettingsView` 的 `LockScreenSettings`）早就存在，它是应用内**唯一**的入口；
+//  - **终端 / 暂存器 / 剪贴板**：承接方是 T5 的四条宿主行（`hostPanelRows`，它们进的是
+//    「面板组件」节）——顺序上先有宿主行、再撤功能段，中途不会出现「某个开关没有落点」。
+//  随之删除的还有七条**不再可达**的文案 key（`settings.features.title` / `.footer` 与五条
+//  `settings.features.effect.<键名>`）；用例改写为「功能段那七条 key 已从 catalog 消失 + 五张卡的
+//  落点各自钉死 + 锁屏页那一行是唯一入口」。页顶 `settings.modules.builtinHint` 那句提示的**取值
+//  上一批就已改成指向「首页组件」节末尾那一行**（文案本身不动），本次只把代码注释里那几处
+//  仍指向「功能段」的说法改掉（`body` 顶部与 `homeRows` 各一处）。
+//
 
 import Defaults
 import SwiftUI
@@ -159,8 +175,8 @@ struct ModuleSettingsSection: View {
 
     var body: some View {
         Form {
-            // 内置块里只剩首页日历行不在两节的名单里（音乐 / 镜子已是模块）——docs/17
-            // §已知限制 5 的缓解措施：日历行由上游 `Defaults` 键门控，开关在下方「功能」段。
+            // 内置块里只剩首页日历行（音乐 / 镜子已是模块）——它**就在本页**「首页组件」节的最后一行
+            // （`HomeCalendarSettingsRow`：有开关、没有 ↑↓）。docs/17 §已知限制 5 的缓解措施。
             Section {
                 Text(LocalizedStringKey("settings.modules.builtinHint"))
                     .font(.caption)
@@ -174,66 +190,13 @@ struct ModuleSettingsSection: View {
 
             surfaceSection(.panel)
 
-            // 「功能」段**跟在两节之后**（D-07：先看得见模块、再看得见还没模块化的上游功能）。
+            // **本页从 p5 / T4 起只有这两节**（D-06）：「功能」段（`featuresSection` 与 `featureCards`
+            // 表）整段撤销——五张卡各自回到真正管它的那一页：终端 / 暂存器 / 剪贴板归本节「面板组件」的
+            // 宿主行（T5），统计归「首页组件」的统计模块卡（同一个键），锁屏天气归锁屏设置页那一行。
             // 顺序节已被两节吸收（每行自己的上移 / 下移），不再单列一节。
-            featuresSection
         }
         .navigationTitle(Text(LocalizedStringKey("settings.modules.title")))
     }
-
-    // MARK: 功能（上游总开关的登记表）
-
-    /// **五张**功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
-    /// （T6 收尾摘掉了**笔记**那一张（`Enable Notes`）——它是原七行里唯一「拨了看不到任何变化」
-    /// 的一行，判据见 docs/09 §5.9 的判定表与 docs/26 §已知限制 5；键与文案保留未删。
-    /// **2026-09-30 又摘掉 `showCalendar` 一张**：它是首页上的一个块（全宽日历行），用户要求
-    /// 「日历也要在首页组件里开关」，于是搬进「首页组件」节成为 `HomeCalendarSettingsRow`——同一个键，
-    /// 换了位置，见 docs/28 §5。）
-    ///
-    /// `nameKey` **逐字沿用上游设置页那一项的名称字面量**（在 `SettingsView.swift` 里那一项
-    /// 旁边取证）——用户在别处认识的词与这里看到的必须是同一个 key，不另起说法
-    /// （docs/20 §接口与数据形状 7）。
-    ///
-    /// **不是 `private`**（文档 §7 写的是 `private struct FeatureCard`）：解析用例直接读这张表
-    /// （`TakeoverEnablementTests.testFeatureCardKeysResolve`），表侧把键写错才会红——测试另抄
-    /// 一份键表的话，「表写错、文案对」这条谁都发现不了。
-    static let featureCards: [FeatureCard] = [
-        FeatureCard(
-            id: "enableClipboardManager",
-            nameKey: "Enable Clipboard Manager",
-            symbolName: "clipboard",
-            key: .enableClipboardManager,
-            effectKey: "settings.features.effect.enableClipboardManager"
-        ),
-        FeatureCard(
-            id: "enableLockScreenWeatherWidget",
-            nameKey: "Show lock screen weather",
-            symbolName: "cloud.sun.fill",
-            key: .enableLockScreenWeatherWidget,
-            effectKey: "settings.features.effect.enableLockScreenWeatherWidget"
-        ),
-        FeatureCard(
-            id: "enableStatsFeature",
-            nameKey: "Enable system stats monitoring",
-            symbolName: "chart.xyaxis.line",
-            key: .enableStatsFeature,
-            effectKey: "settings.features.effect.enableStatsFeature"
-        ),
-        FeatureCard(
-            id: "dynamicShelf",
-            nameKey: "Enable shelf",
-            symbolName: "tray.and.arrow.down",
-            key: .dynamicShelf,
-            effectKey: "settings.features.effect.dynamicShelf"
-        ),
-        FeatureCard(
-            id: "enableTerminalFeature",
-            nameKey: "Enable terminal",
-            symbolName: "apple.terminal",
-            key: .enableTerminalFeature,
-            effectKey: "settings.features.effect.enableTerminalFeature"
-        ),
-    ]
 
     // MARK: 面板组件节的宿主行（上游键的登记表）
 
@@ -247,7 +210,7 @@ struct ModuleSettingsSection: View {
     /// 1. **名称逐字沿用上游设置页那一项的字面量**（`Enable shelf` / `Enable terminal` /
     ///    `Enable Clipboard Manager` / `Enable Color Picker`——四条 key 都已在
     ///    `Localizable.xcstrings` 里，取值处就在 `SettingsView.swift` 那四个 `Text(...)` 旁）：
-    ///    用户在别处认识的词与这里看到的必须是同一个 key，不另起说法（与 `featureCards` 同一条口径）。
+    ///    用户在别处认识的词与这里看到的必须是同一个 key，不另起说法（与本页其余几张生产表同一条口径）。
     /// 2. **只有开关、没有 ↑↓**：这四个宿主元素在面板上的先后**写死在 `TabSelectionView` 的拼装
     ///    顺序**里，给两个点不动的箭头比不给更坏（与 `HomeCalendarSettingsRow` 同一条先例，
     ///    docs/28 §5）。
@@ -258,7 +221,7 @@ struct ModuleSettingsSection: View {
     ///    用量上一批「删页留码」不进本节、齿轮与三个状态指示器在各自设置页、扩展 tab 在扩展设置页
     ///    （枚举表逐条写明）。
     ///
-    /// **表不是 `private`**（与 `featureCards` / `effectKeysByModuleID` / `configControls` 同口径）：
+    /// **表不是 `private`**（与 `effectKeysByModuleID` / `configControls` 同口径）：
     /// 解析用例直接读这张表——表侧把 id / 键 / 文案 key 写错才会红。
     static let hostPanelRows: [HostSurfaceRow] = [
         HostSurfaceRow(
@@ -308,7 +271,7 @@ struct ModuleSettingsSection: View {
     /// 写成错字才会红——上一轮这段映射是宿于 `private struct ModuleSettingsCard` 的
     /// `private static func effectKey(for:)` 里的 switch，用例够不到，于是「把
     /// `settings.modules.effect.music` 改成错字」全绿（T6 报告 §3 变异 ②b），与本文件
-    /// `featureCards` 同一条口径（表侧写错必须能被用例抓到）。
+    /// `configControls` 同一条口径（表侧写错必须能被用例抓到）。
     ///
     /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
     static let effectKeysByModuleID: [String: String] = [
@@ -327,7 +290,7 @@ struct ModuleSettingsSection: View {
     /// **不是通用 config 渲染器**（按 manifest schema 自动生成控件）——那是另一个批次的活
     /// （docs/24 §明确不做：`list` / `enum` / `appPicker` 的「哪些键是真源」未定）。
     /// 这里是**允许清单**：一张**逐字段写死**的表（模块 id / config 键 / 类型与区间 / 文案 key），
-    /// 卡片按 `moduleID` 命中后渲染对应控件。判据与 `effectKeysByModuleID` / `featureCards` 逐字同款：
+    /// 卡片按 `moduleID` 命中后渲染对应控件。判据与 `effectKeysByModuleID` 逐字同款：
     /// **表不是 `private`**，解析用例直接读这一份生产表——把模块 id 或键名写错一个字、
     /// 类型与 manifest 声明不符、或文案没进 catalog，必须有用例红（表侧写错必须能被用例抓到）。
     ///
@@ -450,20 +413,6 @@ struct ModuleSettingsSection: View {
         return registered.filter { !editable.contains($0) }.sorted()
     }
 
-    private var featuresSection: some View {
-        Section {
-            ForEach(Self.featureCards) { card in
-                FeatureCardRow(card: card)
-            }
-        } header: {
-            Text(LocalizedStringKey("settings.features.title"))
-        } footer: {
-            Text(LocalizedStringKey("settings.features.footer"))
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     // MARK: 两节的行（首页组件 / 面板组件）
 
     /// 两节里的一行：一个**声明了本节 surface** 的模块（P3 / T3）。
@@ -495,7 +444,7 @@ struct ModuleSettingsSection: View {
     /// **内置块今天为空**（「内置块 + 声明 `home` 的模块」这句话在今天的产品里只剩后半句）：
     /// strip 上的音乐 / 镜子已是模块块，唯一的内置块是**首页日历行**——它是 strip 之外的全宽行
     /// （`HomeCalendarSettingsRow`），顺序固定在最下、不在 `homeBlockOrder` 的语义里（给它两个点不动的
-    /// 上移 / 下移比不列它更坏），它的开关仍在下面「功能」段（`showCalendar` 那张卡）。
+    /// 上移 / 下移比不列它更坏），它的开关就渲染在**本节的末尾**（`surfaceSection(.home)` 里那一行）。
     /// 将来若有内置块真的进 strip，在 `homeRows` 里补一行、并让 `HomeBlockOrdering` 认它即可。
     private var homeRows: [SurfaceRow] {
         HomeBlockOrdering.sorted(
@@ -748,14 +697,15 @@ enum ModuleSurfaceToggleWriter {
 /// 「面板组件」节的一条**宿主行**（p5 / T5，docs/29-home-blocks-and-panel.md §做法 机制三 / D-07）：
 /// 面板上一个由上游 `Defaults` 直接门控的 tab / 图标（暂存器 / 终端 / 剪贴板 / 取色器）。
 ///
-/// 与 `FeatureCard` 同族（登记一个上游键、开关直接读写它；没有模块、没有内核状态），
+/// 与 `HomeCalendarSettingsRow` 同族（登记一个上游键、开关直接读写它；没有模块、没有内核状态），
 /// 差别只在**渲染位置**：这里渲染在「面板组件」节里，行形态与模块卡同形（图标 chip + 名称 + 开关），
 /// 但没有徽标 / 摘要 / 效果行 / 失败态——它后面没有模块，也就没有那些维度。
+/// （T4 撤销「功能」段之前，这一族里还有一段 `FeatureCard` 登记行；那段已整体删除，本表是它的承接方。）
 ///
 /// **不是 `private`**：解析用例直接读 `ModuleSettingsSection.hostPanelRows` 这张表
-/// （与 `FeatureCard` 同一条口径——表侧写错必须能被用例抓到）。
+/// （表侧写错必须能被用例抓到）。
 struct HostSurfaceRow: Identifiable {
-    /// 稳定 id = **上游键名**（与 `FeatureCard.id` 同口径）：用例按它反查「键真的在用」。
+    /// 稳定 id = **上游键名**：用例按它反查「键真的在用」。
     let id: String
     /// 上游设置页那一项的名称字面量（**逐字沿用**，见 `hostPanelRows` 的口径 1）。
     let nameKey: String
@@ -763,7 +713,8 @@ struct HostSurfaceRow: Identifiable {
     /// 剪贴板 `doc.on.clipboard`、取色器 `eyedropper`）——这一行管的就是面板元素，用户拨完开关
     /// 看的是面板，图标因此跟面板那一枚走（不是设置页侧栏的图标）。
     let symbolName: String
-    /// 这个宿主元素的总开关——裸读写它（动态键装不上 `@Default`，与 `FeatureCard.key` 同一个理由）。
+    /// 这个宿主元素的总开关——裸读写它（动态键装不上 `@Default`，与已删除的 `FeatureCard.key`
+    /// 同一个理由）。
     let key: Defaults.Key<Bool>
 }
 
@@ -783,8 +734,8 @@ private struct HostSurfaceRowView: View {
 
             Spacer(minLength: 12)
 
-            // **裸 `Binding`，不是 `Defaults.Toggle`**：与 `FeatureCardRow` 同款——本行只登记一个
-            // 上游键，开关直读写它。代价也是那一天那条已知限制：本页开着时从上游设置页改同一个键，
+            // **裸 `Binding`，不是 `Defaults.Toggle`**：本行只登记一个
+            // 上游键，开关直读写它。代价是那条已知限制：本页开着时从上游设置页改同一个键，
             // 这一行不即时刷新（关掉重开本页即可）——面板那一侧的即时生效不靠这里，靠的是
             // `TabSelectionView` / `DynamicIslandHeader` 各自的 `@Default` 观察。
             Toggle(isOn: Binding(
@@ -798,28 +749,6 @@ private struct HostSurfaceRowView: View {
         }
         .padding(.vertical, 4)
     }
-}
-
-// MARK: - 功能卡（上游键的登记行）
-
-/// 一段上游功能的登记行：**开关就是那个 `Defaults` 键**，没有模块、没有内核状态
-/// （docs/20 §接口与数据形状 7）。
-///
-/// **本类型不是 `private`**（文档 §7 的片段写的是 `private struct FeatureCard`）：解析用例
-/// 直接读 `ModuleSettingsSection.featureCards`（同一张表），表侧把键写错才会红——测试另抄一份
-/// 键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
-struct FeatureCard: Identifiable {
-    /// 上游键名，同时是效果文案 key 的后缀。
-    let id: String
-    /// 上游设置页里的同一个名称（`String(localized:)` 同源）；**本段不另起说法**。
-    let nameKey: String
-    /// SF Symbol 名（与上游那一项所在设置页的图标同一套：剪贴板 / 日历 / 天气 / 统计 / 架子 /
-    /// 终端）。
-    let symbolName: String
-    /// 这个功能的总开关——裸 `Binding` 直读写它（动态键无法用 `@Default`，§已知限制 8）。
-    let key: Defaults.Key<Bool>
-    /// `settings.features.effect.<id>`。
-    let effectKey: String
 }
 
 // MARK: - 模块 config 控件（允许清单）
@@ -847,7 +776,7 @@ struct FeatureCard: Identifiable {
 /// `get` 给 nil：控件回落 0 / false / "" / 空表，而**键名漂了要用例红**（解析用例逐条对 manifest），
 /// 不是让用户看一条错误提示。
 ///
-/// **本类型不是 `private`**：解析用例直接读这张表（与 `FeatureCard` 同一条口径）。
+/// **本类型不是 `private`**：解析用例直接读这张表（与本页其余生产表同一条口径）。
 struct ModuleConfigControl: Identifiable {
     /// 控件支持的五种类型。区间是**模块侧的既有常量**（口径 3），`nil` = 模块侧本来就没夹取区间。
     /// `integer` / `number` 分开是因为**写盘的 JSON 类型不同**（见类型注释）；
@@ -1313,48 +1242,6 @@ private struct ModuleConfigControlRow: View {
     }
 }
 
-/// 功能卡的一行：图标 chip + 名称 + 一行「效果 / 出现位置」+ 开关。
-///
-/// 排版与组件卡逐字同形（chip 在左、开关在右、行内边距一致），但**没有 surfaces 徽标、
-/// 没有摘要、没有失败态**：这里没有模块，也就没有「激活 / 失败」这一维（D-07）。
-private struct FeatureCardRow: View {
-    let card: FeatureCard
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ModuleSymbolChip(symbolName: card.symbolName)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey(card.nameKey))
-                    .fontWeight(.medium)
-
-                // 「效果 / 出现位置」：这一段只登记上游总开关，卡面必须写清「拨下去会看到什么」，
-                // 否则又是「打开开关但界面没变化」的错觉（docs/20 §做法 机制三）。
-                Text(LocalizedStringKey(card.effectKey))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 12)
-
-            // **裸 `Binding`，不是 `@Default`**：`Defaults.Key` 是运行期取值，`@Default` 装不上；
-            // 为六行各挂一个订阅不值当。代价见 docs/20 §已知限制 8：本页开着时从上游设置页改同键，
-            // 这张卡不即时刷新（关掉重开本页即可）。
-            Toggle(isOn: Binding(
-                get: { Defaults[card.key] },
-                set: { Defaults[card.key] = $0 }
-            )) {
-                Text(LocalizedStringKey(card.nameKey))
-            }
-            .labelsHidden()
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-// MARK: - 首页块顺序的一行
-
 // MARK: - 图标 chip
 
 /// 组件卡与顺序行共用的图标 chip（24×24、accent 底的圆角方块）。
@@ -1390,15 +1277,16 @@ private struct ModuleSymbolChip: View {
 /// 开关读写上游那一个 `showCalendar`：**同一个键同时管首页这条行与展开面板的「日历」页**
 /// （docs/26 §做法 机制四），效果行因此必须把两处都写出来。
 ///
-/// 本行原先只是「功能」段里的一张卡（`featureCards` 的 `showCalendar`），用户 2026-09-30 要求
+/// 本行原先只是「功能」段里的一张卡（那张表已在 p5 / T4 随整段撤销），用户 2026-09-30 要求
 /// 「首页的日历组件也要在首页组件控制区域进行开关控制」之后搬到这里——**键没有变、也没有第二份状态**。
 ///
-/// **两个 key 是 `static let`（不是内联字面量）**：解析用例直接读它们，与本文件其余两张表的
+/// **两个 key 是 `static let`（不是内联字面量）**：解析用例直接读它们，与本文件其余几张表的
 /// 口径一致（表侧写错字才会红）。
 struct HomeCalendarSettingsRow: View {
     /// 名称 key：**逐字沿用上游设置页那一项的字面量**（与其余组件卡的取名口径一致）。
     static let nameKey = "Show calendar"
-    /// 效果行 key（随本行从「功能」段搬进「首页组件」段）。
+    /// 效果行 key（搬进「首页组件」节时改取 `settings.modules.*` 这一族，不再用功能段的
+    /// `settings.features.effect.<键名>`——那一族的五条已随功能段删除）。
     static let effectKey = "settings.modules.calendarRow.effect"
 
     @Default(.showCalendar) private var showCalendar
