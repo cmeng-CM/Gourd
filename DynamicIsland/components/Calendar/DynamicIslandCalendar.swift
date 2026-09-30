@@ -664,8 +664,8 @@ enum MonthGridLayout {
     }
 }
 
-/// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（今天 / 选中高亮 / 有事件的小圆点）
-/// + 按选中日居中**。
+/// 可复用的整月网格：**月份标题 + ‹ › 翻月 + 星期表头 + 7 列日格（公历数字 + 第二行的农历 / 节假日
+/// + 今天 / 选中高亮 / 有事件的小圆点）+ 按选中日居中**。
 ///
 /// 从 `StandaloneCalendarView` 左栏**逐字抽出**（只抽不重写）：独立日历面板与首页的整行日历共用这
 /// 一份实现——月历逻辑只有一处，不再复制第二份（复制必然漂移）。
@@ -676,6 +676,9 @@ enum MonthGridLayout {
 /// **事件标记的数据源由调用方传入**（`monthEvents`，一份**按月**的快照、条目已过滤）：本视图不读
 /// `CalendarManager.shared`，因为同一个网格有两个宿主（首页日历行 / 独立面板），谁读全局单例都会让
 /// 这份实现绑死在宿主的数据口径上，也没法用固定事件直接测「标记画在哪几天」。
+///
+/// **T4 起同一份快照还供给日格的第二行**（农历 + 节假日，见 `subtitleText(for:cellWidth:)`）：
+/// 两个宿主因此自动都拿到系统数据（机制四「只改一处」），不需要各接一条新链路。
 ///
 /// 数据是**按月**抓的（窗口 = 本视图显示月份的整张网格，见 `MonthGridLayout.monthWindow`），
 /// 因此本视图多了一个出口 `onDisplayedMonthChange`：显示月份一变就通知宿主去抓那个月
@@ -701,12 +704,18 @@ struct MonthGridView: View {
     /// 日格网格上下那两条**滚动提示渐变**（`datePicker` 里的两处 `LinearGradient`）画不画。
     ///
     /// 这两条渐变只服务于「网格高于视口、可以滚」的场景，是滚动提示而不是装饰（2026-09-30 D-01）。
-    /// **默认 `true` = 独立日历的既有现状**（`StandaloneCalendarView` 的左栏网格可滚，提示有用）；
-    /// 首页日历行传 `false`——那一排的行高按「一屏显示整月」反推（`HomeCalendarRow.rowHeight` 的算式），
-    /// 网格根本不滚，两条渐变在纯黑面板上就只是两条脏线（用户 2026-09-30 实测反馈第 1 条）。
+    /// 用户对同一处脏线**提了第二次**（2026-09-30 第 5 条「日历面板还存在两条线的遮罩」）后，
+    /// **两个宿主都传 `false`**（D-04）：
+    /// - 首页日历行（`HomeCalendarRow`）：行高按「一屏显示整月」反推（`HomeCalendarRow.rowHeight`
+    ///   的算式），网格根本不滚——渐变在这里从来不是提示；
+    /// - 独立日历面板（`StandaloneCalendarView`）：用户实测那两条线在纯黑面板上只是两处脏线，
+    ///   遮挡了月历格里的第二行（农历 / 节假日）。
+    ///
+    /// **默认值仍是 `true`**（本视图参数保留）：谁都不再依赖它，留着是给 `#Preview` / 将来第三个宿主
+    /// 用的（改默认值会让「不看这一行调用方就多两条线」变成隐式行为）。
     ///
     /// **只切「画不画」，不切样式与位置**：渐变的颜色 / 16pt 高度 / 上下贴边都不随它变
-    ///（改样式是另一件事，会把独立日历的提示也一起改掉）。
+    ///（改样式是另一件事，会把余下这条支路的提示也一起改掉）。
     var showsScrollFades: Bool = true
 
     /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
@@ -763,10 +772,13 @@ struct MonthGridView: View {
     var body: some View {
         GeometryReader { geometry in
             let pickerViewportHeight = max(96, geometry.size.height - 56)
+            // 7 列日格的**单格宽**（与 `datePicker` 里的网格同一算式：两侧各 6pt 内边距 + 6 列 × 6pt
+            // 列距，其余 7 等分）——第二行（农历 / 节假日）放不放得下按它判（`MonthCellSubtitle`）。
+            let cellWidth = max(0, (geometry.size.width - 36) / 7)
 
             VStack(alignment: .leading, spacing: 10) {
                 header
-                datePicker(viewportHeight: pickerViewportHeight)
+                datePicker(viewportHeight: pickerViewportHeight, cellWidth: cellWidth)
                     .frame(height: pickerViewportHeight)
                     .clipped()
             }
@@ -825,7 +837,10 @@ struct MonthGridView: View {
     }
 
     /// 星期表头 + 日格网格（原 `leftPickerPane` 的中下两段，逐字抽出）。
-    private func datePicker(viewportHeight: CGFloat) -> some View {
+    ///
+    /// `cellWidth` 只服务于日格第二行（农历 / 节假日）的**放不下就不画**判据：它由 `body` 按
+    /// 「网格宽 → 7 等分」算好后传进来，视图内不另算一份（两处各算一次必然漂）。
+    private func datePicker(viewportHeight: CGFloat, cellWidth: CGFloat) -> some View {
         ScrollViewReader { proxy in
             VStack(spacing: 6) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
@@ -842,7 +857,7 @@ struct MonthGridView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
                             ForEach(MonthGridLayout.days(forMonth: displayedMonth, calendar: calendar), id: \.self) { day in
-                                dayCell(for: day)
+                                dayCell(for: day, cellWidth: cellWidth)
                                     .id(calendar.startOfDay(for: day))
                             }
                         }
@@ -853,7 +868,7 @@ struct MonthGridView: View {
                         centerDatePicker(on: target, proxy: proxy)
                     }
 
-                    // 上下两条滚动提示渐变（`showsScrollFades`，见该属性的注释）：首页日历行不传
+                    // 上下两条滚动提示渐变（`showsScrollFades`，见该属性的注释）：两个宿主现在都不传
                     // → 这里一条都不生成（不占位、不参与布局，网格几何因此与画时逐字相同）。
                     if showsScrollFades {
                         LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
@@ -876,32 +891,86 @@ struct MonthGridView: View {
         .clipped()
     }
 
-    private func dayCell(for day: Date) -> some View {
+    /// 日格的**三个高度刻度**（T4 新增第二行后仍是这一份，别改成会撑高的写法）：
+    /// 日格恒 30pt（`HomeCalendarRow` 的行高算式 `36 × 周数 + 78` 依赖这个 30）、第一行（数字 +
+    /// 选中圆）与第二行（农历 / 节假日）各自的高度——三者互相咬合：`19 + 11 == 30`。
+    ///
+    /// **为什么有两档选中圆**：30pt 的日格里塞下「圆 + 一行 9pt 文字」时，圆的最大直径是
+    /// `30 − 11 = 19`——28pt 的圆（单行档的现状）与第二行在几何上必然重叠（圆的下弧会切进文字）。
+    /// 单行档（格子放不下第二行时）继续用 28pt，两个档位各自的圆都**完整落在日格内**
+    ///（不溢出、不被 ScrollView 裁掉顶边——这也是不采用「28pt 圆 + 溢出顶边」那条路的原因：
+    /// 网格滚到顶时第一行的圆会被裁平）。
+    private static let dayCellHeight: CGFloat = 30
+    private static let singleLineSelectionDiameter: CGFloat = 28
+    private static let twoLineSelectionDiameter: CGFloat = 19
+    /// 第二行的行框高度：9pt 字（CJK 的 ink 约 8.8pt）放得下，且与选中圆加起来恰好 30。
+    /// **显式定高**：PingFang（CJK fallback）的行高比 SF Pro 宽，交给它自然排版会撑破 30pt。
+    private static let subtitleLineHeight: CGFloat = 11
+
+    /// 这一天的**第二行**：有节假日名就显示它，否则农历日名（机制四）；放不下（或取不到）给 `nil`
+    /// ——`nil` 时整行不画，公历数字的位置与高度因此与改前逐字一致（那段是 30pt 日格的全部）。
+    ///
+    /// 数据源 = 本视图的**按月快照**（`monthEvents`，与事件小圆点同一份，已按偏好过滤）：
+    /// 节假日名走 `HolidayLookup`（名字含「节假日」的日历的全天条目），农历走 `LunarDayLabel`
+    /// （Foundation 的中国农历）。两条都是纯函数，视图这一层只做「取哪个 + 放不放得下」。
+    ///
+    /// **已知的降级**：`hideAllDayEvents` 打开时全天条目不进快照，节假日名因此一并消失（那时网格
+    /// 上连事件点都没有，口径一致——见批次报告 / docs/26 §已知限制）。
+    private func subtitleText(for day: Date, cellWidth: CGFloat) -> String? {
+        guard let label = HolidayLookup.name(for: day, events: monthEvents.events, calendar: calendar)
+            ?? LunarDayLabel.label(for: day)
+        else { return nil }
+        return MonthCellSubtitle.fits(label, cellWidth: cellWidth) ? label : nil
+    }
+
+    /// 日格第二行的颜色：跟随公历数字的层级（跨月补格更暗），比数字低一档（次要色）。
+    private func subtitleColor(isCurrentMonth: Bool) -> Color {
+        isCurrentMonth ? Color(white: 0.65) : Color(white: 0.35)
+    }
+
+    private func dayCell(for day: Date, cellWidth: CGFloat) -> some View {
         let isCurrentMonth = calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month)
         let isSelected = calendar.isDate(day, inSameDayAs: selectedDate)
         let isToday = calendar.isDateInToday(day)
         let hasEvents = eventDays.contains(calendar.startOfDay(for: day))
+        let subtitle = subtitleText(for: day, cellWidth: cellWidth)
+        let selectionDiameter = subtitle == nil
+            ? Self.singleLineSelectionDiameter
+            : Self.twoLineSelectionDiameter
 
         return Button {
             withAnimation(.smooth(duration: 0.18)) {
                 selectedDate = day
             }
         } label: {
-            ZStack {
-                if isSelected {
-                    Circle()
-                        .fill(Color.effectiveAccent)
-                        .frame(width: 28, height: 28)
+            VStack(spacing: 0) {
+                ZStack {
+                    if isSelected {
+                        Circle()
+                            .fill(Color.effectiveAccent)
+                            .frame(width: selectionDiameter, height: selectionDiameter)
+                    }
+
+                    Text(day.formatted(.dateTime.day()))
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(dayTextColor(isCurrentMonth: isCurrentMonth, isSelected: isSelected, isToday: isToday))
                 }
 
-                Text(day.formatted(.dateTime.day()))
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(dayTextColor(isCurrentMonth: isCurrentMonth, isSelected: isSelected, isToday: isToday))
+                // 第二行：公历数字**下方**（不挤数字、不换行）；放不下时 `subtitle` 为 nil、这里不生成。
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(subtitleColor(isCurrentMonth: isCurrentMonth))
+                        .lineLimit(1)
+                        .frame(height: Self.subtitleLineHeight)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 30)
+            .frame(maxWidth: .infinity, minHeight: Self.dayCellHeight)
             // 事件标记：右侧小圆点（位置与颜色见 `eventMarker` 的注释）。放在日格**右下角**而不是
-            // 日号正下方，是为了和 28pt 的选中圆永不重叠；`overlay` 不进布局，日格仍恰好 30pt 高
+            // 日号正下方，是为了和选中圆永不重叠；`overlay` 不进布局，日格仍恰好 30pt 高
             // （`HomeCalendarRow` 的行高算式 `36 × 周数 + 78` 依赖这个 30，别改成会撑高的写法）。
+            // T4 的第二行让日格下半部分多了文字：那颗点在**右下角内缩**（右 6pt / 下 2pt），
+            // 与居中的第二行之间仍有 `MonthCellSubtitle` 判据里预留的那段横向余量（见该类型注释）。
             .overlay(alignment: .bottomTrailing) {
                 if hasEvents {
                     eventMarker(isCurrentMonth: isCurrentMonth)
@@ -1034,7 +1103,13 @@ struct StandaloneCalendarView: View {
                     monthEvents: monthEventSnapshot,
                     onDisplayedMonthChange: { month in
                         Task { await calendarManager.updateMonthEvents(for: month) }
-                    }
+                    },
+                    // **日历面板也不画网格上下的那两条滚动提示渐变**（2026-09-30 用户第 5 条
+                    // 「日历面板还存在两条线的遮罩」/ D-04）：首页日历行早就传了 `false`（上一批
+                    // D-01），这是第二处、也是最后一处。理由是两条在纯黑面板上只是脏线，而它们盖住的
+                    // 正是 T4 新加的那一行（农历 / 节假日）——网格可滚这件事由右侧清单的滚动与
+                    // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
+                    showsScrollFades: false
                 )
                     .frame(width: paneWidth, alignment: .topLeading)
                     .frame(height: paneHeight, alignment: .topLeading)
