@@ -162,10 +162,10 @@ func enabledStandardTabCount() -> Int {
     // （`TimerModule` 的投影：启用真源 = 上游总开关、可见性 = 显示方式选 tab，一一对应）。
     // 三种组合下的贡献因此仍是 1 / 0 / 0（docs/20 §做法 机制五），刘海最小宽度不回归。
 
-    // Stats tab
-    if Defaults[.enableStatsFeature] {
-        count += 1
-    }
+    // Stats tab：**不再在这里计数**（p3-widgets / T2 起）——统计改成**首页块**
+    //（`StatsModule`，docs/26-home-widgets-and-settings.md §做法 机制一），不再占展开 tab，
+    // 上游 `TabSelectionView` 的那条分支与本函数的对应 `+1` 同批删除。启用真源
+    // `enableStatsFeature` 仍是同一个上游键，但它已经和「有几个 tab」无关（首页块不参与 tab 计数）。
 
     // Notes / Clipboard tab
     if Defaults[.enableNotes] || (Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab) {

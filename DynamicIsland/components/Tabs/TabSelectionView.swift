@@ -52,7 +52,6 @@ struct TabSelectionView: View {
     @StateObject private var quickShareService = QuickShareService.shared
     @Default(.quickShareProvider) private var quickShareProvider
     @State private var showQuickSharePopover = false
-    @Default(.enableStatsFeature) var enableStatsFeature
     @Default(.enableColorPickerFeature) var enableColorPickerFeature
     @Default(.enableThirdPartyExtensions) private var enableThirdPartyExtensions
     @Default(.enableExtensionNotchExperiences) private var enableExtensionNotchExperiences
@@ -78,10 +77,10 @@ struct TabSelectionView: View {
         // 上游那条「功能开着 + 显示方式选 tab」的分支已删除，不允许与模块并存
         // （并存就是两个计时器 tab）。下方模块段的条目即计时器页。
 
-        // Stats tab only shown when stats feature is enabled
-        if Defaults[.enableStatsFeature] {
-            tabsArray.append(TabModel(label: "Stats", icon: "chart.xyaxis.line", view: .stats))
-        }
+        // Stats tab：**已删除**（p3-widgets / T2，docs/26 §做法 机制一/机制二）——统计改成
+        // **首页块**（`StatsModule`，启用真源不变：上游 `enableStatsFeature`），不再占展开 tab
+        // 里的一个位置；`enabledStandardTabCount()` 里对应的 `+1` 同批删除。
+        // 允许与模块段并存是不行的：并存就是两个统计入口。
 
         // Usage tab only shown when LLM usage feature is enabled
         if Defaults[.enableLLMUsageFeature] {

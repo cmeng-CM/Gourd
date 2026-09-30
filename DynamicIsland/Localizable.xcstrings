@@ -68535,13 +68535,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Collapsed center slot + progress page in the expanded panel — not on the home strip yet"
+            "value" : "Compact day/week/month/quarter/year progress rows on the home strip"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "折叠态中央槽位 + 展开面板进度页——暂不出现在首页"
+            "value" : "首页块里的紧凑进度条：日 / 周 / 月 / 季 / 年（默认今天 + 今年）"
           }
         }
       }
@@ -82761,6 +82761,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还没有可显示的前台应用"
+          }
+        }
+      }
+    },
+    "module.stats.name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stats"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计"
+          }
+        }
+      }
+    },
+    "module.stats.summary" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPU, memory and GPU mini bars on the home strip"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页块里的 CPU / 内存 / GPU 迷你条"
           }
         }
       }

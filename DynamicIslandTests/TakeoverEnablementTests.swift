@@ -125,6 +125,16 @@
 //    `.unavailable`；开 → `.active` + 进 tab 投影 + 展开请求拿到 `.view`。两个方向都走真门，
 //    这是 T6 的变异验证靶子（换掉接管键 → 本条红）。
 //
+//  p3-widgets / T2 追加（统计接管模块——CPU / 内存 / GPU 的**首页块**）：
+//  - **`StatsModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded`——D-02
+//    「不需要单独面板」，上游那条 Stats tab 分支与本批同删）、`defaultPlacement ==
+//    Placement(slot: nil, order: 50)`、真源键 `enableStatsFeature`、块宽 220/300、`config` = 真源键
+//    + 三格图表可见性键（登记键）；迷你条三行的标签 key / 图标 / 值口径（`StatsHomeBlockLayout`）
+//    逐条钉住；
+//  - **接管键 read-through**：`enableStatsFeature` 关 → `.disabled` + 首页块投影为空 +
+//    首页请求降级 `.unavailable`；开 → `.active` + 进首页块投影 + 首页请求拿到迷你条（`.view`）。
+//    两个方向都走真门，这是本批的变异验证靶子（换掉接管键 → 本条红）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -138,6 +148,7 @@
 //     不写 `Defaults.withoutPropagation`：桥要看的正是「键变了」，屏蔽掉就把被测行为一起屏蔽了。
 //
 
+import AppKit
 import Defaults
 import SwiftUI
 import XCTest
@@ -485,8 +496,10 @@ final class TakeoverEnablementTests: XCTestCase {
     ///    判过（`setEnabled` 不重读门），重注册走的正是应用启动时 `bootstrap()` 的那条路；
     ///    运行期改键的路径（重同步桥）由 T1 的用例覆盖。
     func testTimerModuleKeepsEnabledStandardTabCountParity() async {
-        // 夹具键：`enabledStandardTabCount()` 的上游输入穷举（Home / Shelf / Stats / Notes-Clipboard /
-        // Terminal 五条，加计时器的启用与显示方式两条）。
+        // 夹具键：`enabledStandardTabCount()` 的上游输入穷举（Home / Shelf / Notes-Clipboard /
+        // Terminal 四条，加计时器的启用与显示方式两条）。**Stats 那一条已随 p3-widgets / T2 删除**
+        // （统计改首页块，不再贡献 tab 数——本文件 `testStatsFeatureAddsNoStandardTabCount` 钉住它），
+        // 这里仍把它一起压假只是沿用「所有 tab 输入置假」的夹具形态，不影响结论。
         let upstreamKeys = [
             Defaults.Keys.showStandardMediaControls.name,
             Defaults.Keys.showCalendar.name,
@@ -1381,6 +1394,192 @@ final class TakeoverEnablementTests: XCTestCase {
         }
     }
 
+    // MARK: - 统计接管模块（p3-widgets / T2）
+
+    /// `StatsModule.manifest` 的契约：26 §接口与数据形状 的 stats 行逐条对齐——**首页块 + 一个开关**
+    /// （D-02：用户说「不需要单独面板」，所以**不声明 `expanded`**）。
+    ///
+    /// 与另外四个接管模块的两处刻意不同，都钉在这里：
+    /// - `surfaces == [.home]`（只接首页块：不占展开 tab、不占折叠槽位——上游那条 Stats tab 分支
+    ///   与本批同删，统计的面板入口因此彻底消失）；
+    /// - `config` 非空：`enableStatsFeature` 是**真源键**，另三格图表可见性键是**登记键**
+    ///   （上游 `StatsSettings` 设置页仍读写它们）——因此组件页的统计卡上会出现
+    ///   「由上游设置管理」那行（登记了三个不可编辑的键）。
+    ///
+    /// 本用例**不写**任何真实偏好（只读钩子与常量），因此没有夹具与还原。
+    func testStatsModuleManifestMatchesTakeoverContract() throws {
+        let manifest = StatsModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, StatsModule.moduleID, "moduleID 与 manifest.id 必须是同一份字面量")
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.stats")
+        XCTAssertEqual(manifest.shortID, "stats")
+        XCTAssertEqual(manifest.name.key, "module.stats.name")
+        XCTAssertEqual(manifest.summary?.key, "module.stats.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.xyaxis.line"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.home], "只声明首页块（D-02：不保留独立面板）")
+        XCTAssertFalse(manifest.surfaces.contains(.expanded), "展开 tab 已删（统计不再有面板）")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "接管模块不占折叠槽位")
+        XCTAssertEqual(
+            manifest.defaultPlacement,
+            Placement(slot: nil, order: 50),
+            "首页块序 50（排在 notifications 40 之后；统计没有可继承的内置块序号，取现有最大值 + 10）"
+        )
+        XCTAssertEqual(
+            manifest.defaultEnabled,
+            Defaults.Keys.enableStatsFeature.defaultValue,
+            "= 上游 `enableStatsFeature` 的默认值（接管键读不到时才不生效）"
+        )
+        XCTAssertEqual(manifest.defaultEnabled, false, "上游这个开关默认是关的（方向也要钉住）")
+        XCTAssertTrue(manifest.permissions.isEmpty, "只读进程内已有的采样结果：零新增能力请求（采样仍走上游那条 Mach / IOKit 通道）")
+
+        let properties = try XCTUnwrap(manifest.config?.properties, "登记真源键 + 三格图表可见性键")
+        XCTAssertEqual(
+            properties.keys.sorted(),
+            ["enableStatsFeature", "showCpuGraph", "showGpuGraph", "showMemoryGraph"],
+            "config 只登记这四个上游键（真源键 + 三格图表的可见性键），不新发明键（D-03）"
+        )
+        XCTAssertEqual(properties["enableStatsFeature"]?.type, "boolean")
+        XCTAssertEqual(properties["enableStatsFeature"]?.default, ConfigValue.bool(false))
+        for key in ["showCpuGraph", "showMemoryGraph", "showGpuGraph"] {
+            XCTAssertEqual(properties[key]?.type, "boolean", "\(key) 是登记键：类型照上游")
+            XCTAssertEqual(
+                properties[key]?.default,
+                ConfigValue.bool(true),
+                "\(key) 的登记默认值取上游键的默认值（上游默认开着）"
+            )
+        }
+
+        // 三条取值型钩子：真源 = 上游那颗统计总开关；宽度 = 26 §做法 机制一 给统计的定值 220 / 300
+        XCTAssertEqual(StatsModule.takeoverEnableKey?.name, Defaults.Keys.enableStatsFeature.name)
+        XCTAssertEqual(
+            StatsModule.homeBlockWidth,
+            ModuleHomeBlockWidth(min: 220, ideal: 300),
+            "首页块宽度声明（26 §做法 机制一：统计比进度宽一档）"
+        )
+        // 可见性钩子**刻意不重写**（缺省 true）：本模块不声明 `expanded`，投影先按 `surfaces` 过滤，
+        // 它永远不被问到——写一条 `= true` 只会让读者以为本模块有 tab（与 mirror / music 同一口径，
+        // 那两处也没写断言）。
+
+        // 迷你条的三行：键 / 图标 / 值口径都要对得上（顺序 = 显示顺序 CPU → 内存 → GPU）
+        XCTAssertEqual(StatsHomeBlockLayout.rows.map(\.id), ["cpu", "memory", "gpu"])
+        XCTAssertEqual(StatsHomeBlockLayout.rows.map(\.labelKey), ["CPU", "Memory", "GPU"], "标签复用上游统计页那三条 key")
+        for row in StatsHomeBlockLayout.rows {
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: row.symbolName, accessibilityDescription: nil),
+                "\(row.id) 的图标 \(row.symbolName) 不是可解析的 SF Symbol"
+            )
+        }
+        // 标签解析：**只对 `Memory` 用 `XCTAssertResolves`**——它的 zh-Hans 译名（`内存`）与 key 不同形；
+        // 另两条（`CPU` / `GPU`）的 zh-Hans 译文就是 key 本身，helper 的「译文 != key」判据对它们不适用
+        // （那两条的契约是「key 与上游统计页逐字一致」，已由上面那条相等断言钉住）。
+        XCTAssertResolves("Memory")
+        // 值文案走 `StatsManager` 的 `*UsageString`（同一份 `StatsFormatting` 口径：`%.1f%%`）
+        XCTAssertEqual(StatsHomeBlockLayout.Row.cpu.valueText(in: StatsManager.shared), StatsManager.shared.cpuUsageString)
+        XCTAssertEqual(
+            StatsHomeBlockLayout.Row.memory.valueText(in: StatsManager.shared),
+            StatsManager.shared.memoryUsageString
+        )
+        XCTAssertEqual(StatsHomeBlockLayout.Row.gpu.valueText(in: StatsManager.shared), StatsManager.shared.gpuUsageString)
+        // 细条进度：用量是 0…100 的百分数 → 夹到 0…1（越界会画到框外）
+        XCTAssertEqual(StatsHomeBlockLayout.Row.cpu.barValue(in: StatsManager.shared), StatsManager.shared.cpuUsage / 100, accuracy: 1e-9)
+
+        // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// **接管键 read-through**：统计的启用真源是上游 `enableStatsFeature`，不是它自己的
+    /// `defaultEnabled`——两个方向都走一遍，且**经真组合根的门**（`KernelBootstrap.enablementGate`）。
+    ///
+    /// 与日历那条同款的三点刻意写死：
+    /// 1. **自己置全夹具**：`enableStatsFeature` 读的是**测试域**（Debug 域 `com.cmeng.gourd.dev`）
+    ///    盘上的值（本机可能是任意值，Release 域里它是 true）——两个方向都显式置定值，
+    ///    `defer` 逐字还原（原本有键写回原值、原本没键删键）；
+    /// 2. **注册走真门**：旧门（`manifests[$0]?.defaultEnabled`）读不到上游键，键关闭时也会放行
+    ///    （登记值 false 会碰巧挡住，所以反向那一档尤其要有断言——键**开**时必须真的放行）；
+    /// 3. **不调 `KernelBootstrap.bootstrap()`**（文件头口径 2：那个入口会写开发机真实的
+    ///    `enableScreenAssistant`），只调注册表自己的 `bootstrap()`。
+    ///
+    /// 变异验证（本任务 §3 变异 ①）：把 `StatsModule.takeoverEnableKey` 换成别的键或去掉 →
+    /// 本条红（第 ① 档的 `.disabled` 与 `homeEntries.isEmpty` 都会破）。
+    func testStatsModuleEnablementReadsThroughEnableStatsFeature() async throws {
+        let keys = [Defaults.Keys.enableStatsFeature.name]
+        let originals = snapshotValues(of: keys)
+        defer { restoreValues(originals, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        let id = StatsModule.moduleID
+        let homeRequest = ContentRequest(surface: .home, phase: .expanded, reason: .initial)
+
+        // ① 键关着 → 门不放行：统计既不在首页块投影里，首页请求也降级为 `.unavailable`
+        Defaults[.enableStatsFeature] = false
+        registry.register([StatsModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[id], .disabled, "接管键 false → 启用门不放行")
+        XCTAssertNil(registry.instance(for: id), "未启用的模块不实例化")
+        XCTAssertTrue(registry.homeEntries.isEmpty, "关掉 enableStatsFeature → 首页块投影里没有统计")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "统计不声明 expanded → tab 投影恒为空（上游那条 Stats 分支已删）")
+        guard case .unavailable = registry.content(for: id, request: homeRequest) else {
+            return XCTFail("未激活的模块，首页请求应降级为 .unavailable（06 §3.2）")
+        }
+
+        // ② 键开着 → 放行：进首页块投影，首页请求拿到迷你条（.view），展开请求仍答 .none
+        Defaults[.enableStatsFeature] = true
+        await registry.deactivateAll()
+        registry.register([StatsModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[id], .active, "接管键 true → 启用门放行")
+        XCTAssertNotNil(registry.instance(for: id) as? StatsModule, "过门的统计照常实例化")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [id], "统计的首页块由模块投影产出")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "统计不声明 expanded → 即使开着也一个 tab 都不多出来（上游那条 Stats 分支已删）")
+        guard case .view = registry.content(for: id, request: homeRequest) else {
+            return XCTFail("统计的首页请求应拿到迷你条视图（.view）")
+        }
+        let expandedRequest = ContentRequest(surface: .expanded, phase: .expanded, reason: .initial)
+        guard case .none = registry.content(for: id, request: expandedRequest) else {
+            return XCTFail("统计不声明 expanded（D-02）→ 展开请求必须答 .none")
+        }
+    }
+
+    /// 计数回归（docs/26 §做法 机制一 落地后的口径）：上游那条 Stats 的 `+1` 从
+    /// `enabledStandardTabCount()` 删掉后，**统计开关从关到开，tab 计数一个数都不涨**——
+    /// 这一数是刘海最小宽度的唯一输入（`currentRecommendedMinimumNotchWidth()`），
+    /// 统计改成首页块后它不该再影响面板宽度。
+    ///
+    /// 写法上**不置全夹具**：两次测量之间只动 `enableStatsFeature`，其余输入（其它上游键、
+    /// 注册表）逐字不动，因此 `on - off == 0` 这条不变量与开发机上的其它键值无关
+    /// （同「关→开的差值」口径，比抄一组绝对数稳）。`defer` 逐字还原键值。
+    func testStatsFeatureAddsNoStandardTabCount() async {
+        let keys = [Defaults.Keys.enableStatsFeature.name]
+        let originals = snapshotValues(of: keys)
+        defer { restoreValues(originals, for: keys) }
+
+        let registry = ModuleRegistry.shared
+
+        Defaults[.enableStatsFeature] = false
+        registry.register([StatsModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+        let countWithFeatureOff = enabledStandardTabCount()
+        XCTAssertTrue(registry.tabEntries.isEmpty, "前置：统计关着时它当然不进 tab 投影")
+
+        Defaults[.enableStatsFeature] = true
+        await registry.deactivateAll()
+        registry.register([StatsModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[StatsModule.moduleID], .active, "前置：夹具的键真的放行了统计")
+        let countWithFeatureOn = enabledStandardTabCount()
+
+        XCTAssertEqual(
+            countWithFeatureOn,
+            countWithFeatureOff,
+            "统计开关不改变 tab 计数（上游那条 +1 已删；模块只声明 home → 不进 tabEntries 投影）"
+        )
+        XCTAssertEqual(registry.tabEntries.count, 0, "统计开着也不进 tab 投影（D-02）")
+    }
+
     // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
 
     /// 七张功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
@@ -1428,9 +1627,13 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 「把 `settings.modules.effect.music` 改成错字」是全绿的（T6 报告 §3 变异 ②b）。
     /// 本用例保留「三条 key 在 catalog 里解析得出」这一半，值那一半交给映射表用例。
     func testTakeoverModuleCardKeysResolve() throws {
-        // 日历（T6）也进来了：本用例的名单 = **接管模块**的名单（四个），不要求它有「效果行」
-        //（日历卡没有 `effectKeysByModuleID` 那一条：出现位置已经写在 summary 里）。
-        for manifest in [TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest, CalendarModule.manifest] {
+        // 日历（T6）与统计（p3-widgets / T2）也进来了：本用例的名单 = **接管模块**的名单（五个），
+        // 不要求它们有「效果行」（日历卡没有 `effectKeysByModuleID` 那一条：出现位置已经写在 summary
+        // 里；统计同款——它的出现位置同样写在 summary 里）。
+        for manifest in [
+            TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest,
+            CalendarModule.manifest, StatsModule.manifest,
+        ] {
             let nameKey = try XCTUnwrap(manifest.name.key, "\(manifest.id) 的名称 key 必须写成 Localizable key")
             XCTAssertEqual(nameKey, "module.\(manifest.shortID).name", "名称 key 形态与 label(for:) 同源")
             XCTAssertResolves(nameKey)
@@ -1503,7 +1706,7 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    /// 回弹两档仍成立（D-13 / docs/20 §做法 机制七），这里用**三个真模块的真源键**再钉一遍：
+    /// 回弹两档仍成立（D-13 / docs/20 §做法 机制七），这里用**四个真模块的真源键**再钉一遍：
     /// 组件卡把它们的真源键交给 `preferenceToWrite` 时必须拿到 `nil`（**什么都不写**）。
     ///
     /// 注意这条钉的是**策略函数**，不是视图接线：卡里「回弹时去问策略、而不是无条件写 false」
@@ -1513,8 +1716,9 @@ final class TakeoverEnablementTests: XCTestCase {
             TimerModule.takeoverEnableKey,
             MirrorModule.takeoverEnableKey,
             MusicModule.takeoverEnableKey,
+            StatsModule.takeoverEnableKey,
         ] {
-            XCTAssertNotNil(key, "三个接管模块必须声明真源键（声明缺失时它就不是接管模块了）")
+            XCTAssertNotNil(key, "四个接管模块必须声明真源键（声明缺失时它就不是接管模块了）")
             XCTAssertNil(
                 ModuleEnablementRollback.preferenceToWrite(takeoverKey: key),
                 "接管模块的回弹是空操作——写回偏好等于因为激活失败把用户的功能关了"

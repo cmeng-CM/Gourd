@@ -44,6 +44,11 @@
 //  日历行**不动**（它仍由 `NotchHomeView` 直接渲染），两处呈现共用一个开关
 //  （docs/24-release-freeze.md §做法 机制三）。
 //
+//  p3-widgets 批次 / T2：`builtinModules` 加 `StatsModule`——统计从「展开 tab」改成**首页块**
+//  （启用真源不变，仍是上游 `enableStatsFeature`），上游 `TabSelectionView` 里那条 Stats tab
+//  分支与 `enabledStandardTabCount()` 的对应 `+1` 同批删除
+//  （docs/26-home-widgets-and-settings.md §做法 机制一/机制二）。
+//
 
 import Combine
 import Defaults
@@ -56,14 +61,15 @@ public enum KernelBootstrap {
     /// 内置模块清单。T4 落 `ProgressModule`，T5 落 `TodosModule`，P2c 落 `NotificationsModule`，
     /// P2 启动台批次落 `LauncherModule`，P2 接管批次 / T2 落 `TimerModule`、T4 落 `MirrorModule`、
     /// T5 落 `MusicModule`，P2 快捷指令与前台应用批次 / T2 落 `ShortcutsModule`、T4 落 `FrontAppModule`，
-    /// P3 冻结批次 / T6 落 `CalendarModule`——即「新增模块 = 加一行」的那一行。
+    /// P3 冻结批次 / T6 落 `CalendarModule`，p3-widgets / T2 落 `StatsModule`——即「新增模块 = 加一行」
+    /// 的那一行。
     ///
     /// 顺序与用户可见顺序**无关**（那个由 `defaultPlacement.order` 定，见 `ModuleRegistry.tabEntries`）；
     /// 它只影响 `register` 的落表顺序与日志可读性，这里按批次先后排。
     static let builtinModules: [any GourdModule.Type] = [
         ProgressModule.self, TodosModule.self, NotificationsModule.self, LauncherModule.self,
         TimerModule.self, MirrorModule.self, MusicModule.self, ShortcutsModule.self,
-        FrontAppModule.self, CalendarModule.self,
+        FrontAppModule.self, CalendarModule.self, StatsModule.self,
     ]
 
     private static let log = os.Logger(subsystem: "com.cmeng.gourd.kernel", category: "bootstrap")
