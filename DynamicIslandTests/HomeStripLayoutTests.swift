@@ -1455,6 +1455,167 @@ final class HomeStripLayoutTests: XCTestCase {
         await ModuleRegistry.shared.deactivateAll()
         try await super.tearDown()
     }
+
+    // MARK: - 单条流（P4 / docs/28 §4）
+
+    /// 流的一行：行内块按下标给出，行高 = 行内最高块。
+    private func flowRows(_ plan: HomeFlowLayout.Plan) -> [[Int]] {
+        plan.rows.map(\.indices)
+    }
+
+    private func flowItem(_ min: CGFloat, _ ideal: CGFloat, _ height: CGFloat) -> HomeFlowLayout.Item {
+        HomeFlowLayout.Item(min: min, ideal: ideal, height: height)
+    }
+
+    private var flowMetrics: HomeFlowLayout.Metrics {
+        HomeFlowLayout.Metrics(columnSpacing: 8, rowSpacing: 8, tailReserve: 34)
+    }
+
+    /// **行高取行内最高块**：大块（152）与紧凑块（96）并排时，这一行是 152；全是紧凑块的行是 96。
+    func testFlowRowHeightIsMaxOfItsItems() {
+        let items = [
+            flowItem(300, 420, 152),   // 音乐（大）
+            flowItem(180, 240, 96),    // 待办（紧凑）
+            flowItem(180, 240, 96),    // 前台应用
+            flowItem(220, 300, 96),    // 统计
+        ]
+        // 可用 964：音乐 300 + 8 + 180 + 8 + 180 = 676 ≤ 964，再塞统计 220 → 904 ≤ 964 ✓（一行四块）
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 964, availableHeight: 1000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(plan), [[0, 1, 2, 3]], "四块按最小宽 904 ≤ 964，全在头一行")
+        XCTAssertEqual(plan.rows[0].height, 152, "这一行有大块 → 行高取 152")
+    }
+
+    /// **按最小宽贪心换行**：装不下就换行，**不丢块**（行数够时）。
+    func testFlowWrapsInsteadOfDropping() {
+        let items = (0..<5).map { _ in flowItem(180, 240, 96) }
+        // 可用 560：180 + 8 + 180 = 368 ✓，再塞第三块 368 + 8 + 180 = 556 ≤ 560 ✓ → 一行三块
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 560, availableHeight: 1000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(plan), [[0, 1, 2], [3, 4]], "3 + 2 两行；换行不丢块")
+        XCTAssertEqual(plan.droppedCount, 0, "高度够时一块都不丢")
+        XCTAssertFalse(plan.showsHint, "没有丢弃就不画 ＋N")
+    }
+
+    /// **高度不够时按"整行"丢**（尾部行不画），丢掉的块计入 `＋N`。
+    func testFlowDropsTrailingRowsAndHints() {
+        let items = (0..<5).map { _ in flowItem(180, 240, 96) }
+        // 两行要 96 + 8 + 96 = 200；给 100 只放得下第一行。
+        // 可用宽取 600（一行三块 = 180×3 + 8×2 = 556 ≤ 600，且留出 ＋N 的 34 位后 556 ≤ 566 仍放得下）
+        // ——**特意避开"提示位把本行挤掉一块"那条口径**（那条单独由下一个用例钉）。
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 600, availableHeight: 100,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(plan), [[0, 1, 2]], "第二行整行不画（**不切半行**——P4 的病根）")
+        XCTAssertEqual(plan.droppedCount, 2, "第二行那两块计入丢弃")
+        XCTAssertTrue(plan.showsHint, "有丢弃 → 末行留出 ＋N 位")
+        XCTAssertTrue(plan.rows[0].showsHint)
+    }
+
+    /// **提示位的代价**（既有口径，与旧小组件带一致）：末行留出 `＋N` 的 34pt 后，那一行自己可能
+    /// 少放一块——少的那块如实计入 `droppedCount`。这条把代价写下来，免得后来人以为是算错了。
+    func testFlowHintReserveMayCostOneCellInLastRow() {
+        let items = (0..<5).map { _ in flowItem(180, 240, 96) }
+        // 可用 560：三块 = 556 ≤ 560 本来放得下；但留 34 位后只剩 526 < 556 → 末行只放得下两块
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 560, availableHeight: 100,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(plan), [[0, 1]], "为 ＋N 让出 34pt → 这一行只放得下两块")
+        XCTAssertEqual(plan.droppedCount, 3, "两块在被丢掉的那一行 + 一块被提示位挤掉")
+    }
+
+    /// **日历行优先让位**（沿用 D-02）：放不下时先收日历行，再收流的尾部行。
+    func testFlowCalendarRowYieldsFirst() {
+        let items = [flowItem(300, 420, 152), flowItem(180, 240, 96)]   // 一行两块，行高 152
+        // 日历行 294 + 缝 8 + 152 = 454
+        let fits = HomeFlowLayout.plan(
+            items: items, availableWidth: 964, availableHeight: 460,
+            calendarHeight: 294, metrics: flowMetrics
+        )
+        XCTAssertTrue(fits.showsCalendarRow, "460 ≥ 454 → 日历行在")
+        XCTAssertEqual(flowRows(fits), [[0, 1]])
+
+        let tight = HomeFlowLayout.plan(
+            items: items, availableWidth: 964, availableHeight: 300,
+            calendarHeight: 294, metrics: flowMetrics
+        )
+        XCTAssertFalse(tight.showsCalendarRow, "300 < 454 → **先收日历行**")
+        XCTAssertEqual(flowRows(tight), [[0, 1]], "流那一行留着（日历行比它先让位）")
+        XCTAssertEqual(tight.droppedCount, 0, "只收日历行不算丢块")
+
+        let both = HomeFlowLayout.plan(
+            items: items, availableWidth: 964, availableHeight: 100,
+            calendarHeight: 294, metrics: flowMetrics
+        )
+        XCTAssertFalse(both.showsCalendarRow)
+        XCTAssertEqual(flowRows(both), [], "连第一行（152）都放不下 → 流也不画")
+        XCTAssertEqual(both.droppedCount, 2)
+    }
+
+    /// **用户实况那一档的分布**（面板 1041×853，全部组件开着；docs/28 §4.2 的预期表）。
+    ///
+    /// 可用宽 = 1041 − 2 × 8（容器内边距）= 1025；可用高 = 853 − 内容上下的余量，这里取 520
+    ///（该档实测：日历行 294 + 缝 8 + 两行流 152 + 8 + 96 = 558 ≤ 536 不成立，故本用例取 560）。
+    func testFlowDistributionAtUserPanelSize() {
+        let items = [
+            flowItem(300, 420, 152),   // 音乐（大）
+            flowItem(140, 160, 152),   // 镜子（大）
+            flowItem(180, 240, 96),    // 待办
+            flowItem(180, 240, 96),    // 前台应用
+            flowItem(180, 240, 96),    // 进度
+            flowItem(180, 240, 96),    // 通知
+            flowItem(220, 300, 96),    // 统计
+        ]
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 1025, availableHeight: 560,
+            calendarHeight: 294, metrics: flowMetrics
+        )
+        // 行1：音乐 300 + 8 + 镜子 140 + 8 + 待办 180 + 8 + 前台 180 + 8 + 进度 180 = 1012 ≤ 1025 ✓
+        // 行2：通知 180 + 8 + 统计 220 = 408 ✓
+        XCTAssertEqual(
+            flowRows(plan), [[0, 1, 2, 3, 4], [5, 6]],
+            "全开时是「一行五块 + 一行两块」——不是现在的「第一排只有音乐」"
+        )
+        XCTAssertEqual(plan.rows[0].height, 152, "第一行含大块 → 152")
+        XCTAssertEqual(plan.rows[1].height, 96, "第二行全是紧凑块 → 96")
+        XCTAssertEqual(plan.droppedCount, 0, "一块都不丢")
+    }
+
+    /// 空名单：没有块时不产生任何行（日历行仍按自己的高度单独存活）。
+    func testFlowEmptyItems() {
+        let plan = HomeFlowLayout.plan(
+            items: [], availableWidth: 964, availableHeight: 300,
+            calendarHeight: 294, metrics: flowMetrics
+        )
+        XCTAssertTrue(plan.rows.isEmpty)
+        XCTAssertEqual(plan.rowsNeeded, 0)
+        XCTAssertEqual(plan.droppedCount, 0)
+        XCTAssertTrue(plan.showsCalendarRow, "没有块时日历行单独存活")
+
+        let noCalendar = HomeFlowLayout.plan(
+            items: [], availableWidth: 964, availableHeight: 300,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertFalse(noCalendar.showsCalendarRow)
+    }
+
+    /// `rowsNeeded` 与 `plan` 的行划分**同一份**（改一个就会红）。
+    func testFlowRowsNeededMatchesPlan() {
+        let items = (0..<7).map { _ in flowItem(180, 240, 96) }
+        let needed = HomeFlowLayout.rowsNeeded(items: items, availableWidth: 560, columnSpacing: 8)
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 560, availableHeight: 10_000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(needed, plan.rowsNeeded)
+        XCTAssertEqual(needed, 3, "7 块 / 一行 3 块 = 3 行")
+    }
 }
 
 // MARK: - 假模块（文件私有）
