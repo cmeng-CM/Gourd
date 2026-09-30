@@ -30,6 +30,14 @@
 //  - `ModuleRegistry.home` 请求形状：`surface` / `phase` / `slot` / `sizeHint` / `reason` /
 //    `isLowPower`——**宽度不由请求传递**（`sizeHint == .zero`）。
 //
+//  **首页两排的高度取舍 `HomeVerticalFit.plan`**（T2 / docs/23-home-fit.md §做法 机制二）
+//  - 三档穷举：`.both`（582 → strip 280）/ `.stripOnly`（453 → strip 拿**全部** 453，日历行让位）/
+//    `.calendarOnly`（151.9 → 两排都不画；合成入参下日历行放得下就画）；
+//  - 阈值边界（闭区间）：454 恰好两排都在、453 日历行先消失、152 恰好 strip 仍在、151.9 strip 也让位；
+//  - 顺序反转的正面判据：850 → 140 逐 pt 扫，日历行在 453 先消失、strip 撑到 151；
+//  - 日历行关掉时（行高与间距按 0 传）strip 拿全部可用高度（与改动前同一口径）；
+//  - 退化输入：`available == 0` 与负值都判成什么都不画（负值按 0 处理）。
+//
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
 //
@@ -645,6 +653,209 @@ final class HomeStripLayoutTests: XCTestCase {
         // 投影是现算的（不缓存）：清空注册表后立刻为空
         await registry.deactivateAll()
         XCTAssertTrue(registry.homeEntries.isEmpty, "deactivateAll() 之后投影应为空（现算、不缓存）")
+    }
+
+    // MARK: - 首页两排的高度取舍（T2 / docs/23-home-fit.md §做法 机制二）
+
+    /// 生产档的四个入参（与 `NotchHomeView.standardHomeContent` 传的逐字同源）：日历行固定档 294、
+    /// 两排间距 8、strip 最小可用高度 152。
+    private static let calendarRowHeight: CGFloat = HomeCalendarRow.rowHeight
+    private static let rowSpacing: CGFloat = HomeCalendarRow.rowSpacing
+    private static let stripMinimumHeight: CGFloat = HomeStripView.minimumUsableHeight
+
+    /// 两排一起放得下的**最低高度**（= 152 + 8 + 294 = 454）——下面的边界断言都由它派生，
+    /// 免得三处各写一个数。
+    private static let bothMinimumHeight: CGFloat = stripMinimumHeight + rowSpacing + calendarRowHeight
+
+    /// 阈值链的锚点：四个常量任一被改动，本用例先红——边界数值要跟着一起重新审，而不是静默漂。
+    func testVerticalFitThresholdsArePinned() {
+        XCTAssertEqual(Self.calendarRowHeight, 294, "日历行固定档（HomeCalendarRow.rowHeight 的算式见那边注释）")
+        XCTAssertEqual(Self.rowSpacing, 8)
+        XCTAssertEqual(Self.stripMinimumHeight, 152)
+        XCTAssertEqual(Self.bothMinimumHeight, 454, "152 + 8 + 294：两排一起放得下的最低高度")
+    }
+
+    /// `.both` 档（默认面板高度）：日历行在，strip 拿剩下的（= 改动前的算式，逐字未变）。
+    func testBothLayoutKeepsCalendarRowAndShrinksStrip() {
+        let plan = HomeVerticalFit.plan(
+            available: 582,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .both)
+        XCTAssertTrue(plan.showsStrip)
+        XCTAssertTrue(plan.showsCalendarRow)
+        XCTAssertEqual(plan.stripHeight, 582 - 294 - 8, "strip 拿扣掉日历行与间距的剩余（280）")
+    }
+
+    /// `.both` 的**下边界**：`available` 恰好等于 454 时两排仍都在，strip 恰好拿到它的最小可用高度
+    ///（闭区间：恰好放得下算放得下）。
+    func testBothLayoutBoundaryAtExactCombinedMinimum() {
+        let plan = HomeVerticalFit.plan(
+            available: Self.bothMinimumHeight,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .both, "恰好等于阈值算放得下（不留一条只有 0.0001pt 宽的缝）")
+        XCTAssertEqual(plan.stripHeight, Self.stripMinimumHeight, "恰好放满：strip 拿到 152")
+        XCTAssertTrue(plan.showsCalendarRow)
+    }
+
+    /// `.both` 下一点（454 − 1 = 453）：**让位的是日历行**，strip 拿全部可用高度
+    /// ——这是本次改动的核心判据（D-02），也是改动前会画反的那一档。
+    func testCalendarRowGivesWayJustBelowCombinedMinimum() {
+        let plan = HomeVerticalFit.plan(
+            available: Self.bothMinimumHeight - 1,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .stripOnly)
+        XCTAssertFalse(plan.showsCalendarRow, "两排一起放不下 → 收起日历行（D-02）")
+        XCTAssertTrue(plan.showsStrip, "strip 仍在（改动前这一档整条不画）")
+        XCTAssertEqual(plan.stripHeight, 453, "stripOnly 档 strip 拿**全部**可用高度，不是扣掉日历行的剩余")
+    }
+
+    /// `.stripOnly` 的**整个高度带**（152…453）：日历行全程不在、strip 全程都在且拿全部高度。
+    /// 逐个高度过一遍，是为了钉住「这一档里的任何一个高度都不会把 strip 也收掉」。
+    func testStripOnlyBandKeepsStripAndDropsCalendarRow() {
+        for available in [CGFloat(453), 400, 300, 200, 152] {
+            let plan = HomeVerticalFit.plan(
+                available: available,
+                calendarRowHeight: Self.calendarRowHeight,
+                rowSpacing: Self.rowSpacing,
+                stripMinimumHeight: Self.stripMinimumHeight
+            )
+
+            XCTAssertEqual(plan.layout, .stripOnly, "可用高度 \(available) 应落在 stripOnly 档")
+            XCTAssertTrue(plan.showsStrip, "strip 在 \(available) 应仍在")
+            XCTAssertFalse(plan.showsCalendarRow, "日历行在 \(available) 应已让位")
+            XCTAssertEqual(plan.stripHeight, available, "strip 在 \(available) 应拿全部可用高度")
+            XCTAssertGreaterThanOrEqual(plan.stripHeight, Self.stripMinimumHeight, "strip 的高度不低于它的最小可用高度")
+        }
+    }
+
+    /// `.stripOnly` 的**下边界**：`available` 恰好等于 strip 最小可用高度（152）时 strip 仍画
+    ///（闭区间），它在这一档拿到的高度就等于阈值本身。
+    func testStripOnlyBoundaryAtExactStripMinimum() {
+        let plan = HomeVerticalFit.plan(
+            available: Self.stripMinimumHeight,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .stripOnly, "恰好等于 strip 最小可用高度算放得下")
+        XCTAssertTrue(plan.showsStrip)
+        XCTAssertEqual(plan.stripHeight, Self.stripMinimumHeight)
+        XCTAssertFalse(plan.showsCalendarRow)
+    }
+
+    /// `.calendarOnly` 档（152 以下）：strip 整条不画；生产档下日历行（294）也放不下 → 两排都不画。
+    func testCalendarOnlyBelowStripMinimumDrawsNothingAtProductionHeights() {
+        let plan = HomeVerticalFit.plan(
+            available: Self.stripMinimumHeight - 0.1,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .calendarOnly)
+        XCTAssertFalse(plan.showsStrip, "strip 连最小可用高度都放不下 → 整条不画（「画不满就不画」的既有裁决）")
+        XCTAssertEqual(plan.stripHeight, 0, "不画时不占高度（不是负值、不是残高）")
+        XCTAssertFalse(plan.showsCalendarRow, "生产档日历行要 294，151.9 放不下 → 这一档什么都不画")
+    }
+
+    /// `.calendarOnly` 档**画日历行**的那半边判据：日历年行比 strip 阈值矮时（用合成入参——生产档
+    /// 294 > 152，这一支在真机上到不了），strip 仍不画、日历行画。
+    func testCalendarOnlyDrawsCalendarRowWhenItsHeightFits() {
+        let plan = HomeVerticalFit.plan(
+            available: 120,
+            calendarRowHeight: 100,
+            rowSpacing: 8,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+
+        XCTAssertEqual(plan.layout, .calendarOnly)
+        XCTAssertFalse(plan.showsStrip)
+        XCTAssertTrue(plan.showsCalendarRow, "行高 100 在 120 里放得下 → 这一档画日历行")
+    }
+
+    /// 退化输入：`available == 0` 与负值都判成「什么都不画」，且两者结果一致（负值按 0 处理，
+    /// 不产生负高度）。
+    func testZeroAndNegativeAvailableDrawNothing() {
+        let zero = HomeVerticalFit.plan(
+            available: 0,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+        XCTAssertEqual(zero.layout, .calendarOnly)
+        XCTAssertFalse(zero.showsStrip)
+        XCTAssertFalse(zero.showsCalendarRow)
+
+        let negative = HomeVerticalFit.plan(
+            available: -40,
+            calendarRowHeight: Self.calendarRowHeight,
+            rowSpacing: Self.rowSpacing,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+        XCTAssertEqual(negative, zero, "负的可用高度与 0 等价（布局退化时不出现负高度）")
+    }
+
+    /// 日历行关掉时（接缝把行高与间距都按 0 传）不存在取舍：只要 strip 放得下，它就拿**全部**可用
+    /// 高度（与改动前 `showCalendar == false` 那一支逐字同口径）。
+    func testCalendarRowDisabledHandsAllHeightToStrip() {
+        for available in [CGFloat(152), 300, 453, 454, 850] {
+            let plan = HomeVerticalFit.plan(
+                available: available,
+                calendarRowHeight: 0,
+                rowSpacing: 0,
+                stripMinimumHeight: Self.stripMinimumHeight
+            )
+
+            XCTAssertTrue(plan.showsStrip, "关掉日历行后 \(available) 应仍画 strip")
+            XCTAssertEqual(plan.stripHeight, available, accuracy: 1e-9, "strip 应拿全部可用高度")
+        }
+
+        let belowMinimum = HomeVerticalFit.plan(
+            available: Self.stripMinimumHeight - 1,
+            calendarRowHeight: 0,
+            rowSpacing: 0,
+            stripMinimumHeight: Self.stripMinimumHeight
+        )
+        XCTAssertFalse(belowMinimum.showsStrip, "低于阈值仍整条不画（阈值与日历行开不开无关）")
+    }
+
+    /// **顺序反转的正面判据**（D-02）：可用高度从 850 一路降到 140，**先消失的是日历行**（454 下一点
+    /// 的 453），strip 一路撑到 152 以下才让位。改动前是反的（strip 先死、日历行到最后都画着）。
+    func testReversalOrderCalendarRowDisappearsBeforeStrip() {
+        var calendarRowDroppedAt: CGFloat?
+        var stripDroppedAt: CGFloat?
+
+        for available in stride(from: CGFloat(850), through: 140, by: -1) {
+            let plan = HomeVerticalFit.plan(
+                available: available,
+                calendarRowHeight: Self.calendarRowHeight,
+                rowSpacing: Self.rowSpacing,
+                stripMinimumHeight: Self.stripMinimumHeight
+            )
+            if !plan.showsCalendarRow, calendarRowDroppedAt == nil { calendarRowDroppedAt = available }
+            if !plan.showsStrip, stripDroppedAt == nil { stripDroppedAt = available }
+        }
+
+        XCTAssertEqual(calendarRowDroppedAt, 453, "日历行应在 454 的下一点（453）先消失")
+        XCTAssertEqual(stripDroppedAt, 151, "strip 应一直撑到 strip 最小可用高度之下（151）才让位")
+        XCTAssertGreaterThan(
+            calendarRowDroppedAt ?? -1,
+            stripDroppedAt ?? -1,
+            "日历行必须先于 strip 消失（顺序反了就是 D-02 没落地）"
+        )
     }
 
     // MARK: - 夹具

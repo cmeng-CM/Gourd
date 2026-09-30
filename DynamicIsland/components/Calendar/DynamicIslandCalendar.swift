@@ -698,6 +698,17 @@ struct MonthGridView: View {
     /// 只在这一件事上回调，不做高频轮询。
     var onDisplayedMonthChange: ((Date) -> Void)?
 
+    /// 日格网格上下那两条**滚动提示渐变**（`datePicker` 里的两处 `LinearGradient`）画不画。
+    ///
+    /// 这两条渐变只服务于「网格高于视口、可以滚」的场景，是滚动提示而不是装饰（2026-09-30 D-01）。
+    /// **默认 `true` = 独立日历的既有现状**（`StandaloneCalendarView` 的左栏网格可滚，提示有用）；
+    /// 首页日历行传 `false`——那一排的行高按「一屏显示整月」反推（`HomeCalendarRow.rowHeight` 的算式），
+    /// 网格根本不滚，两条渐变在纯黑面板上就只是两条脏线（用户 2026-09-30 实测反馈第 1 条）。
+    ///
+    /// **只切「画不画」，不切样式与位置**：渐变的颜色 / 16pt 高度 / 上下贴边都不随它变
+    ///（改样式是另一件事，会把独立日历的提示也一起改掉）。
+    var showsScrollFades: Bool = true
+
     /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
     @State private var displayedMonth: Date
 
@@ -708,13 +719,15 @@ struct MonthGridView: View {
         scrollTarget: Binding<Date?>,
         monthNavigationMovesSelection: Bool = false,
         monthEvents: MonthEventSnapshot,
-        onDisplayedMonthChange: ((Date) -> Void)? = nil
+        onDisplayedMonthChange: ((Date) -> Void)? = nil,
+        showsScrollFades: Bool = true
     ) {
         _selectedDate = selectedDate
         _scrollTarget = scrollTarget
         self.monthNavigationMovesSelection = monthNavigationMovesSelection
         self.monthEvents = monthEvents
         self.onDisplayedMonthChange = onDisplayedMonthChange
+        self.showsScrollFades = showsScrollFades
         // 初值取选中日所在月（而不是 `Date()`）：`onChange` 不会为首帧补发，初值必须自己对齐。
         _displayedMonth = State(initialValue: selectedDate.wrappedValue.startOfMonth)
     }
@@ -840,15 +853,19 @@ struct MonthGridView: View {
                         centerDatePicker(on: target, proxy: proxy)
                     }
 
-                    LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .frame(maxHeight: .infinity, alignment: .top)
+                    // 上下两条滚动提示渐变（`showsScrollFades`，见该属性的注释）：首页日历行不传
+                    // → 这里一条都不生成（不占位、不参与布局，网格几何因此与画时逐字相同）。
+                    if showsScrollFades {
+                        LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxHeight: .infinity, alignment: .top)
 
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
-                        .allowsHitTesting(false)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 16)
+                            .allowsHitTesting(false)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
                 .frame(height: max(0, viewportHeight - 22))
                 .clipped()

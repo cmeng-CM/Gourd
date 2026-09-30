@@ -45,7 +45,8 @@
 //  P2 接管批次 / T5 追加（音乐接管模块 + 命名空间环境键的默认值半边）：
 //  - **`MusicModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
 //    `defaultPlacement == Placement(slot: nil, order: 0)`（= 被接管的内置音乐块的默认序号）、
-//    真源键 `showStandardMediaControls`、块宽 300/420、`config` 只登记上游两键；
+//    真源键 `showStandardMediaControls`、块宽 300/420、`config` = 只登记上游两键 +
+//    本模块自己的呈现键 `showAlbumArt`（P2 首页修正批次 / T5 追加，D-06）；
 //  - **`MusicModule.isVisible(showStandardMediaControls:autoHideInactive:hasActiveSession:)`** 四组：
 //    两段是「且」（表达式逐字沿用上游那个 `shouldShowMusicPlayer`）；
 //  - **`EnvironmentValues().homeAlbumArtNamespace == nil`**（D-08 的默认值一半：没人注入时是 nil，
@@ -53,6 +54,12 @@
 //    （`HomeStripView` 的 `.environment(\.homeAlbumArtNamespace, …)`），起作用与否只能人工验收
 //    （封面配对动画：折叠态播放器 ↔ 展开态音乐块）；为它造一条「读回自己刚写的环境值」的断言
 //    只是把修饰符抄进用例，不证明宿主真的注入了，故不写（见 T5 报告 §4）。
+//
+//  P2 首页修正批次 / T5 追加（音乐封面开关 `showAlbumArt`，docs/23-home-fit.md §做法 机制五 / D-06）：
+//  - manifest 的 `showAlbumArt`：`boolean`、默认 `true`（`MusicConfigDefaults`）——键名 / 类型 /
+//    默认值三条都钉住（默认值再钉一次字面量 true：用户问的是「能不能配置」，不是「默认藏起来」）；
+//  - **读取侧分档**（`MusicModule.showsAlbumArt(from:)`）三档：用户覆盖 false / 覆盖 true /
+//    缺键（schema 里没这个键也一样）回落默认显示。假体是内存 `RecordingConfigHandle`，不碰真实域。
 //
 //  P2 接管批次 / T6 追加（组件页的文案解析——功能卡段 + 接管卡的效果行）：
 //  - **七张功能卡的键解析**：数据源是生产表本身（`ModuleSettingsSection.featureCards`，为了这条
@@ -788,7 +795,7 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属与开关真源：零新增能力请求")
 
         let properties = try XCTUnwrap(manifest.config?.properties)
-        XCTAssertEqual(properties.count, 2, "config 只登记上游两键，不新发明键（D-03）")
+        XCTAssertEqual(properties.count, 3, "config = 登记上游两键 + 本模块自己的呈现键 showAlbumArt（D-03 / D-06）")
         XCTAssertEqual(properties["playerColorTinting"]?.type, "boolean")
         XCTAssertEqual(properties["playerColorTinting"]?.default, ConfigValue.bool(true))
         XCTAssertEqual(properties["useMusicVisualizer"]?.type, "boolean")
@@ -796,6 +803,18 @@ final class TakeoverEnablementTests: XCTestCase {
             properties["useMusicVisualizer"]?.default,
             ConfigValue.bool(Defaults.Keys.useMusicVisualizer.defaultValue),
             "登记值必须等于上游键的默认值（上游为 true——不按「可视化默认关」的直觉填 false）"
+        )
+        // 本模块**自己的**呈现键（无上游真源可登记）：默认值取自 `MusicConfigDefaults`
+        XCTAssertEqual(properties["showAlbumArt"]?.type, "boolean")
+        XCTAssertEqual(
+            properties["showAlbumArt"]?.default,
+            ConfigValue.bool(MusicConfigDefaults.showAlbumArt),
+            "默认值必须等于 MusicConfigDefaults.showAlbumArt（读取侧兜底用同一个常量）"
+        )
+        XCTAssertEqual(
+            properties["showAlbumArt"]?.default,
+            ConfigValue.bool(true),
+            "默认显示（用户问的是「能不能配置」，不是「默认藏起来」——方向也要钉住）"
         )
 
         // 两条取值型钩子：真源 = 上游总开关；块宽 = 被接管块原本的那一档（300/420，不是宿主统一值）
@@ -833,8 +852,33 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
-    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
+    /// **封面开关的解析**（`MusicModule.showsAlbumArt(from:)`，docs/23-home-fit.md §做法 机制五 / D-06）：
+    /// 三档——用户覆盖 `false` 读到 false（这就是「关掉封面」那一档）、覆盖 `true` 读到 true、
+    /// 缺键（用户没写过，或 schema 里根本没有这个键）回落 `MusicConfigDefaults.showAlbumArt` = 显示。
+    ///
+    /// 假体是内存 `RecordingConfigHandle`（只落自己的字典，**不碰**开发机真实的
+    /// `com.cmeng.gourd.module.music` 域）——因此本用例没有偏好夹具、也没有还原动作。
+    ///
+    /// 本用例钉的是**读取侧**（config → 布尔量）；「布尔量 → 块内画不画封面」那一段是 SwiftUI
+    /// 视图分档，单测里断言不到（视图是 `private`，也不该为测试放开），只能人工验收
+    /// （截图 `.workflow/p2-home-fit/evidence/t5-albumart-{on,off}.png`）。
+    func testMusicShowsAlbumArtResolution() {
+        let config = RecordingConfigHandle(schema: ["showAlbumArt"])
+        XCTAssertTrue(MusicModule.showsAlbumArt(from: config), "用户没写过这个键 → 回落到默认真（显示）")
+
+        XCTAssertTrue(config.set("showAlbumArt", to: false), "前置：覆盖值写进去了（键在 schema 内）")
+        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "用户覆盖 false → 不画封面（本次新增的那一档）")
+
+        XCTAssertTrue(config.set("showAlbumArt", to: true))
+        XCTAssertTrue(MusicModule.showsAlbumArt(from: config), "用户覆盖 true → 画封面（与改动前逐字一致）")
+
+        XCTAssertTrue(
+            MusicModule.showsAlbumArt(from: RecordingConfigHandle(schema: [])),
+            "schema 里没有这个键（get 给 nil）→ 同一档回落：默认显示"
+        )
+    }
+
+    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
     /// 取回 `showStandardMediaControls`（启用真源）。
     ///
     /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，

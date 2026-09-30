@@ -24,19 +24,39 @@
 //     就是「展开面板首页的一条 strip 块」，块只会在展开态被渲染，重复判一次 `notchState` 是旧内置块
 //     的写法（docs/20 §做法 机制一末段）。判据抽成纯函数 `isVisible(showStandardMediaControls:
 //     autoHideInactive:hasActiveSession:)` 以便单测；答 `.none` 的块**不占位**（「是/否」而不是透明度）。
-//  4. **`config` 只登记不接管**（D-03 / §已知限制 1）：两个键的键名与上游默认值写进 manifest
-//     供审计，读写仍走上游 `Defaults`（`ConfigHandle` 对它们不生效）。默认值**从上游键取**
-//     （`Defaults.Keys.<键>.defaultValue`），不另抄一个字面量——两处各写一个数就会漂。
+//  4. **`config` 里的键分两类**（D-03 / D-06 / §已知限制 1）：`playerColorTinting` /
+//     `useMusicVisualizer` 是**登记键**——键名与上游默认值写进 manifest 供审计，读写仍走上游
+//     `Defaults`（`ConfigHandle` 对它们不生效），默认值**从上游键取**
+//     （`Defaults.Keys.<键>.defaultValue`），不另抄一个字面量——两处各写一个数就会漂；
+//     `showAlbumArt` 是**本模块自己的呈现键**（2026-09-30 用户反馈第 5 条 / D-06），上游没有
+//     对应的 `Defaults` 键，读写就走 `ConfigHandle`：manifest `default` 是唯一默认值来源、
+//     用户覆盖落在模块专属 suite（`com.cmeng.gourd.module.music`）。
 //  5. **命名空间走环境键**（D-08 / §接口与数据形状 6）：折叠态播放器与展开态封面配对的
 //     matchedGeometry 命名空间由宿主 `HomeStripView` 经 `EnvironmentValues.homeAlbumArtNamespace`
 //     注入（它持有那一条），本模块的块读它；**读不到时用自带的 `@Namespace` 兜底**——配对
 //     失效，但不崩、不空白（§已知限制 4）。
+//  6. **封面开关只切「块内画不画封面」**（D-06）：关掉后标题 / 进度 / 控制仍按原布局左对齐、
+//     封面让出的宽度归它们；**块宽声明（300/420）与内容高度都不变**——「封面关掉要不要收窄块宽」
+//     属块宽策略，留给后续反馈（docs/23-home-fit.md §明确不做 / §已知限制 5）。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.music.name` / `module.music.summary`。
 //
 
 import Defaults
 import SwiftUI
+
+// MARK: - 本模块自己的配置键
+
+/// 本模块 config 里**本模块自己发明**（无上游真源）的键的默认值：唯一一份，manifest 字面量与
+/// 读取侧兜底都用它——两处各写一个数就会漂。
+///
+/// 与 `playerColorTinting` / `useMusicVisualizer` 两个**登记键**的区别见文件头口径 4：那两个的
+/// 默认值必须等于上游 `Defaults` 键的默认值（登记值不等于真源值就是假的登记），这里的
+/// `showAlbumArt` 没有上游真源，默认值只能落在本模块。
+enum MusicConfigDefaults {
+    /// 封面默认显示（用户 2026-09-30 问的是「能不能配置」——能力要加，但默认档维持现状：显示）。
+    static let showAlbumArt = true
+}
 
 // MARK: - MusicModule
 
@@ -96,6 +116,16 @@ final class MusicModule: GourdModule {
                     values: nil,
                     itemType: nil
                 ),
+                // **本模块自己的呈现键**（D-06 / 口径 4 的第二类）：首页音乐块画不画封面。
+                // 默认值取本模块的 `MusicConfigDefaults`（没有上游真源可登记），读写走
+                // `ConfigHandle`——用户在模块专属 suite 里的覆盖值由它解析。
+                "showAlbumArt": ConfigNode(
+                    type: "boolean",
+                    title: nil,
+                    default: .bool(MusicConfigDefaults.showAlbumArt),
+                    values: nil,
+                    itemType: nil
+                ),
             ]
         )
     )
@@ -132,6 +162,19 @@ final class MusicModule: GourdModule {
         showStandardMediaControls && (!autoHideInactive || hasActiveSession)
     }
 
+    /// 块内**封面画不画**的解析（纯函数，便于单测：D-06）。
+    ///
+    /// 三档合一：schema 里没有这个键 / 用户没写过覆盖值 → `ConfigHandle.get` 给 `nil` → 回落
+    /// `MusicConfigDefaults.showAlbumArt`（= 显示，缺键时的呈现与 manifest 默认值一致）；
+    /// 用户写过覆盖值 → 读回来的就是它（覆盖值类型不符时 `ConfigHandle` 自己回落默认值并记 warning）。
+    ///
+    /// **调用点必须现读**（`content(for: .home)` 每次投影都调一次）：本批的 `ConfigHandle` 没有
+    /// `observe`（07 §2 的 `observe` 属 P1-3），所以「改了 config 下一次重绘生效」这件事靠现读
+    /// 保证，不靠缓存。
+    static func showsAlbumArt(from config: ConfigHandle) -> Bool {
+        config.get("showAlbumArt", as: Bool.self) ?? MusicConfigDefaults.showAlbumArt
+    }
+
     /// 只记一条日志：音乐没有常驻副作用（播放会话由上游 `MusicManager` 持有，
     /// 本批只搬渲染归属，不搬生命周期）。
     func activate() async throws {
@@ -158,7 +201,7 @@ final class MusicModule: GourdModule {
             ) else {
                 return .none
             }
-            return .view(AnyView(MusicHomeBlockView()))
+            return .view(AnyView(MusicHomeBlockView(showsAlbumArt: Self.showsAlbumArt(from: context.config))))
         case .expanded, .compact, .lockscreen:
             return .none
         }
@@ -167,7 +210,7 @@ final class MusicModule: GourdModule {
 
 // MARK: - 首页块内容
 
-/// 音乐块的视图：**与改动前的内置块逐字相同**（`MusicPlayerView(albumArtNamespace:)`），
+/// 音乐块的视图：**封面档与改动前的内置块逐字相同**（`MusicPlayerView(albumArtNamespace:)`），
 /// 只是搬运到了模块这一侧（一对一替换）。
 ///
 /// 文件内私有：它是本模块的渲染细节，不进任何名单、不给别的模块用。
@@ -177,14 +220,27 @@ final class MusicModule: GourdModule {
 /// 一致；没人注入时（例如将来在别处渲染这个块）退回本视图自己的 `@Namespace`——同一块内的
 /// 动画仍成立，跨视图的那一对静默失效，不崩、不空白。
 ///
+/// **封面关掉的那一档**（`showsAlbumArt == false`，D-06 / 口径 6）走 `MusicControlsView` 单独一块：
+/// 它与 `MusicPlayerView` 里 HStack 的第二个孩子是**同一个视图、同一份自带布局**
+///（`maxWidth: .infinity, alignment: .leading`），因此去掉 `AlbumArtView` 后标题 / 进度 / 控制
+/// 仍是原来的位置与左对齐，封面让出的宽度归它们——不留空洞、也不塌成一列窄内容。
+/// **块宽声明不改**（300/420）：本档只是块内变宽裕（§已知限制 5）。
+///
 /// **块内不自己观察 `MusicManager`**：`MusicPlayerView` 的部件（`AlbumArtView` /
 /// `MusicControlsView`）本来就各自 `@ObservedObject` 它，这里再观察一次只是重复订阅；
 /// 「块在不在」那件事由 `content(for: .home)` 的判据与 `HomeStripView` 的观察承担。
 private struct MusicHomeBlockView: View {
     @Environment(\.homeAlbumArtNamespace) private var albumArtNamespace
     @Namespace private var fallbackNamespace
+    /// 封面画不画：由 `MusicModule.showsAlbumArt(from:)` 在 `content(for: .home)` 里现读后传入
+    /// （视图自己不碰 `ConfigHandle`——参数进来才是可测的分档）。
+    let showsAlbumArt: Bool
 
     var body: some View {
-        MusicPlayerView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+        if showsAlbumArt {
+            MusicPlayerView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+        } else {
+            MusicControlsView()
+        }
     }
 }

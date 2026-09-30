@@ -129,7 +129,12 @@ struct HomeCalendarRow: View {
                     // 显示月份一变（翻月 / 选中日换月）就抓那个月的数据。
                     onDisplayedMonthChange: { month in
                         Task { await calendarManager.updateMonthEvents(for: month) }
-                    }
+                    },
+                    // **首页这一排不画网格上下的滚动提示渐变**（2026-09-30 用户反馈第 1 条 / D-01）：
+                    // 行高按「一屏显示整月」反推（`rowHeight` 的算式），网格不滚——两条渐变在这里
+                    // 不是提示、只是纯黑面板上的两处脏线。独立日历（`StandaloneCalendarView`）的
+                    // 网格可滚，默认档 `true` 保持不变。
+                    showsScrollFades: false
                 )
                 .frame(width: monthGridWidth(in: max(0, geometry.size.width)), alignment: .topLeading)
 

@@ -877,27 +877,36 @@ struct NotchHomeView: View {
 
     /// 标准路径首页的两排接缝：上排 strip + （`showCalendar` 开启时）下排全宽日历行。
     ///
-    /// 高度分配的口径：日历行拿**固定档**（`HomeCalendarRow.rowHeight`），strip 拿剩下的
-    /// ——面板高度不足时优先保 strip 行（`max(0, …)`，不为负），而不是两排各让一半。
+    /// **高度分配的判据只有一处**：`HomeVerticalFit.plan(available:calendarRowHeight:rowSpacing:stripMinimumHeight:)`
+    /// （纯函数，三档穷举在用例里）。按 docs/23-home-fit.md §做法 机制二 / D-02，顺序是
+    /// **先收日历行、保住 strip**：两排一起放不下时日历行整行让位、strip 拿全部可用高度
+    /// （改动前是反的——日历行拿固定档、strip 不够 `HomeStripView.minimumUsableHeight` 就整条不画）。
     ///
-    /// **strip 高度不足「能画满一屏块」时不生成 strip**（判据 = `HomeStripView.minimumUsableHeight`
-    /// = 完整渲染的实测下限 152pt，2026-09-29 复审裁决「画不满就不画」）：低于它整条不画、面板只剩
-    /// 日历行；此前只在「恰好 0」时拦住，44…134 区间会画出一条被切掉封面下沿的残条。历史取证：
-    /// `HomeStripBlock` 的裁剪在退化高度（0）下不生效，块内容会按固有尺寸溢出画到下排日历行上。
+    /// 日历行关掉时（`showCalendar == false`）不存在取舍：行高与间距都按 0 传进去，strip 拿全部可用
+    /// 高度（与改动前逐字同口径；strip 连最小可用高度都放不下时同样整条不画）。
+    ///
+    /// **strip 的「画不满就不画」阈值**仍是 `HomeStripView.minimumUsableHeight`（152，实测来源见那边的
+    /// 注释）：判据在 `HomeVerticalFit` 里，视图侧不再自己比一次高度——两处各判一次就会有两份阈值。
+    /// 这条阈值不是新规矩（2026-09-29 复审裁决）：此前只在「恰好 0」时拦住，44…134 区间会画出一条
+    /// 被切掉封面下沿的残条（历史取证：`HomeStripBlock` 的裁剪在退化高度下不生效，块内容会按固有
+    /// 尺寸溢出画到下排日历行上）；本批只改了「谁先让位」，阈值与它的依据一字未动。
     private var standardHomeContent: some View {
         GeometryReader { geometry in
             let available = max(0, geometry.size.height)
-            let stripHeight = showCalendar
-                ? max(0, available - HomeCalendarRow.rowHeight - HomeCalendarRow.rowSpacing)
-                : available
+            let plan = HomeVerticalFit.plan(
+                available: available,
+                calendarRowHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
+                rowSpacing: showCalendar ? HomeCalendarRow.rowSpacing : 0,
+                stripMinimumHeight: HomeStripView.minimumUsableHeight
+            )
 
             VStack(spacing: HomeCalendarRow.rowSpacing) {
-                if stripHeight >= HomeStripView.minimumUsableHeight {
+                if plan.showsStrip {
                     HomeStripView(albumArtNamespace: albumArtNamespace)
-                        .frame(height: stripHeight, alignment: .topLeading)
+                        .frame(height: plan.stripHeight, alignment: .topLeading)
                 }
 
-                if showCalendar {
+                if showCalendar, plan.showsCalendarRow {
                     HomeCalendarRow()
                 }
             }
