@@ -342,6 +342,9 @@ struct ModuleSettingsSection: View {
         // 卡上从左到右那一排就是块里从上到下那几行，勾满而块放不下时「画前三个」的顺序因此确定。
         // 模块 id 写**字面量**（与启动台三行同口径）：`ProgressModule` 没有 `moduleID` 常量，
         // 解析用例把它对回注册表，写错即红。
+        //
+        // `multiSelectEffectiveSet` 直接接模块那个公开纯函数：卡片勾中的一组 = 块要画的一组
+        // （空表 / 全坏值 → 出厂三档，见 `ModuleConfigControl.selectedOptions` 的注释）。
         ModuleConfigControl(
             moduleID: "com.cmeng.gourd.progress",
             key: "visibleScopes",
@@ -349,7 +352,10 @@ struct ModuleSettingsSection: View {
                 options: ProgressCalculator.Scope.allCases.map(\.rawValue),
                 titleKeys: ProgressCalculator.Scope.allCases.map(\.labelKey)
             ),
-            titleKey: "settings.modules.progress.visibleScopes"
+            titleKey: "settings.modules.progress.visibleScopes",
+            multiSelectEffectiveSet: { raw in
+                ProgressCalculator.resolveScopes(from: raw).map(\.rawValue)
+            }
         ),
     ]
 
@@ -744,6 +750,35 @@ struct ModuleConfigControl: Identifiable {
     let kind: Kind
     /// 这一行文案的本地化 key。
     let titleKey: String
+    /// **多选型专用**：原始 `[String]` → 卡片上应当勾中的那一组（模块的**有效值**）的解析。
+    ///
+    /// 为什么必须由登记表给出、而不是让控件自己拍（T2 审查的 Important）：模块侧对
+    /// 「空表 / 全是坏值」有自己的回落口径（`ProgressCalculator.resolveScopes` → 出厂三档），
+    /// 卡片若只做「按选项过滤」，用户把五档全取消（或手改配置文件写成空表）之后就会出现
+    /// **卡片一个都没勾、块里还在画三行**——同一个键在两边算出两个真相。这里直接接模块那个
+    /// **公开纯函数**（进度那条就是 `ProgressCalculator.resolveScopes(from:)`），卡片勾中的那一组
+    /// 按构造等于块要画的那一组。
+    ///
+    /// `nil`（其他四种类型，或将来漏给的多选）退化成「按选项过滤」这一条最朴素的口径；
+    /// **多选漏给解析会被解析用例拦下**（`testConfigControlAllowlistMatchesManifestsAndCatalog`
+    /// 的 `.multiSelect` 分档里有一条非空断言）。
+    let multiSelectEffectiveSet: (([String]) -> [String])?
+
+    /// 显式 init（`multiSelectEffectiveSet` 是 `let`，memberwise init 不会给它默认值）：
+    /// 只有最后一条是新的，前四条与调用点逐字不变。
+    init(
+        moduleID: String,
+        key: String,
+        kind: Kind,
+        titleKey: String,
+        multiSelectEffectiveSet: (([String]) -> [String])? = nil
+    ) {
+        self.moduleID = moduleID
+        self.key = key
+        self.kind = kind
+        self.titleKey = titleKey
+        self.multiSelectEffectiveSet = multiSelectEffectiveSet
+    }
 
     var id: String { "\(moduleID).\(key)" }
 
@@ -776,11 +811,18 @@ struct ModuleConfigControl: Identifiable {
         config.get(key, as: String.self) ?? ""
     }
 
-    /// 多选的 get：读 `[String]`（缺键回落 manifest 默认值，同上），再收敛成
-    /// **「清单里声明过的取值」∩「勾中的」**并按声明顺序排——手改配置文件写进去的野值不会在卡上
-    /// 变成一个点不掉的勾（与数值型的「读侧再夹一次」同一条理由）。
+    /// 多选的 get：读 `[String]`，再收敛成**卡片上应当勾中的那一组**（顺序恒按 `options`）。
+    ///
+    /// **先经模块侧的解析**（`multiSelectEffectiveSet`），再按选项过滤——返回值因此是
+    /// **「模块真正会画的那一组」**：空表 / 全坏值在模块侧回落到出厂三档，卡片上勾中的也就是那三档
+    /// （旧实现只做过滤，会在这种输入上显示「一个都没勾」而块里还在画三行 —— T2 审查的 Important）。
+    /// 手改配置文件写进去的野值同样不会在卡上变成一个点不掉的勾（与数值型的「读侧再夹一次」同一条理由）。
+    ///
+    /// 登记表没给解析函数时（其他四种类型）退化成「按选项过滤」。
     func selectedOptions(from config: ConfigHandle) -> [String] {
-        let chosen = Set(config.get(key, as: [String].self) ?? [])
+        let raw = config.get(key, as: [String].self) ?? []
+        let effective = multiSelectEffectiveSet?(raw) ?? raw
+        let chosen = Set(effective)
         return multiSelectOptions.map(\.value).filter { chosen.contains($0) }
     }
 
@@ -823,10 +865,16 @@ struct ModuleConfigControl: Identifiable {
     }
 
     /// 某一个选项**翻面**（未勾 → 勾上；已勾 → 取消），落盘同上。多选行的每一次点击就是这一下。
+    ///
+    /// **不许把最后一档也取消**（T2 审查的 Important）：`chosen.count == 1` 时再点那一项直接
+    /// **拒绝**（返回 `false`、不落盘）——一组都没有的块是一行都不画的空块，没有任何用途；
+    /// 而「拒绝」比「写空表再让模块回落成三档」诚实：后者会让卡片与块在那一次点击上又一次分叉。
+    /// 勾上永远是允许的（从有效值的任意一组出发）。
     @discardableResult
     func toggleMultiSelect(_ value: String, config: ConfigHandle) -> Bool {
         var chosen = selectedOptions(from: config)
         if let index = chosen.firstIndex(of: value) {
+            guard chosen.count > 1 else { return false }
             chosen.remove(at: index)
         } else {
             chosen.append(value)

@@ -136,7 +136,11 @@
 //    都收在允许清单用例里；选项的具体取值与顺序由 `testProgressVisibleScopesControlMatchesManifestAndCatalog`
 //    钉死（= `ProgressCalculator.Scope.allCases`）；
 //  - **多选读写口径**：`toggleMultiSelect` 翻面、野值丢弃、**顺序恒按选项声明顺序**（写侧与读侧
-//    各收敛一次）、非多选型调用写多选是空操作（见上面那条端到端用例的 ⑥ 档）。
+//    各收敛一次）、非多选型调用写多选是空操作（见上面那条端到端用例的 ⑥ 档）；
+//  - **卡片与模块同算一组**（T2 审查 Important 的回归）：读侧先经 `multiSelectEffectiveSet`
+//    （登记表里接的是模块的 `ProgressCalculator.resolveScopes`）再按选项过滤——空表 / 全坏值 →
+//    勾中的是出厂三档，不是「一个都没勾」；`toggleMultiSelect` 拒绝把最后一档也取消（不落盘）。
+//    多选漏给解析函数由允许清单用例的非空断言拦下。
 //
 //  P3 冻结批次 / T6 追加（日历接管模块——孤儿视图 `StandaloneCalendarView` 的展开 tab）：
 //  - **`CalendarModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact` / `.home`）、
@@ -1067,6 +1071,13 @@ final class TakeoverEnablementTests: XCTestCase {
                     options.count,
                     "\(control.id) 的 options 与 titleKeys 必须一一对应（`multiSelectOptions` 靠它 zip）"
                 )
+                // **多选必须带「有效值解析」**（T2 审查的 Important）：不给的话卡片会在
+                // 「空表 / 全是坏值」上显示「一个都没勾」而模块还在按自己的回落口径画行
+                // （同一个键两个真相）。解析函数接的必须是模块那个公开纯函数。
+                XCTAssertNotNil(
+                    control.multiSelectEffectiveSet,
+                    "\(control.id) 是多选但没给 `multiSelectEffectiveSet`——卡片会在空表/全坏值上与块分叉"
+                )
                 // 选项必须能落盘：manifest 的默认值里出现的取值都得是清单里的选项之一
                 // （否则「出厂那几档」在卡上一个都勾不上，用户也改不回默认）
                 if case .strings(let declared)? = node.default {
@@ -1413,6 +1424,74 @@ final class TakeoverEnablementTests: XCTestCase {
         )
 
         XCTAssertResolves(control.titleKey)
+    }
+
+    /// **卡片与模块算的是同一组尺度**（T2 审查的 Important 的回归用例）：卡片上「勾中的那一组」
+    /// 必须经模块的**公开解析**（`ProgressCalculator.resolveScopes`，登记在
+    /// `multiSelectEffectiveSet`）算出，因此它按构造等于**块真正会画的那一组**——
+    /// 空表 / 全是坏值 → 出厂三档（不是「一个都没勾」），有真值 → 按真值（去重 + 按选项声明顺序）。
+    ///
+    /// 另钉住「最后一档不许关」：`toggleMultiSelect` 在只剩一档时**拒绝**（返回 false、不落盘）
+    /// ——一组都没有的块一行都不画，而「写空表 + 让模块回落」会让卡片与块在那一次点击上又分叉。
+    ///
+    /// 读侧只经 `ConfigHandle.get`，所以这里的假体（`RecordingConfigHandle`）够了：
+    /// **不碰**开发机真实的 `com.cmeng.gourd.module.progress` 域。
+    func testProgressVisibleScopesCardShowsTheEffectiveSet() throws {
+        let control = try XCTUnwrap(
+            ModuleSettingsSection.configControls.first { $0.moduleID == "com.cmeng.gourd.progress" && $0.key == "visibleScopes" },
+            "进度卡必须有一条「显示的尺度」控件"
+        )
+        let config = RecordingConfigHandle(schema: ["visibleScopes"])
+
+        // ① 一条覆盖值都没有（`get` 给 nil）→ 出厂三档
+        //    （真句柄在同样情形下回落到 manifest 默认，值也是这三档——两条路都对得上）
+        XCTAssertEqual(control.selectedOptions(from: config), ["day", "week", "month"], "缺键 → 出厂三档")
+
+        // ② 覆盖值是**空表** → 仍然是出厂三档（修掉的那一条：旧实现只做过滤，这里给 []）
+        XCTAssertTrue(config.set("visibleScopes", to: [String]()))
+        XCTAssertEqual(
+            control.selectedOptions(from: config),
+            ["day", "week", "month"],
+            "空表 → 有效值仍是出厂三档（与块画出来的三行一致，不是「一个都没勾」）"
+        )
+
+        // ③ 覆盖值**全是坏值** → 同上（模块侧的回落口径与卡片逐字同一处）
+        XCTAssertTrue(config.set("visibleScopes", to: ["bogus", "Month"]))
+        XCTAssertEqual(control.selectedOptions(from: config), ["day", "week", "month"], "全坏值 → 出厂三档")
+
+        // ④ 有真值 → 按真值：野值丢弃、去重、顺序按选项声明顺序（不是写入顺序）
+        XCTAssertTrue(config.set("visibleScopes", to: ["year", "bogus", "day", "day"]))
+        XCTAssertEqual(
+            control.selectedOptions(from: config),
+            ["day", "year"],
+            "野值丢弃 + 去重 + 按选项声明顺序（存进去的先后不参与）"
+        )
+
+        // ⑤ 只剩一档时**拒绝取消**（不落盘：盘上还是原来那一档）
+        XCTAssertTrue(config.set("visibleScopes", to: ["year"]))
+        XCTAssertEqual(control.selectedOptions(from: config), ["year"])
+        XCTAssertFalse(control.toggleMultiSelect("year", config: config), "最后一档拒绝取消")
+        XCTAssertEqual(control.selectedOptions(from: config), ["year"], "拒绝之后盘上一个字节没动")
+        // 从一档出发**加**一档照常，写盘顺序仍按选项声明顺序
+        XCTAssertTrue(control.toggleMultiSelect("day", config: config), "从一档加一档")
+        XCTAssertEqual(control.selectedOptions(from: config), ["day", "year"])
+        // 两档时取消回到一档；再到一档又拒绝
+        XCTAssertTrue(control.toggleMultiSelect("day", config: config), "两档时可以取消")
+        XCTAssertEqual(control.selectedOptions(from: config), ["year"])
+
+        // ⑥ 手改配置文件写成空表之后点一下：**从有效三档出发**（不是从空表出发）
+        XCTAssertTrue(config.set("visibleScopes", to: [String]()))
+        XCTAssertTrue(control.toggleMultiSelect("quarter", config: config), "空表上勾一档")
+        XCTAssertEqual(
+            control.selectedOptions(from: config),
+            ["day", "week", "month", "quarter"],
+            "落盘的是「有效三档 + 本季」——空表在点击这一下就被治好"
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: try XCTUnwrap(config.storage["visibleScopes"])),
+            ["day", "week", "month", "quarter"],
+            "盘上也是这四项（顺序 = 选项声明顺序）"
+        )
     }
 
     /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
