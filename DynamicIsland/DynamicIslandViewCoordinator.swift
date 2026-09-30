@@ -120,6 +120,15 @@ class DynamicIslandViewCoordinator: ObservableObject {
                 currentView = .home
                 return
             }
+            // **宿主门槛键**（p5-home-blocks / T5 修复 P2）：被门槛键排除的视图**不许被选中**——
+            // 选中的那一刻就落回首页。挡在这里而不只挡在「键变化」那一路，是因为把面板开到某个
+            // 宿主视图的入口不止设置页那一个（`openShelfByDefault` 会在打开面板时直接设 `.shelf`、
+            // 剪贴板快捷键直接设 `.notes` / `.clipboard`）——键关着时它们同样会把面板开到一个
+            // 已经关掉的元素上。判据是纯函数 `isHostSurfaceGatedOff(_:offKeyNames:)`。
+            if Self.isHostSurfaceGatedOff(currentView, offKeyNames: Self.hostSurfaceOffKeyNames) {
+                currentView = .home
+                return
+            }
             // Track direction before SwiftUI re-renders
             let oldIdx = Self.tabOrder.firstIndex(of: oldValue) ?? 0
             let newIdx = Self.tabOrder.firstIndex(of: currentView) ?? 0
@@ -229,6 +238,19 @@ class DynamicIslandViewCoordinator: ObservableObject {
             .store(in: &cancellables)
 
         handleExtensionExperienceSnapshot(extensionNotchExperienceManager.activeExperiences)
+
+        // 宿主门槛键（p5-home-blocks / T5 修复 P2）：四个宿主元素（暂存器 / 终端 / 剪贴板 / 取色器）
+        // 的键关掉时，当前若正停在被它门控的视图上就收回首页——同扩展 tab 那条
+        // `resetExtensionViewIfNeeded()` 的先例（`ContentView` 的 switch 只认视图 id、不认门槛键）。
+        // 逐键订阅而不是合并成一条：将来哪一条要单独处理时不必先拆管道。
+        for gate in Self.hostSurfaceGateViews {
+            Defaults.publisher(gate.key)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.resetHostSurfaceViewIfNeeded()
+                }
+                .store(in: &cancellables)
+        }
 
         // Observe all tab-affecting settings to enforce minimum notch width
         Publishers.MergeMany(
@@ -493,6 +515,60 @@ class DynamicIslandViewCoordinator: ObservableObject {
     /// （与 `TabSelectionView.isSelected` 同一口径）。
     func isTimerSurfaceSelected() -> Bool {
         currentView == .timer || (currentView == .module && selectedModuleID == TimerModule.moduleID)
+    }
+
+    // MARK: - 宿主元素的视图归一化（p5-home-blocks / T5 修复 P2）
+
+    /// 一条**宿主元素的视图映射**：门槛键 + 它关掉时**不能继续停留 / 不能再被选中**的视图。
+    ///
+    /// 视图 id 取自「谁在读这个键」（`docs/29` §机制三那张枚举表的宿主行）：
+    /// - 暂存器 `dynamicShelf` → `.shelf`（`TabSelectionView` 的 Shelf tab + 拖拽落点 `dragDetector`）；
+    /// - 终端 `enableTerminalFeature` → `.terminal`；
+    /// - 剪贴板 `enableClipboardManager` → `.notes` 与 `.clipboard`（面板 tab 走 `.notes`、
+    ///   刘海图标 `notchTab` 那一路走 `.clipboard`——两条支路都是剪贴板今天的形态）；
+    /// - 取色器 `enableColorPickerFeature` → `.colorPicker`。
+    ///
+    /// **计时器不在表里**：它是模块行不是宿主行，它的收回走既有那条
+    /// `handleTimerFeatureToggle()`（判据 `isTimerSurfaceSelected()`），两处不重复。
+    struct HostSurfaceGate {
+        /// 门槛键——与设置页 `ModuleSettingsSection.hostPanelRows` 那四条同一批键。
+        let key: Defaults.Key<Bool>
+        /// 该键关掉时不允许停留的视图（`ContentView` 的 `switch coordinator.currentView` 分支）。
+        let views: [NotchViews]
+
+        /// 稳定 id = 上游键名（与 `HostSurfaceRow.id` 同口径：用例两侧按它对键）。
+        var id: String { key.name }
+    }
+
+    /// **不是 `private`**：用例拿它与设置页那四条宿主行对键（同一个集合的两个端点）。
+    static let hostSurfaceGateViews: [HostSurfaceGate] = [
+        HostSurfaceGate(key: .dynamicShelf, views: [.shelf]),
+        HostSurfaceGate(key: .enableTerminalFeature, views: [.terminal]),
+        HostSurfaceGate(key: .enableClipboardManager, views: [.notes, .clipboard]),
+        HostSurfaceGate(key: .enableColorPickerFeature, views: [.colorPicker]),
+    ]
+
+    /// 该视图是否被某个**已关掉**的宿主门槛键排除（纯函数：吃「哪些键关着」的名字集合，不读偏好
+    /// ——用例拿几个字面量就能把四条映射各钉一条，与 `ModuleSurfaceGroup.hasOtherSurface` 同款）。
+    static func isHostSurfaceGatedOff(_ view: NotchViews, offKeyNames: Set<String>) -> Bool {
+        hostSurfaceGateViews.contains { gate in
+            offKeyNames.contains(gate.key.name) && gate.views.contains(view)
+        }
+    }
+
+    /// 此刻**关着**的宿主门槛键名（读偏好的那一半，只出现在这一处）。
+    private static var hostSurfaceOffKeyNames: Set<String> {
+        Set(hostSurfaceGateViews.filter { !Defaults[$0.key] }.map(\.key.name))
+    }
+
+    /// 当前视图被它自己的门槛键排除时收回首页——**「已经停在这个视图上，再把键关掉」那一路**
+    /// （订阅四个键的变更触发）；「被排除的视图不许被选中」那一路在 `currentView` 的 `didSet` 里。
+    /// 先例是扩展 tab 的 `resetExtensionViewIfNeeded()`（同为「关了就得从面板上消失」）。
+    private func resetHostSurfaceViewIfNeeded() {
+        guard Self.isHostSurfaceGatedOff(currentView, offKeyNames: Self.hostSurfaceOffKeyNames) else { return }
+        withAnimation(.smooth) {
+            currentView = .home
+        }
     }
     
     // MARK: - Clipboard Management

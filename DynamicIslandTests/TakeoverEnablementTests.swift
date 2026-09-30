@@ -155,6 +155,17 @@
 //    两份名单是那两个视图**真的在读**的门槛键声明（读取点就在它们各自的 `tabs` / `body` 里）。
 //    方向只有一个（登记 ⊆ 在用），反方向在真实键集上不可达（枚举表逐条写明其余门槛键的归属）。
 //
+//  p5-home-blocks / T5 **修复轮**（独立评审 P2：关掉宿主元素后面板还停在它上面；
+//  `docs/29` §机制三那四条宿主行在协调器一侧的闭环）：
+//  - **视图归一化表对键**（`testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows`）：
+//    `DynamicIslandViewCoordinator.hostSurfaceGateViews` 与 `ModuleSettingsSection.hostPanelRows`
+//    必须是同一批键、同序，且「一个视图只归一条」；四条映射逐条钉死（`.shelf` / `.terminal` /
+//    `.notes` + `.clipboard` / `.colorPicker`）；
+//  - **归一化两路各一条**（`testHostSurfaceGateNormalizationResetsGatedOffViews`）：纯函数
+//    `isHostSurfaceGatedOff(_:offKeyNames:)` 五条 + 反例三档；端到端「停在 `.shelf` → 关暂存器 →
+//    收回 `.home`」（订阅那一路）与「键关着时 `.terminal` / `.notes` / `.clipboard` 连选都选不上」
+//    （`currentView.didSet` 守卫那一路）；另有一条反例断言「关一个不门控当前视图的键不许动它」。
+//
 //  P3 冻结批次 / T6 追加（日历接管模块——孤儿视图 `StandaloneCalendarView` 的展开 tab）：
 //  - **`CalendarModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact` / `.home`）、
 //    `defaultPlacement == nil`、真源键 `showCalendar`、无块宽、`config == nil`（口径 3：本模块没有
@@ -2048,6 +2059,132 @@ final class TakeoverEnablementTests: XCTestCase {
                     + "在读的门槛键——这一行拨下去面板上不会有任何变化（键错了 / 该行不该在本节）"
             )
         }
+    }
+
+    /// **宿主行的另一端**（T5 修复轮 P2）：协调器那张**视图归一化**表
+    /// （`DynamicIslandViewCoordinator.hostSurfaceGateViews`）与设置页那四条宿主行必须是**同一批键**
+    /// ——一端是「用户能拨的开关」，另一端是「拨完把停在被关视图上的面板收回首页」，两边各写一份
+    /// 键表就会漂（枚举表已经把四条钉死，这里把两端钉在一起）。
+    func testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows() {
+        let gates = DynamicIslandViewCoordinator.hostSurfaceGateViews
+        let rows = ModuleSettingsSection.hostPanelRows
+
+        XCTAssertEqual(
+            gates.map(\.id),
+            rows.map(\.id),
+            "归一化表的键与顺序 = 设置页四条宿主行（暂存器 / 终端 / 剪贴板 / 取色器）"
+        )
+        XCTAssertEqual(Set(gates.map(\.key.name)), Set(rows.map(\.key.name)), "同名的键也只能是同一批")
+
+        // 每条都得真的门控到视图，且**一个视图只归一条**（否则「谁关掉了它」会有两个答案）
+        var seen: [String: String] = [:]
+        for gate in gates {
+            XCTAssertFalse(gate.views.isEmpty, "\(gate.id) 没有登记它门控的视图——归一化对它就没有意义")
+            for view in gate.views {
+                XCTAssertNil(seen["\(view)"], "\(view) 同时挂在 \(seen["\(view)"] ?? "") 与 \(gate.id) 上")
+                seen["\(view)"] = gate.id
+            }
+        }
+        // 四条宿主键各自的视图逐个钉死（改映射必须改这条）
+        XCTAssertEqual(gates.map(\.views), [[.shelf], [.terminal], [.notes, .clipboard], [.colorPicker]])
+    }
+
+    /// **宿主元素的视图归一化**（T5 修复轮 P2 的靶子）：四个宿主键关掉时，面板不许停在被它们门控的
+    /// 视图上——「键变化」那一路（订阅）与「被排除的视图不许被选中」那一路（`currentView` 的 `didSet`
+    /// 守卫）各钉一条。
+    ///
+    /// 三层断言：**纯函数**（四条映射逐条 + 反例）→ **端到端**（真协调器 + 真偏好键：停在 `.shelf`
+    /// 把暂存器关掉 → 收回 `.home`）→ **反例**（关取色器不许动 `.terminal`；键关着时 `.terminal`
+    /// 连选都选不上）。
+    ///
+    /// 卫生（同 T3 三档用例）：`snapshotTimerSurface()` 记下协调器两个字段 + `enableMinimalisticUI`
+    /// 的持久域原值（极简 UI 开着会把非 `.home` 的选中打回首页，必须先置假），四个宿主键走
+    /// `snapshotValues(of:)` / `restoreValues(_:for:)`；`defer` 里**先还原键、再还原字段**——反了的话
+    /// 还原键会触发订阅、把刚写回的 `currentView` 又改掉。订阅是异步的（`receive(on: DispatchQueue.main)`），
+    /// 故用 `waitUntil` 等条件成立。
+    func testHostSurfaceGateNormalizationResetsGatedOffViews() async {
+        // ① 纯函数：四条映射各一条
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.shelf, offKeyNames: ["dynamicShelf"]),
+            "暂存器关着 → `.shelf` 不许停留"
+        )
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.terminal, offKeyNames: ["enableTerminalFeature"]),
+            "终端关着 → `.terminal` 不许停留"
+        )
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.notes, offKeyNames: ["enableClipboardManager"]),
+            "剪贴板关着 → `.notes`（面板 tab 那一路）不许停留"
+        )
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.clipboard, offKeyNames: ["enableClipboardManager"]),
+            "剪贴板关着 → `.clipboard`（刘海图标 notchTab 那一路）不许停留"
+        )
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.colorPicker, offKeyNames: ["enableColorPickerFeature"]),
+            "取色器关着 → `.colorPicker` 不许停留"
+        )
+
+        // 反例三档：键都开着时五个视图全放行；`.home` 是兜底、永不被排除；计时器不在本表
+        // （它的收回走既有那条 `handleTimerFeatureToggle()`，两处不重复）。
+        let allGateNames = Set(DynamicIslandViewCoordinator.hostSurfaceGateViews.map(\.id))
+        for view in [NotchViews.shelf, .terminal, .notes, .clipboard, .colorPicker] {
+            XCTAssertFalse(
+                DynamicIslandViewCoordinator.isHostSurfaceGatedOff(view, offKeyNames: []),
+                "\(view)：四个键都开着时必须放行"
+            )
+        }
+        XCTAssertFalse(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.home, offKeyNames: allGateNames),
+            "`.home` 是兜底，永不被排除"
+        )
+        XCTAssertFalse(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.timer, offKeyNames: allGateNames),
+            "计时器不在本表（同键的收回走计时器自己那一处）"
+        )
+
+        // ② 端到端：真协调器 + 真偏好键
+        let hostKeys = DynamicIslandViewCoordinator.hostSurfaceGateViews.map(\.id)
+        let originals = snapshotValues(of: hostKeys)
+        let surface = snapshotTimerSurface()
+        defer {
+            restoreValues(originals, for: hostKeys)   // 先键
+            restoreTimerSurface(surface)              // 再字段（最后写 currentView，顺序见用例注释）
+        }
+        let coordinator = DynamicIslandViewCoordinator.shared
+        Defaults[.enableMinimalisticUI] = false
+        Defaults[.dynamicShelf] = true
+        Defaults[.enableTerminalFeature] = true
+        Defaults[.enableClipboardManager] = true
+        Defaults[.enableColorPickerFeature] = true
+
+        coordinator.currentView = .shelf
+        XCTAssertEqual(coordinator.currentView, .shelf, "前置：四个键都开着时 `.shelf` 是合法选中")
+
+        Defaults[.dynamicShelf] = false                 // 设置页「面板组件」节的那一次拨动
+        let reset = await waitUntil { coordinator.currentView == .home }
+        XCTAssertTrue(reset, "暂存器关掉 → 正停着的 `.shelf` 必须收回首页（订阅那一路）")
+
+        // 反例：关一个**不门控当前视图**的键，不许动它（防「一律打回首页」）
+        coordinator.currentView = .terminal
+        Defaults[.enableColorPickerFeature] = false
+        await yieldTurns()
+        XCTAssertEqual(coordinator.currentView, .terminal, "关取色器不许动 `.terminal`（只收被同一个键门控的视图）")
+
+        // ③ 选中那一端的守卫：键关着时连选都选不上（`openShelfByDefault` / 剪贴板快捷键那两条
+        //    入口把面板开到已关元素上的同一条兜底）
+        Defaults[.enableTerminalFeature] = false
+        let terminalReset = await waitUntil { coordinator.currentView == .home }
+        XCTAssertTrue(terminalReset, "终端关掉 → 正停着的 `.terminal` 收回首页")
+        coordinator.currentView = .terminal
+        XCTAssertEqual(coordinator.currentView, .home, "终端键关着 → `.terminal` 连选都选不上（didSet 守卫）")
+        Defaults[.enableClipboardManager] = false
+        let clipboardReset = await waitUntil { coordinator.currentView == .home }
+        XCTAssertTrue(clipboardReset, "剪贴板关掉 → 当前视图（此刻是 `.home`）保持首页")
+        coordinator.currentView = .notes
+        XCTAssertEqual(coordinator.currentView, .home, "剪贴板键关着 → `.notes`（面板 tab 那一路）也选不上")
+        coordinator.currentView = .clipboard
+        XCTAssertEqual(coordinator.currentView, .home, "剪贴板键关着 → `.clipboard`（刘海图标那一路）也选不上")
     }
 
     /// 三个接管模块的卡片文案也能解析：名称 key 取**真模块的 manifest**（卡片上那行名称走

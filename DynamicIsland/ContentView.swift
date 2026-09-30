@@ -257,6 +257,10 @@ struct ContentView: View {
     // 它们在 mouseDown 回调 / 延时任务里取值，不需要视图观察。
     
     @Default(.enableStatsFeature) var enableStatsFeature
+    // 拖拽落点的宿主门槛键（p5-home-blocks / T5 修复 P3）：`dragDetector` 原先裸读它，设置页
+    // 「面板组件」节把暂存器关掉之后，落点要等本视图因别的原因重绘才消失（同表达式的
+    // `enableMinimalisticUI` 本就有观察，见下方声明——这次把那半边也改成读属性）。
+    @Default(.dynamicShelf) var dynamicShelf
     @Default(.showCpuGraph) var showCpuGraph
     @Default(.showMemoryGraph) var showMemoryGraph
     @Default(.showGpuGraph) var showGpuGraph
@@ -2470,7 +2474,7 @@ struct ContentView: View {
     var dragDetector: some View {
         if lockScreenManager.isLocked {
             EmptyView()
-        } else if Defaults[.dynamicShelf] && !Defaults[.enableMinimalisticUI] {
+        } else if dynamicShelf && !enableMinimalisticUI {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
