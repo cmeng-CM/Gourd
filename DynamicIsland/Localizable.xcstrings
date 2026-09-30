@@ -68594,6 +68594,22 @@
         }
       }
     },
+    "settings.modules.music.showAlbumArt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show album art"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示封面"
+          }
+        }
+      }
+    },
     "settings.modules.order.empty" : {
       "localizations" : {
         "en" : {

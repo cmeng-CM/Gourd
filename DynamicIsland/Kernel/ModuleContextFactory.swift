@@ -6,6 +6,10 @@
 //  `notch` / events / storage / scheduler / permissions / secrets / clock 七个面属 P1-2/P1-3。
 //  本文件是 config / ui 两个句柄的唯一实现落点——模块侧只拿到协议。
 //
+//  P2 首页修正批次 / T5 修复轮：多一个 `configHandle(for:)`——**宿主侧（设置页）**要读写某个
+//  已注册模块的 config 时，拿的是与模块侧**同一个实现**的句柄（suite 名与存储编码因此只有一处）。
+//  唯一的调用点是组件页给音乐卡「显示封面」开的口子，见那里的注释。
+//
 
 import Foundation
 import SwiftUI
@@ -33,6 +37,26 @@ public enum ModuleContextFactory {
             config: ManifestConfigHandle(manifest: manifest, logger: logger),
             logger: logger,
             ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw, collapse: collapse)
+        )
+    }
+
+    /// 宿主侧（设置页）读写**某个已注册模块自己的 config** 时拿的句柄。
+    ///
+    /// **与模块侧是同一个实现**（同一个 `ManifestConfigHandle`）：suite 名
+    /// `com.cmeng.gourd.module.<shortID>` 与「值按 JSON 字节存」的口径因此只有一处，
+    /// 「设置页写进 A 域、模块读 B 域」或「一边存 Data 一边读 String」这类静默故障在构造上
+    /// 就不可能发生（`ManifestConfigHandle` 保持 `private`——宿主只经协议拿到读写两个方法）。
+    ///
+    /// 用途边界（P2 首页修正批次 / T5 修复轮的唯一调用点）：组件页给**音乐卡的「显示封面」**
+    /// 这一个键开的口子。模块的 config 写入口不是通用能力——「按 manifest schema 自动生成
+    /// 控件」是另一个批次的活（见 `.workflow/p2-home-fit/reports/T5-fix.md`）。
+    ///
+    /// 句柄是薄壳（manifest schema 快照 + 一次 `UserDefaults(suiteName:)`），调用点每次现取即可；
+    /// 覆盖值读的仍是当前落盘值（`get` 不去缓存），因此「写完下一次读就变」成立。
+    static func configHandle(for manifest: ModuleManifest) -> ConfigHandle {
+        ManifestConfigHandle(
+            manifest: manifest,
+            logger: ModuleLogger(moduleID: manifest.id, shortID: manifest.shortID)
         )
     }
 

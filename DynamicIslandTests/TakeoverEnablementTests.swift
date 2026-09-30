@@ -61,6 +61,17 @@
 //  - **读取侧分档**（`MusicModule.showsAlbumArt(from:)`）三档：用户覆盖 false / 覆盖 true /
 //    缺键（schema 里没这个键也一样）回落默认显示。假体是内存 `RecordingConfigHandle`，不碰真实域。
 //
+//  P2 首页修正批次 / T5 **修复轮**追加（封面开关的界面入口——范围评审的唯一一条 Important）：
+//  - **控件登记表对生产事实**（`testMusicAlbumArtControlMatchesManifestAndCatalog`）：模块 id =
+//    真模块 id、config 键逐字命中 `manifest.config.properties`、类型 boolean、回落值 =
+//    `MusicConfigDefaults.showAlbumArt`、文案 key 在 zh-Hans 里解析得出来；
+//  - **写路径端到端**（`testMusicAlbumArtControlWriteIsReadableByTheModule`）：控件写 false →
+//    模块自己的读侧（`MusicModule.showsAlbumArt(from:)`）立刻读到 false，落盘就在
+//    `com.cmeng.gourd.module.<shortID>` 的 JSON 字节里。probe 域（`…module.probe-albumart`）
+//    用完即删，**不碰**开发机真实的 `com.cmeng.gourd.module.music`。
+//    视图接线（开关一拨就重绘首页 strip）没有自动化断言，只能人工验收（同 T5 那条的口径：
+//    截图 `.workflow/p2-home-fit/evidence/t5-ui-*.png`）。
+//
 //  P2 接管批次 / T6 追加（组件页的文案解析——功能卡段 + 接管卡的效果行）：
 //  - **七张功能卡的键解析**：数据源是生产表本身（`ModuleSettingsSection.featureCards`，为了这条
 //    用例它没写成 `private`）——`id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红；
@@ -876,6 +887,106 @@ final class TakeoverEnablementTests: XCTestCase {
             MusicModule.showsAlbumArt(from: RecordingConfigHandle(schema: [])),
             "schema 里没有这个键（get 给 nil）→ 同一档回落：默认显示"
         )
+    }
+
+    // MARK: - 音乐封面开关的界面入口（T5 修复轮 / 组件页）
+
+    /// 组件页那一行「显示封面」的**登记表**（`ModuleSettingsSection.configControls`）：模块 id /
+    /// config 键 / 文案 key / 回落值四项逐条对生产事实。
+    ///
+    /// - 模块 id 写错 → 卡片根本命中不到这一行（或被挂到别的模块上）；
+    /// - config 键写错 → `ManifestConfigHandle.set` 对 schema 之外的键返回 false、**不落盘**：
+    ///   开关拨得动、值不生效（这正是「键名必须逐字一致」的代价）；
+    /// - 回落值漂了 → 卡上的显示值与首页块的行为分叉；
+    /// - 文案 key 没进 catalog → 一个没有标签的开关。
+    ///
+    /// 数据源是**生产表本身**（不是测试另抄的键表——同 `featureCards` / `effectKeysByModuleID` 口径）。
+    func testMusicAlbumArtControlMatchesManifestAndCatalog() throws {
+        let control = try XCTUnwrap(
+            ModuleSettingsSection.configControl(forModuleID: MusicModule.moduleID),
+            "音乐卡必须有一条 config 控件（T5 修复轮补的就是这个界面入口）"
+        )
+
+        XCTAssertEqual(control.moduleID, MusicModule.moduleID, "模块 id 必须是真模块那一份字面量")
+        XCTAssertEqual(control.key, "showAlbumArt", "落盘键名就是 `defaults write` 会写的那个字面量")
+
+        let properties = try XCTUnwrap(MusicModule.manifest.config?.properties)
+        let node = try XCTUnwrap(
+            properties[control.key],
+            "控件的键名必须与 manifest config 的那一键逐字一致（`\(control.key)` 不在 schema 里）"
+        )
+        XCTAssertEqual(node.type, "boolean", "这一个开关写的是布尔值")
+        XCTAssertEqual(
+            node.default,
+            ConfigValue.bool(control.defaultValue),
+            "回落值必须等于 manifest 里那一键的默认值（卡上与块同一个默认档）"
+        )
+        XCTAssertEqual(control.defaultValue, MusicConfigDefaults.showAlbumArt)
+        XCTAssertEqual(control.defaultValue, true, "默认显示（方向也要钉住）")
+
+        XCTAssertResolves(control.nameKey)
+    }
+
+    /// 控件**写路径的端到端**：写进 `com.cmeng.gourd.module.<shortID>`（probe 域，**不碰**开发机真实的
+    /// `com.cmeng.gourd.module.music`）→ **模块自己的读侧**（`MusicModule.showsAlbumArt(from:)`）
+    /// 立刻看到同一个值。
+    ///
+    /// 三件事因此被钉住：落盘的**域**（`ModuleContextFactory.configHandle(for:)` 与模块侧是同一个
+    /// `ManifestConfigHandle` 实现）、**键名**、值的**方向**——把写路径改成写反（写 false 实际写
+    /// true）时本用例红（见 T5-fix 报告 §变异）。
+    ///
+    /// 假 manifest 的 config 与音乐真模块**同一形状**（`showAlbumArt` / boolean / 默认 true）：
+    /// 本用例验的是读写口径，音乐模块自己的声明由 `testMusicModuleManifestMatchesTakeoverContract` 覆盖。
+    func testMusicAlbumArtControlWriteIsReadableByTheModule() throws {
+        let suiteName = "com.cmeng.gourd.module.probe-albumart"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)          // 前置：清掉上次运行留下的覆盖值
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let manifest = try ModuleManifest.decode(from: Data(#"""
+        {
+          "manifestVersion": 1,
+          "id": "com.cmeng.gourd.probe-albumart",
+          "name": {"key": "module.probe-albumart.name"},
+          "icon": {"type": "symbol", "name": "music.note"},
+          "version": "1.0.0",
+          "apiVersion": "1.0",
+          "kind": "builtin",
+          "surfaces": ["home"],
+          "config": {
+            "type": "object",
+            "properties": {"showAlbumArt": {"type": "boolean", "default": true}}
+          }
+        }
+        """#.utf8))
+
+        let control = try XCTUnwrap(ModuleSettingsSection.configControl(forModuleID: MusicModule.moduleID))
+        let config = ModuleContextFactory.configHandle(for: manifest)
+
+        // 用户没写过 → 无覆盖值，卡上与块都按默认「显示」
+        XCTAssertTrue(control.isOn(config: config), "缺键回落 defaultValue（默认显示）")
+        XCTAssertEqual(
+            control.isOn(config: config),
+            MusicModule.showsAlbumArt(from: config),
+            "卡上显示的值与首页块画不画封面必须是同一个判定"
+        )
+
+        // 关掉：写 false → 落盘 → 模块读侧立刻看到 false（**写反了这里就红**）
+        XCTAssertTrue(control.write(false, config: config), "键在 schema 内 → 落盘成功")
+        XCTAssertFalse(control.isOn(config: config), "卡上立刻变关")
+        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "模块读侧同步：块不再画封面")
+
+        // 落盘形状：就在模块专属 suite 里、键名逐字、JSON 字节（与读侧的 `data(forKey:)` 配套）
+        let stored = try XCTUnwrap(
+            suite.data(forKey: control.key),
+            "覆盖值应落在 \(suiteName) 的 `\(control.key)` 上"
+        )
+        XCTAssertEqual(try JSONDecoder().decode(Bool.self, from: stored), false)
+
+        // 再打开：回程也要对（避免「只会写一边」）
+        XCTAssertTrue(control.write(true, config: config))
+        XCTAssertTrue(control.isOn(config: config))
+        XCTAssertTrue(MusicModule.showsAlbumArt(from: config))
     }
 
     /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`

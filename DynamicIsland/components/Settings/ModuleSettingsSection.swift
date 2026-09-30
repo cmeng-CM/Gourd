@@ -44,6 +44,18 @@
 //  必须能被用例抓到（上一轮「把 `settings.modules.effect.music` 改成错字」是全绿的，
 //  见 T6 报告 §3 变异 ②b）。
 //
+//  P2 首页修正批次 / T5 **修复轮**（本文件本轮的增量，范围评审的 Important）：
+//  **音乐卡多一行「显示封面」**（`ModuleSettingsSection.configControls` + `ModuleConfigControlRow`）
+//  ——T5 加的 `showAlbumArt` 原先只有 config、界面上没有入口（用户今天只能 `defaults write` + 重启），
+//  而用户原话是「音乐播放区域这个封面应该是可以配置是否显示」，因此必须给这一个键开一个口子：
+//  - 登记表**逐字段写死**（模块 id / config 键 / 文案 key / 回落值），**不做**按 manifest schema
+//    自动生成控件的通用渲染器（那是另一个批次的活，本轮只开这一个键）；
+//  - 读写走 `ModuleContextFactory.configHandle(for:)`（与模块侧同一个句柄实现）→ suite 名与
+//    存储编码只有一处；**先落盘、再叫醒首页 strip**（注册表的 `objectWillChange`），
+//    模块下一次 `content(for: .home)` 现读 config 即生效——**不需要重启**；
+//  - 本文件同时补一句口径：卡片主开关仍然是「模块开不开」，这一行是**卡片内部的子设置**，
+//    两者不共用一个开关（关掉封面 ≠ 关掉音乐块）。
+//
 
 import Defaults
 import SwiftUI
@@ -189,6 +201,35 @@ struct ModuleSettingsSection: View {
         "com.cmeng.gourd.music": "settings.modules.effect.music",
     ]
 
+    // MARK: 模块 config 控件（本批只有一个口子）
+
+    /// 组件卡上的**模块 config 控件**登记表（**本批只有一条**：音乐卡的「显示封面」）。
+    ///
+    /// **不是通用 config 渲染器**（按 manifest schema 自动生成控件）——那是另一个批次的活；
+    /// 这里是一张**逐字段写死**的表：模块 id / config 键 / 文案 key 三项都写在表里，卡片只按
+    /// `moduleID` 命中后渲染一行。判据与 `effectKeysByModuleID` / `featureCards` 逐字同款：
+    /// **表不是 `private`**，解析用例直接读这一份生产表——把模块 id 或键名写错一个字、
+    /// 或文案没进 catalog，必须有用例红（表侧写错必须能被用例抓到）。
+    ///
+    /// **为什么现在才开这个口子**：T5 加的 `showAlbumArt`（音乐块画不画封面）原先只有 config，
+    /// 界面上没有入口——用户原话是「音乐播放区域这个封面应该是可以配置是否显示」，于是本批给它
+    /// 补一个控件（范围评审的 Important，见 `.workflow/p2-home-fit/reports/T5-fix.md`）。
+    /// 其余键（含同卡片的 `playerColorTinting` / `useMusicVisualizer` 两个登记键）**不开**：
+    /// 它们在上游设置页本来就有入口，这里不重复造第二处。
+    static let configControls: [ModuleConfigControl] = [
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.music",
+            key: "showAlbumArt",
+            nameKey: "settings.modules.music.showAlbumArt",
+            defaultValue: MusicConfigDefaults.showAlbumArt
+        ),
+    ]
+
+    /// 命中本卡片的 config 控件（本批最多一条；将来多模块时仍是一张表，不改成通用渲染器）。
+    static func configControl(forModuleID id: String) -> ModuleConfigControl? {
+        configControls.first { $0.moduleID == id }
+    }
+
     private var featuresSection: some View {
         Section {
             ForEach(Self.featureCards) { card in
@@ -306,6 +347,81 @@ struct FeatureCard: Identifiable {
     let key: Defaults.Key<Bool>
     /// `settings.features.effect.<id>`。
     let effectKey: String
+}
+
+// MARK: - 模块 config 控件（本批只有一个口子）
+
+/// 一条**模块 config 控件**的读写实现（本批只有音乐卡「显示封面」一条，登记在
+/// `ModuleSettingsSection.configControls` 这张生产表里）。
+///
+/// 读写都经宿主给模块的**同一个 `ConfigHandle` 实现**
+/// （`ModuleContextFactory.configHandle(for:)` → `ManifestConfigHandle`）：suite 名
+/// （`com.cmeng.gourd.module.<shortID>`）与「值按 JSON 字节存」的口径只有一处，
+/// 「设置页写了一份、模块读另一份」这类静默故障在构造上就不可能发生。
+///
+/// **本类型不是 `private`**：解析用例直接读这张表（与 `FeatureCard` 同一条口径）。
+struct ModuleConfigControl: Identifiable {
+    /// 模块 id：卡片按它命中（本批 = 音乐）。
+    let moduleID: String
+    /// 该模块 manifest config 里的键名——**逐字一致**（用例拿 manifest 的 `properties` 对，
+    /// 写错一个字就红；`ConfigHandle.set` 对 schema 之外的键也不落盘）。
+    let key: String
+    /// 这一行文案的本地化 key。
+    let nameKey: String
+    /// 缺键（用户没写过覆盖值）时的回落值 = 该模块 manifest 里的默认值
+    /// （本批 = `MusicConfigDefaults.showAlbumArt`）。
+    let defaultValue: Bool
+
+    var id: String { "\(moduleID).\(key)" }
+
+    /// 卡上开关的 get：用户覆盖值优先、否则回落 `defaultValue`——**与模块自己的解析口径同式**
+    /// （`MusicModule.showsAlbumArt(from:)`），因此「卡上显示开」与「块画封面」永远是同一个判定。
+    func isOn(config: ConfigHandle) -> Bool {
+        config.get(key, as: Bool.self) ?? defaultValue
+    }
+
+    /// 卡上开关的 set：**只写模块专属 suite 的覆盖值**（manifest 默认值一个字不动）。
+    ///
+    /// 返回 `false` = 这个键不在该模块 manifest 的 config schema 里（键名漂了就会这样，
+    /// `ManifestConfigHandle.set` 的既有语义）——用例断掉它；卡面不做错误态：
+    /// 本批的键是逐字段写死的，漂了要用例红，不是让用户看一条错误提示。
+    @discardableResult
+    func write(_ value: Bool, config: ConfigHandle) -> Bool {
+        config.set(key, to: value)
+    }
+}
+
+/// 模块 config 控件的一行：**带标签的小开关**（卡片主开关是 `labelsHidden` 的，这一行必须有标签）。
+///
+/// **句柄每次现取**：`ModuleContextFactory.configHandle(for:)` 只是薄壳（schema 快照 + 一次
+/// `UserDefaults(suiteName:)`），而本批 config 没有 `observe`（07 §2 属 P1-3）——「改完立刻生效」
+/// 靠的是三件事：写路径落盘、这里现读、**首页 strip 重取内容**（模块的 `content(for: .home)`
+/// 每次现读 config，见 `MusicModule.showsAlbumArt(from:)`）。
+private struct ModuleConfigControlRow: View {
+    let control: ModuleConfigControl
+    let manifest: ModuleManifest
+
+    private var config: ConfigHandle { ModuleContextFactory.configHandle(for: manifest) }
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { control.isOn(config: config) },
+            set: { newValue in
+                // **先落盘、再刷新**（docs/18 §处理链路）：写进模块专属 suite 之后，叫醒观察注册表的
+                // 宿主视图（`HomeStripView.resolvedHomeBlocks()` 每次渲染都现问模块要内容，模块再现读
+                // config）——所以**不需要重启**，也不需要模块自己发通知（config 没有 `observe`）。
+                control.write(newValue, config: config)
+                ModuleRegistry.shared.objectWillChange.send()
+            }
+        )) {
+            Text(LocalizedStringKey(control.nameKey))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        // 开关自己带得出名字（辅助功能口径与卡片主开关 / 功能卡那七行一致：AX 里那个 checkbox
+        // 的 description 就是这一行的文案，而不是一个没有名字的开关）。
+        .accessibilityLabel(Text(LocalizedStringKey(control.nameKey)))
+    }
 }
 
 /// 功能卡的一行：图标 chip + 名称 + 一行「效果 / 出现位置」+ 开关。
@@ -460,6 +576,13 @@ private struct ModuleSettingsCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // **模块 config 控件**（本批只有音乐卡那一条：显示封面）——卡片自己的子设置行，
+                // 放在描述行之后、失败态之前。命中判据是登记表里的模块 id：**不按 manifest schema
+                // 自动生成控件**（通用渲染器是另一个批次的活，见 `configControls` 的注释）。
+                if let control = ModuleSettingsSection.configControl(forModuleID: manifest.id) {
+                    ModuleConfigControlRow(control: control, manifest: manifest)
                 }
 
                 // 失败态只回显**一行**：`failed` 是终态、要恢复只能重启（D-13），
