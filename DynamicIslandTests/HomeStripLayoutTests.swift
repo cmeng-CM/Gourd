@@ -114,11 +114,12 @@ final class HomeStripLayoutTests: XCTestCase {
         max(0, width - HomeBandChrome.containerInset * 2)
     }
 
-    /// **尺寸反馈那一族的样本输入**（T4 复现）：`300/420` + 三个 `180/240`
+    /// **尺寸反馈那一族的样本输入**（合成四块，**不是生产声明**）：一块 300/420 + 三块 180/240
     /// （`HomeStripView.moduleBlockWidth` 的统一值）。**必须与下面探针模块的宽度声明逐字一致**
     /// ——渲染真值对照的是「plan 说的宽」与「探针实际拿到的宽」，两边各取一套数就会对不上。
-    /// 数值沿用 T4 那一刻的生产档（音乐 300/420）；当前生产声明见 `music` / `mirror` 两条上面的说明。
-    private static let productionFourBlockItems: [HomeStripLayoutMath.Item] = [
+    /// 取样沿用 T4 那一刻的四块（含当时音乐那一档 300/420）：770/900/1088 三档面板的
+    /// **可见块数阶梯（2/3/4）**是按这一组算出来的，它不是「当前生产声明」的转述。
+    private static let syntheticFourBlockItems: [HomeStripLayoutMath.Item] = [
         HomeStripLayoutMath.Item(min: 300, ideal: 420),
         HomeStripLayoutMath.Item(min: 180, ideal: 240),
         HomeStripLayoutMath.Item(min: 180, ideal: 240),
@@ -1117,7 +1118,7 @@ final class HomeStripLayoutTests: XCTestCase {
     func testMainBandStillDropsTrailingBlocks() {
         let available = Self.panelWidth770StripWidth
         let plan = HomeBandedLayout.plan(
-            mainItems: Self.productionFourBlockItems,
+            mainItems: Self.syntheticFourBlockItems,
             widgetItems: [],
             availableWidth: available,
             widgetBandHeight: 0,
@@ -1309,7 +1310,7 @@ final class HomeStripLayoutTests: XCTestCase {
         ])
         await ModuleRegistry.shared.bootstrap()
 
-        let items = Self.productionFourBlockItems
+        let items = Self.syntheticFourBlockItems
         let available = Self.panelWidth770StripWidth
         // 接缝真正喂给主块带的宽度 = 托管宽 − 两侧容器内边距（T8）；渲染挂的是托管宽那份。
         let bandWidth = Self.bandContentWidth(forHostingWidth: available)
@@ -1361,7 +1362,7 @@ final class HomeStripLayoutTests: XCTestCase {
         ])
         await ModuleRegistry.shared.bootstrap()
 
-        let items = Self.productionFourBlockItems
+        let items = Self.syntheticFourBlockItems
         let height: CGFloat = 212
         // **P4 起改走单条流**：三档宽度下的可见块数不再是"一条 strip 挤得下几块"，而是"流铺几行 ×
         // 高度放得下几行"。锚值（实到）：770 → 2、900 → 3、1088 → 4。
@@ -1479,7 +1480,7 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
-    /// 探针夹具的流输入：`productionFourBlockItems` 加**大块档高**（那一族探针都答 `.large`，
+    /// 探针夹具的流输入：`syntheticFourBlockItems` 加**大块档高**（那一族探针都答 `.large`，
     /// 见 `HomeSizedProbeModule` 的注释）。
     private static func flowItems(_ items: [HomeStripLayoutMath.Item]) -> [HomeFlowLayout.Item] {
         items.map { HomeFlowLayout.Item(min: $0.min, ideal: $0.ideal, height: HomeFlowView.largeBlockHeight) }

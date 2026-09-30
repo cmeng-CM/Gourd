@@ -55,7 +55,8 @@
 //  6. **封面开关只切「块内画不画封面」**（D-06 / p5-home-blocks / T3 起是「画多大的封面」）：
 //     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView` 一条（曲名 / 艺人 + 进度 + 控制键），
 //     打开则在那一条**前面**加一枚 **40pt 圆角小封面**——不再是改动前那个占满整块的大封面
-//     （`MusicPlayerView` 的 `AlbumArtView` 是宽高双向贪婪的 1:1 图，在紧凑条里只会撑高行）。
+//     （`MusicPlayerView` 的 `AlbumArtView` 是宽高双向贪婪的 1:1 图：块高是声明值、不由内容决定，
+//     所以它不会把行撑高，而是**在 96pt 里铺满 96 见方**，把旁边的文字与控制键挤成窄列）。
 //     块宽声明与形态**同批降档**（`240/300` / `.compact`，D-09），封面开关不再影响块的尺寸。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.music.name` / `module.music.summary`。
@@ -261,8 +262,10 @@ final class MusicModule: GourdModule {
 ///   与 `MusicPlayerView` 里 HStack 的第二个孩子是**同一个视图、同一份自带布局**
 ///   （`maxWidth: .infinity, alignment: .leading`），因此左对齐与改动前一致、不留空洞；
 /// - 开 → 同一块 `MusicControlsView` 前面加一枚 40pt 圆角小封面（`AlbumArtThumbnailView`）。
-///   **不是**改动前的 `MusicPlayerView`：它的 `AlbumArtView` 是宽高双向贪婪的 1:1 图，在 96 高的
-///   紧凑条里只会把整条撑高（这正是「封面把行撑高」那条失败信号）。
+///   **不是**改动前的 `MusicPlayerView`：它的 `AlbumArtView` 是宽高双向贪婪的 1:1 图。
+///   注意这里的真实故障形态——**块高是声明值（形态 → 档高），宿主从不量内容**，所以那张图
+///   不会把行撑高；它会在 96pt 的块里铺满 96 见方，把旁边的曲名 / 进度 / 控制键挤成一条窄列
+///   （对应验收要看的「文字被裁」那一档，而不是「行变高」）。
 ///
 /// **块内不自己观察 `MusicManager`**：`MusicControlsView` / `DynamicIslandArtworkSourceView`
 /// 本来就各自 `@ObservedObject` 它，这里再观察一次只是重复订阅；「块在不在」那件事由
@@ -274,8 +277,9 @@ private struct MusicHomeBlockView: View {
     /// （视图自己不碰 `ConfigHandle`——参数进来才是可测的分档）。
     let showsAlbumArt: Bool
 
-    /// 小封面边长（pt）：40——96 高的紧凑条里不到一半高，与右侧两行文字并排后仍不撑高行；
-    /// 也是「打开封面后仍是一条」这条验收的尺寸判据（docs/29 §验收标准 A7）。
+    /// 小封面边长（pt）：40——96 高的紧凑条里不到一半高，右侧的曲名 / 进度 / 控制键因此保住
+    /// 192pt 上下的宽度（40 是「小图能认出来」与「文字不挤」之间的一档）；
+    /// 也是「打开封面后块内没被挤扁」这条验收的尺寸判据（docs/29 §验收标准 A7）。
     private static let albumArtSide: CGFloat = 40
 
     /// 小封面与小封面左侧的间距：8（面板里那套 8pt 呼吸感，与 `HomeStripLayout.spacing` 同值；
@@ -299,8 +303,8 @@ private struct MusicHomeBlockView: View {
 
 /// 紧凑条里的**小封面**（40pt 圆角方，T3 / D-09）：封面来源那一层与改动前逐字相同
 /// （`DynamicIslandArtworkSourceView`——含动态封面的分支），但**不带** `AlbumArtView` 的角标 /
-/// 翻转 / 视差 / 模糊底 / `lightingEffect` 底光：那些是给 133pt 大封面做的装饰，在 40pt 里既读不出
-/// 也只会把行撑高。
+/// 翻转 / 视差 / 模糊底 / `lightingEffect` 底光：那些是给 133pt 大封面做的装饰，在 40pt 里读不出，
+/// 展开后还会挤掉旁边文字的宽度（块高是声明值，被挤的是宽度不是行高）。
 ///
 /// **matchedGeometry 配对保留**（口径 5）：上一版大封面上的
 /// `.matchedGeometryEffect(id: "albumArt", in: …)` 搬到这里——展开面板的封面仍是折叠态播放器
