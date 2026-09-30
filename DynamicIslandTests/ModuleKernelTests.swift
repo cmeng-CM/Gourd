@@ -2726,6 +2726,54 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
+    /// 表头之下画什么（P5 / T1 修复轮，审查 2 / 3）：空态行**只在三个条件同时成立**时画——
+    /// **有完整授权**（未授权时 `store.items` 空是「读不到」而不是「今天没事」，画文案是正面假断言）、
+    /// **块高放得下这一行**（`rowCount > 0`，空态行与清单行同高 16，画不下就会溢出块高）、
+    /// **今日确实 0 条**。三者缺一 → `.nothing`（只留表头）。
+    func testTodosHomeBlockLayoutTodayContentGatesEmptyState() {
+        let items = (1...3).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
+
+        // ① 授权 + 放得下 + 有今日条目 → 按行数截取（顺序沿用 TodoBucketing）
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: items, hasFullAccess: true, rowCount: 2),
+            .rows(Array(items.prefix(2))),
+            "有授权、放得下 2 行 → 画前 2 条"
+        )
+        // ② 授权 + 放得下 + 今日 0 条 → 空态一行
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: [], hasFullAccess: true, rowCount: 4),
+            .empty,
+            "有授权、放得下、确实没有 → 才画空态"
+        )
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: [], hasFullAccess: true, rowCount: 1),
+            .empty,
+            "一行放得下就够画空态（空态行与清单行同高）"
+        )
+        // ③ 未授权：空表是「读不到」→ 一行都不画（不画空态文案、也不画条目）
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: [], hasFullAccess: false, rowCount: 4),
+            .nothing,
+            "授权未就绪时不画「今日无待办」（那是正面假断言）"
+        )
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: items, hasFullAccess: false, rowCount: 4),
+            .nothing,
+            "未授权时即使手里有陈旧条目也不画（读不到就是不知道）"
+        )
+        // ④ 块高连一行都放不下（`rowCount == 0`）→ 空态行同样溢出，不画
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: [], hasFullAccess: true, rowCount: 0),
+            .nothing,
+            "块矮到 0 行：16 + 4 + 16 = 36 > 块高，空态行也不画"
+        )
+        XCTAssertEqual(
+            TodosHomeBlockLayout.todayContent(todayItems: items, hasFullAccess: true, rowCount: 0),
+            .nothing,
+            "块矮到 0 行：有今日条目也只留表头（宁可少画，不说谎也不溢出）"
+        )
+    }
+
     /// 清单的截取口径（P5 / T1）：`listedItems(_:count:)` 只按**条数**取前 N 条（条数由块高算，
     /// 见 `rowCount(fittingHeight:)`），顺序沿用 `TodoBucketing` 的排序（不在这里重排）；
     /// `count` 为 0 / 负数给空表（不崩），超过条目数时原样给全。
@@ -2790,6 +2838,8 @@ final class ModuleKernelTests: XCTestCase {
             "module.todos.priority.high",
             "module.todos.priorityHint",
             "module.todos.completedEmpty",
+            // 首页块的今日空态（P5 / T1）
+            "module.todos.home.empty",
         ]
         for key in keys {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)

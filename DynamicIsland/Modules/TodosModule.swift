@@ -17,7 +17,7 @@
 
 //
 //  TodosModule.swift
-//  Gourd 内置模块 · 待办（展开面板四视图 + 首页三环，P1 批次 / T5、T2）
+//  Gourd 内置模块 · 待办（展开面板四视图 + 首页今日块，P1 批次 / T5、T2；P5 / T1 去三环）
 //
 //  形态定稿：
 //  - 展开态（**P1 / T2 改版，2026-09-29**）= **左侧四视图导航**（今天 / 最近 7 天 / 清单 / 已完成，
@@ -670,8 +670,9 @@ final class TodoStore: ObservableObject {
 final class TodosModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
-    /// - `surfaces`：`expanded`（三环 + 清单）+ `compact`（折叠态中央槽位：图标 + 今日 `已办/总量`）
-    ///   + `home`（**首页块** = 三环横排 + 今日清单，行数按块宽分档，见 `TodosHomeBlockLayout`）；
+    /// - `surfaces`：`expanded`（四视图左导航 + 右看板）+ `compact`（折叠态中央槽位：图标 + 今日 `已办/总量`）
+    ///   + `home`（**首页块** = 表头一行 + 今日清单，**行数按块高算、行形态按块宽选**，
+    ///   见 `TodosHomeBlockLayout`）；
     /// - `defaultPlacement`：`slot == .center`、`order == 20`——与 progress（order 30）同槽位时排在它前面
     ///   （`ModuleRegistry` 的候选按 `(order, id)` 升序，只取第一个），即中央槽位的默认内容；
     /// - `defaultEnabled: true`：待办是新的中央槽位默认内容（用户定稿）；
@@ -749,7 +750,8 @@ final class TodosModule: GourdModule {
 /// 为什么换掉三环筛选器（[docs/18](../../docs/18-p1-todos-and-order.md) §背景与目标）：环只能表达
 /// 「今天 / 本周 / 所有」三个聚合量，**没有「已完成」这一档**，也没有分组标题与计数。
 /// 视图口径一律走 T1 的纯函数（`TodoViewSource` 是唯一出口，视图里不另写过滤）；
-/// **三环仍服务首页块**（`TodoScopeRing` / `TodoRingPicker` 本批一行不动）。
+/// **三环不再服务任何 surface**（首页块也已换形态）：`TodoScopeRing` / `TodoRingPicker` /
+/// `TodoRingLayout` 原样保留、不挂 surface，可逆。
 ///
 /// 当前视图是 **UI 局部状态**（`@State`，不进 Defaults，docs/18 §执行口径）：面板每次出现都回到「今天」。
 /// 分类在每次重算时按**当下**做（展开面板是瞬时视图；常驻的折叠态另有 60s `TimelineView` 负责跨零点）。
@@ -1125,6 +1127,37 @@ enum TodosHomeBlockLayout {
         guard count > 0 else { return [] }
         return Array(items.prefix(count))
     }
+
+    /// **表头之下那段**该画什么（纯值）。
+    enum TodayContent: Equatable {
+        /// 今日条目（已按行数截好）。
+        case rows([TodoBucketing.Item])
+        /// 今日确实 0 条（且那一行放得下）→ 空态文案。
+        case empty
+        /// 什么都不画，只留表头。
+        case nothing
+    }
+
+    /// 表头之下的内容（纯函数，三条判据逐条定死；审查 2 / 3 的修复轮，2026-09-30）。
+    ///
+    /// | 判据 | 结果 | 为什么 |
+    /// |---|---|---|
+    /// | 没有完整授权 | `.nothing` | `store.items` 空是**「读不到」，不是「今天没事」**——画「今日无待办」是正面假断言（旧的三个空环只是静默，不做断言）。授权入口在展开 tab，首页块没有交互面 |
+    /// | `rowCount == 0`（块高连一行都放不下） | `.nothing` | 空态行与清单行**同高**（`rowHeight`），块矮于「表头 + 间距 + 一行」时画它就溢出块高 |
+    /// | 放得下且今日 0 条 | `.empty` | 有授权、有位置、确实没事——这时才该出现空态文案 |
+    ///
+    /// 第三条与第二条**不是同一个判断**：`rowCount == 0` 是「画不下」（宁可少画），今日 0 条是
+    /// 「没有」（该说就说）。
+    static func todayContent(
+        todayItems: [TodoBucketing.Item],
+        hasFullAccess: Bool,
+        rowCount: Int
+    ) -> TodayContent {
+        guard hasFullAccess else { return .nothing }
+        guard rowCount > 0 else { return .nothing }
+        let rows = listedItems(todayItems, count: rowCount)
+        return rows.isEmpty ? .empty : .rows(rows)
+    }
 }
 
 /// 首页块：**表头一行 + 今日清单**（[29](../../docs/29-home-blocks-and-panel.md) D-01 / D-02）。
@@ -1136,10 +1169,12 @@ enum TodosHomeBlockLayout {
 /// 「一眼看进度」，不是第二个操作台。
 ///
 /// 尺寸用 `GeometryReader` 读**放置后**的尺寸（不是测量）：**高度**决定画几行
-/// （`rowCount(fittingHeight:)`），**宽度**只决定行形态（`listTier(forWidth:)`）。今日 0 条时画一行
-/// 浅色空态（`module.todos.home.empty`）——旧的「只留三个 0/0 的环」已随 D-01 删掉；未授权时
-/// `store.items` 为空 → 表头 `0/0` + 空态一行，**不在这里引导授权**（授权入口在展开 tab，
-/// 首页块没有交互面）。
+/// （`rowCount(fittingHeight:)`），**宽度**只决定行形态（`listTier(forWidth:)`）。
+///
+/// **表头之下画什么由 `TodosHomeBlockLayout.todayContent(todayItems:hasFullAccess:rowCount:)` 定**
+/// （审查 2 / 3 的修复轮）：未授权时 `store.items` 为空是「读不到」而不是「今天没事」，那里一律
+/// **只留表头**、不画空态文案（首页块也不引导授权——授权入口在展开 tab，这里没有交互面）；
+/// 块矮到连一行都放不下时同样只留表头。今日确实 0 条且有位置时才画 `module.todos.home.empty`。
 ///
 /// 重绘走本模块既有做法——观察 `store` 的 `@Published`（折叠态那 60s 的 `TimelineView` 是给**常驻**视图
 /// 跨零点用的；首页块只在展开面板里存在，每次出现 `.task` 重取一次数即可，不去新建定时器）。
@@ -1153,18 +1188,23 @@ private struct TodosHomeBlockView: View {
         GeometryReader { proxy in
             // 行数与行形态都在**同一层**算：高度决定画几行，宽度只决定行的形态（D-02）。
             let tier = TodosHomeBlockLayout.listTier(forWidth: proxy.size.width)
-            let count = TodosHomeBlockLayout.rowCount(fittingHeight: proxy.size.height)
-            let rows = TodosHomeBlockLayout.listedItems(summary.today.items, count: count)
+            let content = TodosHomeBlockLayout.todayContent(
+                todayItems: summary.today.items,
+                hasFullAccess: store.hasFullAccess,
+                rowCount: TodosHomeBlockLayout.rowCount(fittingHeight: proxy.size.height)
+            )
 
             VStack(alignment: .leading, spacing: TodosHomeBlockLayout.listSpacing) {
                 TodoHomeHeader(result: summary.today)
 
-                // 空态判据取**今日是否有条目**，不取截好的行数：块矮到 0 行（`count == 0`）时
-                // 今日明明有待办，画「今日无待办」就是撒谎——那时只是画不下（宁可少画，不可说谎）。
-                if summary.today.items.isEmpty {
+                switch content {
+                case .rows(let items):
+                    TodoHomeTodayList(items: items, tier: tier)
+                case .empty:
                     TodoHomeEmptyRow()
-                } else {
-                    TodoHomeTodayList(items: rows, tier: tier)
+                case .nothing:
+                    // 未授权（读到的是「读不到」）或块高放不下：只留表头，什么都不加。
+                    EmptyView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1208,6 +1248,9 @@ private struct TodoHomeHeader: View {
 ///
 /// 取代旧的「三个 0/0 的环」：环是聚合计数，读不出「哪件事该做」，而空态要回答的正是
 /// 「今天有没有事」。高度同样钉在 `rowHeight` 上，块的竖向账目因此与清单态一致。
+///
+/// **不是「今日 0 条」就画**：只在**有完整授权 + 块高放得下这一行 + 今日确实 0 条**时才出现
+/// （判据在 `TodosHomeBlockLayout.todayContent`）——未授权时的空表是「读不到」，不是「没有」。
 private struct TodoHomeEmptyRow: View {
     var body: some View {
         Text(LocalizedStringKey("module.todos.home.empty"))
