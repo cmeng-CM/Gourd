@@ -81938,6 +81938,22 @@
         }
       }
     },
+    "module.todos.home.empty" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing due today"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日无待办"
+          }
+        }
+      }
+    },
     "module.notifications.moreCount" : {
       "localizations" : {
         "en" : {

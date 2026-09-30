@@ -2625,98 +2625,126 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
-    /// 首页块的两条取舍口径（P2 / T4；P2 / T3 同步到分档口径）：**块宽 < 160pt 只画三环**、
-    /// 清单按档取行数（完整 5 行 / 紧凑 3 行）。
+    /// 首页块的**行数由块高算**（P5 / T1，D-02；docs/29 §接口与数据形状）：`rowCount(fittingHeight:)`
+    /// 是 `floor((高度 − 表头 − 间距) / 行高)` 钳 `0…8` 的纯函数，**宽度不参与**。
     ///
-    /// 三环横排本身不受块高约束（用设计定稿的 52），因此这里钉的是「宽度的档位」与「行数的上限」，
-    /// 以及 180pt（宿主给模块块的最小宽）下「环放得下、清单按紧凑档画」这一条不变量。
-    func testTodosHomeBlockLayoutWidthThresholdAndRowCap() {
-        XCTAssertEqual(TodosHomeBlockLayout.maxListRows, 5, "今日清单前 5 条是规格值")
-        XCTAssertEqual(
-            TodosHomeBlockLayout.ringDiameter,
-            TodoRingLayout.maximumDiameter,
-            "横排三环沿用设计定稿直径，不另取一套"
-        )
+    /// 验收 A2 的四个边界逐条钉住：**0 / 96 / 140 / 非有限值**。96 是小组件带的真实块高
+    /// （`HomeStripFit.compactBlockHeight`，待办声明 `.compact`），所以这一条不是凑的数字。
+    func testTodosHomeBlockLayoutRowCountFitsHeight() {
+        XCTAssertEqual(TodosHomeBlockLayout.headerHeight, 16, "表头一行的高度是规格值")
+        XCTAssertEqual(TodosHomeBlockLayout.rowHeight, 16, "清单一行的高度是规格值（行数是按它算的）")
+        XCTAssertEqual(TodosHomeBlockLayout.maximumRows, 8, "行数上限是规格值（钳 0…8）")
 
-        // 档位两侧（完整档 220 / 紧凑档 160）：220 起完整行，219.9 / 200 落紧凑档
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 220), .full, "恰好在完整档阈值上")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 219.9), .compact, "差一点落进紧凑档")
-        XCTAssertEqual(
-            TodosHomeBlockLayout.listTier(forWidth: 200),
-            .compact,
-            "200pt 走紧凑档（只标题，宽度压窄也不溢出）"
-        )
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 240), .full, "宿主的理想宽 240 走完整档")
+        /// 「表头 + 一段间距 + N 行」的内容高：它是「恰好放得下 N 行」的那条高度线，
+        /// 用例用它与渲染共用同一组常量，避免算式与渲染各写一套数字。
+        func exactHeight(fittingRows rows: Int) -> CGFloat {
+            TodosHomeBlockLayout.headerHeight + TodosHomeBlockLayout.listSpacing
+                + CGFloat(rows) * TodosHomeBlockLayout.rowHeight
+        }
 
-        // 宽度取不到（首帧 0 / 非有限数）时只画环：环一定放得下，清单宁少不溢出
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 0), .ringsOnly)
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: .nan), .ringsOnly)
+        XCTAssertEqual(exactHeight(fittingRows: 4), 84, "16 + 4 + 4 × 16 = 84")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 96), 4, "96 高（真实块高）画 4 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 140), 7, "140 高画更多行（本算式给 7）")
+        XCTAssertLessThanOrEqual(exactHeight(fittingRows: 4), 96, "96 高里 4 行的内容高不超可用高")
 
-        // 模块块的最小宽（宿主统一声明 180）下：三环横排 + 间距要真的放得进块里
-        let ringRowWidth = TodosHomeBlockLayout.ringDiameter * 3 + TodosHomeBlockLayout.ringSpacing * 2
-        XCTAssertLessThanOrEqual(ringRowWidth, 180, "180pt 的块里三环横排必须放得下")
+        // 高度取不到（首帧 GeometryReader 给 0 / NaN / ±∞）→ 0 行：先只画表头。
+        // 这一支必须显式兜住——`Int(Double.nan)` 与 `Int(1e300)` 都是运行时陷阱，不是返回值。
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 0), 0, "首帧高度 0 → 0 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: .nan), 0, "NaN → 0 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: .infinity), 0, "+∞ → 0 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: -.infinity), 0, "−∞ → 0 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: -50), 0, "负高度 → 0 行（不返回负数）")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 30), 0, "矮于「表头 + 间距 + 一行」→ 0 行")
 
-        // 行数上限：今日 5 条全画、6 条只画前 5 条（顺序沿用 TodoBucketing，不在这里重排）
-        let items = (1...6).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
-        XCTAssertEqual(
-            TodosHomeBlockLayout.listedItems(items, tier: .full).map(\.id),
-            ["t1", "t2", "t3", "t4", "t5"]
-        )
-        XCTAssertEqual(
-            TodosHomeBlockLayout.listedItems(Array(items.prefix(3)), tier: .full).map(\.id),
-            ["t1", "t2", "t3"]
-        )
-        XCTAssertTrue(
-            TodosHomeBlockLayout.listedItems([], tier: .full).isEmpty,
-            "今日 0 条 → 清单为空（只画三环）"
-        )
+        // 上限：高度再富余也停在 8 行（D-02 的钳位）
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 10_000), 8, "高度富余时钳在 8 行")
+
+        // **永不超可用高**：逐个高度验算「内容高 ≤ 块高」，并验「行数在恰好放得下时不变」
+        // （后者说明算式与渲染的高度账目是同一套，不是两处各写一份）。
+        for height: CGFloat in [36, 52, 84, 96, 140, 200, 10_000] {
+            let count = TodosHomeBlockLayout.rowCount(fittingHeight: height)
+            XCTAssertLessThanOrEqual(
+                exactHeight(fittingRows: count), height,
+                "高度 \(height)：表头 + 间距 + \(count) 行不得溢出块高"
+            )
+            XCTAssertEqual(
+                TodosHomeBlockLayout.rowCount(fittingHeight: exactHeight(fittingRows: count)), count,
+                "高度 \(height)：内容高恰好放得下 \(count) 行（不多不少）"
+            )
+        }
+
+        // 关于高度单调不减（块变高只会多画行，不会少画）
+        var previous = 0
+        for height in stride(from: CGFloat(0), through: 200, by: 4) {
+            let count = TodosHomeBlockLayout.rowCount(fittingHeight: height)
+            XCTAssertGreaterThanOrEqual(count, previous, "高度 \(height)：行数不得随块变高而减少")
+            previous = count
+        }
     }
 
-    /// 分档纯函数（P2 / T3，规格 220 / 160）：边界取「恰好 / 差一点 / 0 / NaN」。
-    ///
-    /// 分档的由来是块宽预算的硬约束（docs/17 §已知限制 16）：本机 770pt 面板下待办块只分到 180.5pt，
-    /// 单阈值 220 让默认配置永远只画三环——180.5 必须落进「紧凑档」才有清单可看。
-    func testTodosHomeBlockLayoutListTierBoundaries() {
-        XCTAssertEqual(TodosHomeBlockLayout.fullListWidth, 220, "完整档阈值是规格值")
-        XCTAssertEqual(TodosHomeBlockLayout.compactListWidth, 160, "紧凑档阈值是规格值")
+    /// 行形态分档**缩成两档**（P5 / T1，D-02）：块宽不再决定行数，只决定清单行的形态——
+    /// `>= compactListWidth`（160，沿用既有值）画完整行（`TodoHomeRow`：状态圈 + 标题 + 过期红字）；
+    /// 更窄（或宽度取不到）画紧凑行（`TodoHomeCompactRow`：只标题）。
+    func testTodosHomeBlockLayoutTierHasTwoRowShapes() {
+        XCTAssertEqual(TodosHomeBlockLayout.compactListWidth, 160, "行形态的分界线沿用既有值 160")
 
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 220), .full, "恰好在完整档阈值上")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 219.9), .compact, "差一点落进紧凑档")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 160), .compact, "恰好在紧凑档阈值上")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 159.9), .ringsOnly, "差一点就只画环")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 0), .ringsOnly, "首帧宽度 0 只画环")
-        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: .nan), .ringsOnly, "非有限数只画环")
-
-        // 本机 770pt 面板的实测块宽（180.5）：必须落进紧凑档而不是只画环
+        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 160), .full, "恰好在分界线上 → 完整行")
+        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 240), .full, "宿主的理想宽 240 → 完整行")
         XCTAssertEqual(
             TodosHomeBlockLayout.listTier(forWidth: 180.5),
-            .compact,
-            "770pt 面板下的 180.5pt 块宽要走紧凑档（默认配置也能看到清单）"
+            .full,
+            "本机 770pt 面板实测块宽 180.5 ≥ 160 → 完整行（改动前这一档只画紧凑行）"
         )
+        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 159.9), .compact, "差一点落进紧凑行")
+        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: 0), .compact, "首帧宽度 0 → 最保守的紧凑行")
+        XCTAssertEqual(TodosHomeBlockLayout.listTier(forWidth: .nan), .compact, "非有限数 → 紧凑行")
     }
 
-    /// 各档的行数上限（P2 / T3）：完整 5、紧凑 3、只画环 0；条目成员与顺序不变，只截行数。
-    func testTodosHomeBlockLayoutTierRowCaps() {
+    /// 首页块**不含环**（P5 / T1，D-01：用户「只显示今日的就行，那三个圈不要了」）。
+    ///
+    /// `TodoHomeRingRow` 与它的两个环尺寸常量（`TodosHomeBlockLayout.ringSpacing` / `.ringDiameter`）
+    /// 已删除——**删除本身是编译期约束**：本用例若再引用它们就编不过。运行期能钉住的是它们的替代契约：
+    /// **任何宽度下都落进「有清单行」的两种形态之一**，旧三档里那个「只画三个 `0/0` 的环」的退化档
+    /// （`.ringsOnly`）不再存在；今日有条目时块里画的是清单，不是环。
+    func testTodosHomeBlockLayoutHasNoRingsOnlyFallback() {
+        let today = (1...3).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
+        let widths: [CGFloat] = [0, 1, 100, 159.9, 160, 180.5, 220, 240, 1_000, .nan, .infinity, -.infinity]
+
+        for width in widths {
+            let tier = TodosHomeBlockLayout.listTier(forWidth: width)
+            XCTAssertTrue(
+                [.full, .compact].contains(tier),
+                "宽度 \(width) 只能落进两种行形态（没有「只画环」这一档）"
+            )
+
+            // 真实块高（96）下今日有 3 条就画 3 行——不因宽度窄而改画环。
+            let rows = TodosHomeBlockLayout.listedItems(
+                today,
+                count: TodosHomeBlockLayout.rowCount(fittingHeight: 96)
+            )
+            XCTAssertEqual(rows.map(\.id), ["t1", "t2", "t3"], "宽度 \(width)：96 高的块仍画今日清单")
+        }
+    }
+
+    /// 清单的截取口径（P5 / T1）：`listedItems(_:count:)` 只按**条数**取前 N 条（条数由块高算，
+    /// 见 `rowCount(fittingHeight:)`），顺序沿用 `TodoBucketing` 的排序（不在这里重排）；
+    /// `count` 为 0 / 负数给空表（不崩），超过条目数时原样给全。
+    func testTodosHomeBlockLayoutListedItemsByCount() {
         let items = (1...6).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
 
-        XCTAssertEqual(TodosHomeBlockLayout.listRows(for: .full), 5, "完整档上限是规格值")
-        XCTAssertEqual(TodosHomeBlockLayout.listRows(for: .compact), 3, "紧凑档上限是规格值")
-        XCTAssertEqual(TodosHomeBlockLayout.listRows(for: .ringsOnly), 0, "只画环时一行都不画")
-
         XCTAssertEqual(
-            TodosHomeBlockLayout.listedItems(items, tier: .compact).map(\.id),
-            ["t1", "t2", "t3"],
-            "紧凑档最多 3 行"
+            TodosHomeBlockLayout.listedItems(items, count: 4).map(\.id),
+            ["t1", "t2", "t3", "t4"],
+            "按块高算出的 4 行 = 前 4 条（1/4 之后的那些排在后面）"
         )
         XCTAssertEqual(
-            TodosHomeBlockLayout.listedItems(Array(items.prefix(2)), tier: .compact).map(\.id),
+            TodosHomeBlockLayout.listedItems(Array(items.prefix(2)), count: 8).map(\.id),
             ["t1", "t2"],
-            "不足 3 条时原样"
+            "不足 N 条时原样"
         )
-        XCTAssertTrue(
-            TodosHomeBlockLayout.listedItems(items, tier: .ringsOnly).isEmpty,
-            "只画环的档不画任何行"
-        )
+        XCTAssertTrue(TodosHomeBlockLayout.listedItems(items, count: 0).isEmpty, "0 行（块太矮）→ 一条都不画")
+        XCTAssertTrue(TodosHomeBlockLayout.listedItems(items, count: -3).isEmpty, "负数 → 空表（不崩）")
+        XCTAssertTrue(TodosHomeBlockLayout.listedItems([], count: 8).isEmpty, "今日 0 条 → 空表（空态行由视图画）")
     }
 
     /// `TODO` 日期选项的文案 key 与 `DueOption` 同源（加选项必须同时给 key，否则面板上出现裸 key）。
