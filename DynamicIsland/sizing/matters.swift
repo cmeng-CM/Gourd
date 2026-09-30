@@ -109,8 +109,9 @@ var openNotchSize: CGSize {
     let maxWidth = maxAllowedNotchWidth()
     let width = min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)
     // 高度按 `panelHeightMode` 二选一（p5-home-blocks / T6，docs/29 §做法 机制六）：
-    // **auto** 读首页那一路算出来的内容高（过渡持有者的值，经 `panelHeight(...)` 加上宿主内边距
-    // 并夹在既有区间里）、**manual** 读用户滑块值（`panelHeight(...)` 原样返回手动值）。
+    // **auto** 读高度账本的内容高（`PanelContentHeight.current`——首页那一份由接缝算出来、
+    // 其它 tab 那一份由内容页量出来，两路同一个口径，T7），经 `panelHeight(...)` 加上宿主内边距
+    // 并夹在既有区间里；**manual** 读用户滑块值（`panelHeight(...)` 原样返回手动值）。
     // 两条最后都过 `clampedOpenNotchHeight`：manual 那条因此逐字还是今天那条（同一个函数、
     // 同一个入参），auto 那条是幂等复夹（`panelHeight` 已经夹过一次，同区间）。
     //
@@ -121,7 +122,7 @@ var openNotchSize: CGSize {
     // 把它拉回来（§已知限制 2 的「首帧一拍」会变成「一直不贴合」）。
     let height = clampedOpenNotchHeight(
         PanelAutoHeight.panelHeight(
-            contentHeight: PanelAutoHeight.homeContentHeight ?? .nan,
+            contentHeight: PanelContentHeight.shared.current ?? .nan,
             mode: Defaults[.panelHeightMode],
             manualHeight: Defaults[.openNotchHeight],
             screenVisibleHeight: NSScreen.main?.visibleFrame.height

@@ -817,7 +817,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 切高度模式），窗口尺寸必须跟着重算。
         //
         // **走既有的 0.15s 防抖那条**（`debouncedUpdateWindowSize`），不新开第二条 resize 链：
-        // 内容高是在 `HomeBandedHomeView` 的 body 里写进持有者的，同步重算读到的是**上一帧**的内容高
+        // 内容高是在 `HomeBandedHomeView` 的 body 里写进账本的，同步重算读到的是**上一帧**的内容高
         // （写与读都在同一帧的渲染里，谁先谁后没有保证）——防抖之后的这一趟正好落在新一帧之后。
         Defaults.publisher(.hiddenHomeModules, options: []).sink { [weak self] _ in
             self?.debouncedUpdateWindowSize()
@@ -838,6 +838,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Defaults.publisher(.panelHeightMode, options: []).sink { [weak self] _ in
             self?.debouncedUpdateWindowSize()
         }.store(in: &cancellables)
+
+        // **高度账本的变化 → 同一条防抖链**（p5-home-blocks / T7，docs/29 §做法 机制六）：
+        // 内容页（待办 / 通知 / 启动台 / 快捷指令）把量出来的自然高写进 `PanelContentHeight`，
+        // 账本只在**值真的变了**时响一声（同一 tab 的 8pt 以下微动、值没变的切页都不响）。
+        // 这里只用既有那条 0.15s 防抖：上报发生在布局那一刻（那一帧的窗口尺寸已经定死），
+        // 防抖之后的这一趟正好落在新一帧之后——**不新开第二条 resize 链**。
+        //
+        // 切 tab 本身**不靠这里**：`coordinator.$currentView` 那条（上面的
+        // `updateWindowSizeForTabSwitch`）是立即重算，它经 `openNotchSize` 读到的是账本里
+        // **上一页**的值（新页还没布局）；新页量出来之后由本订阅补上那一拍（§已知限制 2 的
+        // 「切换瞬间有一次性跳动」）。
+        PanelContentHeight.shared.objectWillChange
+            .sink { [weak self] _ in
+                self?.debouncedUpdateWindowSize()
+            }
+            .store(in: &cancellables)
+
+        // 账本条款 ④ 的判据（「光标在面板 frame 内时不缩」）：接上宿主**既有**的 hover 判定
+        // （`vm.isMouseHovering()`，与 `NotchHomeView` 给首页那条路用的是同一个方法），
+        // 不另写一份面板几何。默认实现是「在外面」——不接上时账本不拦任何变化。
+        PanelContentHeight.shared.pointerInsidePanel = { [weak self] in
+            self?.vm.isMouseHovering() ?? false
+        }
 
         // Observe terminal settings changes
         Defaults.publisher(.enableTerminalFeature, options: []).sink { [weak self] _ in

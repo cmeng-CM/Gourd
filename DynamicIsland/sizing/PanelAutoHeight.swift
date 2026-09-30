@@ -30,12 +30,13 @@
 //    ——与滑块同一个上界函数，不另立一套（D-11 / docs/29 §做法 机制六）。
 //
 //  内容自然高只有**首页**是算出来的（`HomeBandedHomeView` 把流方案的 `heightUsed` + 日历行 +
-//  缝算出结果写进下面的过渡持有者）；其它 tab 由 T7 的测量账本（`PanelContentHeight`）上报
-//  ——见 docs/29 §备选与取舍 ⑥：流方案在渲染前就有自然高，用测量反而引入首帧跳动。
+//  缝算出来写进账本）；其它 tab 由高度账本（`PanelContentHeight`，Kernel 层）上报——见
+//  docs/29 §备选与取舍 ⑥：流方案在渲染前就有自然高，用测量反而引入首帧跳动。
 //
 //  **本文件是纯算术**（与 `HomeFlowLayout` / `HomeVerticalFit` / `matters.swift` 同一条纪律：
-//  只做算术、不读偏好、不碰视图），唯一的例外是那个**过渡持有者** `homeContentHeight`
-//  （`@MainActor` 静态可写，T7 升级成 `PanelContentHeight`）。
+//  只做算术、不读偏好、不碰视图）：T6 那个过渡持有者（`homeContentHeight`）在 **T7 升级成
+//  `PanelContentHeight`**（`DynamicIsland/Kernel/PanelContentHeight.swift`），本文件不再持有任何
+//  可变状态；「测量值 → 内容高」的那一步换算仍是纯函数（`measuredContentHeight(naturalHeight:headerHeight:)`）。
 //
 
 import CoreGraphics
@@ -94,6 +95,38 @@ enum PanelAutoHeight {
     /// 可用高的一段距离，`homeVerticalPadding` 的表里必须能点到它（控制器 2026-10-01 实机测量：
     /// 漏掉它会让日历行整行被流方案丢掉）。改这个数 = 同时改面板的观感与首页的预算，两处一起走。
     static let notchLayoutSpacing: CGFloat = 8
+
+    /// **所有 tab 共享**的那一份宿主垂直开销 = `ContentView` 展开态的底边 12 + 刘海屏顶出血 4 +
+    /// 表头↔内容的缝 8 = **24**（三项的出处与 `homeVerticalPadding` 的表同源，逐项写死在这里）。
+    ///
+    /// 与 `homeVerticalPadding`（40）的**差**恰好是 `NotchHomeView` 那一份上下各 8（只有首页有，
+    /// 见 `homeOnlyVerticalPadding`）——非首页 tab 的「内容区高 → 面板高」的换算必须用本常数，
+    /// 拿 40 会每算一次多留 16pt（T7：其它 tab 的高度是**量**出来的，量的那一步先减掉首页独有的
+    /// 那一段，见 `measuredContentHeight(naturalHeight:headerHeight:)`）。
+    static let panelVerticalPadding: CGFloat = 12 + 4 + notchLayoutSpacing
+
+    /// 首页**独有**的一份宿主内边距 = `NotchHomeView` 的 `.padding(8)`（上下各一，非极简档）
+    /// = `homeVerticalPadding − panelVerticalPadding` = **16**。
+    ///
+    /// 其它 tab 的内容不经过 `NotchHomeView`，因此它们的「自然高 + 表头」折算成内容高时要**减掉**
+    /// 这一份，尺寸层再 `+ homeVerticalPadding` 时才刚好等于「自然高 + 表头 + 24」——面板贴住内容、
+    /// 且整页**填满**内容区时（量出来的自然高 = 内容区高）面板高**一步回到原值**（不动点）。
+    static let homeOnlyVerticalPadding: CGFloat = homeVerticalPadding - panelVerticalPadding
+
+    /// 测量出来的**自然高** → 账本口径的内容高（含表头，`PanelContentHeight.current`）的换算
+    /// （纯函数，p5-home-blocks / T7）。
+    ///
+    /// 口径一条链写死：面板高 = 内容高 + `homeVerticalPadding`（40），而其它 tab 的内容区 =
+    /// 面板高 − 表头 − `panelVerticalPadding`（24）。于是「自然高 N、表头 H」的一页要的面板高是
+    /// `N + H + 24`，反解出内容高 = `N + H + 24 − 40` = **`N + H − 16`**（`homeOnlyVerticalPadding`）。
+    ///
+    /// 非有限项按 0（与 `contentHeight(from:)` 同一条口径：不让一个坏读数把面板尺寸打掉；不过
+    /// 账本的 `report(...)` 本来就不收非有限值——这里是第二道）。
+    static func measuredContentHeight(naturalHeight: CGFloat, headerHeight: CGFloat) -> CGFloat {
+        let natural = naturalHeight.isFinite ? naturalHeight : 0
+        let header = headerHeight.isFinite ? headerHeight : 0
+        return natural + header - homeOnlyVerticalPadding
+    }
 
     /// 展开态内容**上方面板表头**的高度（`NotchLayout` 给 `DynamicIslandHeader` 的高度：
     /// `max(24, vm.effectiveClosedNotchHeight)`）。
@@ -212,7 +245,8 @@ enum PanelAutoHeight {
     /// 底下抽走（docs/29 §做法 机制六 边界 ①）。
     ///
     /// 副作用是「从高内容切到矮内容、光标又停在面板里」时看起来偏大，移开鼠标后下一次重算才贴合
-    /// （§已知限制 1，本批如实接受）。作用范围只有首页这一路；其它 tab 的账本在 T7。
+    /// （§已知限制 1，本批如实接受）。**作用范围只有首页这一路**（种子 = 当前面板高、走收敛）；
+    /// 其它 tab 的同一条规则在账本里（`PanelContentHeight.report(_:for:)`，T7）。
     static func heldForPointer(
         converged: CGFloat,
         currentPanelHeight: CGFloat,
@@ -222,18 +256,4 @@ enum PanelAutoHeight {
         guard converged.isFinite, currentPanelHeight.isFinite else { return converged }
         return max(converged, currentPanelHeight)
     }
-
-    // MARK: - 过渡持有者（首页内容高）
-
-    /// 首页**内容自然高**（含面板表头，口径见 `contentHeight(...)`）：接缝 `HomeBandedHomeView`
-    /// 在 body 里写，尺寸层（`openNotchSize` → `calculateRequiredNotchSize` / `calculateDynamicNotchSize`）
-    /// 经 `panelHeight(...)` 读。
-    ///
-    /// **过渡形态**（T7 升级为 `PanelContentHeight` 账本）：`nil` = 还没有人算过（首帧 / 从没渲染
-    /// 过首页）→ 尺寸层回落手动值，于是「打开面板的第一拍」按旧高度画，第二帧才贴内容
-    /// （docs/29 §已知限制 2 如实记下）。
-    ///
-    /// 写方是视图 body、读方是尺寸层，两者都在主线程上：`@MainActor` 只是把这件事写明。
-    @MainActor
-    static var homeContentHeight: CGFloat?
 }

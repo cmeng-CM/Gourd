@@ -885,7 +885,7 @@ struct HomeBandedHomeView: View {
             // 不在这里由 `geometry.size.height + 假设的宿主开销` 反推。
             //
             // 为什么必须取权威值（T6 评审 P1）：种子同时是 `heldForPointer` 的「当前值」——光标在
-            // 面板里（悬浮展开时必然如此）且内容变矮时，它会把**种子**原样写回持有者。种子只要与
+            // 面板里（悬浮展开时必然如此）且内容变矮时，它会把**种子**原样写回账本。种子只要与
             // 真实面板高差 Δ，写回的就是「真值 + Δ」，下一次重算又拿它当种子——**每个 resize 事件
             // 都把面板推高 Δ，直到撞上上界**。§已知限制 1 接受的只是「看起来偏大直到移开鼠标」，
             // 不是每次事件都长一点。`openNotchSize` 是唯一权威源（`calculateRequiredNotchSize`、
@@ -904,11 +904,12 @@ struct HomeBandedHomeView: View {
                 currentPanelHeight: seedPanelHeight,
                 pointerInsidePanel: pointerInsidePanel
             )
-            // 写持有者（`@MainActor` 静态）：尺寸层（`openNotchSize`）读它。**两种模式都写**——
-            // auto 下它决定面板高；manual 下尺寸层不读它，但写下来模式切换那一刻的值就是新鲜的
-            // （切模式的那条 publisher 会重算窗口，见 `DynamicIslandApp`）。
-            // 持有者的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它：
+            // 写账本（`PanelContentHeight.shared`，Kernel 层）：尺寸层（`openNotchSize`）读它。
+            // **两种模式都写**——auto 下它决定面板高；manual 下尺寸层不读它，但写下来模式切换那一刻
+            // 的值就是新鲜的（切模式的那条 publisher 会重算窗口，见 `DynamicIslandApp`）。
+            // 账本的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它：
             // 收敛值与被光标按住时的现值因此都能被尺寸层逐字还原（`clamp(内容 + homeVerticalPadding)`）。
+            // 首页那一份是**权威**（`setHomeContentHeight`）：量出来的值（其它 tab 的上报）碰不到它。
             // `let _ =`：`ViewBuilder` 不接受 Void 类型的表达式语句（`type '()' cannot conform to 'View'`），
             // 绑定给 `_` 是声明、不是语句，这条约束因此绕开（包的 `writeHomeContentHeight` 只是语法桥）。
             let _ = writeHomeContentHeight(heldPanelHeight - PanelAutoHeight.homeVerticalPadding)
@@ -945,13 +946,13 @@ struct HomeBandedHomeView: View {
         )
     }
 
-    /// 把算出来的内容高写进过渡持有者（`PanelAutoHeight.homeContentHeight`）。
+    /// 把算出来的内容高写进高度账本（`PanelContentHeight.shared.setHomeContentHeight(_:)`）。
     ///
     /// 包一层函数是**语法上的必须**：写入点在 `GeometryReader` 的 `ViewBuilder` 里，那里放不下
     /// 一条裸赋值语句（`type '()' cannot conform to 'View'`）；调用一个返回 Void 的函数则是
-    /// 合法的表达式语句。`@MainActor`：`View.body` 本就在主 actor 上（持有者也是主 actor 隔离的）。
+    /// 合法的表达式语句。`@MainActor`：`View.body` 本就在主 actor 上（账本是主 actor 隔离的）。
     private func writeHomeContentHeight(_ height: CGFloat) {
-        PanelAutoHeight.homeContentHeight = height
+        PanelContentHeight.shared.setHomeContentHeight(height)
     }
 }
 

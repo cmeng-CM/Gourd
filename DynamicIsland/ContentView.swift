@@ -1270,14 +1270,14 @@ struct ContentView: View {
                 }
 
                 // **自适应高度（p5-home-blocks / T6，docs/29 §做法 机制六）**：打开面板的**第一拍**
-                // 读到的内容高还是上一帧的值——过渡持有者（`PanelAutoHeight.homeContentHeight`）
-                // 由 `HomeBandedHomeView` 的 body 写，展开这一帧才第一次写；而打开那条路
+                // 读到的内容高还是上一帧的值——账本（`PanelContentHeight`，T7 起 T6 的过渡持有者
+                // 升级成它）由首页接缝的 body 写，展开这一帧才第一次写；而打开那条路
                 // （`DynamicIslandViewModel.open`）是**先定尺寸、再渲染**。
-                // 因此下一拍按已经写好的持有者再推一次窗口尺寸（`dynamicNotchSize` → `openNotchSize`
-                // → 持有者），这就是 §已知限制 2 说的「先按旧高度画一帧再贴合」——防抖那条 publisher
-                // 只在**偏好变化**时触发，打开面板本身不是偏好变化，所以这一拍只能由这里补。
-                // manual 档跳过（滑块 / 拖动各自那条链路已经把它推到当天值）；极简档的尺寸来自
-                // `minimalisticOpenNotchSize`，与持有者无关，同样跳过。
+                // 因此下一拍按已经写好的账本再推一次窗口尺寸（`dynamicNotchSize` → `openNotchSize`
+                // → `PanelContentHeight.current`），这就是 §已知限制 2 说的「先按旧高度画一帧再贴合」
+                // ——防抖那条 publisher 只在**偏好变化**时触发，打开面板本身不是偏好变化，所以这一拍
+                // 只能由这里补。manual 档跳过（滑块 / 拖动各自那条链路已经把它推到当天值）；极简档的
+                // 尺寸来自 `minimalisticOpenNotchSize`，与账本无关，同样跳过。
                 if newState == .open, !enableMinimalisticUI, PanelAutoHeight.isAuto(panelHeightMode) {
                     runAfter(0.06) {
                         guard vm.notchState == .open, !enableMinimalisticUI else { return }
@@ -1760,7 +1760,27 @@ struct ContentView: View {
                             case .module:
                                 // 模块内核（接缝 S5）：当前选中的模块由 coordinator 持有，
                                 // 未选中（selectedModuleID == nil）时 ModuleHostView 渲染 EmptyView。
-                                ModuleHostView(moduleID: coordinator.selectedModuleID)
+                                //
+                                // **自然高上报**（p5-home-blocks / T7，docs/29 §做法 机制六）：模块 tab
+                                // 是「内容随条数变」的那几页（待办 / 通知 / 启动台 / 快捷指令）挂账本的
+                                // 唯一入口——探针量这一页的**理想高**（与面板当前多高无关），名单在
+                                // `PanelContentHeight.measuredTabs`（名单外的页静默不上报：日历 / 计时器
+                                // 的自然高是面板高的函数、暂存器与终端没有自然高，逐条理由在那边）。
+                                // 表头高由 `vm` 算好传进去（内容高口径含表头，与首页那一份同源）；
+                                // `isCurrent` 挡住切 tab 那 0.3s 里还活着的旧页（它一量到新尺寸就会把
+                                // 账本抢回去，面板来回跳）。
+                                let selectedModuleID = coordinator.selectedModuleID
+                                ModuleHostView(moduleID: selectedModuleID)
+                                    .panelContentHeightReport(
+                                        tab: selectedModuleID ?? "",
+                                        headerHeight: PanelAutoHeight.panelHeaderHeight(
+                                            effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
+                                        ),
+                                        isCurrent: {
+                                            coordinator.currentView == .module
+                                                && coordinator.selectedModuleID == selectedModuleID
+                                        }
+                                    )
                           }
                       }
                       .id(expandedContentIdentity)
