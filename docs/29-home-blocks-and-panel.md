@@ -69,9 +69,9 @@
 
 ### 机制二 · 进度块：把「自然时间进度」这件事说清并交出去配
 
-**它是什么**（第 2 条的「从设计、交互、目的考虑」）：进度块回答的是**「这段时间过去多少了」**——一种时间感/节奏感，不是任务完成度（那是待办的事），也不是工作量（没有数据源）。**单位是自然时间**：`Calendar` 的 `.day` / `.weekOfYear` / `.month` / 自算季度 / `.year`，跟着系统日历与 `firstWeekday` 走，**不是小时、不是工作日**（工作日需要节假日表与调休规则，本产品不引入该数据源；`remaining(for:)` 给出的「小时/分钟」只服务展开面板那份剩余量清单）。故模块显示名从「进度」改为**「时间进度」**，简介保留五档说法但改成与默认一致。
+**它是什么**（第 2 条的「从设计、交互、目的考虑」）：进度块回答的是**「这段时间过去多少了」**——一种时间感/节奏感，不是任务完成度（那是待办的事），也不是工作量（没有数据源）。**单位是自然时间**：`Calendar` 的 `.day` / `.weekOfYear` / `.month` / 自算季度 / `.year`，跟着系统日历与 `firstWeekday` 走，**不是小时、不是工作日**（工作日需要节假日表与调休规则，本产品不引入该数据源；`remaining(for:)` 给出的「小时/分钟」只服务展开面板那份剩余量清单）。故模块显示名从「进度」改为**「时间进度」**，~~简介保留五档说法但改成与默认一致~~ **（2026-10-01 执行期改判，D-23：简介只写出厂那三档——不再承诺块做不到的事）**。
 
-**怎么配**（原本的缺口）：默认尺度从 `[.day, .year]` 改为 **`[.day, .week, .month]`**（三行刚好填满 96 高的紧凑块）；模块改为读 `context.config`（`ConfigHandle` 已支持 `[String]` 往返与「覆盖值优先、坏值回落默认」），设置侧在组件卡的「显示的尺度」一行给**多选控件**（五档胶囊，勾选即写）。多选是 `configControls` 允许清单里的**新控件种类**（今天只有 boolean / number / integer），它按模块 id + 键名逐条登记，与既有三条口径（只收模块真读的键、接管键不进清单、区间取模块常量）逐字相同。块内行数按可用高度裁剪：勾了五档而块放不下时，**按声明顺序画前 N 行**（N = 宽度档与高度档取小者；96 高的块今天放得下五档），不缩字。
+**怎么配**（原本的缺口）：默认尺度从 `[.day, .year]` 改为 **`[.day, .week, .month]`**~~（三行刚好填满 96 高的紧凑块）~~**（2026-10-01 执行期改判，D-20：96 高的块实际放得下五行——行容量取 5，默认仍是三档；「三行填满 96」这个前提作废）**；模块改为读 `context.config`（`ConfigHandle` 已支持 `[String]` 往返与「覆盖值优先、坏值回落默认」），设置侧在组件卡的「显示的尺度」一行给**多选控件**（五档胶囊，勾选即写）。多选是 `configControls` 允许清单里的**新控件种类**（今天只有 boolean / number / integer），它按模块 id + 键名逐条登记，与既有三条口径（只收模块真读的键、接管键不进清单、区间取模块常量）逐字相同。块内行数按可用高度裁剪：勾了五档而块放不下时，**按声明顺序画前 N 行**（N = 宽度档与高度档取小者；96 高的块今天放得下五档），不缩字。
 > 依据：D-03 / D-04 / D-05。
 
 ### 机制三 · 设置：撤销「功能」段，面板组件收全
@@ -100,7 +100,7 @@
 | 右侧 取色器图标 | `enableColorPickerFeature`（+ `showColorPickerIcon`） | 面板组件 · 宿主行 |
 | 右侧 计时器图标 | `enableTimerFeature`（+ `timerDisplayMode`） | 面板组件 · **计时器模块行**（同一个键，模块卡已在） |
 | 右侧 镜子图标 | `showMirror` | **首页组件 · 镜子模块卡**（`MirrorModule` 只声明 `.home`，它的开关天然在那一节） |
-| 左列 用量 tab | `enableLLMUsageFeature` | **不进本节**：上一批「删页留码」的裁决保留——它默认关、无入口，面板上不会出现它（[26](26-home-widgets-and-settings.md) D-08） |
+| 左列 用量 tab | `enableLLMUsageFeature` | **不进本节**：上一批「删页留码」的裁决保留——它默认关、无入口，默认配置下面板上不会出现它（[26](26-home-widgets-and-settings.md) D-08）。**存量配置里被拨成 `true` 的用户**会看到一个应用内关不掉的 Usage tab（本批不处理——§已知限制 15） |
 | 右侧 齿轮 | `settingsIconInNotch` | 外观页既有开关，**不算组件开关**，不进本节 |
 | 右侧 录屏 / 勿扰 / 电池指示器 | `showRecordingIndicator` / `showDoNotDisturbIndicator` / `showBatteryIndicator` | 各自的既有设置页，**不进本节** |
 | 左列 扩展 tab | `enableThirdPartyExtensions` 三连 | 扩展设置页，**不进本节** |
@@ -130,9 +130,9 @@
 新增偏好 `panelHeightMode`（`auto` 默认 / `manual`）：
 
 - **manual**：今天的行为——用户拖右下角 / 用外观页滑块（`openNotchHeight`），逐字不变。
-- **auto**：展开面板的高度 = **内容自然高 + 宿主内边距**，夹在 `[openNotchHeightRange.lowerBound, effectiveOpenNotchHeightUpperBound(屏高)]`（与滑块同一个上界函数，不另立一套）。首页那一份**不需要额外测量**——流的方案里已经算好 `heightUsed`（各行的行高 + 行距），加日历行与容器内边距就是答案；其它 tab（待办、通知、日历、启动台、快捷指令、计时器、暂存器、终端…）用内容上报（`onGeometryChange` → 一个宿主侧的高度账本），**带 8pt 滞回**：只在高度差超过阈值时改窗口，避免「内容一变→面板一缩→内容重排」的抖动。
+- **auto**：展开面板的高度 = **内容自然高 + 宿主内边距**，夹在 `[openNotchHeightRange.lowerBound, effectiveOpenNotchHeightUpperBound(屏高)]`（与滑块同一个上界函数，不另立一套）。首页那一份**不需要额外测量**——流的方案里已经算好 `heightUsed`（各行的行高 + 行距），加日历行与容器内边距就是答案；其它 tab（待办、通知、日历、启动台、快捷指令、计时器、暂存器、终端…）用内容上报（`onGeometryChange` → 一个宿主侧的高度账本），**带 8pt 滞回**：只在高度差超过阈值时改窗口，避免「内容一变→面板一缩→内容重排」的抖动。**上报机制在执行期改判过**（2026-10-01，见 偏离 2 / 偏离 3 · D-44 · D-45）：不是 `onGeometryChange`，改成 `Layout` 量**理想高**的探针（`PanelContentHeight`），且覆盖范围收窄成 4 页（待办 / 通知 / 启动台 / 快捷指令）——日历 / 计时器 / 暂存器 / 终端不上报、回落手动值。
 
-四个必须写下的边界：① **光标在面板里时不缩**（只允许长高）——否则鼠标停在下方会把面板从光标底下抽走；② **切换 tab 时才重新取高度**，同一 tab 内容微动（如秒数跳动）不改窗口；③ **右下角的拖动把手只在 manual 模式出现**——auto 下拖动写的那个键当场没有效果，留着它就是本仓已经明确规避的「拖了没用」（`ContentView` 的极简模式隐藏把手是同一条先例）；④ **`calculateRequiredNotchSize` 里那几条 per-tab 覆盖**（计时器 / 便签 / 剪贴板 / 终端的高度下限）在 auto 下**取 `max(覆盖值, 内容高)`**——它们是某些 tab 的下限，不是上限。
+四个必须写下的边界：① **光标在面板里时不缩**（只允许长高）——否则鼠标停在下方会把面板从光标底下抽走；② ~~**切换 tab 时才重新取高度**，同一 tab 内容微动（如秒数跳动）不改窗口~~ **（2026-10-01 执行期改判，D-44 · D-45：同一 tab 的改动 < 8pt 不动窗口、≥ 8pt 接受——光标在面板内时只增；不是「只在切 tab 时重取高度」）**；③ **右下角的拖动把手只在 manual 模式出现**——auto 下拖动写的那个键当场没有效果，留着它就是本仓已经明确规避的「拖了没用」（`ContentView` 的极简模式隐藏把手是同一条先例）；④ **`calculateRequiredNotchSize` 里那几条 per-tab 覆盖**（计时器 / 便签 / 剪贴板 / 终端的高度下限）在 auto 下**取 `max(覆盖值, 内容高)`**——它们是某些 tab 的下限，不是上限。
 
 **高度怎么收敛**（首页那一份的种子口径）：内容高按**当前面板高度**算一次（`availableHeight` 用当前值），然后**双向**向不动点收敛——高于不动点就收缩、低于就长高（**不是**单向棘轮：种子低于内容高时若只许收缩，面板永远长不上去，日历行与后半行会永久不画）；夹取后不再回头改内容（避免「算出的高 → 重排 → 又算」的振荡）。唯一的单向规则是「光标在面板内时不缩」。因此首页没有滞回、但**仍有首帧一拍**，如实记在 §已知限制。
 > 依据：D-11 / D-12。
@@ -237,6 +237,7 @@ manual 档 `panelHeight(...)` 原样返回手动值 → 那条链逐字是改动
 @MainActor final class PanelContentHeight: ObservableObject {
     static let shared: PanelContentHeight
     static let homeTab = "home"
+    static let sideLyricsHomeTab = "sideLyricsHome"   // 侧歌词档首页的键：没人上报 → `current` = nil → 回落手动值（终审 D-57）
     static let hysteresis: CGFloat = 8
     static let measuredTabs: Set<String>       // todos / notifications / launcher / shortcuts（模块 id）
     static func isMeasuredTab(_ tab: String?) -> Bool
@@ -259,7 +260,7 @@ extension View {
 }
 ```
 **探针不是 `onGeometryChange`**：一个 `Layout`（`PanelNaturalHeightLayout`）在 `placeSubviews` 里按 `ProposedViewSize(width: bounds.width, height: nil)` 量这一页的**理想高**（宽按面板给的那个格子、高留空），`sizeThatFits` 逐字转发提案（渲染透明）。
-**首页不走上报**：接缝 `HomeBandedHomeView` 把「流方案的内容高 + 日历行（画了才加）+ 面板表头」算出来写 `setHomeContentHeight(_:)`；双向收敛与「光标在面板内不缩」都在那一侧做完。
+**首页不走上报**：接缝 `HomeBandedHomeView` 把「流方案的内容高 + 日历行（画了才加）+ 面板表头」算出来写 `setHomeContentHeight(_:)`；双向收敛与「光标在面板内不缩」都在那一侧做完。**这一份只对标准路径有效**：侧歌词档（`NotchHomeView` 的第二支）没有自己的内容高，账本键走 `sideLyricsHomeTab`（没人上报）→ `current` = nil → 尺寸层回落手动值（终审 D-57，判据 `showsSideLyricsHomeLayout(...)` 与视图共用）。
 
 ### 模块侧（逐条对代码）
 
@@ -398,15 +399,17 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 
 ## 实际交付
 
-**批线与结构**：2026-09-30 23:28 开工、2026-10-01 凌晨收口；**九任务、四个阶段（三个实现阶段 + 回写）**，实现提交范围 `efecc332..c2949c46`（本地提交，未 push），全量单测 425 → **467 条 0 失败**，改动文件新增编译告警 0。
+**批线与结构**：2026-09-30 23:28 开工、2026-10-01 凌晨收口；**九任务、四个阶段（三个实现阶段 + 回写）**，实现提交范围 `efecc332..c2949c46`（本地提交，未 push），全量单测 425 → **467 条 0 失败**，改动文件新增编译告警 0。**本轮终审（T-final）另补 1 条 F1 用例**（侧歌词档账本键，`PanelAutoHeightTests::testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey`）→ 全量 **468 条 0 失败**；F1 的代码修复与 F4 的测试消息修复同批落地（提交 `T-final: …`）。
+
+**测试名映射（终审 F5）**：计划的 14 条用例名里 **3 条逐字存在**（`PanelAutoHeightTests::testPanelHeightAutoManualBoundsAndOverrides` / `::testContentHeightReportHysteresisAndGrowthOnly` / `::testResizeHandleHiddenInAutoMode`），其余 11 条按落地后的文件归属**改名迁移**（例：`testTodosHomeBlockRowCountFitsHeight` → `ModuleKernelTests::testTodosHomeBlockLayoutRowCountFitsHeight`；`testTodosHomeBlockShowsTodayOnlyWithoutRings` → `ModuleKernelTests::testTodosHomeBlockLayoutTodayContentGatesEmptyState` + `::testTodosHomeBlockLayoutHasNoRingsOnlyFallback`；`testLargeBlockHeightIsMirrorSquareSide` → `HomeStripLayoutTests::testLargeTierHeightAndMirrorSquareSideShareOneSource`；`testHostPanelRowsKeysResolve` → `TakeoverEnablementTests::testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys`；`testProgressScopesMultiSelectRoundTrip` → `TakeoverEnablementTests::testProgressVisibleScopesControlMatchesManifestAndCatalog` / `::testProgressVisibleScopesCardShowsTheEffectiveSet`）——**实质覆盖不漏**（D-01…D-16 的每条判据都有对应用例），差异只在名字与文件。
 
 **D-15 的超限取舍（如实记）**：九个任务超过 8 的惯例上限，按「接受超限」执行——七条反馈是同一次需求且彼此耦合（音乐降档 ↔ 大块档高度 ↔ 自适应高度），拆开要让用户审两遍设计、走两道门；代价是两道门的审阅有效性下降（计划更长、更容易被扫过），用**三阶段 Checkpoint** 补偿：
 
 | 阶段 | 任务 | Checkpoint（控制器核对；证据在 `.workflow/p5-home-blocks/evidence/`，收尾后随 `.workflow/` 消失） |
 |---|---|---|
-| Phase 1 首页块的内容与尺寸 | T1 待办块 / T2 进度块 / T3 音乐降档 + 大块档高度 | 881×598 实机：待办 = 「今日 0/3 + 细进度条 + 三条今日清单」、无三环；进度默认三行（今天 / 本周 / 本月）、勾「本季」立即多一行并落盘 `visibleScopes`；音乐条进度 + 时间 + 控制三键全在 96 内不裁、默认无封面、封面档是 40pt 小图 |
+| Phase 1 首页块的内容与尺寸 | T1 待办块 / T2 进度块 / T3 音乐降档 + 大块档高度 | 881×598 实机：待办 = 「今日 0/3 + 细进度条 + 三条今日清单」、无三环；进度默认三行（今天 / 本周 / 本月）、勾「本季」立即多一行并落盘 `visibleScopes`；音乐条进度 + 时间 + 控制三键全在 96 内不裁、默认无封面、封面档是 40pt 小图。**证据核账（终审修复轮）**：`evidence/` 里 T1 / T2 两个文件名（`t1-todos-today.png` / `t2-progress-four-rows.png`）指向的是**同一张图**（MD5 相同），计划命名的 `t2-progress-three.png` / `t2-progress-five.png` **从未产出**——见 遗留项 13 |
 | Phase 2 设置与面板 | T5 面板组件节宿主行（先）/ T4 撤销功能段（后） | 结构由单测与 review 钉住（组件页只剩两节、四条宿主行的键与「登记 ⊆ 在用」、`featureCards` 一族已删）；**T4 / T5 的命名截图未落进 `evidence/`**（见 遗留项 13） |
-| Phase 3 高度与重置 | T6 首页高度算 / T7 其它 tab 上报 / T8 外观页「面板布局」 | T6 由控制器**实机核对**（auto 档窗口 596、manual 598；**日历行回到 AX 树**——36 个日按钮；底部留白 ~300pt → 面板自己的 20pt；右下角把手在 auto 档隐藏）；T7 的判据由 11 条用例钉住；T8 另有三份 `defaults export` 逐键对（清单内 17 键回到改乱前、清单外 7 键未动），截图同样未落进 `evidence/` |
+| Phase 3 高度与重置 | T6 首页高度算 / T7 其它 tab 上报 / T8 外观页「面板布局」 | T6 由控制器**实机核对**（auto 档窗口 596、manual 598；**日历行回到 AX 树**——36 个日按钮；底部留白 ~300pt → 面板自己的 20pt；右下角把手在 auto 档隐藏）；T7 的判据由 11 条用例钉住；T8 另有三份 `defaults export` 逐键对（清单内 17 键回到改乱前、清单外 7 键未动）。**证据核账（终审修复轮）**：T6 只落了一张 `t6-auto-height.png`——计划命名的 `t6-manual-height.png` / `t6-handle-hidden.png` **从未产出**；T7 / T8 的命名截图同样缺席（见 遗留项 13） |
 | Phase 4 回写 | T9 本节 + docs/26 / 17 / 20 的改判留痕 | `workflow.py check p5-home-blocks` 零 ERROR + 本文件已无草稿期的占位字样 |
 
 **交付物清单**：
@@ -453,7 +456,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 2. **名单内页切页的一次跳动**（§已知限制 3）：消掉它要付出「两次跳动」或「每页存一份量值」的代价。
 3. **`Layout` 探针是偏好屏障**（§已知限制 13）：将来给那四页加「往上抛 preference」的机制要连探针一起改。
 4. **用量 tab 的老口子**（§已知限制 15）：存量配置里 `enableLLMUsageFeature = true` 的用户看到一个应用内关不掉的 Usage tab。
-5. **旧分带渲染器的遗留代码与滞后注释**（T3 不修并留痕，评审接受）：`HomeStripView.minimumUsableHeight` 与 `widgetRowHeight` 已无生产读者（旧分带渲染器 `HomeBandedLayout` / `HomeVerticalFit` 不在生产路径上）；`ModuleTypes.swift` / `GourdModule.swift` 的 `homeBlockWidth` 权威注释仍以「镜子 140/160、音乐 300/420」举例；`HomeVerticalFit.swift` / `HomeStripView.swift` / `FrontAppModule.swift` / `ModuleKernelTests.swift` 里还有把 152 当样本值的注释。
+5. **旧分带渲染器的遗留代码与滞后注释**（T3 不修并留痕，评审接受）：`HomeStripView.minimumUsableHeight` 与 `widgetRowHeight` 已无生产读者（旧分带渲染器 `HomeBandedLayout` / `HomeVerticalFit` 不在生产路径上）；`ModuleTypes.swift` / `GourdModule.swift` 的 `homeBlockWidth` 权威注释仍以「镜子 140/160、音乐 300/420」举例；`HomeVerticalFit.swift` / `HomeStripView.swift` / `FrontAppModule.swift` / `ModuleKernelTests.swift` 里还有把 152 当样本值的注释。**另两条同类遗留（终审进文档，见 §决策摘要 D-58）**：紧凑小封面 `AlbumArtThumbnailView`（`MusicModule.swift`）的**冗余二次 `clipShape`**（`DynamicIslandArtworkSourceView` 的 `cornerRadius` 已裁过）与 `ShortcutsFrontAppTests.swift:961/964` 两处 **152 参数化样本**（只作 `FrontAppGridBudget` 的输入样本，不是生产声明）。
 6. **两条孤儿 key**：`settings.features.effect.enableNotes`（笔记的恢复路径从「加回一行」退化成「重建表 + 行」——docs/26 §已知限制 5 已改判）与 `settings.features.effect.showCalendar`（日历行早已改取 `settings.modules.calendarRow.effect`）仍在 catalog 里、不可达。
 7. **上锁的那一枚多选胶囊在浅色系统外观下的对比度**没有上屏证据（低置信、视觉项）。
 8. **测试内部的一处时序**：测试 `defer` 里先还键后还 `currentView`，排队的 `resetHostSurfaceViewIfNeeded` 会落在还视图之后——需协调器进测试时恰好停在受门控视图上才触发（无生产影响）。
@@ -461,15 +464,15 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 10. **音乐 40pt 小封面是大封面的裁剪版**：不带角标 / 翻转 / 视差 / 模糊底 / 底光；动态封面在 40pt 上的渲染未验证（§已知限制 12）。
 11. **「表头计数」与展开面板「今天」视图的条数可以是两个数**（非缺陷）：首页表头走 `TodoBucketing.Bucket.today`（含今天完成的、含逾期未完成，口径一字不改），展开面板「今天」视图走 `TodoViewKind.today`（只未完成）——默认数据上两者可能不等。
 12. **T5 只做了「视图订阅」这半边的即时性**：设置窗与面板同时开着的叠放场景若看到 tab 不消失，说明还有第三条渲染路径没订阅（未复现）。
-13. **记账口径的观察**：阶段 Checkpoint 的部分截图只留在了会话里、未全部落进 `evidence/`（T4 / T5 / T7 / T8 的命名截图在目录里缺席；ck1 / T1 / T2 / T3 / T6 与 reset 三份 export 在）——结论已在本节与 §已知限制 记下，证据本身随 `.workflow/` 消失，不影响实现。
+13. **证据清点（终审修复轮对着目录实测）**：`evidence/` 里实际是——**图片 7 张**（`ck1-home-all.png`、`ck1-settings-open.png`、`t1-todos-today.png`、`t2-progress-four-rows.png`、`t3-music-bar.png`、`t3-music-cover.png`、`t6-auto-height.png`；其中 **`t1` 与 `t2` 两张 MD5 相同、实为同一张图**——两个状态里至多一个在图上）+ **测试日志一族**（t3 / t4 / t5 / t6 / t7 / t8 的 `*-test.log` 与 `t8-build.log`）+ **reset 三份 `defaults export` 与脚本**（`t8-reset-before/messed/after.plist` + `t8-reset-evidence.{sh,log}`）；计划命名的 **`t2-progress-three.png` / `t2-progress-five.png` / `t6-manual-height.png` / `t6-handle-hidden.png` 从未产出**（T4 / T5 / T7 / T8 的命名截图同样缺席）——结论已在本节与 §已知限制 记下，证据本身随 `.workflow/` 消失，不影响实现。
 
 ---
 
 ## 已知限制
 
-1. **自适应高度与 hover 判定共用同一个面板 frame**：内容变矮时若光标停在面板内，面板**不缩**（机制六的边界 ①）。实现取的是**粗形态**——`vm.isMouseHovering()` 按**当前**尺寸判，不预测收缩后的尺寸（精确形态要再写一份面板几何）。副作用：①「把面板从高内容切到矮内容、光标又在面板里」时看起来偏大，移开鼠标下一次重算才贴合；②打开面板时若账本还没有值（首开）、内容又比手动值矮，面板会先按手动高度站着，直到那一拍补推（第 4 条）。
+1. **自适应高度与 hover 判定共用同一个面板 frame**：内容变矮时若光标停在面板内，面板**不缩**（机制六的边界 ①）。实现取的是**粗形态**——`vm.isMouseHovering()` 按**当前**尺寸判，不预测收缩后的尺寸（精确形态要再写一份面板几何）。副作用：①「把面板从高内容切到矮内容、光标又在面板里」时看起来偏大，**要等下一次触发才贴合**（重开面板 / 偏好变化 / 切 tab——实现里**没有 hover 触发的重算**，「移开鼠标下一次重算就贴合」不成立）；②打开面板时若账本还没有值（首开）、内容又比手动值矮，面板会先按手动高度站着，直到那一拍补推（第 4 条）。
 2. **auto 档的高度覆盖是 4/8 页**：只有**待办 / 通知 / 启动台 / 快捷指令**四页上报自然高（它们的自然高是内容条数的函数）。**日历 / 计时器 / 暂存器 / 终端的自然高是「面板」的函数**（量它们 = 把面板高喂回自己：日历每接受一次缩 12pt、一路缩到 130 的下限），因此它们在 auto 档**回落手动值**（滑块高度）——「切到日历面板变高」本批做不到，要补得单独一轮（给日历声明偏好高，或改它的 `.frame(height: maxTabContentHeight)` 结构）。计时器另有 250 的 per-tab 下限兜着。
-3. **名单内的页切页有一次跳动**：切到名单内某一页时先留着上一页量出来的值（若切页就清值会「先跳手动值再跳量值」= 两次跳动），新页量完那一拍**无条件覆盖**（`awaitsFirstReport`）。首页那一份是算出来的，不受此影响。
+3. **名单内的页切页有一次跳动**：切到名单内某一页时先留着上一页量出来的值（若切页就清值会「先跳手动值再跳量值」= 两次跳动），新页量完那一拍**无条件覆盖**（`awaitsFirstReport`）。首页那一份是算出来的，不受此影响。另：**从首页（或名单外的页）切进名单内的页、而那一槽还是 nil 时**（名单外的页在上一次切页时把 `measuredHeight` 清掉了、首页那一支从不写它），那一拍走的是**手动高度**——新页量出来（第一份上报无条件接受）才贴合；这也是「切页有一次跳动」的另一半根因。
 4. **首页在 auto 档仍有「首帧一拍」**：打开面板是「先定尺寸、再渲染」，首开时账本还没有值 → 回落手动高度；那一拍由 `ContentView` 打开后 ~60ms 的补推兜住（复用拖动那条实时推尺寸的既有函数）。
 5. **进度块的行数受块高限制**：勾了五档而块放不下时只画**前 N 行**（按声明顺序），**不缩字也不滚动**——与流「装不下就不画」同口径。96 高的块今天放得下五档（行容量 5 是 T2 的改判，见 D-20）；默认三档在 96 高下留白 42pt（观感项，上屏核对过）。
 6. **宿主行不参与排序**：面板上它们的先后仍是 `TabSelectionView` 里写死的顺序；只有模块行受 `panelOrder` 控制。
@@ -503,7 +506,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | A6 | 关掉暂存器行 → 面板上的暂存器 tab 消失；开回来即恢复 | 上屏截图（面板 tab 行前后各一张）+ 偏好评据 |
 | A7 | 音乐块宽度 ≤300、行高 96、默认无封面；打开封面是 40pt 小图 | 单测（`homeBlockWidth` / `homeFormFactor` / `showAlbumArt` 默认）+ 上屏截图 |
 | A8 | 自适应模式下，首页高度 = 算出来的内容高（面板不留大空白）；手动模式行为与改动前一致，且**右下角把手只在手动模式出现** | 上屏截图（两种模式各一张，量面板高度）+ 单测（高度换算纯函数） |
-| A9 | 自适应模式下光标在面板内时高度只增不减；per-tab 覆盖值（计时器等）与内容高取 `max` | 人工/上屏（把光标停在面板里切换内容，观察高度不回缩）；单测（`max` 优先级） |
+| A9 | 自适应模式下光标在面板内时高度只增不减；per-tab 覆盖值（计时器等）与内容高取 `max` | 单测把**规则**钉住（`report` 条款 ④ 与 `heldForPointer` 的两组用例 + `max` 优先级的 `mergedTabHeight` 用例）；**D-12 的人工那半没有执行**——「把光标停在面板里切换内容、屏上观察高度不回缩」这一次没有跑，接线 `PanelContentHeight.shared.pointerInsidePanel = { vm.isMouseHovering() }`（`DynamicIslandApp.swift:861-863`）**未上屏验证**（终审修复轮如实记录） |
 | A10 | 外观页「恢复默认」把 §接口与数据形状 清单里的键恢复到出厂，清单外的键**一个不动**（用 `defaults export` 逐键对） | 自动化（脚本：改乱 → 重置 → `defaults export` diff） |
 
 ---
@@ -592,3 +595,10 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | D-54 | `expandHeightSliderEnabled(heightMode:)` 提成 `PanelLayoutDefaults` 上的**可测契约**（视图只调用它） | agent | 外观页整页在单测里搭不起来（与 T6 把把手判据提成 `showsPanelResizeHandle` 同一条先例）。代价：多一个只被视图与用例引用的函数（已回写进 §接口与数据形状） |
 | D-55 | 高度模式选择器是**无可见标签的 segmented**（标签取本组标题，`labelsHidden` + `accessibilityLabel`）；**未知存量值下两段显示「自适应」**（绑定归一化） | agent | 裁决给的 5 条新 key 里没有「高度模式」行标签的文案，两个分段自己就是文案，不再新增第 6 条 key；`panelHeightMode` 是裸字符串键、尺寸层对未知串按 auto——界面若显示「两段都没选中」就与行为对不上。代价：组的可读性靠标题与位置（观感靠截图）；控件不再逐字显示盘上的原始串（用户点一下即写回合法档名之一） |
 | D-56 | 外观页的两处「顺手」：搜索索引加两条（"Panel height mode" / "Reset panel layout"，含中文关键词）；「清单外」护栏多钉 `ColorPickerHistory` / `ScreenAssistantFiles` 两键 | agent | 外观页其余控件都在搜索表里，新组的两个控件不登记就是搜不到的死角；两个历史键与剪贴板历史同一条判据（内容类，丢了就是丢东西），且在同一偏好域里、是真会被误伤的那一类。代价：动了同文件的搜索表（越出「只加一组控件」的字面范围，删掉那两行即回退）；比文档多钉两个键（只在用例的护栏清单里，不改生产行为） |
+
+**终审修复（T-final，2026-10-01；一轮独立终审的发现项修复，独立于上面的九任务）**
+
+| ID | 决策 | 来源 | 理由与代价 |
+|----|------|------|------|
+| D-57 | **侧歌词档首页不吃首页的账本槽**：新键 `PanelContentHeight.sideLyricsHomeTab`（**没人上报**）→ `current` = nil → 尺寸层回落手动值；判据提成纯函数 `showsSideLyricsHomeLayout(...)`（`NotchHomeView` 与 `ContentView.selectedPanelTabKey` 共用），键映射提成 `homePanelTabKey(showsSideLyricsLayout:)` | agent | 侧歌词档（`enableLyrics` 开 + 音乐在放 + 日历关）**没有自己的内容高**——写首页那一份的接缝（`HomeBandedHomeView`）不在屏幕上；落在首页键上时 auto 档的面板高 = **上一次标准首页算出来的值 + 40**（与侧歌词无关），而 auto 下把手隐藏、滑块禁用，用户没得改。给它一个没人上报的键 = D-45 对名单外页「回落手动值」同一条口径；标准路径逐字不变（判据两处共用、键映射是纯函数，由 `testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey` 钉住）。代价：`ContentView` 为此多观察三条键（`enableLyrics` / `showCalendar` / `autoHideInactiveNotchMediaPlayer`）、`NotchHomeView` 的私有 `shouldShowMusicPlayer` 并进同一判据 |
+| D-58 | T3 两条**只在 `.workflow/` 账本里「不修并留痕」的物品进文档**：① 紧凑小封面 `AlbumArtThumbnailView`（`MusicModule.swift`）的**冗余二次 `clipShape`**（`DynamicIslandArtworkSourceView` 的 `cornerRadius` 参数已经裁过，外面又裁一次、同值；不修）；② `DynamicIslandTests/ShortcutsFrontAppTests.swift:961/964` 两处 **152 参数化样本**（旧大块档高，只作 `FrontAppGridBudget` 的**输入样本**、不是生产声明；不修） | agent | 「账本里记了、文档里没有」= 后来读文档的人看不到这两条已知状态；写进本节是为了让「知道而没修」与「漏了没修」可区分（清单另见 §实际交付 遗留 5）。代价：两条从排版噪声升级成**显式接受**的遗留 |

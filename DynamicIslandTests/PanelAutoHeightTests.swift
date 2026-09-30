@@ -72,6 +72,11 @@
 //    （量摆放后的高 = 量容器，反馈环；这条用例是那个判断的行为护栏）；`isCurrent = false` 的旧页
 //    一次都不报（切 tab 那 0.3s 的防抖闸门）。
 //
+//  **首页两支的账本键**（终审 T-final / F1 / D-57）：**侧歌词档**（`NotchHomeView` 的第二支）
+//  用 `PanelContentHeight.sideLyricsHomeTab`——没人上报的键 → `current` = nil → 回落手动值；
+//  判据 `showsSideLyricsHomeLayout(...)` 与键映射 `homePanelTabKey(showsSideLyricsLayout:)`
+//  两处都由用例直接钉住；标准路径（首页键 + 接缝写的那份值）逐字不变。
+//
 
 import AppKit
 import Combine
@@ -1051,6 +1056,101 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertNil(ledger.current, "名单外的页（日历）不上报")
         XCTAssertNil(ledger.activeTab)
         withExtendedLifetime(host) {}
+    }
+
+    // MARK: - 首页两支的账本键（侧歌词档不吃首页的槽；终审 T-final / D-57）
+
+    /// **侧歌词档的账本键不是首页键**（p5-home-blocks 终审 F1）：`NotchHomeView` 的第二支
+    /// （歌词 + 音乐 + 镜子）**没有自己的内容高**——写首页那一份的接缝（`HomeBandedHomeView`）
+    /// 不在屏幕上。它若落在首页键上，`current` 就会拿到「上一次标准首页算出来的值」，auto 档下
+    /// 面板高度 = 那个值 + 40（与侧歌词无关，且把手隐藏、滑块禁用，用户没得改）；给它一个
+    /// **没人上报**的键 → `current` = nil → 尺寸层回落**手动值**（D-45 对名单外页同一条口径）。
+    /// 标准路径逐字不变（仍读首页那一份）。
+    func testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey() {
+        // ① 判据（`matters.swift` 的纯函数，与 `NotchHomeView` / `ContentView` 两处共用）：
+        //    只有「歌词开 + 日历关 + 非极简 + 音乐该显示」这组全真时才是侧歌词档。
+        XCTAssertTrue(
+            showsSideLyricsHomeLayout(
+                enableLyrics: true,
+                showCalendar: false,
+                enableMinimalisticUI: false,
+                showStandardMediaControls: true,
+                autoHideInactiveNotchMediaPlayer: true,
+                musicHasActiveSession: true
+            ),
+            "歌词开 + 日历关 + 非极简 + 有音乐会话 = 侧歌词档（`NotchHomeView` 的第二支）"
+        )
+        XCTAssertFalse(
+            showsSideLyricsHomeLayout(
+                enableLyrics: false,
+                showCalendar: false,
+                enableMinimalisticUI: false,
+                showStandardMediaControls: true,
+                autoHideInactiveNotchMediaPlayer: true,
+                musicHasActiveSession: true
+            ),
+            "歌词关 → 标准路径（逐字不变的那一支）"
+        )
+        XCTAssertFalse(
+            showsSideLyricsHomeLayout(
+                enableLyrics: true,
+                showCalendar: true,
+                enableMinimalisticUI: false,
+                showStandardMediaControls: true,
+                autoHideInactiveNotchMediaPlayer: true,
+                musicHasActiveSession: true
+            ),
+            "日历行开着 → 标准路径（`shouldShowSideLyrics` 的 `!showCalendar` 一条）"
+        )
+        XCTAssertFalse(
+            showsSideLyricsHomeLayout(
+                enableLyrics: true,
+                showCalendar: false,
+                enableMinimalisticUI: true,
+                showStandardMediaControls: true,
+                autoHideInactiveNotchMediaPlayer: true,
+                musicHasActiveSession: true
+            ),
+            "极简档是另一支（尺寸走 `minimalisticOpenNotchSize`、不读账本）——它的键保持首页键"
+        )
+        XCTAssertFalse(
+            showsSideLyricsHomeLayout(
+                enableLyrics: true,
+                showCalendar: false,
+                enableMinimalisticUI: false,
+                showStandardMediaControls: true,
+                autoHideInactiveNotchMediaPlayer: true,
+                musicHasActiveSession: false
+            ),
+            "「自动隐藏无会话的音乐」且没有会话 → 不画音乐条，也不是侧歌词档"
+        )
+
+        // ② 键的映射（`ContentView.swift` 的文件级函数）：侧歌词档 → 专用键——不是首页键、
+        //    也不在测量名单里（没人上报它）；标准路径仍是首页键。
+        let sideLyricsKey = homePanelTabKey(showsSideLyricsLayout: true)
+        XCTAssertNotEqual(sideLyricsKey, PanelContentHeight.homeTab, "侧歌词档不许落到首页键上")
+        XCTAssertFalse(PanelContentHeight.isMeasuredTab(sideLyricsKey), "专用键不在测量名单里（没人上报它）")
+        XCTAssertEqual(
+            homePanelTabKey(showsSideLyricsLayout: false),
+            PanelContentHeight.homeTab,
+            "标准路径逐字不变（接缝写的就是这个槽）"
+        )
+
+        // ③ 账本行为：哪怕首页槽里还留着上一次标准首页算出来的值，侧歌词档当班时 `current` 也是
+        //    nil（尺寸层据此回落手动值），不是那个存量的 400。
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        ledger.setHomeContentHeight(400)
+        ledger.selectTab(sideLyricsKey)
+        XCTAssertEqual(ledger.activeTab, sideLyricsKey)
+        XCTAssertNil(ledger.current, "侧歌词档没有值 → 回落手动值（不是继承首页槽里的 400）")
+        XCTAssertEqual(ledger.homeContentHeight, 400, "首页那一份原样保留（切回标准路径还要用）")
+
+        // 切回标准路径：首页槽照常当班（逐字不变的那一条）。
+        ledger.selectTab(homePanelTabKey(showsSideLyricsLayout: false))
+        XCTAssertEqual(ledger.current, 400, "标准路径仍读首页那一份")
     }
 
     // MARK: - 右下角把手（D-16）

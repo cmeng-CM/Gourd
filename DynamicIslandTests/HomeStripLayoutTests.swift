@@ -300,8 +300,10 @@ final class HomeStripLayoutTests: XCTestCase {
     /// **770pt 面板的三块预算**（2026-09-29 修复轮，实测发现）：块间距 12 → 8 之后，
     /// 音乐 / 日历 / 模块块的最小宽度和 + 两个间隙 = `680 + 16 = 696 ≤ 702`（样本面板 770pt 减去
     /// `ContentView` 两侧各 34pt 的内边距）——三块全部保住；模块块 ≥ 160，待办首页块因此能进
-    /// `.compact` 档显示今日标题。改动前 `680 + 24 = 704 > 702`：第三块被规则 ③ 丢掉
-    ///（且当时外框不裁剪，屏上留下溢出残影）。
+    /// ~~`.compact` 档显示今日标题~~ **`.full` 档画完整行形态（2026-10-01 口径改判：分数线
+    /// `compactListWidth`(160) 的 ≥ 一侧是 `.full`，`.compact` 只标题留给更窄的块——旧三档的
+    /// 语义方向作废，见 `TodosHomeBlockLayout.listTier(forWidth:)`）**。改动前 `680 + 24 = 704 > 702`：
+    /// 第三块被规则 ③ 丢掉（且当时外框不裁剪，屏上留下溢出残影）。
     ///
     /// **注意口径**：`702 > 696` 落在规则 ②，那 6pt 余量**按可压缩量等比分摊**，因此每块略高于
     /// 自己的 `min`（min 是下界、不是取值）；「每块恰好取 `min`」只在可用 = 696 时成立（本用例两段都钉）。
@@ -318,7 +320,10 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(plan.visibleCount, 3, "三块都要在默认面板里（改动前是 2）")
         XCTAssertEqual(plan.widths, [303, 201.5, 181.5], "6pt 余量按可压缩量等比分摊；各自 ≥ min、不放大到 ideal")
         XCTAssertEqual(plan.leftover, 0, accuracy: 1e-9, "702 − (303 + 201.5 + 181.5 + 16) = 0")
-        XCTAssertGreaterThanOrEqual(plan.widths[2], 160, "第三块 181.5 ≥ 160 → 待办首页块走 .compact 档")
+        // 2026-10-01 口径（终审 F4）：`TodosHomeBlockLayout.compactListWidth`（160）这条线是
+        // **≥ → `.full`**（完整行形态：完成圈 + 标题 + 过期红字），`.compact`（只标题）留给**更窄**
+        // 的块——与旧三档的语义方向相反，旧消息写反了（断言本身一字未动）。
+        XCTAssertGreaterThanOrEqual(plan.widths[2], 160, "第三块 181.5 ≥ 160 → 待办首页块走 .full 档（完整行形态）")
         XCTAssertGreaterThanOrEqual(plan.widths[2], Self.moduleBlock.min, "不得低于声明的最小宽度")
         assertInvariants(plan, available: available, spacing: hostSpacing)
 

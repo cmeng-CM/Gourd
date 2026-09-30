@@ -249,6 +249,23 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
     isOpen && !isMinimalistic && !PanelAutoHeight.isAuto(heightMode)
 }
 
+/// 首页 tab 的**高度账本键**（p5-home-blocks 终审 T-final，docs/29 §决策摘要 D-57）。
+///
+/// 首页视图有两支而账本只有一个首页槽：**标准路径**的接缝（`HomeBandedHomeView`）把算出来的
+/// 内容高写进 `PanelContentHeight.homeTab`；**侧歌词档没有自己的内容高**——落到首页键上就会拿
+/// 「上一次标准首页算出来的值」当内容高（auto 档下把手隐藏、滑块禁用，用户没得改）。
+/// 因此侧歌词档用 `PanelContentHeight.sideLyricsHomeTab`：没人上报 → `current` = nil →
+/// 尺寸层回落**手动值**（D-45 对名单外页同一条口径）。
+///
+/// 判据（哪一支在屏幕上）由 `showsSideLyricsHomeLayout(...)` 给（与 `NotchHomeView` 共用同一个
+/// 纯函数）；抽成文件级函数是为了用例能直接钉住这条映射（与 `showsPanelResizeHandle` 同一条先例）。
+/// `@MainActor`：两个键都住在 `@MainActor` 的 `PanelContentHeight` 上（引用隔离属性要么进主 actor、
+/// 要么把键改成 `nonisolated`——这里选前者，别动账本类的隔离）。
+@MainActor
+func homePanelTabKey(showsSideLyricsLayout: Bool) -> String {
+    showsSideLyricsLayout ? PanelContentHeight.sideLyricsHomeTab : PanelContentHeight.homeTab
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -304,6 +321,12 @@ struct ContentView: View {
     @Default(.enableCapsLockIndicator) var enableCapsLockIndicator
     @Default(.enableExtensionLiveActivities) var enableExtensionLiveActivities
     @Default(.showStandardMediaControls) var showStandardMediaControls
+    // 首页两支的账本键要跟着这三条键走（p5-home-blocks 终审 T-final / D-57）：它们决定首页此刻画的
+    // 是不是侧歌词档（`selectedPanelTabKey` 的 `.home` 分支），不给观察，拨完开关键的映射要等
+    // 下一次别的重绘才跟上（那一拍账本读的还是旧键）。
+    @Default(.enableLyrics) var enableLyrics
+    @Default(.showCalendar) var showCalendar
+    @Default(.autoHideInactiveNotchMediaPlayer) var autoHideInactiveNotchMediaPlayer
     @Default(.externalDisplayStyle) var externalDisplayStyle
     @Default(.hideNonNotchUntilHover) var hideNonNotchUntilHover
     @Default(.terminalStickyMode) var terminalStickyMode
@@ -1501,7 +1524,8 @@ struct ContentView: View {
     }
 
     /// 高度账本用的**页键**（p5-home-blocks / T7）：模块页 = 模块 id（与账本 `measuredTabs` 里那四个
-    /// 键同一批），宿主页各给一个稳定串，首页 = `PanelContentHeight.homeTab`。
+    /// 键同一批），宿主页各给一个稳定串，首页 = `PanelContentHeight.homeTab`（**标准路径**那一支；
+    /// 侧歌词档是 `sideLyricsHomeTab`，见 `.home` 分支——终审 T-final / D-57）。
     ///
     /// 名单外的键（`shelf` / `terminal` / `timer` / `stats` / `notes` / `clipboard` / `llmUsage` /
     /// `colorPicker` / `extension`）**也要声明**——账本据此把量出来的值清掉，让这些页回落**手动值**
@@ -1509,7 +1533,20 @@ struct ContentView: View {
     private var selectedPanelTabKey: String {
         switch coordinator.currentView {
         case .home:
-            return PanelContentHeight.homeTab
+            // 首页视图有两支而账本只有一个首页槽（终审 F1 / D-57）：**标准路径**用首页键（接缝把
+            // 算出来的内容高写进那个槽），**侧歌词档**用 `sideLyricsHomeTab`——那一支没有自己的
+            // 内容高，落到首页键就会拿上一次标准首页算出来的值当内容高（auto 档下把手隐藏、滑块
+            // 禁用，用户没得改）；没人上报的键 → `current` = nil → 回落手动值（D-45 同一条口径）。
+            return homePanelTabKey(
+                showsSideLyricsLayout: showsSideLyricsHomeLayout(
+                    enableLyrics: enableLyrics,
+                    showCalendar: showCalendar,
+                    enableMinimalisticUI: enableMinimalisticUI,
+                    showStandardMediaControls: showStandardMediaControls,
+                    autoHideInactiveNotchMediaPlayer: autoHideInactiveNotchMediaPlayer,
+                    musicHasActiveSession: musicManager.hasActiveSession
+                )
+            )
         case .module:
             return coordinator.selectedModuleID ?? ""
         case .shelf:

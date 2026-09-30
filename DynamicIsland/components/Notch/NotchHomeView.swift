@@ -906,13 +906,21 @@ struct NotchHomeView: View {
     @Default(.lyricsPanelOffset) private var lyricsPanelOffset
     let albumArtNamespace: Namespace.ID
 
-    /// Whether the music player should actively display (enabled AND has real content).
-    private var shouldShowMusicPlayer: Bool {
-        showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer || musicManager.hasActiveSession)
-    }
-
+    /// 侧歌词档 = 「音乐该显示」（`showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer ||
+    /// hasActiveSession)`）**且**歌词开、日历行关、非极简——整条判据提成 `matters.swift` 的纯函数
+    /// `showsSideLyricsHomeLayout(...)`，与 `ContentView.selectedPanelTabKey` 共用（终审 T-final /
+    /// D-57）；本视图不再自己拼一遍那个 `&&` 链。
     private var shouldShowSideLyrics: Bool {
-        shouldShowMusicPlayer && enableLyrics && !showCalendar
+        // 判据与 `ContentView.selectedPanelTabKey` 共用同一个纯函数（p5-home-blocks 终审 T-final /
+        // D-57）：侧歌词档没有自己的内容高，账本键必须与标准路径分开——判据各写一份就会漂。
+        showsSideLyricsHomeLayout(
+            enableLyrics: enableLyrics,
+            showCalendar: showCalendar,
+            enableMinimalisticUI: Defaults[.enableMinimalisticUI],
+            showStandardMediaControls: showStandardMediaControls,
+            autoHideInactiveNotchMediaPlayer: autoHideInactiveNotchMediaPlayer,
+            musicHasActiveSession: musicManager.hasActiveSession
+        )
     }
     
     var body: some View {

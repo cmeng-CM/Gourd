@@ -72,6 +72,16 @@ final class PanelContentHeight: ObservableObject {
     /// 首页那一路的键。首页**不走上报**（它有算出来的那一份，见 `setHomeContentHeight(_:)`）。
     static let homeTab = "home"
 
+    /// **侧歌词档首页**的键（p5-home-blocks 终审 T-final，docs/29 §决策摘要 D-57）。
+    ///
+    /// `NotchHomeView` 的第二支（歌词 + 音乐 + 镜子）**没有自己的内容高**——写首页那一份的接缝
+    /// （`HomeBandedHomeView`）不在屏幕上。落在首页键上，`current` 就会拿「上一次标准首页算出来的
+    /// 值」当内容高（auto 档下面板高度 = 那个值 + 40，与侧歌词无关；且把手隐藏、滑块禁用，用户
+    /// 没得改）。因此给它一个**没人上报**的键：`selectTab(_:)` 走到「名单外」那一档 →
+    /// `current` = nil → 尺寸层回落**手动值**（D-45 对日历 / 计时器 / 暂存器 / 终端同一条口径）。
+    /// 判据（哪一支在屏幕上）由 `showsSideLyricsHomeLayout(...)` 给，标准路径的首页键逐字不变。
+    static let sideLyricsHomeTab = "sideLyricsHome"
+
     /// 同一 tab 的滞回阈值（pt）：差在这个以内不改窗口（`docs/29 §做法 机制六` 的 8pt）。
     /// 秒数跳动这类「同一 tick 里十几分之一 pt」的微动因此不会碰窗口。
     static let hysteresis: CGFloat = 8
