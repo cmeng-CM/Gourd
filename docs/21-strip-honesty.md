@@ -311,6 +311,18 @@ func willAlsoCloseSystemBanner(for item: NotificationItem, now: Date = Date()) -
     重叠」都是算术 + 用例保证的，屏上观感属人工验收；实机复现还需要「音乐有会话 + 摄像头可用 + 两个模块块
     都有内容 + 展开面板」这一组合（§实际交付 遗留项）。
 
+**`p2-home-fit` 补充（2026-09-30，实测）**：
+
+13. **`＋N` 与实际空白块数一致——已由实机截图 + 宿主级用例钉住**（`p2-home-fit` 的 T4，详见
+    [23](23-home-fit.md) §已知限制 4/7）：770pt 面板 + 四块（音乐 300 + 三个 180/240 的模块块）→ 屏上 2 块 + `＋2`
+    （另 2 块零尺寸）；900pt → 3 块 + `＋1`；1088pt → 四块齐、**无 `＋N`**。用例把**真的 `HomeStripView`** 挂进
+    `NSHostingView` 跑布局，断言「拿到尺寸的块数 == `plan.visibleCount`、空白块数 == `plan.droppedCount`」
+    （变异：去掉 `HomeStripView` 里那句把提案宽钉在可用宽上的 `.frame(width: available, …)` → **9 条断言红**）。
+    这同时补上了第 12 条的**实机观感**：`＋N` 与"还有几块没显示"在屏上对得上（`evidence/t4-770-fixed.png` /
+    `t4-900.png` / `t4-1088.png`）。**反向提醒**：`＋N` 为 0 不等于"块都画出来了"——`p2-home-fit` 修复前
+    770pt 下就出现过"视图那份 plan 算 2 块、Layout 那份只摆 1 块，而视图照显 `＋2`"（两份 plan 的输入宽度
+    不同：尺寸反馈，根因与修法见 [23](23-home-fit.md) §已知限制 4）。
+
 ## 验收标准
 
 1. `xcodebuild test`（`DynamicIslandTests`）**退出码 0、315 条 0 失败**；`HomeStripLayoutTests` **21 条**

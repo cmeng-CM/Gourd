@@ -160,11 +160,50 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 **遗留**（详见 [22](22-shortcuts-and-frontapp.md) §实际交付 末段与 §已知限制 1/10/13）：真跑一条系统快捷指令、首次运行的系统自动化提示、首页块的点小图标回切、前台事件的真实投递、列表缓存的过期行为——**都没有本批的现场证据**（用例不跑真命令、前台样本全是手造快照）。两条实现期实测的边界：**超时是软界**（`terminate()` 后仍要等子进程真的退出，子进程忽略 `SIGTERM` 时实际用时超过 `timeoutSeconds`）；**前台块窄块里最多画 6 格**（180pt 下，配 7/8 时超出的静默不画、没有 `＋N` 提示）。
 
+### 已交付 · `p2-home-fit`（2026-09-30）
+
+按用户 2026-09-30 的**五条实测反馈**修首页，设计 [23](23-home-fit.md)（D-01…D-11）。五条都**改了用户可见行为**，
+其中一条（最小宽度下的空白块）先取证再改：① 首页日历行的两条渐变遮罩**按需**（`showsScrollFades`，独立日历那一档保留）；
+② 高度不足时**先收日历行、保住 strip**（判据收成纯函数 `HomeVerticalFit`，改动前是反的）；
+③ 前台应用块内容 = **所有打开的常规 App**（现取 `NSWorkspace.runningApplications`，过滤 `.regular` / 无效 pid / 空名 →
+排除自身 → 排序 → 同 id 去重；`recent` 降级为排序依据）；④ 修最小宽度（770pt）下"块被分配宽度却空白"
+（根因实测是**尺寸反馈**——`sizeThatFits` 上报的宽度被下一趟当提案宽，修法是视图侧把提案宽钉在可用宽上，一行）；
+⑤ 音乐封面可配置（模块 config 新增 `showAlbumArt`，组件页音乐卡多一行「显示封面」开关）。
+
+提交范围 `f56c8a54..ac9a9aeb`（`cdbaa197` T1+T2+T5 · `f78d8a8c` T3 · `13ceebb9` T4 · `ac9a9aeb` T5 修复；本批的文档回写提交在其后）。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1+T2+T5 | 日历渐变按需 + 高度取舍反转 + 封面开关 | `MonthGridView(showsScrollFades:)`（默认 `true` = 独立日历现状，首页行传 `false`）；新文件 `HomeVerticalFit`（三档 `.both` / `.stripOnly` / `.calendarOnly`，阈值闭区间：面板 ≥470 → 两排 / 168…469 → 只有 strip / ≤167 → 空面板）；`MusicModule` 的 `showAlbumArt`（boolean，默认 `true`，关档走 `MusicControlsView` 不留空洞） |
+| T3 | 前台应用块改成"所有打开的常规 App" | `FrontAppStore.switcherApps`（**每次访问现取一次**，注入点 `FrontAppRunningAppsProvider` / 值类型 `FrontAppRunningApp` —— 摊成值类型是为了让 `.regular` 过滤可被用例钉住）；块内下半改成网格，格数由 `FrontAppGridBudget`（**宽 × 高两维**）定；`maxRecentApps` 降级为"`recent` 的记忆长度"；两条激活失败路径都记 `warn` |
+| T4 | 修最小宽度下的空白块 | 探针取证（`evidence/probe-770/`）钉死根因后**只改一处**：`HomeStripView` 的 `.frame(width: available, alignment: .leading)`；`HomeStripLayout` 的规则与 cache 一字未动；新增**宿主级用例**（真 `HomeStripView` 挂 `NSHostingView`，断言"被判可见的块都拿到宽度、空白块数 == `＋N`"） |
+| T5 修复 | 封面开关的界面入口 | 组件页音乐卡一行「显示封面」（`ModuleSettingsSection.configControls` 逐字段写死的**一条**，不做通用 config 渲染器）；写路径 = `config.set` 落盘 → `objectWillChange`，模块侧现读 config，**面板开着也立刻变样** |
+
+**测试**：`DynamicIslandTests` 341 → **362 条 0 失败**（`HomeStripLayoutTests` 21 → **34**：T2 的三档/阈值/顺序反转 +
+T4 的两条宿主级用例；`TakeoverEnablementTests` 27 → **30**；`ShortcutsFrontAppTests` 26 → **31**）。
+五段变异各有红（判据反转 4 条 / 封面恒 true 1 条 / `.regular` 政策 3 断言 / 去掉那行修复 9 断言 / T5-fix 写反 5 断言）。
+改动文件新增告警 0。
+
+**上屏证据**（`.workflow/p2-home-fit/evidence/`，每条改完都看过）：`t1-home-no-fade.png` + `t1-fade-counterfactual.png`
+（反事实：打回 `true` 两条暗带复现）+ `t1-fade-profile.txt`（亮度剖面 0.348 → 0.602）；`t2-both.png` / `t2-strip-only.png` /
+`t2-calendar-only.png`（三档高度）；`t3-switcher.png` / `t3-cell-hover.png` / `t3-after-click.png` /
+`t3-switcher-after-switch.png` + `t3-running-apps-probe.txt`（18 个常规 App 直读，台前调度是 `.accessory` 被挡在外）；
+`probe-770/repro-770-blank.png` → `t4-770-fixed.png` / `t4-900.png` / `t4-1088.png`（修复前 vs 后三档宽度）；
+`t5-albumart-on/off.png` + `t5-ui-toggle.png` + `t5-ui-albumart-on/off.png`（同一帧里开关与块内容一起变）。
+
+**零权限边界**：不新增 TCC 权限、不引入私有 API、不新增出站请求、不新增子进程（`NSWorkspace.runningApplications`
+是公开 API）——与 `p2-home-strip` / `p2-takeover` 同一条。
+
+**遗留**（详见 [23](23-home-fit.md) §实际交付 遗留项）：独立日历的"渐变保留"**无运行期入口**（`StandaloneCalendarView`
+无调用点、`CalendarView` 只有 `#Preview`），只能按代码默认档 + 反事实截图论证；770pt 下只显示 2 块 + `＋N = 2`
+是**宽度预算的必然**（四块需可用宽 ≥864，面板 ≈932pt 起）而不是缺陷；封面关掉后块宽仍 300/420；块内网格溢出静默不画；
+`showsScrollFades` 的默认值与 `MusicHomeBlockView` 的分档**没有自动化断言**（靠唯一实参 / 截图）。
+
 ### 下一批 · 登记（2026-09-29）
 
 > **2026-09-29 增补**：下一批的完整优先级清单（含本批暴露的缺口）已收在 [16](16-nookx-reference.md) **§4.4**，按 P0 / P1 / P2 分档并给了成本、依赖与判据。**P0 四项**：~~① 通知组件在首页有块~~、~~② 组件卡片说清"开了会看到什么、在哪看"~~、~~③ 待办块窄宽度下也显示清单~~（**三项已在 `p2-p0-visible` 批次落地，2026-09-29**）；**④ 月历入口回归仍待做**（需要先定形态：点日期头进月历 vs 加一个 calendar tab——这是产品选择，等用户拍板）。下面四项属 **P1**。
 
-四项都来自 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组（"值得参考"6 项）里本批未落地的部分；本批的「明确不做」已逐条给过排除理由（[17](17-nookx-adoption.md)）。**2026-09-30 更新**：其中 **A5 的首页块一半已落地**（`p2-shortcuts-frontapp`），侧槽一半仍留；其余三项不变。
+四项都来自 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组（"值得参考"6 项）里本批未落地的部分；本批的「明确不做」已逐条给过排除理由（[17](17-nookx-adoption.md)）。**2026-09-30 更新**：其中 **A5 的首页块一半已落地**（`p2-shortcuts-frontapp`，其**内容口径随后由 `p2-home-fit` 改判**为"所有打开的常规 App"——[23](23-home-fit.md) §做法 机制三），侧槽一半仍留；其余三项不变。
 
 | # | 项 | 来源 |
 |---|---|---|

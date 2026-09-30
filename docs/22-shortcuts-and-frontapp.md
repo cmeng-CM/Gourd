@@ -215,30 +215,63 @@ enum FrontAppHistory {
     static let limitRange: ClosedRange<Int> = 3...8
     static let defaultLimit = 5
     /// **全项目唯一一处夹取**（回写 2026-09-30 补，落地代码里的成员）：store 读 config（缺键兜
-    /// `defaultLimit`）之后调它一次，`recentLimit` 就是那个唯一值，视图不再夹（§决策摘要 D-15）。
+    /// `defaultLimit`）之后调它一次，`recentLimit` 就是那个唯一值（§决策摘要 D-15；
+    /// **2026-09-30 `p2-home-fit` 起视图整份不收它**——`recentLimit` 只剩"`recent` 记多长"一个作用）。
     static func clampedLimit(_ raw: Int) -> Int
+}
+
+// **2026-09-30 `p2-home-fit` 新增**（`p2-home-fit` 的 T3）：块内容改判的接口面
+/// 「取所有正在运行的 App」的**注入点**（生产 = `NSWorkspace.shared.runningApplications`；用例给假体）。
+typealias FrontAppRunningAppsProvider = @MainActor () -> [FrontAppRunningApp]
+
+/// 一次进程表里的**可判定字段**——**不是 `NSRunningApplication`**（那个类没有公开构造器，用例造不出假体，
+/// 「筛 `.regular` / 丢无效 pid / 排除自身」这几条就钉不住，而它们正是 D-04 的核心）。**摊成值类型是为了可测**。
+struct FrontAppRunningApp: Equatable {
+    let pid: pid_t
+    let bundleID: String?
+    let name: String?                                  // 可为 nil：过滤在纯函数里做
+    let activationPolicy: NSApplication.ActivationPolicy
+}
+
+/// `switcherApps` 的**纯函数口径**：过滤 → 排除自身 → 排序 → 去重（四条各管一件事，顺序就是契约）。
+enum FrontAppSwitcher {
+    static func apps(from running: [FrontAppRunningApp],
+                     current: FrontAppSnapshot?,
+                     recent: [FrontAppSnapshot],
+                     selfBundleID: String?) -> [FrontAppSnapshot]
 }
 ```
 
 **store**：`FrontAppStore: ObservableObject`（`@MainActor`）持 `@Published current` / `@Published recent`
 与 `private(set) recentLimit`（夹取后的历史上限，在 `start` 里定一次、之后不变，故不做 `@Published`）；
+**另有一个现取的计算属性 `var switcherApps: [FrontAppSnapshot]`（2026-09-30 `p2-home-fit` 新增，块内容的唯一来源）**：
+每次访问都会通过注入点 `FrontAppRunningAppsProvider`（默认真实现 = 读 `NSWorkspace.shared.runningApplications`）
+取一次进程表，交给纯函数 `FrontAppSwitcher.apps(from:current:recent:selfBundleID:)` 做
+**过滤（`.regular` / `pid > 0` / 名字非空）→ 排除自身 → 排序（当前 → `recent` → 名称 → pid）→ 同 id 去重**；
+因此块的**内容 = 所有打开的常规 App**，`recent` 只当排序依据（这是 `p2-home-fit` 的改判，
+逐条见 [23](23-home-fit.md) §做法 机制三 / D-03）。
 `start(selfBundleID:maxRecentApps:)` 里订阅 `NSWorkspace.shared.notificationCenter` 的
 `didActivateApplicationNotification`（观察者 token 存起来；`userInfo` 里取 `NSRunningApplication` 的写法照
 `DynamicIsland/DynamicIslandApp.swift:214-219` 的既有先例），初值取 `NSWorkspace.shared.frontmostApplication`
 ——**只种 `current`、不种 `recent`**（§决策摘要 D-16）；`maxRecentApps` 缺省 `nil` = 从 config 读
 （§决策摘要 D-18），**夹取在 store 读 config 之后做一次**（`FrontAppHistory.clampedLimit`，`limitRange` 3…8），
-视图不再夹；`deactivate()` 幂等摘观察者；`activate(_ snapshot:)` → `NSRunningApplication(processIdentifier:)?.activate()`；
+视图不再夹、也不再收；`deactivate()` 幂等摘观察者；`activate(_ snapshot:)` → `NSRunningApplication(processIdentifier:)?.activate()`
+（**两条失败路径都记 `warn`**：进程已不在 / 系统拒绝，`p2-home-fit` 起不再出现"点了没反应还没记录"）；
 图标取值 `func icon(for snapshot:) -> NSImage?`（`NSWorkspace.shared.icon(forFile:)`，按 id 缓存；路径优先用
 映射快照时记下的 `bundleURL`，快照不是本 store 产生的才按 pid 现查——pid 会被复用）——
 **视图只调 `store.icon(for:)`，不自己取图标**（接口里没有第二个图标来源）。
 模块 id 的唯一字面量是 `FrontAppModule.moduleID` = `"com.cmeng.gourd.frontapp"`（manifest 与用例同源）。
 
-**视图的排版预算**（`FrontAppHomeBlockView`，回写 2026-09-30 补）：当前应用图标 28pt、最近图标 20pt、
-图标间距 4、两行间距 6；最近一行画几个由**块内预算** `capacity(forWidth:)` 定（每格 = 图标 20 + 悬停底色
-左右内边距各 2 + 间距 4 = 24：`max(1, min(maxRecentApps, Int((宽 + 4) / 28)))`）——它在 180pt 的宿主最小块宽
-下最多画 6 个、240pt 下 8 个，因此**配到 7 / 8 时超出的格子会被静默不画**（§已知限制 13）。
-**它不是第二处夹取**：容量只会画得更少，永不超 `recentLimit`。
-`current == nil`（拿不到前台应用）时画一行浅色 `—`；`recent` 为空时最近那一行**整行不画**。
+**视图的排版预算**（`FrontAppHomeBlockView`；**2026-09-30 `p2-home-fit` 改判**，旧口径是单行 `capacity(forWidth:)`）：
+当前应用图标 28pt、网格里的格子 20pt（悬停底色左右内边距各 2）、格间距 4、行间距 6；
+**一行几格由块宽定、几行由块高定**——判据是纯函数 `FrontAppGridBudget`（`cellsPerRow(forWidth:)` /
+`rowCount(forHeight:)` / `capacity(forWidth:forHeight:)`，定义在 `FrontAppModule.swift` 末尾）：
+180pt 宽 × 152pt 高（宿主最小档）= **6 格 × 4 行 = 24 格**、240 × 152 = **8 × 4 = 32 格**，
+超出的格子**静默不画**（§已知限制 13）。容量**可以为 0**（放不下一格就整片网格不画，而不是画一个越界格子）。
+它**与 `maxRecentApps` 无关**——那个键只剩"`recent` 排序依据记多长"一个作用（§决策摘要 D-19 的改判），
+因此它也不再说"不是第二处夹取"（那时容量还是 `recentLimit` 的下游）：格数只由块被分配到的宽高决定。
+`current == nil`（拿不到前台应用）时上半画一行浅色 `—`；网格里画的是**除当前应用外**的其余 App
+（当前应用在上半已有一行，别在网格里重复一格）。
 
 ### 4. 前台应用：manifest（`com.cmeng.gourd.frontapp`）
 
@@ -249,7 +282,7 @@ enum FrontAppHistory {
 | `icon.name` | `app.badge` |
 | `defaultEnabled` | `false` |
 | `permissions` | `[]`（`NSWorkspace` 通知与 `NSRunningApplication` 都是公开 API） |
-| `config` | `maxRecentApps`（`integer`，默认 `5`，运行时夹取到 `3...8`） |
+| `config` | `maxRecentApps`（`integer`，默认 `5`，运行时夹取到 `3...8`）——**只决定 `recent`（排序依据）记多长**；块里画几格由块宽高预算定（2026-09-30 `p2-home-fit` 改判，见 §已知限制 13） |
 | `homeBlockWidth` | `nil`（用宿主统一值 180/240） |
 | `name` / `summary` | `module.frontapp.name` / `.summary` |
 
@@ -271,6 +304,11 @@ enum FrontAppHistory {
 `module.frontapp.recent` 是最近图标那一排的**可访问性标签**（同样不新增可见文字——块宽只有 180pt，
 加标题行会挤掉"当前应用"这个主角）；`module.frontapp.emptyRecent` 只作**空态那一行 `—` 的 `.help` 与
 `.accessibilityLabel`**（可见文案仍是 `—`，不是一句文字）。
+**2026-09-30 `p2-home-fit` 改判**：那排"最近图标"已改成**网格**，它的可访问性标签换成新 key
+`module.frontapp.switcher`（"其他打开的 App"）；`module.frontapp.recent` 因此**暂时留而不用**
+（仍在 catalog 里、也仍在 `ShortcutsFrontAppTests` 的解析名单里，删它要动 catalog）——
+"留给以后的『最近切换』形态还是一并删掉"这个选择留给后续批次。
+`current` 与 `emptyRecent` 两个 key 的用法未变。
 `module.shortcuts.outputTruncated` 是 runner 侧截断时追加在 `output` 末尾的那一行；
 `module.shortcuts.runFailed` 是"失败/超时但系统没给说明"的兜底句（§决策摘要 D-13）；
 `module.shortcuts.timedOut` 一 key 两用（结果行标签 + 超时说明的句头，§决策摘要 D-13）。
@@ -321,8 +359,9 @@ enum FrontAppHistory {
 **覆盖审计**（`D-01`…`D-07` 逐条对应的脚本化证据）：`ShortcutListParser.parse` 定义在
 `ShortcutCatalog.swift:43`；两个注入点在 `ShortcutRunner.swift`（`ShortcutsListing` / `ShortcutsRunning`），
 用例文件里 `Process(` **0 命中**；`clampedLimit` 定义 `FrontAppHistory.swift:87`、调用点唯一
-（`FrontAppStore.swift:70`）；`capacity(forWidth:)` 定义 `FrontAppModule.swift:265` 且是块内预算、
-不写回 store；D-07 的四个不做项在 `DynamicIsland/` 与 `DynamicIslandTests/` 全域
+（`FrontAppStore.swift:70`）；块内排版预算 `FrontAppGridBudget` 定义在 `FrontAppModule.swift` 末尾且不写回 store
+（**2026-09-30 `p2-home-fit` 改判**：旧口径 `capacity(forWidth:)` 定义在 `:265`，随块内容改成"所有打开的常规 App"
+换成**宽 × 高两维**——同批新增的 `switcherApps` 判据与宿主级用例见 [23](23-home-fit.md) §接口与数据形状）；D-07 的四个不做项在 `DynamicIsland/` 与 `DynamicIslandTests/` 全域
 `grep -rn "input-path\|--folders\|--folder-name\|--output-type\|windowTitle\|showInFinder"` **零命中**
 （`AXUIElement` 只在 `FrontAppStore.swift:14` 的一句"没有它"注释里），
 `DynamicIsland/Modules/Shortcuts/*.swift` 的 `grep -n "input-path\|--folders"` 同为空。
@@ -373,13 +412,15 @@ enum FrontAppHistory {
     但注入点与手改的 config 能走进这一档；② `refresh()` **空结果也写盘**（D-12），
     所以一次失败的刷新（起不来 / 非零退出 / 超时在真实现里都是 `[]`）会把上一份缓存清掉、
     屏幕上变成空态——恢复办法是再点一次刷新。
-13. **前台应用块在窄块里会少画最近应用**：`FrontAppHomeBlockView` 按块宽算容量
-    （`capacity(forWidth:)`，格子 24 + 间距 4 的精确上界）——宿主最小块宽 180pt 下最多画 **6** 个、
-    240pt 下画 **8** 个。用户把 `maxRecentApps` 配成 7 或 8 时，**超出的格子会被静默不画，且没有
-    `＋N` 之类的提示**（与首页 strip 的丢块提示不是一回事：这里丢的是块内的格子，不是整块）。
-    依据：`FrontAppModule.swift:265-268` 与 `HomeStripView.swift:307` 的 `moduleBlockWidth(180, 240)`
-    + `:175` 的显式宽度提案。它**不是第二处夹取**（容量永不超 `recentLimit`）。自动化的范围只到
-    "模块答不答 `.view`"，格数只能靠肉眼（见 §验收标准 4）。
+13. **前台应用块的格子数有物理上限，超出静默不画**（**2026-09-30 `p2-home-fit` 改判**；旧条目的口径是
+    "块在窄块里会少画最近应用"，随块内容改成"所有打开的常规 App"而作废）：`FrontAppGridBudget` 是**宽 × 高
+    两个维度**——宿主最小块宽 180pt × strip 最小高 152pt 下最多 **24 格**（6 列 × 4 行）、240 × 152 是 **32 格**（8 × 4）。
+    常规 App 超过这个数时多出来的格子**既不画也没有提示**（`＋N` 是首页 strip 的整块级提示，丢的不是块内格子）。
+    `maxRecentApps`（3…8）**与此无关**：它只决定 `recent` 记多长（排序依据），不再决定画几格。
+    依据：`DynamicIsland/Modules/FrontApp/FrontAppModule.swift` 末尾的 `FrontAppGridBudget` 与
+    `HomeStripView.swift:307` 的 `moduleBlockWidth(180, 240)` + `:175` 的显式宽度提案。
+    自动化只到预算纯函数（扫 0…400pt 钉住"画的格子不比块更大"）；**"溢出被静默丢掉"这一档没有实拍**
+    （本机 18 个常规 App 只占 3 行，没到 4 行上限）。
 14. **D-07 的判据是「代码字面量无命中」，注释可以照实写**：D-07 的四个不做项靠 grep 钉
     （`input-path` / `--folders` / `windowTitle` / `showInFinder`）。grep **分不出代码与注释**——
     把 `--input-path` 写进一句"本模块不用 `--input-path`"的注释是允许的，它不构成"顺手做了进来"；
@@ -398,7 +439,9 @@ enum FrontAppHistory {
 3. 打开快捷指令模块后：展开面板有 tab；点刷新后列表出现本机快捷指令（名称 + identifier 解析正确）；
    点运行跑完给出结果行；右键固定后重启仍固定在前面。
 4. 打开前台应用模块后（**前提：关掉音乐与镜子，或把面板拉到 ≥892pt**——否则该块按 order 30 被规则 ③ 从尾部丢，见 §已知限制 7）：
-   首页出现一块，显示当前前台应用；切换 App 后块内跟着变；最近应用的小图标点一下能切回去。
+   首页出现一块，显示当前前台应用；切换 App 后块内跟着变；网格里其余打开的常规 App 的小图标点一下能切过去
+   （**2026-09-30 `p2-home-fit` 改判**：这句原写"最近应用的小图标"，那是块的旧内容——现在网格画的是
+   **所有打开的常规 App**（除上半那一个），也见 [23](23-home-fit.md) §验收标准 5）。
 5. **D-07 的四个不做项在代码里无命中**：`grep -rn "input-path\|--folders\|folder-name\|output-type\|windowTitle\|showInFinder" DynamicIsland/Modules/Shortcuts/ DynamicIsland/Modules/FrontApp/` 无命中
    （等价的老判据是 `grep -n "input-path\|--folders" DynamicIsland/Modules/Shortcuts/*.swift`）。
    **注释不算**：这四条判据管的是代码字面量与命令行开关字符串，注释里照实写"不做 `--input-path`"
@@ -412,7 +455,7 @@ enum FrontAppHistory {
 | D-02 | 运行走 `shortcuts run` + `--output-path` 读回；**限时 30s、禁止并发** | agent | docs/09 §5.4 的四条硬口径（§备选与取舍 ②③） |
 | D-03 | 子进程的取数与运行都做成**注入点**（`ShortcutsListing` / `ShortcutsRunning`） | agent | 单测不跑真命令、不依赖本机装了什么快捷指令（同 Launcher 的取数注入口径） |
 | D-04 | 前台应用联动本批做**首页块**形态，不做折叠态侧槽 | agent | 侧槽依赖左右槽位（用户已降级）；首页块不依赖它（§备选与取舍 ④） |
-| D-05 | 历史口径 = 去重 + 移到最前 + 截到 `maxRecentApps`（夹取 3…8），**排除本应用自己** | agent | 纯函数、可单测；不排除自己会让每次点开刘海都污染历史（§做法 机制三）。**默认 5 与夹取区间是本批自定的旋钮**（用户未指定），取值小且可逆 |
+| D-05 | 历史口径 = 去重 + 移到最前 + 截到 `maxRecentApps`（夹取 3…8），**排除本应用自己** | agent | 纯函数、可单测；不排除自己会让每次点开刘海都污染历史（§做法 机制三）。**默认 5 与夹取区间是本批自定的旋钮**（用户未指定），取值小且可逆。**2026-09-30 `p2-home-fit` 改判**：`maxRecentApps` 现在只是"`recent`（排序依据）的记忆长度"——块里画几格由 `FrontAppGridBudget` 按块宽高算，与它无关；历史口径本身（去重 / 移前 / 截到上限 / 排除自身）一字未改 |
 | D-06 | 两个模块都 `defaultEnabled: false`，都不新增 surface / capability | agent | docs/14 T-12（新增模块默认关）；用既有的 `expanded` / `home` 即可（§做法 机制四） |
 | D-07 | 不做 `--input-path`（Shelf 联动）、不做文件夹、不做窗口标题、不做持久历史 | agent | §明确不做：各自缺前置条件或需要新权限面 |
 
@@ -428,10 +471,10 @@ enum FrontAppHistory {
 | D-12 | `refresh()` **空结果也写** `cachedShortcuts` | agent | 注入点这一层「取数失败」与「本机真的没有指令」同形（真实现失败时返回 `[]` 并把原因写日志），写下去让屏幕与盘同源。代价：一次异常刷新会清掉旧缓存（§已知限制 12 ②；要"失败保留旧缓存"得给 `ShortcutsListing` 加"这次是否失败"的返回） |
 | D-13 | 失败 / 超时且 `failureMessage` 去空白后为空时，结果行退到 `module.shortcuts.runFailed`；而 `failureMessage` 侧**系统没给 stderr 时给 `exit <码>`**，超时时给 `module.shortcuts.timedOut` + ` · <限值>s` | agent | 那一栏是"失败时把系统的原话摆出来"的载体：留空等于把失败说成"没有原因"。代价：`exit 64` 这样的英文字样会直接出现在结果行（可核对的事实，好过编一句像人说的话）；`.timedOut` 一 key 两用（标签 + 说明句头），显示上略重 |
 | D-14 | 运行闸门是**纯拒绝**：`isRunning` 为真时后到的 `run` 直接返回（不排队、不放弃前一条），并新增 `runningIdentifier` 做行内 spinner 的判据 | agent | §机制二只说"一次只允许一条在跑"，"后到的怎么办"未定；界面上按钮本来就禁用。代价：将来要做队列得改这里（用例 `testShortcutsStoreRunIsGatedWhileRunning` 钉住拒绝语义）；`runningIdentifier` 比片段列的 store 字段多一个 `@Published` |
-| D-15 | `maxRecentApps` 的夹取**只在 `FrontAppStore.start` 一处**（`FrontAppHistory.clampedLimit`，3…8）；`updated` 严格按传进来的 `limit` 截断；视图用 `recentLimit`、不再夹 | agent | 夹取两处会让"哪个值说了算"有两个答案；`recentLimit` 是唯一值，配置页与首页块不会各显示一个数量 |
+| D-15 | `maxRecentApps` 的夹取**只在 `FrontAppStore.start` 一处**（`FrontAppHistory.clampedLimit`，3…8）；`updated` 严格按传进来的 `limit` 截断；**视图不再收这个值** | agent | 夹取两处会让"哪个值说了算"有两个答案；`recentLimit` 是唯一值。**2026-09-30 `p2-home-fit` 改判**：本批的视图还用它当"最近一排画几个"的上限，现在视图整份不收它（画几格由 `FrontAppGridBudget` 按块宽高算），`recentLimit` 只剩"`recent` 记多长"一个作用 |
 | D-16 | 初值**只种 `current`、不种 `recent`** | agent | `recent` 的语义是"**切换**过谁"，启动时的前台应用还没被切换过；块只有 180pt 宽，同一个应用在"当前"与"最近"各出现一次很浪费。代价：模块刚打开时 `recent` 为空、首页块只显示当前应用 |
 | D-17 | 前台变成本应用自己时**整条忽略**：`current` 保持上一次的真前台（不回退、不清空），不进 `recent` | agent | 点开刘海让壶中天成为前台时，用户想看的仍是"刚才那个应用"；清空会让块在每次点开时闪一下空白。代价：极端情况下 `current` 停在最后一个真正的第三方应用上（是刻意的） |
 | D-18 | `start(selfBundleID:maxRecentApps:)` 的 `maxRecentApps` **默认 `nil`**（nil = store 从 config 读）；模块侧**显式**读 config 原样传值 | agent | 契约同时给了"签名带参数"与"store 读 config"两句，默认值让两种调用形态都合法、夹取点仍只有一处；显式传值让"读点"与"显示点"对得上（缺键兜 `defaultLimit`，与 manifest 默认值同源） |
-| D-19 | 视图内有**块内排版预算** `capacity(forWidth:)`：每格 = 20（图标）+ 4（悬停底色内边距）+ 4（间距），至少 1 个、不超过 `maxRecentApps` | agent | 夹取上界 8 时 8 格 ≈188pt > 宿主最小块宽 180，不裁会溢出（块是 `.clipped()`，被裁掉的是最后几个图标）。代价：配 7 / 8 时窄块里静默少画（§已知限制 13）；**它不是第二处夹取**（只会画得更少） |
+| D-19 | 块内格数由 `FrontAppGridBudget` 定：**宽决定一行几格、高决定几行**（每格 = 20 图标 + 2×2 悬停内边距 + 4 格间距 = 24，行间距 6），**放不下一格就是 0**（整片网格不画） | agent | 2026-09-30 `p2-home-fit` 改判：旧口径是单行 `capacity(forWidth:)`（至少 1 个、不超过 `maxRecentApps`）。块内容换成"所有打开的常规 App"后，格数上限不再是 `maxRecentApps`；且实测 strip 最小高 152pt 下能放 4 行，只按宽度算会在矮块里纵向溢出（"格子被裁 / 挤变形"）。代价：容量与 `recentLimit` 不再有数量关系；超出预算的格子静默不画（§已知限制 13） |
 | D-20 | 空态 / 无命中的图标与文案自定：`bolt.square` / `magnifyingglass`；`noMatch` 文案 = "没有匹配的快捷指令"（key 在契约里、文案不在） | agent | 契约只给了 key 名；`empty` 的文案逐字照 §预期结果（"没有快捷指令（点刷新）"）。代价：这两条英文措辞是本批自定的 |
 | D-21 | 前台应用名的兜底链 `localizedName ?? bundleIdentifier ?? "pid:\(pid)"`；图标路径优先用映射快照时记下的 `bundleURL`，快照不是本 store 产生的才按 pid 现查 | agent | 不编造应用名——两样都没有时用身份串顶上，用户至少能看出是哪个进程；pid 会被复用，用当场记下的包路径不会画错图标。代价：块里可能出现英文/数字串（五键里没有"未知应用"这条）；`iconCache` 只增不删（一次会话见过的应用数量级） |
