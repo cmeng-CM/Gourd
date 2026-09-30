@@ -1078,6 +1078,9 @@ final class TakeoverEnablementTests: XCTestCase {
                     control.multiSelectEffectiveSet,
                     "\(control.id) 是多选但没给 `multiSelectEffectiveSet`——卡片会在空表/全坏值上与块分叉"
                 )
+                // 「至少要留一项」那条提示（上锁胶囊的 `.help`）也必须在 catalog 里解析得出：
+                // 只对这一条**类型上的**常量断言（视图只用这个 key，不另抄字面量）。
+                XCTAssertResolves(ModuleConfigControl.minimumOneHintKey)
                 // 选项必须能落盘：manifest 的默认值里出现的取值都得是清单里的选项之一
                 // （否则「出厂那几档」在卡上一个都勾不上，用户也改不回默认）
                 if case .strings(let declared)? = node.default {

@@ -68759,6 +68759,22 @@
         }
       }
     },
+    "settings.modules.multiSelect.minimumOne" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "At least one option has to stay on"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至少要留一项（不能全部取消）"
+          }
+        }
+      }
+    },
     "settings.modules.progress.visibleScopes" : {
       "localizations" : {
         "en" : {

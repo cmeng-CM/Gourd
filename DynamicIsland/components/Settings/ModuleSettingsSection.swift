@@ -782,6 +782,12 @@ struct ModuleConfigControl: Identifiable {
 
     var id: String { "\(moduleID).\(key)" }
 
+    /// 多选「至少要留一项」那条提示的文案 key（`.help(...)` 用，`ModuleConfigControlRow` 渲染）。
+    ///
+    /// **写在类型上而不是散在视图里**：与 `titleKey` 同一条口径——视图只用 key，文案在
+    /// `Localizable.xcstrings`（中英双语），而「这个 key 解析得出来吗」由用例直接对这条常量断言。
+    static let minimumOneHintKey = "settings.modules.multiSelect.minimumOne"
+
     /// 多选型的选项（值 + 文案 key，一一对应）；其他类型是空表。
     /// **顺序即展示顺序**——视图照它从左到右排，写盘也照它收敛。
     var multiSelectOptions: [Option] {
@@ -1101,6 +1107,10 @@ private struct ModuleConfigControlRow: View {
     ///
     /// 点一下 = 把这一项翻面（`toggleMultiSelect`）→ 走 `commit` 落盘 + 叫醒本行与宿主。
     /// **没有「确定」按钮**：勾上就写、写就生效（这就是 D-05 要的「勾了立刻上屏」）。
+    ///
+    /// **只剩一档时那一枚会「上锁」**（`isLocked`）：`toggleMultiSelect` 对「取消最后一档」是
+    /// **拒绝**（静默返回 `false`——`commit` 的返回值没人读），所以视图必须**在点之前**把话说出来，
+    /// 否则那一枚在用户眼里就是「点了没反应」。判据 = 亮着的只有它一枚。
     private var multiSelectRow: some View {
         let selected = Set(control.selectedOptions(from: config))
 
@@ -1111,15 +1121,23 @@ private struct ModuleConfigControlRow: View {
 
             HStack(spacing: 6) {
                 ForEach(control.multiSelectOptions) { option in
-                    chip(option, isOn: selected.contains(option.value))
+                    let isOn = selected.contains(option.value)
+                    chip(option, isOn: isOn, isLocked: isOn && selected.count == 1)
                 }
             }
         }
     }
 
-    /// 一枚胶囊。`isOn` 只决定长相；点它的动作在 `multiSelectRow` 那一层统一说明。
-    private func chip(_ option: ModuleConfigControl.Option, isOn: Bool) -> some View {
-        Button {
+    /// 一枚胶囊。`isOn` / `isLocked` 只决定长相；点它的动作在 `multiSelectRow` 那一层统一说明。
+    ///
+    /// `isLocked`（= 它是**最后一枚亮着的**）的长相：**填色减半 + 虚线描边**（系统里表达「按不动」
+    /// 的那一族观感），另配一条 `.help(...)` 说明「至少要留一项」——形状 / 字号 / 内边距与别的胶囊
+    /// 逐字相同，它是**同一个控件的一个状态**，不是另一种控件。
+    /// 点击本身**照旧发出去**（写策略不动：`toggleMultiSelect` 拒绝清空）——上锁是提示，不是禁用：
+    /// 真禁用（`disabled`）会让「为什么点不动」变得更难问。
+    @ViewBuilder
+    private func chip(_ option: ModuleConfigControl.Option, isOn: Bool, isLocked: Bool) -> some View {
+        let button = Button {
             commit { control.toggleMultiSelect(option.value, config: config) }
         } label: {
             Text(LocalizedStringKey(option.titleKey))
@@ -1128,12 +1146,29 @@ private struct ModuleConfigControlRow: View {
                 .foregroundStyle(isOn ? Color.white : Color.primary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(isOn ? Color.accentColor : Color.clear))
-                .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.45), lineWidth: 0.5))
+                .background(Capsule().fill(chipFill(isOn: isOn, isLocked: isLocked)))
+                .overlay(
+                    Capsule().strokeBorder(
+                        isLocked ? Color.secondary.opacity(0.7) : Color.secondary.opacity(0.45),
+                        style: StrokeStyle(lineWidth: 0.5, dash: isLocked ? [2, 2] : [])
+                    )
+                )
         }
         .buttonStyle(.plain)
         // 辅助功能：胶囊自己报得出名字（与滑杆 / 开关那两条同口径）。
         .accessibilityLabel(Text(LocalizedStringKey(option.titleKey)))
+
+        if isLocked {
+            button.help(Text(LocalizedStringKey(ModuleConfigControl.minimumOneHintKey)))
+        } else {
+            button
+        }
+    }
+
+    /// 胶囊的填色：未选是空的、普通选中是主题色、**上锁的那一枚减半**（浅一档，但仍看得出是「开」的）。
+    private func chipFill(isOn: Bool, isLocked: Bool) -> Color {
+        guard isOn else { return .clear }
+        return isLocked ? Color.accentColor.opacity(0.45) : Color.accentColor
     }
 
     // MARK: 写路径
