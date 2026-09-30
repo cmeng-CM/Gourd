@@ -147,6 +147,9 @@ static var homeFormFactor: HomeFormFactor { .compact }      // 缺省语义写�
 // Kernel/ModuleRegistry.swift：宿主访问器（照 homeBlockWidth(for:) 的写法）
 func homeFormFactor(for id: String) -> HomeFormFactor       // 每次现问一次、不缓存；未注册 id 答 .compact
 //   显式声明 .large 的只有两个：MusicModule、MirrorModule（进度 / 统计 / 待办 / 通知 / 前台应用 = 缺省 .compact）
+//   ~~显式声明 .large 的只有两个：MusicModule、MirrorModule~~ **2026-10-01 改判（p5-home-blocks / D-09 · D-10）：只剩 `MirrorModule` 一个大块**——
+//   音乐本批降为 `.compact`（宽度 `300/420` → `240/300`、封面 `showAlbumArt` 默认关），大块档高度改由镜子的方形边长 140 定
+//   （镜子块宽同步收敛为 `140/140`）。详见 [29](29-home-blocks-and-panel.md) §做法 机制四 / §已知限制 9。
 
 // Host/HomeBandedLayout.swift（纯几何、无 SwiftUI，可单测）
 enum HomeBandedLayout {
@@ -166,6 +169,10 @@ enum HomeBandChrome {
     static let hoverCornerRadius: CGFloat = 8
 }
 // HomeStripView.widgetRowHeight = 96（小组件带行高的**宿主常量**，不是统计块的高度，见 §已知限制 9）
+// ~~小组件带行高 96~~ **2026-10-01 改判（p5-home-blocks / T1 · T2 · T3）：96 现在是「紧凑档」的块高**
+// （`HomeFlowView.compactBlockHeight`，出处是「形态 → 档高」表）；旧分带渲染器（`HomeBandedLayout` / `HomeVerticalFit` /
+// `widgetRowHeight`）已不在生产路径（[28](28-home-layout-redesign.md) 的单条流接手）。这一档里装的块本批都改过：
+// 待办不再画三环、进度行高 14 + 行距 6（96 高放得下五行）、音乐紧凑条六项预算 95。详见 [29](29-home-blocks-and-panel.md) §实际交付。
 
 // 面板顺序（新键）
 Defaults.Keys.panelOrder: [String: Int]      // 键 = 模块 id，值 = 面板组的序号；缺键 = 用户未表达
@@ -213,6 +220,8 @@ enum ProgressHomeBlockLayout {
     static func listedScopes(_:forWidth:) -> [Scope]      // 按 visibleScopes 声明顺序取前 N 个
 }
 ```
+
+> ~~`twoRowWidth = 220`（≥220 → 2 行）~~ **2026-10-01 改判（p5-home-blocks / D-21 · D-20）：宽度档门槛改成 `allScopesWidth = 180`（= 模块声明的最小宽；`twoRowWidth` 已删）**，行数由「宽度档 × **高度档**」取小者定，并新增 `rowHeight = 14` / `rowSpacing = 6` / `barHeight = 6`（96 高的块放得下五行——本批实测宿主真分配的块宽是 180.5…240，旧门槛 220 在多数面板宽下会把块压成 1–2 行，默认三档都上不全）。详见 [29](29-home-blocks-and-panel.md) §接口与数据形状。
 
 **文件**（实际改动到的；新增文件带 Gourd 版权头）：
 `DynamicIsland/Modules/ProgressModule.swift`、`create DynamicIsland/Modules/Takeover/StatsModule.swift`、
@@ -269,6 +278,7 @@ enum ProgressHomeBlockLayout {
 8. **进度的展开清单视图保留不挂 surface**（计划只写 `.expanded` 改 `.none`）：删掉等于丢一份可用呈现，留着则「把 `.expanded` 加回 `surfaces` 与 `content(for:)` 两处」即可复原。
 9. **收尾把笔记的 tab 分支也摘了**（派发原话是「只摘设置入口、上游代码保留」）：T5 报告实测本机 `enableNotes = 1` 时面板上真有一个 Notes tab，而摘掉设置页后它**再没有关闭入口**——这是 T3+T5 报告里那条 concern，控制器裁定按统计的先例（T1+T2 删 Stats 分支）一并摘掉；笔记代码与偏好键一个字没删，该键从此惰性（见 §已知限制 5）。
 10. **「首页组件节 = 内置块 + 声明 home 的模块」在实现里是「只有模块」**（机制三 的那句描述）：宿主内置块今天为空（音乐 / 镜子已是模块块），唯一的内置面是**首页日历行**——它是 strip 之外的全宽行，不在 `homeBlockOrder` 的语义里、给不了排序，其开关在组件页的「功能」段。首页节实际只有 7 个模块行（音乐 / 镜子 / 待办 / 前台应用 / 进度 / 通知 / 统计）。
+    **2026-10-01 改判（p5-home-blocks / D-06）：组件页的「功能」段已整段撤销**（`featuresSection` / `featureCards` / `FeatureCard` / `FeatureCardRow` 与七条文案 key 一起删除）：日历行那一行的开关现在是「首页组件」节末尾的 `HomeCalendarSettingsRow`；终端 / 暂存器 / 剪贴板 / 取色器进了「面板组件」节（宿主行，只有开关、没有 ↑↓）。详见 [29](29-home-blocks-and-panel.md) §做法 机制三。
 11. **机制六 的第三档在文档里有两个名字**（`stripWidgetsOnly` / `widgetsOnly`）——实现取 **`widgetsOnly`**，让位链是 `both → noCalendar → widgetsOnly → none`；`HomeVerticalFit` 的旧 `.calendarOnly` 档**删除**（四档链里日历行是第一个让位的，没有「只剩日历行」这一档）。
 12. **`settings.modules.effect.progress` 的文案在 T1+T2 一并改了**（派发未点名）：原文写「折叠态中央槽位 + 展开面板进度页——暂不出现在首页」，三个分句全错，改为「首页块里的紧凑进度条：日 / 周 / 月 / 季 / 年（默认今天 + 今年）」。
 13. **派发要的「统计块 min220 上屏档」取不到正好 220**：面板有强制最小宽（本机 770 → 可用 702），最紧的一档是「三块一行被压缩」下的统计块 ≈261pt（> 200，仍是 46 档）——220 那一档由用例钉住（`rowWidth(forWidth: 220) == 158 ≤ 220`，即 T9 变异的靶子）。
@@ -287,6 +297,7 @@ enum ProgressHomeBlockLayout {
 8. **`module.stats.summary` 的文案仍写「mini bars / 迷你条」**（形态已改环状）：本批（T6）动的是**效果行**（统计 / 日历两条按事实改写，便签那条随卡片摘除改成「本版无效果」并从此不可达），这条摘要行**未改**，留给下一批或控制器（改法是中英各一句，key 不动）。
 9. **组件页两节都列全量 manifest（含未启用）**：刻意的（关掉的组件必须还能开回来），代价是列表比实际内容长（默认关的模块也在名单里占一行）。
 10. **组件页「功能」段的 `Enable Notes` 卡已在 T6 收尾摘除**（原先的第七行）：笔记页与 Notes tab 分支都已摘除、`enableNotes` 键惰性，卡片留着就是「拨了没反应」的那一类（判据同 §已知限制 5）。`featureCards` 表里那一行与 catalog 里的名称 / 效果行 key 都**保留未删**（效果行值已改成「本版无效果（…键惰性——卡片已摘，此文案暂不可达）」），恢复笔记入口时把那一行加回表即复活。**仍按七张写的旧计数**（不在本批文件清单里，未动）：[20](20-component-page.md)（§接口与数据形状 7 的表格、§改动点 3、§验收标准 3）与 [16](16-nookx-reference.md) §4「组件七张卡 + 功能七张卡」——留待下一批一并改。
+    **2026-10-01 改判（p5-home-blocks / T4）：整段「功能」段已撤销**——`featureCards` 表与 `FeatureCard` / `FeatureCardRow` 两个类型、七条 `settings.features.*` key 一起删除（[20](20-component-page.md) 那一族旧计数已同批改判，[16](16-nookx-reference.md) §4 仍是旧计数、不在本次回写范围）。上面那句「把那一行加回表即复活」**不再成立**：恢复笔记入口要「重建表与行」（或把开关挂进现有两节）——这是一处真实的能力退化（可逆路径从「加一行」变成「重建一段」），见 [29](29-home-blocks-and-panel.md) §已知限制 19 / §实际交付 遗留项 6。
 
 ## 已知限制
 
@@ -295,11 +306,12 @@ enum ProgressHomeBlockLayout {
 3. **统计首页块只显示当前值**：三环给的是「此刻的 CPU / 内存 / GPU 占用」，看不出历史趋势——完整图在**设置页的统计页**里预览（那里本来就有图表可见性开关）。
 4. **两组排序是两套键**：`homeBlockOrder` 与 `panelOrder` 互不影响；同一个模块在两组里的名次可以不同。
 5. **摘掉笔记入口后，笔记功能对用户不可达**：设置侧栏的笔记页（T5）与 `TabSelectionView` 的笔记 tab 分支（收尾修复）都已摘除，`enableNotes` 键从此**惰性**（拨它不再改变任何界面——今天**三处入口全无**：设置页、tab 分支、组件页卡片都已摘；偏好键、笔记代码与 `featureCards` / catalog 里那两行文案保留未删）。恢复路径是三处：把 `.notes` 加回 `availableTabs`、把笔记那一半条件加回 `TabSelectionView` 的合并分支（`enabledStandardTabCount()` 同步）、把 `enableNotes` 那一行加回 `ModuleSettingsSection.featureCards`——代码与键一个字没删。
+    **2026-10-01 改判（p5-home-blocks / T4）**：第三条恢复路径**已失效**——`featureCards` 表在撤销「功能」段时连同两个类型一起删除，恢复要「重建表与行」（或把开关挂进现有两节）；键与代码仍是一个字没删。前两条路径不变。`settings.features.effect.enableNotes` 这条 key 仍留在 catalog 里、不可达（孤儿 key，见 [29](29-home-blocks-and-panel.md) §已知限制 19）。
 
 **实现期补充（2026-09-30 回写，按代码与实测落）**：
 
 6. **带级容器的内边距纵向为 0**（横向真 8）：默认档（1154×630）的高度预算 `日历行 294 + 缝 8 + 主块带最小 152 + 缝 8 + 小组件带 96 = 558`，可用高 ≈562——只剩 **4pt**；纵向真 padding 要 32pt，只能从「默认档先丢日历行」或「主块带掉到最小可用高之下（音乐封面被切）」里出。实现取「**横向真 8、纵向 0**」，纵向呼吸靠带内自然余量；容器高度 = 带高度，因此四档取值、`.clipped()` 与零提案三条硬约束一字未动。
-7. **小组件带的行高是宿主常量 96pt**（`HomeStripView.widgetRowHeight`），**不是统计块的高度**：统计块实测内容 74.5 → 59pt（布局高）/ 64.8 → 58pt（墨迹高）。用户看到的「一块占 96pt」是**行高等高定值**；`.widgetsOnly` 档的富余高度留在带尾（不摊到行上、不拉伸）。
+7. ~~**小组件带的行高是宿主常量 96pt**（`HomeStripView.widgetRowHeight`），**不是统计块的高度**~~ **2026-10-01 改判（p5-home-blocks / T1 · T2 · T3）：96 现在是「紧凑档」的块高**（`HomeFlowView.compactBlockHeight`，「形态 → 档高」表里的声明值）——[28](28-home-layout-redesign.md) 的单条流接手后两条带与 `widgetRowHeight` 已不在生产路径。**读数口径不变**：用户看到的「一块占 96pt」是**声明档高**（块内容自己没占满，不是被拉伸）。当时那两组实测数仍是有效读数（统计块内容 74.5 → 59pt 布局高 / 64.8 → 58pt 墨迹高）；本批装进这一档的块都改过：待办**不再画三环**（三环口径随 T1 撤销，`TodoScopeRing` 一族保留不挂 surface）、进度行高 14 + 行距 6（96 高放得下五行）、音乐紧凑条六项预算 95。详见 [29](29-home-blocks-and-panel.md) §实际交付。
 8. **进度的展开清单视图保留但不挂 surface**：文件里多约 70 行不被任何 surface 渲染的代码（外加热度为它服务的两个私有出口）——这是**有意留的**（可逆：把 `.expanded` 加回 `surfaces` 与 `content(for:)` 两处即复原），将来清理时要知道它不是遗漏。
 9. **枚举型 config 键的写入格式有两套，写错会静默回落默认值**（实现期为此烧掉约 20 分钟）：`Defaults` 库对**声明了 `Codable` 的枚举**走 `CodableBridge`——序列化成 **JSON 字符串（带引号）**、读时走 `Value(jsonString:)`；对**没有 `Codable` 的枚举**（如 `TimerDisplayMode`）走 `RawRepresentableBridge`——**裸串**即可。同一个应用里两种格式并存：`clipboardDisplayMode` 要写 `'"separateTab"'`，`timerDisplayMode` 写 `popover`。写错格式时**解不出来 → 静默回落默认**，屏上表现就是「改了没反应」；取证时按枚举的声明面挑格式。
 10. **月历格第二行在 `hideAllDayEvents` 打开时一并消失**（含节假日名）：月历快照按该偏好过滤，全天条目不进快照——节假日名与它的事件点同进同出（与事件清单同一口径，但这是一条连锁，值得先知道）。
@@ -311,6 +323,8 @@ enum ProgressHomeBlockLayout {
 ## 验收标准
 
 > **回写注（2026-09-30）**：判据以**最终实现**为准——第 3 条的统计形态是环状（T9 改判，机制八 / D-11），第 6 条的两节即「首页组件 / 面板组件」+「功能」段。逐条结果见 §实际交付（哪条有截图、哪条只有用例、哪条留人工验收，都在那里写明）。
+>
+> **2026-10-01 改判（p5-home-blocks / D-06）**：第 6 条的判据改成「组件页**只剩**『首页组件 / 面板组件』两节、没有『功能』段」——「功能」段已整段撤销，五张卡逐张归位。详见 [29](29-home-blocks-and-panel.md) §做法 机制三 / §实际交付。
 
 1. `xcodebuild test`（`DynamicIslandTests`）全绿；新增用例覆盖：`LunarDayLabel.label` 的五组（初一 / 十五 / 月末 / 闰月 / 普通日）、`HolidayLookup.holidayCalendar` 的三组（命中 / 无 / 多个候选）、`tabEntries` 按 `panelOrder` 排序、进度与统计的 manifest 取值、`HomeBandedLayout` 的换行与四档取舍、`StatsRingMetrics` 的三环不裁。
 2. 进度不再有展开 tab，作为首页块出现；关掉后在首页组件里把它打开即回来（截图）。
@@ -339,7 +353,7 @@ enum ProgressHomeBlockLayout {
 
 | ID | 决策 | 来源 | 理由 / 代价（代价写在这，别去报告里找） |
 |---|---|---|---|
-| D-12 | 小组件带行高取 **96pt 定值** | agent（执行期） | 默认档 `294 + 8 + 152 + 8 + 96 = 558 ≤ 562` 才留得住日历行；96 是「不挤掉日历行」约束下的最高一档。代价：面板高 < ≈626 时两行小组件带把日历行挤掉；`.widgetsOnly` 档富余高度留在带尾（§已知限制 7）。改这个数就是改跨任务常量与阈值用例 |
+| D-12 | 小组件带行高取 **96pt 定值** | agent（执行期） | 默认档 `294 + 8 + 152 + 8 + 96 = 558 ≤ 562` 才留得住日历行；96 是「不挤掉日历行」约束下的最高一档。代价：面板高 < ≈626 时两行小组件带把日历行挤掉；`.widgetsOnly` 档富余高度留在带尾（§已知限制 7）。改这个数就是改跨任务常量与阈值用例。**2026-10-01 改判（p5-home-blocks）：分带渲染器已不在生产路径，96 现在是「紧凑档」的块高**（`HomeFlowView.compactBlockHeight`，见 §已知限制 7 的改判；[29](29-home-blocks-and-panel.md) 起 96 不再由「不挤掉日历行」的预算推出来） |
 | D-13 | 四档定名 `both` / `noCalendar` / `widgetsOnly` / `none`；**删掉旧 `.calendarOnly` 档** | agent（执行期） | 机制六 里 `stripWidgetsOnly` 与 `widgetsOnly` 两个名字描述同一档，按语义取后者；四档链里日历行是第一个让位的，没有「只剩日历行」这一档（旧档在生产高度下从来不画日历行，行为等价）。代价：合成分支（可用高 < 152 却画日历行）没了，将来面板能更矮时要重新加档 |
 | D-14 | **空带不进取舍**：没有大块 / 没有紧凑块时，四档退化成旧三档 | agent（执行期） | 这是「只有音乐的旧配置逐字不变」的保证——调用方按「有没有块」传 `mainBandMinimumHeight = 0` / `widgetRowHeight = 0`。代价：纯函数多一层「0 表示不存在」的约定，传错 0 会让一条带静默消失 |
 | D-15 | 带级容器**只做横向内边距 8，纵向 0** | agent（执行期） | 默认档高度预算只剩 4pt，纵向真 padding 会先丢日历行或把音乐块压到最小可用高之下（§已知限制 6）。代价：容器与内容在纵向可能贴边；要「四周都是 8」得先动行高 / 让位顺序 |

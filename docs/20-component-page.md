@@ -90,6 +90,11 @@
 接管模块声明它接管的那一块**原本**的宽度（镜子 140/160、音乐 300/420），`HomeStripView` 优先用它。
 D-11 的口径因此收窄为「**新增**模块不参与宽度决策；接管模块继承被接管块的宽度」。
 
+> **2026-10-01 改判（p5-home-blocks / D-09 · D-10）：两条接管宽度已变**——音乐 `300/420` → **`240/300`**（块降为紧凑档、
+> 封面默认关），镜子 `140/160` → **`140/140`**（方形：圆恰好是方形、块内不留横向空档，边长 = 宿主大块档高 `HomeFlowView.largeBlockHeight = 140`，
+> 模块直接引用宿主常量、编译期同源）。「接管模块继承被接管块原本的宽度」这半条因此变成「派生自形态度量」；
+> 宿主对**新增**模块的 `180 / 240` 不变。详见 [29](29-home-blocks-and-panel.md) §做法 机制四 / §已知限制 9。
+
 **存在性判据不再重复展开态**：`.home` surface 的定义就是「展开面板首页的一条 strip 块」，块只会在展开态被渲染，
 所以镜子模块的判据是 `showMirror && cameraAvailable`——不重复 `vm.notchState == .open`（旧的重复是内置块的写法，
 见 [17](17-nookx-adoption.md) 已知限制 7 的第二句，本批同批回写）。
@@ -202,6 +207,7 @@ public extension GourdModule {
     /// **只有接管模块需要重写**：它接住的是被接管块原本的宽度（镜子 140/160、音乐 300/420），
     /// 不是为了形状统一把老块改小。类型是内核侧的 `ModuleHomeBlockWidth`（Host 的
     /// `HomeBlockWidth` 由 `HomeStripView` 自己映射，内核不引用渲染层类型）。
+    /// ~~镜子 140/160、音乐 300/420~~ **2026-10-01 改判（p5-home-blocks / D-09 · D-10）：现行值是镜子 `140/140`（= 宿主大块档高 140，模块直接引用它、编译期同源）、音乐 `240/300`（降为紧凑档）**——见 [29](29-home-blocks-and-panel.md) §做法 机制四。
     static var homeBlockWidth: ModuleHomeBlockWidth? { nil }
 }
 ```
@@ -293,8 +299,8 @@ static func migratingLegacyIDs(_ overrides: [String: Int]) -> [String: Int]
 | 模块 id | `surfaces` | `defaultPlacement` | `icon.name` | `defaultEnabled` | `takeoverEnableKey` | `homeBlockWidth` | `isTabVisible()` | 渲染点 |
 |---|---|---|---|---|---|---|---|---|
 | `com.cmeng.gourd.timer` | `[.expanded]` | nil（tab 落模块段） | `timer` | `true`（= `enableTimerFeature` 默认） | `Defaults.Keys.enableTimerFeature` | nil | `Defaults[.timerDisplayMode] == .tab` | `NotchTimerView()`（展开 tab） |
-| `com.cmeng.gourd.mirror` | `[.home]` | `Placement(slot: nil, order: 2)` | `camera` | `false`（= `showMirror` 默认） | `Defaults.Keys.showMirror` | `140 / 160` | —（不声明 `expanded`） | `CameraPreviewView(webcamManager: WebcamManager.shared)`，门控 = `showMirror && WebcamManager.shared.cameraAvailable`（答 `.none` 不占位） |
-| `com.cmeng.gourd.music` | `[.home]` | `Placement(slot: nil, order: 0)` | `music.note` | `true`（= `showStandardMediaControls` 默认） | `Defaults.Keys.showStandardMediaControls` | `300 / 420` | — | `MusicPlayerView(albumArtNamespace:)`（命名空间经环境注入，见 6），门控 = `showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer \|\| MusicManager.shared.hasActiveSession)` |
+| `com.cmeng.gourd.mirror` | `[.home]` | `Placement(slot: nil, order: 2)` | `camera` | `false`（= `showMirror` 默认） | `Defaults.Keys.showMirror` | ~~`140 / 160`~~ **`140 / 140`**（2026-10-01 改判：方形，边长 = 宿主大块档高 140） | —（不声明 `expanded`） | `CameraPreviewView(webcamManager: WebcamManager.shared)`，门控 = `showMirror && WebcamManager.shared.cameraAvailable`（答 `.none` 不占位） |
+| `com.cmeng.gourd.music` | `[.home]` | `Placement(slot: nil, order: 0)` | `music.note` | `true`（= `showStandardMediaControls` 默认） | `Defaults.Keys.showStandardMediaControls` | ~~`300 / 420`~~ **`240 / 300`**（2026-10-01 改判：降为紧凑档，封面默认关） | — | `MusicHomeBlockView(showsAlbumArt:)` → `MusicControlsView(density: .compact)`（命名空间经环境注入，见 6），门控 = `showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer \|\| MusicManager.shared.hasActiveSession)` |
 
 三个模块一律：`manifestVersion 1`、`version "1.0.0"`、`apiVersion = HostInfo.currentAPIVersion`、`kind "builtin"`、
 `icon.type "symbol"`、`permissions []`、`name`/`summary` 用 `module.<shortID>.name` / `.summary`；
@@ -327,6 +333,12 @@ extension EnvironmentValues {
 模块侧读不到时用一个自己的 `@Namespace` 兜底（配对失效，但不会崩、不会空白）。
 
 ### 7. 功能卡段的数据形状（`DynamicIsland/components/Settings/ModuleSettingsSection.swift`）
+
+> **2026-10-01 改判（p5-home-blocks / D-06 · D-31）：本节整段已作废——「功能」段已整段撤销。**
+> `featuresSection` / `featureCards` / `FeatureCard` / `FeatureCardRow` 与七条 `settings.features.*` key 一起删除（五张卡归位：
+> 统计删重复卡、锁屏天气→锁屏页、终端 / 暂存器 / 剪贴板 / 取色器→「面板组件」的宿主行 `hostPanelRows`）；
+> 下面这段结构与「读生产表」的用例只对历史成立——用例已迁移成负向形态（七条 key 从编译产物消失 + 五张卡落点逐条断言）。
+> 详见 [29](29-home-blocks-and-panel.md) §接口与数据形状 / §实际交付。
 
 ```swift
 /// 一段上游功能的登记行：开关就是那个 `Defaults` 键，没有模块、没有内核状态。
@@ -516,6 +528,9 @@ T6 修复 `6e70fc23`（映射表补断言 + 测试锁定语言）。**另有终�
     不是实现缺陷。**2026-09-30 终审修复**：断言改为**显式加载 `zh-Hans` 子 bundle** 取译文，
     与宿主语言无关（`-testLanguage en` 下实测绿，旧形态 7 条红）；产品侧在英语宿主下显示英文原文，那是正确行为。
     同样形态的另一处（`ModuleKernelTests` 的同类断言）仍随宿主机语言走，未改。
+    **2026-10-01 改判（p5-home-blocks / T4）**：`testFeatureCardKeysResolve` 这条用例已随「功能」段撤销**迁移成负向形态**
+    （`XCTAssertDoesNotResolve` × 7，用同一份 `zh-Hans` 子 bundle 断言取反）——本条对今天**不再有生产判据**，
+    只对历史成立；同名助手与新用例的作用域见 [29](29-home-blocks-and-panel.md) §已知限制 16。
 14. **`isTimerSurfaceSelected()` 的模块分支在极简 UI 下不可达**：`DynamicIslandViewCoordinator.currentView` 的
     `didSet` 在 `enableMinimalisticUI` 开着时把非 `.home` 的赋值强制打回 `.home`
     （`DynamicIslandViewCoordinator.swift:118-122`），因此该模式下 `currentView == .module` 永远不成立——
@@ -545,6 +560,7 @@ T6 修复 `6e70fc23`（映射表补断言 + 测试锁定语言）。**另有终�
 3. 组件页第一段出现计时器 / 镜子 / 音乐三张卡、第二段出现七张功能卡；**凡在
    `ModuleSettingsSection.effectKeysByModuleID` 表内的模块卡**都有一行效果说明——表外的模块卡
    （如启动台）**不显示**这一行（`effectKey(for:)` 未命中原样返回 nil，整行不渲染，不是空白行）。
+   **2026-10-01 改判（p5-home-blocks / D-06）**：第二段（「功能」段）已整段撤销，判据改成「组件页**只剩**『首页组件 / 面板组件』两节、没有『功能』段」；第一段与效果行那半条不变。
 4. 在组件页关掉计时器 → 上游设置页的「计时器」开关也是关的；在上游设置页改 → 组件页跟着变（重启前后都不漂）。
 5. 首页 strip 的可见块名单与顺序在接管前后一致（含用户排过顺序的场景，靠 §接口与数据形状 4 的映射）。
 6. 面板宽度足够时，首页同时能看到音乐块与镜子块（与改动前同一门控条件下的同一结果）。
@@ -568,4 +584,4 @@ T6 修复 `6e70fc23`（映射表补断言 + 测试锁定语言）。**另有终�
 | D-13 | 接管模块的开关**回弹是空操作**（不得因 `activate()` 失败把上游总开关写 `false`） | agent | 计划评审实测：照搬非接管模块的回弹会把用户的计时器 / 音乐功能关掉，`showStandardMediaControls` 还会连带关掉 Home tab 判据 |
 | D-14 | `GourdModule` 的三条钩子**必须同时声明为协议要求**（扩展只提供缺省实现），不能只写在扩展里 | agent | 实现期最小复现（`swiftc -swift-version 5`）：只写扩展时经 `any GourdModule.Type` 取用一律走静态派发拿到缺省值（`nil` / `true`），接管模块声明的接管键 / 可见性 / 块宽被**静默忽略**——无编译错误、无警告，只有行为不对 |
 | D-15 | 接管模块 `config` 的默认值一律取**上游真源**的 `Defaults.Keys.<键>.defaultValue`，不抄计划里的字面量（`useMusicVisualizer` = `true`，计划写的 `false` 作废） | agent | 登记的价值是「声明 = 真源」（§备选与取舍 ④）；两处各写一个字面量就会漂（`Constants.swift:988-989` 是 `true` / `true`） |
-| D-16 | 功能卡 `nameKey` 取**上游设置页字面量**（不是本文档 §7 早先表格里的短名），`FeatureCard` / `featureCards` 因此放宽为 internal 供用例直读生产表 | agent | §7 同段指令（「逐字沿用上游那一项的名称字面量」）与表格示例的短名互相矛盾，取指令；解析用例读**生产表本身**才能钉住「表写错、文案对」这类故障（变异实测：表侧改一个字符即红）；代价是七条名称在英语宿主下判据退化（§已知限制 13） |
+| D-16 | 功能卡 `nameKey` 取**上游设置页字面量**（不是本文档 §7 早先表格里的短名），`FeatureCard` / `featureCards` 因此放宽为 internal 供用例直读生产表 | agent | §7 同段指令（「逐字沿用上游那一项的名称字面量」）与表格示例的短名互相矛盾，取指令；解析用例读**生产表本身**才能钉住「表写错、文案对」这类故障（变异实测：表侧改一个字符即红）；代价是七条名称在英语宿主下判据退化（§已知限制 13）。**2026-10-01 改判（p5-home-blocks / D-06）：表与两个类型已删除**——「功能」段整段撤销，读生产表的用例迁移成负向形态（见 §接口与数据形状 7 的改判） |
