@@ -32,6 +32,12 @@ struct DynamicIslandHeader: View {
     @State private var showColorPickerPopover = false
     @State private var showTimerPopover = false
     @Default(.enableTimerFeature) var enableTimerFeature
+    // **宿主门槛键**（p5-home-blocks / T5）：面板右侧的剪贴板 / 取色器两枚图标由它们直接门控。
+    // 与 `enableTimerFeature` 同样的理由用 `@Default`：设置页「面板组件」节的宿主行拨了开关，
+    // 本视图必须**当场**重绘（裸读不订阅——取色器那一行原先就是裸读，拨完要等别的状态变化
+    // 才轮到它）。名单见文件末尾的 `hostPanelGateKeys`。
+    @Default(.enableClipboardManager) var enableClipboardManager
+    @Default(.enableColorPickerFeature) var enableColorPickerFeature
     @Default(.timerDisplayMode) var timerDisplayMode
     @Default(.showClipboardIcon) var showClipboardIcon
     @Default(.showColorPickerIcon) var showColorPickerIcon
@@ -88,7 +94,7 @@ struct DynamicIslandHeader: View {
                         .buttonStyle(PlainButtonStyle())
                     }
                     
-                    if Defaults[.enableClipboardManager]
+                    if enableClipboardManager
                         && showClipboardIcon
                         && clipboardDisplayMode != .separateTab {
                         Button(action: {
@@ -140,7 +146,7 @@ struct DynamicIslandHeader: View {
                     }
                     
                     // ColorPicker button
-                    if Defaults[.enableColorPickerFeature] && showColorPickerIcon{
+                    if enableColorPickerFeature && showColorPickerIcon {
                         Button(action: {
                             switch Defaults[.colorPickerDisplayMode] {
                             case .panel:
@@ -334,6 +340,26 @@ private extension DynamicIslandHeader {
             && Defaults[.showColorPickerIcon]
             && Defaults[.enableTimerFeature]
     }
+}
+
+// MARK: - 宿主门槛键（设置页「面板组件」节的宿主行反查用）
+
+extension DynamicIslandHeader {
+    /// 本视图**真的在读**的宿主门槛键（`docs/29` §机制三的枚举表）：面板右侧那两枚由上游键
+    /// 直接门控的图标——剪贴板 `enableClipboardManager`（`if enableClipboardManager && …`）
+    /// 与取色器 `enableColorPickerFeature`（`if enableColorPickerFeature && showColorPickerIcon`）。
+    /// 两个读取点就在 `body` 里（`@Default` 的观察 + 那两行 `if`）。
+    ///
+    /// 镜子 / 计时器 / 齿轮 / 三个状态指示器**不在这份名单里**：它们的门槛键各有归属
+    /// （镜子归首页组件的镜子卡、计时器归计时器模块行、齿轮与指示器在各自设置页），
+    /// 枚举表逐条写明——与 `TabSelectionView.hostPanelGateKeys` 合起来就是设置页「面板组件」节
+    /// 宿主行的反查依据（方向：登记的键都真的在用；删掉任何一条门槛时必须同步改这份名单）。
+    ///
+    /// **不是 `private`**：用例直接读它。
+    static let hostPanelGateKeys: [Defaults.Key<Bool>] = [
+        .enableClipboardManager,
+        .enableColorPickerFeature,
+    ]
 }
 
 #Preview {

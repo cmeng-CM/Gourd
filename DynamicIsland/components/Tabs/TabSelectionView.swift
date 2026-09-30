@@ -60,6 +60,12 @@ struct TabSelectionView: View {
     @Default(.showMirror) private var showMirror
     @Default(.showStandardMediaControls) private var showStandardMediaControls
     @Default(.enableMinimalisticUI) private var enableMinimalisticUI
+    // **宿主门槛键**（p5-home-blocks / T5）：面板左列的暂存器 / 剪贴板 / 终端三条 tab 由它们直接门控。
+    // 用 `@Default` 而不是裸 `Defaults[...]`：设置页「面板组件」节的宿主行拨了开关，本视图必须
+    // **当场**重绘（裸读不订阅，得等下一次别的状态变化才轮到它）。名单见文件末尾的 `hostPanelGateKeys`。
+    @Default(.dynamicShelf) private var dynamicShelf
+    @Default(.enableClipboardManager) private var enableClipboardManager
+    @Default(.enableTerminalFeature) private var enableTerminalFeature
     @Namespace var animation
     
     private var tabs: [TabModel] {
@@ -69,7 +75,7 @@ struct TabSelectionView: View {
             tabsArray.append(TabModel(label: "Home", icon: "house.fill", view: .home))
         }
 
-        if Defaults[.dynamicShelf] {
+        if dynamicShelf {
             tabsArray.append(TabModel(label: "Shelf", icon: "tray.fill", view: .shelf))
         }
         
@@ -94,10 +100,10 @@ struct TabSelectionView: View {
         // Clipboard；笔记开关从此**惰性**（笔记代码与键一个字没删，只是不再产生任何入口）。
         // 与统计开关（p3-widgets / T2）同款先例：键保留、tab 分支删除。
         // 注意：`clipboardDisplayMode == .separateTab` 的用户仍必须能拿到这一支——不是整支删掉。
-        if Defaults[.enableClipboardManager] && Defaults[.clipboardDisplayMode] == .separateTab {
+        if enableClipboardManager && Defaults[.clipboardDisplayMode] == .separateTab {
             tabsArray.append(TabModel(label: "Clipboard", icon: "doc.on.clipboard", view: .notes))
         }
-        if Defaults[.enableTerminalFeature] {
+        if enableTerminalFeature {
             tabsArray.append(TabModel(label: "Terminal", icon: "apple.terminal", view: .terminal))
         }
         if extensionTabsEnabled {
@@ -215,6 +221,28 @@ struct TabSelectionView: View {
         }
         coordinator.currentView = first.view
     }
+}
+
+// MARK: - 宿主门槛键（设置页「面板组件」节的宿主行反查用）
+
+extension TabSelectionView {
+    /// 本视图**真的在读**的宿主门槛键（`docs/29` §机制三的枚举表）：面板左列那三条由上游键
+    /// 直接门控的 tab——暂存器 `dynamicShelf`、剪贴板 `enableClipboardManager`、终端
+    /// `enableTerminalFeature`。三个读取点就在同文件 `tabs` 里（`@Default` 的观察 + 那一行
+    /// `if`，一屏可及）。
+    ///
+    /// **这份名单是给用例反查的方向**：设置页「面板组件」节的宿主行表
+    /// （`ModuleSettingsSection.hostPanelRows`）登记的键必须落在本名单与
+    /// `DynamicIslandHeader.hostPanelGateKeys` 的并集里——方向是「登记的键都真的在用」，
+    /// **不是**「用到的全部门槛键都在这里」（用量 tab 的 `enableLLMUsageFeature`、镜子
+    /// `showMirror` 等各有归属，见枚举表；删掉任何一条门槛时必须同步改这份名单）。
+    ///
+    /// **不是 `private`**：用例直接读它（与组件页那几张生产表同一条口径）。
+    static let hostPanelGateKeys: [Defaults.Key<Bool>] = [
+        .dynamicShelf,
+        .enableClipboardManager,
+        .enableTerminalFeature,
+    ]
 }
 
 #Preview {

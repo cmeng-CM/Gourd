@@ -101,6 +101,18 @@
 //  - **读出来的值也按声明顺序收敛**（野值不落进 UI：与数值型的「读侧再夹一次」同一条理由）。
 //  `list` 型仍**只有多选这一个渲染形态**（键必须逐条登记，不按 manifest schema 自动生成控件）。
 //
+//  p5 批次 / T5 增量（「面板组件」节收全：模块行 + **宿主行**，docs/29-home-blocks-and-panel.md
+//  §做法 机制三 / D-07、D-08）：
+//  - 面板组件节在模块行**之后**多四条**宿主行**（`hostPanelRows`：暂存器 / 终端 / 剪贴板 / 取色器）
+//    ——面板上那四个由上游 `Defaults` 直接门控、**不经模块注册表**的 tab / 图标。名称逐字沿用
+//    上游设置页那一项的字面量（四条 key 都已在 catalog 里），行渲染与模块卡同形（复用
+//    `ModuleSymbolChip`）、**只有开关、没有 ↑↓**（先后写死在 `TabSelectionView` 里）；
+//  - 节脚注据此改写成「面板上出现什么」的**全量清单**（四条宿主行 + 声明 `.expanded` 的模块行；
+//    其余面板元素各有归属——枚举表在 docs/29 §机制三）；
+//  - **登记的键必须真的在用**：四条键就是 `TabSelectionView` / `DynamicIslandHeader` 现读的门槛键
+//    （那两个视图各自的 `hostPanelGateKeys` 名单），用例按这个方向反查。用量
+//    （`enableLLMUsageFeature`）上一批「删页留码」已裁决无入口、面板上不会出现，**不进本节**。
+//
 //  P3 组件批次 / T3 增量（**两节 + 两套排序**，docs/26-home-widgets-and-settings.md §做法 机制三 / D-03）：
 //  - 页面从「一张卡 = 一个模块」的平铺改成两节：**首页组件**（声明 `home` 的模块，doc 里也叫
 //    「内置块 + 声明 home 的模块」——内置块今天为空，见 `homeRows`）与**面板组件**（声明 `expanded`
@@ -220,6 +232,58 @@ struct ModuleSettingsSection: View {
             symbolName: "apple.terminal",
             key: .enableTerminalFeature,
             effectKey: "settings.features.effect.enableTerminalFeature"
+        ),
+    ]
+
+    // MARK: 面板组件节的宿主行（上游键的登记表）
+
+    /// 「面板组件」节的**宿主行表**（p5-home-blocks / T5，docs/29-home-blocks-and-panel.md
+    /// §做法 机制三 / D-07、D-08）：面板上那四个由 `Defaults` **直接门控、不经模块注册表**的
+    /// tab / 图标的总开关。四条的名单与顺序**逐字取自那张枚举表**（暂存器 / 终端 / 剪贴板 / 取色器）
+    /// ——本节因此是「面板上出现什么」的全量清单的一半（另一半 = 声明 `.expanded` 的模块行）。
+    ///
+    /// 三条口径（改动前先读）：
+    ///
+    /// 1. **名称逐字沿用上游设置页那一项的字面量**（`Enable shelf` / `Enable terminal` /
+    ///    `Enable Clipboard Manager` / `Enable Color Picker`——四条 key 都已在
+    ///    `Localizable.xcstrings` 里，取值处就在 `SettingsView.swift` 那四个 `Text(...)` 旁）：
+    ///    用户在别处认识的词与这里看到的必须是同一个 key，不另起说法（与 `featureCards` 同一条口径）。
+    /// 2. **只有开关、没有 ↑↓**：这四个宿主元素在面板上的先后**写死在 `TabSelectionView` 的拼装
+    ///    顺序**里，给两个点不动的箭头比不给更坏（与 `HomeCalendarSettingsRow` 同一条先例，
+    ///    docs/28 §5）。
+    /// 3. **只有真的在用的键才上来**：四条都是 `TabSelectionView` / `DynamicIslandHeader` 现读的
+    ///    门槛键（那两个视图各自的 `hostPanelGateKeys` 名单），用例按「登记 ⊆ 在用」这**一个方向**
+    ///    反查——反方向在真实键集上不可达，面板上其余门槛键各有归属，本表**不重复**它们：
+    ///    计时器归计时器模块行、镜子归「首页组件」的镜子卡（`MirrorModule` 只声明 `.home`）、
+    ///    用量上一批「删页留码」不进本节、齿轮与三个状态指示器在各自设置页、扩展 tab 在扩展设置页
+    ///    （枚举表逐条写明）。
+    ///
+    /// **表不是 `private`**（与 `featureCards` / `effectKeysByModuleID` / `configControls` 同口径）：
+    /// 解析用例直接读这张表——表侧把 id / 键 / 文案 key 写错才会红。
+    static let hostPanelRows: [HostSurfaceRow] = [
+        HostSurfaceRow(
+            id: "dynamicShelf",
+            nameKey: "Enable shelf",
+            symbolName: "tray.fill",
+            key: .dynamicShelf
+        ),
+        HostSurfaceRow(
+            id: "enableTerminalFeature",
+            nameKey: "Enable terminal",
+            symbolName: "apple.terminal",
+            key: .enableTerminalFeature
+        ),
+        HostSurfaceRow(
+            id: "enableClipboardManager",
+            nameKey: "Enable Clipboard Manager",
+            symbolName: "doc.on.clipboard",
+            key: .enableClipboardManager
+        ),
+        HostSurfaceRow(
+            id: "enableColorPickerFeature",
+            nameKey: "Enable Color Picker",
+            symbolName: "eyedropper",
+            key: .enableColorPickerFeature
         ),
     ]
 
@@ -477,6 +541,14 @@ struct ModuleSettingsSection: View {
             if group == .home {
                 HomeCalendarSettingsRow()
             }
+            // 面板组件的**宿主行**（不是模块，p5 / T5）：暂存器 / 终端 / 剪贴板 / 取色器——面板上
+            // 由上游键直接门控的四个 tab / 图标。排在**模块行之后**、顺序按 `hostPanelRows` 那张表
+            // （枚举表的顺序），同样**只有开关、没有 ↑↓**（先后写死在 `TabSelectionView` 里）。
+            if group == .panel {
+                ForEach(Self.hostPanelRows) { row in
+                    HostSurfaceRowView(row: row)
+                }
+            }
         } header: {
             Text(LocalizedStringKey(group.titleKey))
         } footer: {
@@ -668,6 +740,63 @@ enum ModuleSurfaceToggleWriter {
         guard case .failed = state else { return }
         guard let rollback = ModuleEnablementRollback.preferenceToWrite(takeoverKey: takeoverKey) else { return }
         ModuleEnablementWrite.write(rollback, for: manifest.id, takeoverKey: takeoverKey)
+    }
+}
+
+// MARK: - 面板组件节的宿主行（上游键的登记行）
+
+/// 「面板组件」节的一条**宿主行**（p5 / T5，docs/29-home-blocks-and-panel.md §做法 机制三 / D-07）：
+/// 面板上一个由上游 `Defaults` 直接门控的 tab / 图标（暂存器 / 终端 / 剪贴板 / 取色器）。
+///
+/// 与 `FeatureCard` 同族（登记一个上游键、开关直接读写它；没有模块、没有内核状态），
+/// 差别只在**渲染位置**：这里渲染在「面板组件」节里，行形态与模块卡同形（图标 chip + 名称 + 开关），
+/// 但没有徽标 / 摘要 / 效果行 / 失败态——它后面没有模块，也就没有那些维度。
+///
+/// **不是 `private`**：解析用例直接读 `ModuleSettingsSection.hostPanelRows` 这张表
+/// （与 `FeatureCard` 同一条口径——表侧写错必须能被用例抓到）。
+struct HostSurfaceRow: Identifiable {
+    /// 稳定 id = **上游键名**（与 `FeatureCard.id` 同口径）：用例按它反查「键真的在用」。
+    let id: String
+    /// 上游设置页那一项的名称字面量（**逐字沿用**，见 `hostPanelRows` 的口径 1）。
+    let nameKey: String
+    /// SF Symbol：取该元素**在面板上**的那一枚（暂存器 `tray.fill`、终端 `apple.terminal`、
+    /// 剪贴板 `doc.on.clipboard`、取色器 `eyedropper`）——这一行管的就是面板元素，用户拨完开关
+    /// 看的是面板，图标因此跟面板那一枚走（不是设置页侧栏的图标）。
+    let symbolName: String
+    /// 这个宿主元素的总开关——裸读写它（动态键装不上 `@Default`，与 `FeatureCard.key` 同一个理由）。
+    let key: Defaults.Key<Bool>
+}
+
+/// 宿主行的一行：图标 chip + 名称 + 开关。**没有 ↑↓**（先后写死在面板里，见 `hostPanelRows` 口径 2）。
+///
+/// 排版与 `ModuleSettingsCard` / `HomeCalendarSettingsRow` 同一族（chip 在左、开关在右、
+/// 行内边距 `.vertical, 4` 一致），因此一节里的模块行与宿主行看起来是一族人、不分成两套皮肤。
+private struct HostSurfaceRowView: View {
+    let row: HostSurfaceRow
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ModuleSymbolChip(symbolName: row.symbolName)
+
+            Text(LocalizedStringKey(row.nameKey))
+                .fontWeight(.medium)
+
+            Spacer(minLength: 12)
+
+            // **裸 `Binding`，不是 `Defaults.Toggle`**：与 `FeatureCardRow` 同款——本行只登记一个
+            // 上游键，开关直读写它。代价也是那一天那条已知限制：本页开着时从上游设置页改同一个键，
+            // 这一行不即时刷新（关掉重开本页即可）——面板那一侧的即时生效不靠这里，靠的是
+            // `TabSelectionView` / `DynamicIslandHeader` 各自的 `@Default` 观察。
+            Toggle(isOn: Binding(
+                get: { Defaults[row.key] },
+                set: { Defaults[row.key] = $0 }
+            )) {
+                Text(LocalizedStringKey(row.nameKey))
+            }
+            .labelsHidden()
+            .toggleStyle(.switch)
+        }
+        .padding(.vertical, 4)
     }
 }
 

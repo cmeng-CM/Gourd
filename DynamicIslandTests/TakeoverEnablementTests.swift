@@ -144,6 +144,17 @@
 //    勾中的是出厂三档，不是「一个都没勾」；`toggleMultiSelect` 拒绝把最后一档也取消（不落盘）。
 //    多选漏给解析函数由允许清单用例的非空断言拦下。
 //
+//  p5-home-blocks / T5 追加（「面板组件」节的**宿主行**——模块行之外的另一半，docs/29 §做法 机制三 / D-07、D-08）：
+//  - **四条宿主行的键解析**（`testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys`）：数据源是生产表
+//    `ModuleSettingsSection.hostPanelRows`（与 `featureCards` 同口径）——顺序 / 键名 / `nameKey`
+//    四条上游字面量逐字钉死，`key` 必须是 `Defaults.Keys` 里那**一个对象**（`===`，不是另造的同名
+//    字面量）；用量（`enableLLMUsageFeature`）刻意不在表里（上一批「删页留码」的裁决，重新登记
+//    就是与已定决策矛盾）；
+//  - **「登记的键真的在用」**（`testHostPanelRowKeysAreReallyInUseByTheTwoBackingViews`）：四条键必须
+//    落在 `TabSelectionView.hostPanelGateKeys` ∪ `DynamicIslandHeader.hostPanelGateKeys` 里——
+//    两份名单是那两个视图**真的在读**的门槛键声明（读取点就在它们各自的 `tabs` / `body` 里）。
+//    方向只有一个（登记 ⊆ 在用），反方向在真实键集上不可达（枚举表逐条写明其余门槛键的归属）。
+//
 //  P3 冻结批次 / T6 追加（日历接管模块——孤儿视图 `StandaloneCalendarView` 的展开 tab）：
 //  - **`CalendarModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact` / `.home`）、
 //    `defaultPlacement == nil`、真源键 `showCalendar`、无块宽、`config == nil`（口径 3：本模块没有
@@ -1958,6 +1969,85 @@ final class TakeoverEnablementTests: XCTestCase {
             "settings.modules.calendarRow.effect",
             "效果行 key 的形态与本页其余组件文案一致（settings.modules.*）"
         )
+    }
+
+    // MARK: - 「面板组件」节的宿主行（p5-home-blocks / T5）
+
+    /// **宿主行四条**的键解析 + 名称字面量逐字钉死（docs/29-home-blocks-and-panel.md §做法 机制三 /
+    /// D-07、D-08）。
+    ///
+    /// 数据源是生产表本身（`ModuleSettingsSection.hostPanelRows`——为了这条用例它没写成 `private`，
+    /// 与 `featureCards` / `effectKeysByModuleID` / `configControls` 同一条口径）：表里把 id / 键 /
+    /// 文案 key / 顺序写错，这条都会红。
+    ///
+    /// 四条各自钉三件事：
+    /// - **顺序与键名**：枚举表那四条 = 暂存器 / 终端 / 剪贴板 / 取色器——面板上由上游 `Defaults`
+    ///   直接门控、不经模块注册表的 tab / 图标就这四个，顺序就是节里那四行的顺序；
+    /// - **`id` 与键名同源**（与 `FeatureCard` 同口径：id 就是上游键名），且 `key` 就是
+    ///   `Defaults.Keys` 里那**一个对象**（`===`：将来谁把它换成另造的同名字面量，这条红）；
+    /// - **`nameKey` 在 zh-Hans 里解析得出**，且就是那四条上游字面量：名称写串成**另一条已存在的
+    ///   key**（比如指到 `Enable Notes`）时解析断言抓不到，字面量断言抓得到。
+    ///
+    /// 另有一条**刻意不在表里**的锚：用量（`enableLLMUsageFeature`）——上一批「删页留码」已裁决它
+    /// 默认关、无入口、面板上不会出现（docs/26 D-08），本节重新登记一行就是与那条已定决策矛盾。
+    func testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys() {
+        let rows = ModuleSettingsSection.hostPanelRows
+
+        XCTAssertEqual(
+            rows.map(\.id),
+            ["dynamicShelf", "enableTerminalFeature", "enableClipboardManager", "enableColorPickerFeature"],
+            "四条宿主行的顺序与键名（枚举表：暂存器 / 终端 / 剪贴板 / 取色器）"
+        )
+        XCTAssertEqual(
+            rows.map(\.nameKey),
+            ["Enable shelf", "Enable terminal", "Enable Clipboard Manager", "Enable Color Picker"],
+            "名称逐字沿用上游设置页那一项的字面量（用户在别处认识的词与这里必须是同一个 key）"
+        )
+
+        for row in rows {
+            XCTAssertEqual(row.key.name, row.id, "id 就是上游键名（与 featureCards 同口径）")
+            XCTAssertResolves(row.nameKey)
+        }
+
+        XCTAssertTrue(rows[0].key === Defaults.Keys.dynamicShelf, "第一行（暂存器）的键")
+        XCTAssertTrue(rows[1].key === Defaults.Keys.enableTerminalFeature, "第二行（终端）的键")
+        XCTAssertTrue(rows[2].key === Defaults.Keys.enableClipboardManager, "第三行（剪贴板）的键")
+        XCTAssertTrue(rows[3].key === Defaults.Keys.enableColorPickerFeature, "第四行（取色器）的键")
+
+        XCTAssertFalse(
+            rows.contains { $0.id == Defaults.Keys.enableLLMUsageFeature.name },
+            "用量不进本节：上一批「删页留码」已裁决它默认关、无入口、面板上不会出现（docs/26 D-08）"
+        )
+    }
+
+    /// **登记的键都真的在用**（T5 验收：「宿主行键解析」与「登记的键真的在用」两半里的后一半）：
+    /// 四条宿主键必须落在两个消费方视图**真的在读**的门槛键名单里——
+    /// `TabSelectionView.hostPanelGateKeys`（左列三条 tab）∪ `DynamicIslandHeader.hostPanelGateKeys`
+    /// （右侧两枚图标）。
+    ///
+    /// **方向只有一个**（刻意写死）：本节登记的键都真的在用；**不是**「两个视图用到的全部门槛键都在
+    /// 本节」——反方向在真实键集上不可达：镜子（首页组件的镜子卡）、计时器（计时器模块行）、齿轮与
+    /// 三个状态指示器（各自设置页）、扩展 tab（扩展设置页）、用量（上一批裁决不进本节）都不在本表里，
+    /// docs/29 §机制三那张枚举表逐条写明了归属（这正是那张表存在的理由，D-08）。
+    ///
+    /// 两份名单各自带注释写明**读取点在自己文件哪一行**（`tabs` 里那三个 `if` / `body` 里那两行
+    /// `if`）：门槛删掉而不改名单，这条红；名单里混进没人读的键，同样红。
+    func testHostPanelRowKeysAreReallyInUseByTheTwoBackingViews() {
+        let registered = Set(ModuleSettingsSection.hostPanelRows.map(\.key.name))
+        XCTAssertFalse(registered.isEmpty, "前置：宿主行表不能是空的")
+
+        let inUse = Set(
+            (TabSelectionView.hostPanelGateKeys + DynamicIslandHeader.hostPanelGateKeys).map(\.name)
+        )
+        XCTAssertFalse(inUse.isEmpty, "前置：两份消费方名单不能都是空的（否则下面的子集断言恒假）")
+
+        for name in registered.sorted() {
+            XCTAssertTrue(
+                inUse.contains(name),
+                "\(name) 登记在「面板组件」节，但不是 TabSelectionView / DynamicIslandHeader "
+                    + "在读的门槛键——这一行拨下去面板上不会有任何变化（键错了 / 该行不该在本节）"
+            )
+        }
     }
 
     /// 三个接管模块的卡片文案也能解析：名称 key 取**真模块的 manifest**（卡片上那行名称走
