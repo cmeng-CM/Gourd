@@ -1046,11 +1046,12 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.summary?.key, "module.progress.summary")
         XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.pie"))
         XCTAssertEqual(manifest.kind, "builtin")
-        XCTAssertEqual(manifest.surfaces, [.compact, .expanded], "折叠态中央槽位 + 展开面板清单")
+        // 2026-09-30：折叠态撤销——那枚「尺度图标 + 百分比」与亮度 HUD 同形（用户报「收起态挂亮度 HUD」）
+        XCTAssertEqual(manifest.surfaces, [.expanded], "只声明展开 tab（折叠态中央槽位不再由本模块承担）")
         // 2026-09-28 用户判定「时间进度」无行动价值 → 默认关（代码保留），中央槽位默认内容改由 todos 承担
         XCTAssertEqual(manifest.defaultEnabled, false, "progress 默认关（13 号文档 D-20）")
-        XCTAssertEqual(manifest.defaultPlacement?.order, 30)
-        XCTAssertEqual(manifest.defaultPlacement?.slot, .center, "声明 compact 后 slot 记 center（06 §6.2）")
+        XCTAssertEqual(manifest.defaultPlacement?.order, 30, "order 仍供 expanded tab 排序（13 §已知限制 25）")
+        XCTAssertNil(manifest.defaultPlacement?.slot, "不声明 compact → slot 记 nil（06 §6.2）")
         XCTAssertTrue(manifest.permissions.isEmpty, "09 §5.3：progress 无权限")
 
         let properties = try XCTUnwrap(manifest.config?.properties)
@@ -1457,23 +1458,26 @@ final class ModuleKernelTests: XCTestCase {
         // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
         XCTAssertTrue(["Progress", "进度"].contains(entry.label), "tab 文案应已本地化，实到 \(entry.label)")
 
-        // 两个 surface 各给一份内容：expanded = 剩余量清单、compact = 中央槽位的图标 + 百分比；
-        // 未声明的 lockscreen 一律 `.none`（不占位、不算失败）
+        // 只声明 `expanded`：展开 = 剩余量清单；`.compact` / `.lockscreen` 一律 `.none`
+        //（未声明的 surface 不占位、也不算失败，06 §3.2）
         guard case .view = registry.content(for: id, request: request(.expanded)) else {
             return XCTFail("展开请求应拿到 .view")
         }
-        guard case .view = registry.content(for: id, request: request(.compact)) else {
-            return XCTFail("compact 已声明，应返回 .view")
+        guard case .none = registry.content(for: id, request: request(.compact)) else {
+            return XCTFail("compact 未声明（2026-09-30 撤销），应返回 .none")
         }
         guard case .none = registry.content(for: id, request: request(.lockscreen)) else {
             return XCTFail("lockscreen 未声明，应返回 .none")
         }
 
-        // 折叠态中央槽位投影：三个模块都声明 compact，**第一个候选是 order 20 的 todos**
-        //（`compactSlotContent()` 只转发第一个），因此槽位内容仍是待办的视图——
-        // notifications（order 40）在默认配置下拿不到槽位，它的 compact 视图只是候选之一。
-        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, id, notificationsID])
-        XCTAssertEqual(registry.compactEntries.map(\.order), [20, 30, 40])
+        // 折叠态中央槽位投影：progress 不再声明 compact（2026-09-30），候选只剩
+        // **order 20 的 todos** 与 order 40 的 notifications——`compactSlotContent()` 只转发第一个。
+        XCTAssertEqual(registry.compactEntries.map(\.id), [todosID, notificationsID])
+        XCTAssertEqual(registry.compactEntries.map(\.order), [20, 40])
+        XCTAssertFalse(
+            registry.compactEntries.contains { $0.id == id },
+            "progress 不声明 compact → 不得进折叠槽位候选（否则关闭态会挂一枚与亮度 HUD 同形的 pill）"
+        )
         guard case .view = registry.compactSlotContent() else {
             return XCTFail("折叠态中央槽位应拿到 todos 的 .view 内容")
         }

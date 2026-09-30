@@ -22,10 +22,15 @@
 //  P1 的试点模块（D-07）：零私有 API、零依赖——它同时是「新增一个模块 = 实现
 //  `GourdModule` + 往 `KernelBootstrap.builtinModules` 加一行」（验收 A3）里那「一行」的样本。
 //
-//  **形态定稿（2026-09-27 用户反馈后重做，09 §5.3 呈现行）**：
-//  - 折叠态（`compact` / `slot == .center`）= 中央槽位常驻**最关心的一个尺度**的百分比；
+//  **形态定稿（2026-09-27 用户反馈后重做，09 §5.3 呈现行；2026-09-30 折叠态撤销）**：
 //  - 展开态（`expanded`）= **剩余量清单**：一行一个尺度（图标 + 标签 + 细进度条 + 剩余量 + 百分比），
 //    默认只显示 **日 + 年**（`visibleScopes` 默认值，可配；解析见 `ProgressCalculator.resolveScopes`）。
+//  - ~~折叠态（`compact` / `slot == .center`）= 中央槽位常驻「最关心的一个尺度」的百分比~~
+//    **2026-09-30 撤销**：那枚「尺度图标 + 百分比」（默认 `sun.max` + `53%`）在关闭态与**亮度 HUD**
+//    同形——用户 2026-09-30 报为「收起态长期挂着一枚亮度 HUD」并由本批（p3-freeze）定位到本模块。
+//    故本模块**不再声明 `compact`**（与 launcher / shortcuts / frontapp / calendar 同口径），
+//    折叠态中央槽位交回 `todos`（order 20，D-20 的口径）；`order` 仍供 expanded tab 排序
+//    （13 §已知限制 25 的双语义），因此 `slot` 记 `nil`、`order` 保留 30。
 //  旧的三态排版（等权五环 / 条形 / 纯文本）已不再使用：`style` 配置项**保留**（契约不变），
 //  但本版**只实现清单这一种形态**，`ring` / `bar` / `text` 取值一律按清单渲染。
 //
@@ -65,12 +70,13 @@ enum ProgressBaseCalendar: String, CaseIterable {
 final class ProgressModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
-    /// - `surfaces`：`expanded`（展开面板一页剩余量清单）+ `compact`（折叠态中央槽位）；
-    /// - `defaultPlacement`：`slot == .center`（折叠态槽位的归属，06 §6.2）、`order == 30`
-    ///   （既排 tab、也排槽位，同序按 id 字典序；槽位只取 `compactEntries` 的第一个）；
+    /// - `surfaces`：**只声明 `expanded`**（展开面板一页剩余量清单）——折叠态中央槽位
+    ///   2026-09-30 撤销（那枚「图标 + 百分比」与亮度 HUD 同形，见文件头注）；
+    /// - `defaultPlacement`：`slot == nil`（`slot` 只在含 `compact` 时有意义，06 §6.2）、
+    ///   `order == 30`（仍供 expanded tab 排序：13 §已知限制 25 的双语义）；
     /// - **`defaultEnabled` 改为 `false`（2026-09-28 用户判定「时间进度」无行动价值）**：
-    ///   代码与 manifest 全部保留（可手动开回），中央槽位的默认内容改由 `todos` 承担
-    ///   （`todos` 的 order 20 < 本模块的 30，故槽位候选的第一个是 todos，见 docs/13 D-20）；
+    ///   代码与 manifest 全部保留（可手动开回）；中央槽位的默认内容当时改由 `todos` 承担
+    ///   （docs/13 D-20），2026-09-30 起本模块连候选都不是（见上一条）；
     /// - `config` 三项只声明类型与默认值：本批**没有用户可见的配置入口**（docs/13「明确不做」），
     ///   读取侧拿到的恒是这里的 `default`；`visibleScopes` 的默认值即「出厂显示哪些尺度」（日 + 年）。
     static let manifest = ModuleManifest(
@@ -82,8 +88,8 @@ final class ProgressModule: GourdModule {
         version: "1.0.0",
         apiVersion: HostInfo.currentAPIVersion,
         kind: "builtin",
-        surfaces: [.compact, .expanded],
-        defaultPlacement: Placement(slot: .center, order: 30),
+        surfaces: [.expanded],
+        defaultPlacement: Placement(slot: nil, order: 30),
         defaultEnabled: false,
         permissions: [],
         config: ConfigSchema(
@@ -134,11 +140,11 @@ final class ProgressModule: GourdModule {
     /// `visibleScopes`（本批没有配置入口，读到的是 manifest 默认值）。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
-        case .compact:
-            return .view(AnyView(ProgressCompactView(scopes: scopes)))
         case .expanded:
             return .view(AnyView(ProgressModuleView(scopes: scopes)))
-        case .lockscreen, .home:
+        case .compact, .lockscreen, .home:
+            // `compact` 不再声明（2026-09-30 撤销，见文件头注）：按 06 §3.2「未声明的 surface
+            // 此刻无内容」返回 `.none`——不占位、也不算失败。
             return .none
         }
     }
@@ -232,35 +238,14 @@ private struct ProgressScopeRow: View {
     }
 }
 
-// MARK: - 折叠态中央槽位视图
+// MARK: - 折叠态中央槽位视图（2026-09-30 撤销，视图一并删除）
 
-/// 折叠态中央槽位的内容：尺度图标 + 百分比，尺度取 `visibleScopes` 的第一个（默认「今天」）。
+/// ~~折叠态中央槽位的内容：尺度图标 + 百分比（`visibleScopes` 首项，默认「今天」→ `sun.max`）~~
 ///
-/// 常驻在关闭态的刘海中央，所以**自带 60s 的 `TimelineView`**：宿主不会为这一格起定时器，
-/// 没有它百分比会一直停在视图构造时的值（与展开面板同一粒度，见 docs/13「已知限制」14）。
-///
-/// 关闭态的槽位尺寸极窄，因此只有 11pt 图标 + 13pt 数值（`HStack(spacing: 5)`），
-/// 不显示标签文案——尺度靠图标区分，最关心的那个由 `visibleScopes` 的首项决定。
-private struct ProgressCompactView: View {
-    let scopes: [ProgressCalculator.Scope]
-
-    private var scope: ProgressCalculator.Scope { scopes.first ?? .day }
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            HStack(spacing: 5) {
-                Image(systemName: scope.symbolName)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text(ProgressText.percent(ProgressCalculator.progress(for: scope, now: timeline.date)))
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-            }
-        }
-    }
-}
+/// **已删除（2026-09-30，本批 p3-freeze）**：那枚 pill 在关闭态与亮度 HUD 同形——用户报
+/// 「收起态长期挂着一枚亮度 HUD」；根因就是这里（11pt 尺度图标 + 13pt 百分比），而模块默认关、
+/// 一旦被手动开回（`moduleEnableOverrides`）就在关闭态常驻。撤销口径见文件头注与 manifest 的
+/// `surfaces`：**折叠态不再由本模块承担**，展开态的剩余量清单不受影响。
 
 // MARK: - 文案出口
 
