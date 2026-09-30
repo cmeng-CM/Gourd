@@ -1082,11 +1082,12 @@ final class ModuleKernelTests: XCTestCase {
     /// （激活失败隔离等机制由假模块覆盖，见 T2 的用例；`register` 本身不校验 manifest，
     /// 所以这里显式对真模块的 manifest 跑一次 `validate()`。）
     ///
-    /// **这条用例的 `count == 9` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
-    /// 加第十个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
+    /// **这条用例的 `count == 10` 与逐项 `ObjectIdentifier` 断言是批内契约**（13 号文档已知限制 22）：
+    /// 加第十一个内置模块时会红，按该条的口径一并放宽（T4 加 progress 时从 1 放宽到 3、
     /// P2 启动台批次从 3 放宽到 4、P2 接管批次 / T2 从 4 放宽到 5、T4 从 5 放宽到 6、
     /// T5 落 `MusicModule` 时从 6 放宽到 7、P2 快捷指令与前台应用批次 / T2 落 `ShortcutsModule`
-    /// 时从 7 放宽到 8、T4 落 `FrontAppModule` 时从 8 放宽到 9，都是这一条）。
+    /// 时从 7 放宽到 8、T4 落 `FrontAppModule` 时从 8 放宽到 9，P3 冻结批次 / T6 落 `CalendarModule`
+    /// 时从 9 放宽到 10，都是这一条）。
     func testKernelBootstrapRegistersBuiltinModulesAndServesExpandedContent() async throws {
         // `bootstrap()` 会落首启默认值：把闸门先置真让它提前返回（用例结束还原原值），
         // 避免改开发机上真实的 `enableScreenAssistant`。
@@ -1112,6 +1113,9 @@ final class ModuleKernelTests: XCTestCase {
         // 而「进 homeEntries」要求模块 `.active`——不置夹具的话镜子不激活、块名单里没有它，断言必红。
         // 音乐接管（T5）同理：真源是 `showStandardMediaControls`（上游默认 `true`，但本机**测试域缺键**，
         // 缺键走默认 true；缺键的机器与显式写过 false 的机器必须走同一条断言，故同样置定值）。
+        // 日历接管（P3 冻结批次 / T6）同理：真源是 `showCalendar`（上游默认 `true`，本机测试域同样缺键）
+        // ——缺键的机器与显式写过 false 的机器必须走同一条断言，故也置定值（置 true：与其余三个接管
+        // 模块同向，让日历模块在本条用例里也走完整条「注册 → 过门 → 进 tab 投影 → 取到 .view」的路）。
         // 夹具写法与首启闸门键同款：先读持久域现值（nil = 盘上原本没有这个键）→ 置定值 → `defer` 逐字还原
         // （原本有键写回原值、原本没键删键，不把 Defaults 注册域里的默认值写进持久域）。
         let takeoverKeyNames = [
@@ -1119,6 +1123,7 @@ final class ModuleKernelTests: XCTestCase {
             Defaults.Keys.timerDisplayMode.name,
             Defaults.Keys.showMirror.name,
             Defaults.Keys.showStandardMediaControls.name,
+            Defaults.Keys.showCalendar.name,
         ]
         let domain = Bundle.main.bundleIdentifier
         let originalTakeoverValues = takeoverKeyNames.reduce(into: [String: Any]()) { table, key in
@@ -1141,11 +1146,12 @@ final class ModuleKernelTests: XCTestCase {
         Defaults[.timerDisplayMode] = .tab
         Defaults[.showMirror] = true
         Defaults[.showStandardMediaControls] = true
+        Defaults[.showCalendar] = true
 
         XCTAssertEqual(
             KernelBootstrap.builtinModules.count,
-            9,
-            "A3：内置模块清单 = 九行（progress + todos + notifications + launcher + timer + mirror + music + shortcuts + frontapp）"
+            10,
+            "A3：内置模块清单 = 十行（progress + todos + notifications + launcher + timer + mirror + music + shortcuts + frontapp + calendar）"
         )
         XCTAssertEqual(
             KernelBootstrap.builtinModules.map { ObjectIdentifier($0) },
@@ -1159,8 +1165,9 @@ final class ModuleKernelTests: XCTestCase {
                 ObjectIdentifier(MusicModule.self),
                 ObjectIdentifier(ShortcutsModule.self),
                 ObjectIdentifier(FrontAppModule.self),
+                ObjectIdentifier(CalendarModule.self),
             ],
-            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule、TimerModule、MirrorModule、MusicModule、ShortcutsModule 与 FrontAppModule"
+            "builtinModules 里应是 ProgressModule、TodosModule、NotificationsModule、LauncherModule、TimerModule、MirrorModule、MusicModule、ShortcutsModule、FrontAppModule 与 CalendarModule"
         )
         for type in KernelBootstrap.builtinModules {
             XCTAssertNoThrow(try type.manifest.validate(), "真模块的 manifest 必须过校验")
@@ -1178,6 +1185,7 @@ final class ModuleKernelTests: XCTestCase {
         let timerID = TimerModule.moduleID
         let mirrorID = MirrorModule.moduleID
         let musicID = MusicModule.moduleID
+        let calendarID = CalendarModule.moduleID
 
         // ① 真启用门：非接管模块逐字取 `defaultEnabled`（todos 与 notifications 默认开、
         // progress 与 launcher 默认关，D-20 / T-12）；**接管模块取上游键**——
@@ -1203,15 +1211,18 @@ final class ModuleKernelTests: XCTestCase {
             "音乐的真源是 `showStandardMediaControls`（夹具 true）——不看 `defaultEnabled` 的登记值"
         )
         XCTAssertNotNil(registry.instance(for: musicID) as? MusicModule, "过门的音乐照常实例化")
+        XCTAssertEqual(registry.states[calendarID], .active, "日历的真源是 `showCalendar`（夹具 true）——不看 `defaultEnabled` 的登记值")
+        XCTAssertNotNil(registry.instance(for: calendarID) as? CalendarModule, "过门的日历照常实例化")
         XCTAssertNotNil(registry.instance(for: todosID) as? TodosModule)
         XCTAssertNotNil(registry.instance(for: notificationsID) as? NotificationsModule)
 
-        // 投影里只剩已激活的四个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
+        // 投影里只剩已激活的五个（未激活的 progress 与 launcher 不进 tab、不进槽位候选），
         // 槽位内容 = todos 的视图；对 progress 的内容请求按 06 §3.2 降级为 `.unavailable`。
-        // tab 顺序按 `(order, id)`：todos（20）→ notifications（40）→ 计时器（**无 placement
-        // → `Int.max`**，排在所有给了 order 的模块之后）；**镜子与音乐都不进 tab**（两者都只声明
-        // `.home`，不声明 `expanded`——这一条同时是「接管不会凭空多出 tab」的判据）
-        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID, timerID])
+        // tab 顺序按 `(order, id)`：todos（20）→ notifications（40）→ 日历与计时器（**都无 placement
+        // → `Int.max`**，排在所有给了 order 的模块之后；同 order 按 id 字典序，故 calendar → timer）；
+        // **镜子与音乐都不进 tab**（两者都只声明 `.home`，不声明 `expanded`——这一条同时是
+        // 「接管不会凭空多出 tab」的判据）
+        XCTAssertEqual(registry.tabEntries.map(\.id), [todosID, notificationsID, calendarID, timerID])
         XCTAssertFalse(registry.tabEntries.contains { $0.id == mirrorID }, "镜子只声明 home → 不进 tab 投影")
         XCTAssertFalse(registry.tabEntries.contains { $0.id == musicID }, "音乐只声明 home → 不进 tab 投影")
         // 快捷指令默认关（docs/22 D-06）：**不进任何投影**——这条是"新增模块默认关"的判据，
@@ -1327,11 +1338,11 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertNotNil(registry.instance(for: frontAppID) as? FrontAppModule, "过门的前台应用照常实例化")
 
         // tab 候选按 `order` 升序：todos（20）→ progress（30）→ notifications（40）→
-        // launcher、快捷指令与计时器（**都无 placement → `Int.max`**，排在所有给了 order 的模块之后；
-        // 同 order 按 id 字典序，故 launcher → shortcuts → timer）
+        // 日历、launcher、快捷指令与计时器（**都无 placement → `Int.max`**，排在所有给了 order 的
+        // 模块之后；同 order 按 id 字典序，故 calendar → launcher → shortcuts → timer）
         XCTAssertEqual(
             registry.tabEntries.map(\.id),
-            [todosID, id, notificationsID, launcherID, shortcutsID, timerID]
+            [todosID, id, notificationsID, calendarID, launcherID, shortcutsID, timerID]
         )
         let launcherEntry = try XCTUnwrap(registry.tabEntries.first { $0.id == launcherID }, "launcher 应进展开面板的 tab 投影")
         XCTAssertEqual(launcherEntry.symbolName, "square.grid.2x2")
@@ -1412,6 +1423,34 @@ final class ModuleKernelTests: XCTestCase {
         guard case .view = registry.content(for: timerID, request: request(.expanded)) else {
             return XCTFail("计时器的展开请求应拿到上游那个 NotchTimerView（.view）")
         }
+        // **日历是「只声明 expanded 的孤儿视图接线」那一档**（P3 冻结批次 / T6，docs/24 §做法 机制三）：
+        // 展开 tab 存在且文案 / 图标对得上，内容 = 那个孤儿视图（`StandaloneCalendarView`）；
+        // 不声明 compact / home / lockscreen（D-09 口径：不占折叠槽位与首页块）。
+        let calendarEntry = try XCTUnwrap(
+            registry.tabEntries.first { $0.id == calendarID },
+            "日历应进展开面板的 tab 投影（声明了 expanded 且接管键 showCalendar = true）"
+        )
+        XCTAssertEqual(calendarEntry.symbolName, "calendar")
+        XCTAssertTrue(
+            ["Calendar", "日历"].contains(calendarEntry.label),
+            "tab 文案应已本地化（module.calendar.name），实到 \(calendarEntry.label)"
+        )
+        guard case .view = registry.content(for: calendarID, request: request(.expanded)) else {
+            return XCTFail("日历的展开请求应拿到那个孤儿视图 StandaloneCalendarView（.view）")
+        }
+        for surface in [Surface.compact, .lockscreen, .home] {
+            guard case .none = registry.content(for: calendarID, request: request(surface)) else {
+                return XCTFail("日历未声明 \(surface.rawValue) → 必须答 .none（不占位）")
+            }
+        }
+        XCTAssertFalse(
+            registry.compactEntries.contains { $0.id == calendarID },
+            "日历不声明 compact → 不得进折叠槽位候选"
+        )
+        XCTAssertFalse(
+            registry.homeEntries.contains { $0.id == calendarID },
+            "日历不声明 home → 首页块名单里不得出现它（首页那条全宽日历行仍由上游 NotchHomeView 渲染）"
+        )
         let entry = try XCTUnwrap(registry.tabEntries.first { $0.id == id }, "progress 应进展开面板的 tab 投影")
         XCTAssertEqual(entry.symbolName, "chart.pie")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；

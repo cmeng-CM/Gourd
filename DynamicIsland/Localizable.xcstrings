@@ -68594,6 +68594,70 @@
         }
       }
     },
+    "settings.modules.frontapp.maxRecentApps" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recent apps shown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示最近应用条数"
+          }
+        }
+      }
+    },
+    "settings.modules.launcher.density" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icon spacing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图标间距"
+          }
+        }
+      }
+    },
+    "settings.modules.launcher.iconSize" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icon size"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图标大小"
+          }
+        }
+      }
+    },
+    "settings.modules.launcher.showRecents" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sort by recent use"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按最近使用排序"
+          }
+        }
+      }
+    },
     "settings.modules.music.showAlbumArt" : {
       "localizations" : {
         "en" : {
@@ -68654,6 +68718,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "首页块顺序"
+          }
+        }
+      }
+    },
+    "settings.modules.shortcuts.showOutput" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show run output"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回显运行输出"
+          }
+        }
+      }
+    },
+    "settings.modules.shortcuts.timeoutSeconds" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Run timeout (seconds)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行限时（秒）"
           }
         }
       }
@@ -68734,6 +68830,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "组件"
+          }
+        }
+      }
+    },
+    "settings.modules.upstreamManaged" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Managed by the upstream setting (changing it here has no effect)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由上游设置管理（改了不生效）"
           }
         }
       }
@@ -82057,6 +82169,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "从列表移除"
+          }
+        }
+      }
+    },
+    "module.calendar.name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calendar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日历"
+          }
+        }
+      }
+    },
+    "module.calendar.summary" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Month grid plus the selected day's events in a tab"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开面板的日历页：整月网格 + 当日事件清单"
           }
         }
       }

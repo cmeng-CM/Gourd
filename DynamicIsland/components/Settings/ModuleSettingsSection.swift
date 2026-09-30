@@ -73,6 +73,20 @@
 //  - 本文件同时补一句口径：卡片主开关仍然是「模块开不开」，这一行是**卡片内部的子设置**，
 //    两者不共用一个开关（关掉封面 ≠ 关掉音乐块）。
 //
+//  P3 冻结批次 / T7 增量（模块配置编辑口：**允许清单**，docs/24-release-freeze.md §做法 机制四 / D-06）：
+//  把那一个口子扩成一条**逐键声明的允许清单**（`ModuleSettingsSection.configControls` 七条：
+//  music 一条、launcher 三条、shortcuts 两条、frontapp 一条），并支持四种控件类型
+//  （`ModuleConfigControl.Kind` = boolean / integer / number / string）——`list` / `enum` 仍不渲染
+//  （§明确不做）：
+//  - **区间取模块侧既有常量**（`LauncherGridMetrics.iconSizeRange` / `.densityRange`、
+//    `FrontAppHistory.limitRange`）：读写两侧各夹一次——UI 拨不出去范围外的值，
+//    手改配置文件写进去的越界值也会被读侧夹回来（`shortcuts.timeoutSeconds` 没有既有区间 → 不夹）；
+//  - **接管模块登记的上游键不进清单**（`enableTimerFeature` / `showMirror` / `playerColorTinting`
+//    一类：`ConfigHandle` 对它们不生效、拨了没人读），改由卡片上一行灰字
+//    （`settings.modules.upstreamManaged`）说清；
+//  - **不自己带默认值**：缺键回落交给 `ManifestConfigHandle.get`（= manifest config 的 `default`），
+//    卡上显示什么与模块读到什么因此是同一个判定，不存在第二个默认档。
+//
 
 import Defaults
 import SwiftUI
@@ -218,33 +232,111 @@ struct ModuleSettingsSection: View {
         "com.cmeng.gourd.music": "settings.modules.effect.music",
     ]
 
-    // MARK: 模块 config 控件（本批只有一个口子）
+    // MARK: 模块 config 控件（允许清单，逐键声明）
 
-    /// 组件卡上的**模块 config 控件**登记表（**本批只有一条**：音乐卡的「显示封面」）。
+    /// 组件卡上的**模块 config 控件**登记表（docs/24-release-freeze.md §做法 机制四 / D-06）。
     ///
-    /// **不是通用 config 渲染器**（按 manifest schema 自动生成控件）——那是另一个批次的活；
-    /// 这里是一张**逐字段写死**的表：模块 id / config 键 / 文案 key 三项都写在表里，卡片只按
-    /// `moduleID` 命中后渲染一行。判据与 `effectKeysByModuleID` / `featureCards` 逐字同款：
+    /// **不是通用 config 渲染器**（按 manifest schema 自动生成控件）——那是另一个批次的活
+    /// （docs/24 §明确不做：`list` / `enum` / `appPicker` 的「哪些键是真源」未定）。
+    /// 这里是**允许清单**：一张**逐字段写死**的表（模块 id / config 键 / 类型与区间 / 文案 key），
+    /// 卡片按 `moduleID` 命中后渲染对应控件。判据与 `effectKeysByModuleID` / `featureCards` 逐字同款：
     /// **表不是 `private`**，解析用例直接读这一份生产表——把模块 id 或键名写错一个字、
-    /// 或文案没进 catalog，必须有用例红（表侧写错必须能被用例抓到）。
+    /// 类型与 manifest 声明不符、或文案没进 catalog，必须有用例红（表侧写错必须能被用例抓到）。
     ///
-    /// **为什么现在才开这个口子**：T5 加的 `showAlbumArt`（音乐块画不画封面）原先只有 config，
-    /// 界面上没有入口——用户原话是「音乐播放区域这个封面应该是可以配置是否显示」，于是本批给它
-    /// 补一个控件（范围评审的 Important，见 `.workflow/p2-home-fit/reports/T5-fix.md`）。
-    /// 其余键（含同卡片的 `playerColorTinting` / `useMusicVisualizer` 两个登记键）**不开**：
-    /// 它们在上游设置页本来就有入口，这里不重复造第二处。
+    /// 三条口径（改动前先读）：
+    ///
+    /// 1. **只收「模块自己真的读」的键**——七条都是模块侧现读现用的：
+    ///    `music.showAlbumArt`（块内画不画封面）、`launcher.iconSize` / `.density` / `.showRecents`、
+    ///    `shortcuts.showOutput` / `.timeoutSeconds`、`frontapp.maxRecentApps`。
+    ///    **生效时机分两档**（别混为一谈）：`iconSize` / `density` / `showAlbumArt` /
+    ///    `maxRecentApps`（下一次读）/ `timeoutSeconds` / `showOutput`（下一次运行）是「下一次
+    ///    取用时就生效」；`launcher.showRecents` 慢一档——一次激活只查一次 Spotlight，
+    ///    关掉再开模块（或重启）才换档（见 `LauncherSettings` 的注释）。
+    /// 2. **接管模块登记的上游键不进清单**（`enableTimerFeature` / `showMirror` /
+    ///    `playerColorTinting` 一类）：它们的真源在上游 `Defaults`，`ConfigHandle` 对它们不生效
+    ///    （`get` 拿不到覆盖值、`set` 写进去也没人读），拨了不会有反应——卡片上改由
+    ///    `settings.modules.upstreamManaged` 那行灰字说清（判据 = `upstreamManagedKeys(for:takeoverKeyName:)`）。
+    /// 3. **区间一律取模块侧既有常量**（`LauncherGridMetrics.iconSizeRange` / `.densityRange`、
+    ///    `FrontAppHistory.limitRange`）：UI 拨不出范围外的值，手改配置文件写进去的越界值也会被
+    ///    读侧夹回来——两处各写一个区间就会漂，故这里**一个字面量都不写**。
+    ///    `shortcuts.timeoutSeconds` **没有**既有区间常量 → `range: nil`（不夹取、输入框形态）：
+    ///    发明一个区间等于替模块做它没做过的裁决（§候选决策）。
+    ///
+    /// **`list` / `enum` 不渲染**（§明确不做）：shortcuts 的 `pinnedShortcuts` / `cachedShortcuts`、
+    /// timer 的 `timerPresets`、mirror 的 `mirrorShape` 仍只能改配置文件（§已知限制 2）。
     static let configControls: [ModuleConfigControl] = [
         ModuleConfigControl(
-            moduleID: "com.cmeng.gourd.music",
+            moduleID: MusicModule.moduleID,
             key: "showAlbumArt",
-            nameKey: "settings.modules.music.showAlbumArt",
-            defaultValue: MusicConfigDefaults.showAlbumArt
+            kind: .boolean,
+            titleKey: "settings.modules.music.showAlbumArt"
+        ),
+        // 启动台三键。**模块 id 是字面量**：`LauncherModule` 没有 `moduleID` 常量（它的 manifest
+        // 里直接写的字面量），此处逐字对齐——解析用例把它对回注册表，写错即红。
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.launcher",
+            key: "iconSize",
+            kind: .number(range: LauncherGridMetrics.iconSizeRange),
+            titleKey: "settings.modules.launcher.iconSize"
+        ),
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.launcher",
+            key: "density",
+            kind: .number(range: LauncherGridMetrics.densityRange),
+            titleKey: "settings.modules.launcher.density"
+        ),
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.launcher",
+            key: "showRecents",
+            kind: .boolean,
+            titleKey: "settings.modules.launcher.showRecents"
+        ),
+        ModuleConfigControl(
+            moduleID: ShortcutsModule.moduleID,
+            key: "showOutput",
+            kind: .boolean,
+            titleKey: "settings.modules.shortcuts.showOutput"
+        ),
+        // 秒数：**没有夹取区间**（模块侧本来就没夹，见口径 3），整数输入框
+        ModuleConfigControl(
+            moduleID: ShortcutsModule.moduleID,
+            key: "timeoutSeconds",
+            kind: .integer(range: nil),
+            titleKey: "settings.modules.shortcuts.timeoutSeconds"
+        ),
+        ModuleConfigControl(
+            moduleID: FrontAppModule.moduleID,
+            key: "maxRecentApps",
+            kind: .integer(range: FrontAppHistory.limitRange),
+            titleKey: "settings.modules.frontapp.maxRecentApps"
         ),
     ]
 
-    /// 命中本卡片的 config 控件（本批最多一条；将来多模块时仍是一张表，不改成通用渲染器）。
-    static func configControl(forModuleID id: String) -> ModuleConfigControl? {
-        configControls.first { $0.moduleID == id }
+    /// 命中本卡片的 config 控件（**可能多行**：启动台卡三行、快捷指令卡两行）。
+    /// 数据源仍是上面那张唯一的生产表，本函数只做一次筛选。
+    static func configControls(forModuleID id: String) -> [ModuleConfigControl] {
+        configControls.filter { $0.moduleID == id }
+    }
+
+    /// 本卡片上**登记了但这里不可编辑**的上游键——`settings.modules.upstreamManaged`
+    /// 那行灰字的判据（docs/24 §做法 机制四：**把话说清楚**，而不是让用户拨一个不生效的开关）。
+    ///
+    /// 判据两段，缺一不可：
+    /// - **非接管模块一律空表**：它们那些没进清单的键（`list` / `enum` 型，如 shortcuts 的两个
+    ///   清单键、timer 的 `timerPresets`）是「只能改配置文件」那一档（§已知限制 1/2），
+    ///   **不是**「由上游设置管理」——那句话只在真源确实落在上游 `Defaults` 时才成立；
+    /// - **接管模块**（`takeoverKeyName != nil`）= manifest 里登记的键**减去**允许清单里已开的键。
+    ///   例如音乐卡：`playerColorTinting` / `useMusicVisualizer` 留下（→ 标注一行），
+    ///   `showAlbumArt` 被减掉（→ 它是一个真的有控件的键）。日历卡没有 `config` → 空表
+    ///   （没有登记过任何不可编辑的键，就没有什么要标注的）。
+    ///
+    /// **取键名（`String?`）而不是 `Defaults.Key<Bool>`**：本函数是纯函数——用例拿几个字符串
+    /// 就能把三段判据各钉一条，不必造注册表、不读偏好。
+    static func upstreamManagedKeys(for manifest: ModuleManifest, takeoverKeyName: String?) -> [String] {
+        guard takeoverKeyName != nil else { return [] }
+        let editable = Set(configControls(forModuleID: manifest.id).map(\.key))
+        let registered = (manifest.config?.properties.keys).map { Array($0) } ?? []
+        return registered.filter { !editable.contains($0) }.sorted()
     }
 
     private var featuresSection: some View {
@@ -366,78 +458,319 @@ struct FeatureCard: Identifiable {
     let effectKey: String
 }
 
-// MARK: - 模块 config 控件（本批只有一个口子）
+// MARK: - 模块 config 控件（允许清单）
 
-/// 一条**模块 config 控件**的读写实现（本批只有音乐卡「显示封面」一条，登记在
-/// `ModuleSettingsSection.configControls` 这张生产表里）。
+/// 一条**模块 config 控件**的读写实现（登记在 `ModuleSettingsSection.configControls` 这张生产表里）。
 ///
 /// 读写都经宿主给模块的**同一个 `ConfigHandle` 实现**
 /// （`ModuleContextFactory.configHandle(for:)` → `ManifestConfigHandle`）：suite 名
 /// （`com.cmeng.gourd.module.<shortID>`）与「值按 JSON 字节存」的口径只有一处，
 /// 「设置页写了一份、模块读另一份」这类静默故障在构造上就不可能发生。
 ///
+/// **四种类型**（docs/24 §接口与数据形状）：`boolean` / `integer` / `number` / `string`。
+/// `list` / `enum` 不在此列（§明确不做）。
+///
+/// **值类型必须与模块读的那一种一致**（改动前先读）：`ManifestConfigHandle` 把值按 JSON 字节存，
+/// 模块侧用 `config.get(key, as: T.self)` 读——`number` 键（launcher 的 `iconSize`）必须写
+/// `Double`、`integer` 键（frontapp 的 `maxRecentApps` / shortcuts 的 `timeoutSeconds`）必须写
+/// `Int`。JSON 的 `30.0` 解不进 `Int`（`DecodingError`），写错类型就是「拨得动、模块读不到」的
+/// 静默故障，因此**读写两条路各自按 kind 分档**，不共用一条泛型通道。
+///
+/// **缺键回落 manifest 默认值**：`get` 本来就先查覆盖值、再回落 `manifest.config.properties[key].default`
+/// （`ManifestConfigHandle` 的既有语义），所以控件**不自己带一份默认值**——卡上显示的值与模块读到的
+/// 值因此是同一个判定（表里再抄一个默认值就会漂，见 T7 报告 §候选决策）。键名漂出 schema 时
+/// `get` 给 nil：控件回落 0 / false / ""，而**键名漂了要用例红**（解析用例逐条对 manifest），
+/// 不是让用户看一条错误提示。
+///
 /// **本类型不是 `private`**：解析用例直接读这张表（与 `FeatureCard` 同一条口径）。
 struct ModuleConfigControl: Identifiable {
-    /// 模块 id：卡片按它命中（本批 = 音乐）。
+    /// 控件支持的四种类型。区间是**模块侧的既有常量**（口径 3），`nil` = 模块侧本来就没夹取区间。
+    /// `integer` / `number` 分开是因为**写盘的 JSON 类型不同**（见类型注释）。
+    enum Kind: Equatable {
+        case boolean
+        case integer(range: ClosedRange<Int>?)
+        case number(range: ClosedRange<Double>?)
+        case string
+    }
+
+    /// 模块 id：卡片按它命中（启动台三行、快捷指令两行、音乐 / 前台应用各一行）。
     let moduleID: String
-    /// 该模块 manifest config 里的键名——**逐字一致**（用例拿 manifest 的 `properties` 对，
+    /// 该模块 manifest config 里的键名——**逐字一致**（解析用例拿 manifest 的 `properties` 对，
     /// 写错一个字就红；`ConfigHandle.set` 对 schema 之外的键也不落盘）。
     let key: String
+    /// 类型与区间（区间取模块侧常量，见 `Kind`）。
+    let kind: Kind
     /// 这一行文案的本地化 key。
-    let nameKey: String
-    /// 缺键（用户没写过覆盖值）时的回落值 = 该模块 manifest 里的默认值
-    /// （本批 = `MusicConfigDefaults.showAlbumArt`）。
-    let defaultValue: Bool
+    let titleKey: String
 
     var id: String { "\(moduleID).\(key)" }
 
-    /// 卡上开关的 get：用户覆盖值优先、否则回落 `defaultValue`——**与模块自己的解析口径同式**
-    /// （`MusicModule.showsAlbumArt(from:)`），因此「卡上显示开」与「块画封面」永远是同一个判定。
-    func isOn(config: ConfigHandle) -> Bool {
-        config.get(key, as: Bool.self) ?? defaultValue
+    // MARK: 读（缺键回落 manifest 默认；数值型夹取到区间）
+
+    /// 卡上开关的 get：缺键回落 manifest 默认值（`ManifestConfigHandle.get` 的既有语义）。
+    func boolValue(from config: ConfigHandle) -> Bool {
+        config.get(key, as: Bool.self) ?? false
     }
 
-    /// 卡上开关的 set：**只写模块专属 suite 的覆盖值**（manifest 默认值一个字不动）。
-    ///
+    /// 整数的 get：先夹取到区间——用户直接改 `UserDefaults` 写了 99 也要有确定的呈现
+    /// （同 `LauncherGridMetrics.metrics` / `FrontAppHistory.clampedLimit` 的口径）。
+    func intValue(from config: ConfigHandle) -> Int {
+        clamp(config.get(key, as: Int.self) ?? 0)
+    }
+
+    /// 小数的 get（`integer` 型也走它：滑杆要的是连续量，写回时才取整——见 `writeInt`）。
+    func doubleValue(from config: ConfigHandle) -> Double {
+        clamp(config.get(key, as: Double.self) ?? 0)
+    }
+
+    func stringValue(from config: ConfigHandle) -> String {
+        config.get(key, as: String.self) ?? ""
+    }
+
+    // MARK: 写（只写模块专属 suite 的覆盖值；manifest 默认值一个字不动）
+
     /// 返回 `false` = 这个键不在该模块 manifest 的 config schema 里（键名漂了就会这样，
     /// `ManifestConfigHandle.set` 的既有语义）——用例断掉它；卡面不做错误态：
     /// 本批的键是逐字段写死的，漂了要用例红，不是让用户看一条错误提示。
     @discardableResult
-    func write(_ value: Bool, config: ConfigHandle) -> Bool {
+    func writeBool(_ value: Bool, config: ConfigHandle) -> Bool {
         config.set(key, to: value)
+    }
+
+    /// 整数写回：**夹取后**落盘（越界值取端点），写的是 `Int`（`integer` 型模块读的就是 `Int`）。
+    @discardableResult
+    func writeInt(_ value: Int, config: ConfigHandle) -> Bool {
+        config.set(key, to: clamp(value))
+    }
+
+    /// 小数写回：夹取后落盘，写的是 `Double`（`number` 型模块读的就是 `Double`）。
+    @discardableResult
+    func writeDouble(_ value: Double, config: ConfigHandle) -> Bool {
+        config.set(key, to: clamp(value))
+    }
+
+    @discardableResult
+    func writeString(_ value: String, config: ConfigHandle) -> Bool {
+        config.set(key, to: value)
+    }
+
+    // MARK: 区间（唯一入口：kind 里那个常量）
+
+    private func clamp(_ value: Int) -> Int {
+        guard case .integer(let range) = kind, let range else { return value }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        switch kind {
+        case .number(let range):
+            guard let range else { return value }
+            return min(max(value, range.lowerBound), range.upperBound)
+        case .integer(let range):
+            guard let range else { return value }
+            return min(max(value, Double(range.lowerBound)), Double(range.upperBound))
+        case .boolean, .string:
+            return value
+        }
     }
 }
 
-/// 模块 config 控件的一行：**带标签的小开关**（卡片主开关是 `labelsHidden` 的，这一行必须有标签）。
+/// 模块 config 控件的一行：按 `kind` 分档渲染 —— 布尔 = 小开关、有区间的数值 = 滑杆 + 当前值、
+/// 没区间的数值 = 数字输入框、字符串 = 文本框。
 ///
 /// **句柄每次现取**：`ModuleContextFactory.configHandle(for:)` 只是薄壳（schema 快照 + 一次
 /// `UserDefaults(suiteName:)`），而本批 config 没有 `observe`（07 §2 属 P1-3）——「改完立刻生效」
-/// 靠的是三件事：写路径落盘、这里现读、**首页 strip 重取内容**（模块的 `content(for: .home)`
-/// 每次现读 config，见 `MusicModule.showsAlbumArt(from:)`）。
+/// 靠的是三件事：写路径落盘、这里现读、**宿主重取内容**（模块的 `content(for:)` 每次现读 config，
+/// 见 `MusicModule.showsAlbumArt(from:)`）。因此每次写完都叫醒观察注册表的宿主视图
+/// （`ModuleRegistry.shared.objectWillChange.send()`）——**不需要重启**。
 private struct ModuleConfigControlRow: View {
     let control: ModuleConfigControl
     let manifest: ModuleManifest
 
+    /// 本行的**自刷新令牌**：写完 config 之后，本行要重画一次（值文本与滑杆位置都来自 config）。
+    ///
+    /// 为什么需要它（2026-09-30 上屏实测的缺陷）：`commit` 里那句
+    /// `ModuleRegistry.objectWillChange.send()` 覆盖的是**观察注册表的宿主视图**（首页 strip 那一侧
+    /// ——它每次渲染现问模块要内容），**不包括本行自己**：点一下滑杆的轨道，拇指跟着点走、
+    /// 而右侧那个数值文本还是旧值（`44` 明明已经写成了 `89.47`）——正是「拨了没反应」的错觉。
+    /// 本批 config 没有 `observe`（07 §2 属 P1-3），所以本行只能自己叫醒自己：
+    /// 令牌在 `body` 里被读一次（见 `body` 首行），写完自增 → SwiftUI 重画本行 → 现读 config。
+    /// 代价：多一个只增不减的 `Int`（视图级，不进偏好、不跨渲染保存语义）。
+    @State private var refreshToken = 0
+
     private var config: ConfigHandle { ModuleContextFactory.configHandle(for: manifest) }
 
     var body: some View {
-        Toggle(isOn: Binding(
-            get: { control.isOn(config: config) },
-            set: { newValue in
-                // **先落盘、再刷新**（docs/18 §处理链路）：写进模块专属 suite 之后，叫醒观察注册表的
-                // 宿主视图（`HomeStripView.resolvedHomeBlocks()` 每次渲染都现问模块要内容，模块再现读
-                // config）——所以**不需要重启**，也不需要模块自己发通知（config 没有 `observe`）。
-                control.write(newValue, config: config)
-                ModuleRegistry.shared.objectWillChange.send()
+        // 读一次令牌：它变了就等于「本行需要重画」，见 `refreshToken` 的注释。
+        _ = refreshToken
+        return content
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch control.kind {
+        case .boolean:
+            booleanRow
+        case .integer(let range):
+            if let range {
+                sliderRow(in: Double(range.lowerBound)...Double(range.upperBound), step: 1) { value in
+                    control.writeInt(Int(value.rounded()), config: config)
+                }
+            } else {
+                integerFieldRow
             }
+        case .number(let range):
+            if let range {
+                sliderRow(in: range, step: nil) { value in
+                    control.writeDouble(value, config: config)
+                }
+            } else {
+                doubleFieldRow
+            }
+        case .string:
+            stringRow
+        }
+    }
+
+    // MARK: 布尔
+
+    private var booleanRow: some View {
+        Toggle(isOn: Binding(
+            get: { control.boolValue(from: config) },
+            set: { newValue in commit { control.writeBool(newValue, config: config) } }
         )) {
-            Text(LocalizedStringKey(control.nameKey))
+            Text(LocalizedStringKey(control.titleKey))
         }
         .toggleStyle(.switch)
         .controlSize(.small)
         // 开关自己带得出名字（辅助功能口径与卡片主开关 / 功能卡那七行一致：AX 里那个 checkbox
         // 的 description 就是这一行的文案，而不是一个没有名字的开关）。
-        .accessibilityLabel(Text(LocalizedStringKey(control.nameKey)))
+        .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
+    }
+
+    // MARK: 数值
+
+    /// 有区间的数值：**滑杆 + 当前值**——区间取模块侧那个常量（口径 3），用户拨到端点就停住
+    /// （没有「拨出去、读侧再夹回来」的错觉）。整型带 `step: 1`（不会拨出「3.7 个应用」那种值）；
+    /// 小数型连续，显示时按最多两位小数收口（`numberText`）。
+    private func sliderRow(
+        in range: ClosedRange<Double>,
+        step: Double?,
+        write: @escaping (Double) -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(LocalizedStringKey(control.titleKey))
+
+            slider(in: range, step: step, write: write)
+                .frame(width: 150)
+                // 辅助功能：滑杆在 AX 里报得出名字（与开关那条同口径）
+                .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
+
+            Text(numberText(min(max(control.doubleValue(from: config), range.lowerBound), range.upperBound)))
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// 滑杆本体：有 `step` 用步进式、没有用连续式（两种初始化器在 SwiftUI 里是两个方法，
+    /// 因此这一处按需分叉，绑定与写路径共用）。
+    @ViewBuilder
+    private func slider(
+        in range: ClosedRange<Double>,
+        step: Double?,
+        write: @escaping (Double) -> Void
+    ) -> some View {
+        // get 也夹一次：手改 `UserDefaults` 写了越界值时，滑杆停在端点上而不是空掉。
+        let binding = Binding(
+            get: { min(max(control.doubleValue(from: config), range.lowerBound), range.upperBound) },
+            set: { newValue in commit { write(newValue) } }
+        )
+        if let step {
+            Slider(value: binding, in: range, step: step)
+        } else {
+            Slider(value: binding, in: range)
+        }
+    }
+
+    /// 没区间的整数：数字输入框（回车 / 失焦提交）。**不发明区间**（口径 3）。
+    private var integerFieldRow: some View {
+        HStack(spacing: 8) {
+            Text(LocalizedStringKey(control.titleKey))
+
+            Spacer(minLength: 8)
+
+            TextField(value: Binding(
+                get: { control.intValue(from: config) },
+                set: { newValue in commit { control.writeInt(newValue, config: config) } }
+            ), format: .number) {
+                Text(LocalizedStringKey(control.titleKey))
+            }
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 70)
+            .multilineTextAlignment(.trailing)
+            .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
+        }
+    }
+
+    private var doubleFieldRow: some View {
+        HStack(spacing: 8) {
+            Text(LocalizedStringKey(control.titleKey))
+
+            Spacer(minLength: 8)
+
+            TextField(value: Binding(
+                get: { control.doubleValue(from: config) },
+                set: { newValue in commit { control.writeDouble(newValue, config: config) } }
+            ), format: .number) {
+                Text(LocalizedStringKey(control.titleKey))
+            }
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 70)
+            .multilineTextAlignment(.trailing)
+            .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
+        }
+    }
+
+    /// 当前值的显示形态：整数不带小数点、小数最多两位（`44` / `1` / `0.95`）。
+    private func numberText(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)))
+    }
+
+    // MARK: 字符串
+
+    private var stringRow: some View {
+        HStack(spacing: 8) {
+            Text(LocalizedStringKey(control.titleKey))
+
+            Spacer(minLength: 8)
+
+            TextField(text: Binding(
+                get: { control.stringValue(from: config) },
+                set: { newValue in commit { control.writeString(newValue, config: config) } }
+            )) {
+                Text(LocalizedStringKey(control.titleKey))
+            }
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 160)
+            .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
+        }
+    }
+
+    // MARK: 写路径
+
+    /// **先落盘、再刷新**（docs/18 §处理链路），两处刷新各管一件事：
+    /// - `ModuleRegistry.shared.objectWillChange.send()` 叫醒**观察注册表的宿主视图**
+    ///   （`HomeStripView.resolvedHomeBlocks()` 每次渲染都现问模块要内容，模块再现读 config）；
+    /// - `refreshToken` 叫醒**本行自己**（值文本 / 滑杆都读 config，见那个属性的注释）。
+    private func commit(_ write: () -> Void) {
+        write()
+        refreshToken &+= 1
+        ModuleRegistry.shared.objectWillChange.send()
     }
 }
 
@@ -595,11 +928,22 @@ private struct ModuleSettingsCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                // **模块 config 控件**（本批只有音乐卡那一条：显示封面）——卡片自己的子设置行，
-                // 放在描述行之后、失败态之前。命中判据是登记表里的模块 id：**不按 manifest schema
-                // 自动生成控件**（通用渲染器是另一个批次的活，见 `configControls` 的注释）。
-                if let control = ModuleSettingsSection.configControl(forModuleID: manifest.id) {
+                // **模块 config 控件**（允许清单：音乐 / 启动台 / 快捷指令 / 前台应用四张卡）——
+                // 卡片自己的子设置行，放在描述行之后、失败态之前。命中判据是登记表里的模块 id：
+                // **不按 manifest schema 自动生成控件**（通用渲染器是另一个批次的活，见 `configControls`）。
+                ForEach(ModuleSettingsSection.configControls(forModuleID: manifest.id)) { control in
                     ModuleConfigControlRow(control: control, manifest: manifest)
+                }
+
+                // **登记了但这里不可编辑的上游键**：一行灰字说清（docs/24 §做法 机制四）——
+                // 那句「改了不生效」必须写在卡上，否则用户看到的是「组件页管着一切」的错觉。
+                // 判据取 manifest 的登记键（纯函数，见 `upstreamManagedKeys`）：只有接管模块
+                // 才可能非空（它们的真源在上游 `Defaults`）。
+                if !upstreamManagedKeys.isEmpty {
+                    Text(LocalizedStringKey("settings.modules.upstreamManaged"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 // 失败态只回显**一行**：`failed` 是终态、要恢复只能重启（D-13），
@@ -638,6 +982,16 @@ private struct ModuleSettingsCard: View {
     private var isFailed: Bool {
         if case .some(.failed) = registry.states[manifest.id] { return true }
         return false
+    }
+
+    /// 本卡片上**登记了但这里不可编辑**的上游键（唯一判据在
+    /// `ModuleSettingsSection.upstreamManagedKeys(for:takeoverKeyName:)`，本处只把注册表里那个
+    /// 接管键的**名字**递进去——非接管模块传 nil，函数据此一律答空表）。
+    private var upstreamManagedKeys: [String] {
+        ModuleSettingsSection.upstreamManagedKeys(
+            for: manifest,
+            takeoverKeyName: registry.takeoverEnableKey(for: manifest.id)?.name
+        )
     }
 
     /// set：**先落盘再改内存**（docs/17 §处理链路）。落盘只经 `ModuleEnablementWrite.write`——它是

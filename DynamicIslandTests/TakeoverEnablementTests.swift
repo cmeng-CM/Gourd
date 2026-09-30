@@ -105,6 +105,26 @@
 //    没有 `en` 值，原先的 `Bundle.main.localizedString + != key` 跟着机器语言走（英语环境下红）。
 //    Swift 在 Darwin 上没导入带 `localization:` 的四参重载，故用等价的 `.lproj` 子 bundle 形态。
 //
+//  P3 冻结批次 / T7 追加（组件页的模块配置编辑口——**允许清单**，docs/24 §做法 机制四）：
+//  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：七条清单项逐条钉死，
+//    每条都断言「模块 id 是已注册模块」「键在 manifest 的 `config.properties` 里」「kind 与声明的
+//    `type` 一致」「文案在 zh-Hans 里解析得出」「(模块 id, 键) 不重复」——键名写错一个字即红
+//    （T7 的变异验证靶子）；
+//  - **两处边界**（`testConfigControlAllowlistExcludesTakeoverUpstreamKeys`）：接管模块登记的上游键
+//    不进清单（真源在上游 `Defaults`，拨了没人读），且它们的卡片必须出那行
+//    「由上游设置管理」；非接管模块（含没有 `config` 的日历）一律不出；
+//  - **写路径端到端**（`testConfigControlWritePathsShareTheModuleConfigHandle`）：四种控件类型各写
+//    一遍，落盘在 probe 域（`…module.probe-config` 用完即删），**模块自己的读侧**立刻看到同一个值；
+//    另钉住「写盘的 JSON 类型」与「区间夹取读写各一次」。
+//
+//  P3 冻结批次 / T6 追加（日历接管模块——孤儿视图 `StandaloneCalendarView` 的展开 tab）：
+//  - **`CalendarModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact` / `.home`）、
+//    `defaultPlacement == nil`、真源键 `showCalendar`、无块宽、`config == nil`（口径 3：本模块没有
+//    自己的配置键，唯一相关的上游键就是接管键本身）；
+//  - **接管键 read-through**：`showCalendar` 关 → `.disabled` + 不进 tab 投影 + 展开请求降级
+//    `.unavailable`；开 → `.active` + 进 tab 投影 + 展开请求拿到 `.view`。两个方向都走真门，
+//    这是 T6 的变异验证靶子（换掉接管键 → 本条红）。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -906,26 +926,304 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    // MARK: - 音乐封面开关的界面入口（T5 修复轮 / 组件页）
+    // MARK: - 组件页的模块配置编辑口（P3 冻结批次 / T7：允许清单）
 
-    /// 组件页那一行「显示封面」的**登记表**（`ModuleSettingsSection.configControls`）：模块 id /
-    /// config 键 / 文案 key / 回落值四项逐条对生产事实。
+    /// **允许清单对生产事实**（docs/24-release-freeze.md §做法 机制四 / §验收标准 4）：迭代
+    /// `ModuleSettingsSection.configControls` **这张生产表本身**（不是测试另抄的键表——同
+    /// `featureCards` / `effectKeysByModuleID` 口径），逐条断言：
     ///
-    /// - 模块 id 写错 → 卡片根本命中不到这一行（或被挂到别的模块上）；
-    /// - config 键写错 → `ManifestConfigHandle.set` 对 schema 之外的键返回 false、**不落盘**：
-    ///   开关拨得动、值不生效（这正是「键名必须逐字一致」的代价）；
-    /// - 回落值漂了 → 卡上的显示值与首页块的行为分叉；
-    /// - 文案 key 没进 catalog → 一个没有标签的开关。
+    /// ① 模块 id 是**已注册模块**的 id（模块改名 / 表里 id 写错 → 红）；
+    /// ② config 键在**那个模块 manifest 的 `config.properties` 里**（键名写错一个字 → 红；
+    ///    这正是「拨得动、值不生效」那个静默故障的判据——《ManifestConfigHandle.set` 对
+    ///    schema 之外的键返回 false、不落盘）；
+    /// ③ **类型与 manifest 声明一致**（`.boolean` ↔ `boolean`、`.integer` ↔ `integer`、
+    ///    `.number` ↔ `number`、`.string` ↔ `string`）：类型写错就是「写进去的类型模块读不出来」
+    ///    （JSON 的 `30.0` 解不进 `Int`）；
+    /// ④ 文案 key 在宿主 bundle 的 zh-Hans 里**解析得出来**（没进 catalog → 一行没有标签的控件）；
+    /// ⑤ 表里 **(模块 id, 键) 不重复**（重复 = 两个控件写同一个键，是谁在生效说不清）。
+    ///
+    /// 另把**七条清单项逐条钉死**（模块 id + 键名），因为「清单少了一条」在 ①~⑤ 下是**全绿**的
+    /// ——少一条只是「那个键没入口」，不违反任何一条断言（§已知限制 1 点名接受：清单是滞后的，
+    /// 没有自动发现机制；这里用一条显式名单把它钉住，去掉任意一条即红）。
+    ///
+    /// 注册用 `enabled: { _ in true }`（不读任何偏好键、不落状态）、**不调** `bootstrap()`：
+    /// 本用例只看 manifest 与文案，不激活任何模块。
+    func testConfigControlAllowlistMatchesManifestsAndCatalog() throws {
+        let controls = ModuleSettingsSection.configControls
+
+        // ⑤ 不重复
+        XCTAssertEqual(
+            Set(controls.map(\.id)).count,
+            controls.count,
+            "允许清单里出现了重复的 (模块 id, 键)：两个控件写同一个键，谁生效说不清"
+        )
+
+        // ⑤′ 逐条钉死（去掉 / 改掉任意一条即红）
+        XCTAssertEqual(
+            controls.map(\.id),
+            [
+                "com.cmeng.gourd.music.showAlbumArt",
+                "com.cmeng.gourd.launcher.iconSize",
+                "com.cmeng.gourd.launcher.density",
+                "com.cmeng.gourd.launcher.showRecents",
+                "com.cmeng.gourd.shortcuts.showOutput",
+                "com.cmeng.gourd.shortcuts.timeoutSeconds",
+                "com.cmeng.gourd.frontapp.maxRecentApps",
+            ],
+            "七条 = docs/24 §做法 机制四 点名的七个键（顺序不动，去/改任意一条都会红）"
+        )
+
+        // ①②③ 数据源 = 注册表里的真 manifest（先补注册：`setUp` 的 `deactivateAll()` 把
+        // `manifests` 一起清空了，不注册的话 ① 恒红）。
+        let registry = ModuleRegistry.shared
+        registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
+        let registeredIDs = Set(registry.manifests.keys)
+        XCTAssertFalse(registeredIDs.isEmpty, "前置：注册后不能还是空表（setUp 刚清过注册表）")
+
+        for control in controls {
+            XCTAssertTrue(
+                registeredIDs.contains(control.moduleID),
+                "\(control.moduleID) 不是已注册模块的 id（模块改名漏改表 / 表里 id 写错？）"
+            )
+            let manifest = try XCTUnwrap(registry.manifests[control.moduleID], "① 前置：manifest 应当拿得到")
+            let properties = try XCTUnwrap(
+                manifest.config?.properties,
+                "\(control.moduleID) 的 manifest 没有 config——清单却给它开了控件？"
+            )
+            let node = try XCTUnwrap(
+                properties[control.key],
+                "② `\(control.key)` 不在 \(control.moduleID) 的 manifest config.properties 里（键名写错一个字？）"
+            )
+
+            // ③ 类型 ↔ kind（四种一一对应；`list` / `enum` 不在清单里）
+            switch control.kind {
+            case .boolean:
+                XCTAssertEqual(node.type, "boolean", "\(control.id) 的 kind 是 boolean，manifest 声明的是 \(node.type)")
+            case .integer:
+                XCTAssertEqual(node.type, "integer", "\(control.id) 的 kind 是 integer，manifest 声明的是 \(node.type)")
+            case .number:
+                XCTAssertEqual(node.type, "number", "\(control.id) 的 kind 是 number，manifest 声明的是 \(node.type)")
+            case .string:
+                XCTAssertEqual(node.type, "string", "\(control.id) 的 kind 是 string，manifest 声明的是 \(node.type)")
+            }
+
+            // ④ 文案
+            XCTAssertResolves(control.titleKey)
+        }
+    }
+
+    /// 允许清单的**两处边界**（T7 的失败信号逐条对应）：
+    ///
+    /// ① **接管模块登记的上游键不进清单**：`enableTimerFeature` / `showMirror` /
+    ///    `playerColorTinting` 一类进了清单就是「拨得动、没人读」（`ConfigHandle` 对它们不生效）；
+    /// ② **接管模块的卡片必须出那行灰字**（`settings.modules.upstreamManaged` 的判据
+    ///    `upstreamManagedKeys(for:takeoverKeyName:)` 非空），非接管模块**一律不出**
+    ///    （它们没进清单的键是 `list` / `enum` 那一档：只能改配置文件，不是「由上游设置管理」）。
+    ///
+    /// 上游键名单**逐条写死**（不拿 manifest 自己算——那样断言会变成同义反复）：这份名单就是
+    /// 「`docs/20` §接口与数据形状 5 登记的键」在用例里的镜像，改 manifest 的登记键时这条会红，
+    /// 提醒同步。
+    ///
+    /// 本用例**不写**任何真实偏好（只读表 / manifest / 纯函数），没有夹具与还原。
+    func testConfigControlAllowlistExcludesTakeoverUpstreamKeys() throws {
+        let controls = ModuleSettingsSection.configControls
+        // 三个接管模块的真 manifest + 它们登记的上游键（逐条写死，见文档注释）
+        let takeoverModules: [(manifest: ModuleManifest, upstreamKeys: [String])] = [
+            (TimerModule.manifest, ["enableTimerFeature", "timerDisplayMode", "timerPresets"]),
+            (MirrorModule.manifest, ["showMirror", "mirrorShape", "selectedCameraID"]),
+            (MusicModule.manifest, ["playerColorTinting", "useMusicVisualizer"]),
+        ]
+
+        // ① 上游键一条都不得进清单
+        for (manifest, upstreamKeys) in takeoverModules {
+            for key in upstreamKeys {
+                XCTAssertFalse(
+                    controls.contains { $0.moduleID == manifest.id && $0.key == key },
+                    "\(manifest.id) 的 `\(key)` 是**登记的上游键**（真源在上游 Defaults），不得进允许清单"
+                )
+            }
+        }
+
+        // ② 标注判据：接管模块非空（→ 卡片出灰字）、非接管模块恒空
+        for (manifest, upstreamKeys) in takeoverModules {
+            let managed = ModuleSettingsSection.upstreamManagedKeys(
+                for: manifest,
+                takeoverKeyName: TimerModule.takeoverEnableKey?.name
+            )
+            XCTAssertFalse(managed.isEmpty, "\(manifest.id) 是接管模块且有登记的键 → 卡片必须标一行「由上游设置管理」")
+            for key in upstreamKeys {
+                XCTAssertTrue(
+                    managed.contains(key),
+                    "\(manifest.id) 的上游键 `\(key)` 应在标注名单里（实到 \(managed)）"
+                )
+            }
+        }
+
+        // 非接管模块：一份键表都没有 → 空表（那一档是「只能改配置文件」，不是「由上游设置管理」）
+        for manifest in [LauncherModule.manifest, ShortcutsModule.manifest, FrontAppModule.manifest, CalendarModule.manifest] {
+            XCTAssertTrue(
+                ModuleSettingsSection.upstreamManagedKeys(for: manifest, takeoverKeyName: nil).isEmpty,
+                "\(manifest.id) 不是接管模块 → 那行灰字不得出现"
+            )
+        }
+
+        // 音乐卡的具体分工：`showAlbumArt` 有控件（不标注），两个登记键留下（标注）
+        XCTAssertEqual(
+            ModuleSettingsSection.upstreamManagedKeys(for: MusicModule.manifest, takeoverKeyName: "x"),
+            ["playerColorTinting", "useMusicVisualizer"],
+            "音乐卡：一个键有控件、两个上游键留下——名单与顺序都钉住"
+        )
+
+        // 日历卡：`config == nil` → 没有可标注的键（口径 3）
+        XCTAssertTrue(
+            ModuleSettingsSection.upstreamManagedKeys(for: CalendarModule.manifest, takeoverKeyName: "x").isEmpty,
+            "日历卡没有登记任何 config 键 → 不出那行灰字"
+        )
+    }
+
+    /// 控件**写路径的端到端**（四种类型各走一遍）：写进 `com.cmeng.gourd.module.<shortID>`
+    /// （probe 域，**不碰**开发机真实的模块域）→ **模块自己的读侧**立刻看到同一个值
+    /// （`MusicModule.showsAlbumArt(from:)` / `LauncherSettings.read(from:)` / `ShortcutsSettings.read(from:)`）。
+    ///
+    /// 四件事因此被钉住：落盘的**域**（`ModuleContextFactory.configHandle(for:)` 与模块侧是同一个
+    /// `ManifestConfigHandle` 实现）、**键名**、值的**类型**（`integer` 键写 `Int`、`number` 键写
+    /// `Double`——写错模块侧 `get` 就是 nil，本用例红）、以及**区间夹取**（越界值写进去读到的是端点）。
+    ///
+    /// 假 manifest 的 config 与四个真模块**同一形状**（键名 / 类型 / 默认值都照抄）：
+    /// 本用例验的是读写口径，各模块自己的声明由各自的 manifest 用例覆盖。
+    /// probe 域用完即删。
+    func testConfigControlWritePathsShareTheModuleConfigHandle() throws {
+        let suiteName = "com.cmeng.gourd.module.probe-config"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)          // 前置：清掉上次运行留下的覆盖值
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let manifest = try ModuleManifest.decode(from: Data(#"""
+        {
+          "manifestVersion": 1,
+          "id": "com.cmeng.gourd.probe-config",
+          "name": {"key": "module.probe-config.name"},
+          "icon": {"type": "symbol", "name": "square"},
+          "version": "1.0.0",
+          "apiVersion": "1.0",
+          "kind": "builtin",
+          "surfaces": ["expanded"],
+          "config": {
+            "type": "object",
+            "properties": {
+              "showAlbumArt": {"type": "boolean", "default": true},
+              "iconSize": {"type": "number", "default": 44},
+              "density": {"type": "number", "default": 1},
+              "showRecents": {"type": "boolean", "default": true},
+              "showOutput": {"type": "boolean", "default": false},
+              "timeoutSeconds": {"type": "integer", "default": 30},
+              "maxRecentApps": {"type": "integer", "default": 5}
+            }
+          }
+        }
+        """#.utf8))
+
+        let config = ModuleContextFactory.configHandle(for: manifest)
+        let controls = ModuleSettingsSection.configControls
+
+        /// 按 (模块 id, 键) 取一条清单项——数据源是生产表本身。
+        func control(_ moduleID: String, _ key: String) throws -> ModuleConfigControl {
+            try XCTUnwrap(
+                controls.first { $0.moduleID == moduleID && $0.key == key },
+                "清单里必须有 \(moduleID).\(key)"
+            )
+        }
+
+        // ① 缺键 → 回落 manifest 默认值（`ManifestConfigHandle.get` 的既有语义）：
+        //    卡上显示的就是模块读到的那一档
+        let albumArt = try control(MusicModule.moduleID, "showAlbumArt")
+        XCTAssertTrue(albumArt.boolValue(from: config), "缺键回落 manifest 默认（显示封面）")
+        XCTAssertEqual(
+            albumArt.boolValue(from: config),
+            MusicModule.showsAlbumArt(from: config),
+            "卡上显示的值与块画不画封面必须是同一个判定"
+        )
+
+        let iconSize = try control("com.cmeng.gourd.launcher", "iconSize")
+        let density = try control("com.cmeng.gourd.launcher", "density")
+        let showRecents = try control("com.cmeng.gourd.launcher", "showRecents")
+        let launcherDefaults = LauncherSettings.read(from: config)
+        XCTAssertEqual(launcherDefaults, LauncherSettings(
+            iconSize: LauncherConfigDefaults.iconSize,
+            density: LauncherConfigDefaults.density,
+            showRecents: LauncherConfigDefaults.showRecents
+        ), "缺键三件都回落各模块自己的常量")
+        XCTAssertEqual(iconSize.doubleValue(from: config), launcherDefaults.iconSize)
+        XCTAssertEqual(density.doubleValue(from: config), launcherDefaults.density)
+        XCTAssertEqual(showRecents.boolValue(from: config), launcherDefaults.showRecents)
+
+        let showOutput = try control(ShortcutsModule.moduleID, "showOutput")
+        let timeout = try control(ShortcutsModule.moduleID, "timeoutSeconds")
+        XCTAssertEqual(showOutput.boolValue(from: config), ShortcutsConfigDefaults.showOutput)
+        XCTAssertEqual(
+            Int(timeout.doubleValue(from: config)),
+            ShortcutsConfigDefaults.timeoutSeconds,
+            "缺键回落 30（`number` 形态读的是 `Double`，整数键也能互通）"
+        )
+
+        // ② 拨一个 `number` 值：写盘 → 模块读侧与卡上同时变（**写反了 / 写错类型这里就红**）
+        XCTAssertTrue(iconSize.writeDouble(72, config: config), "键在 schema 内 → 落盘成功")
+        XCTAssertEqual(iconSize.doubleValue(from: config), 72, "卡上立刻变 72")
+        XCTAssertEqual(LauncherSettings.read(from: config).iconSize, 72, "启动台读侧同步：格子按 72pt 算")
+        let storedNumber = try XCTUnwrap(suite.data(forKey: iconSize.key), "覆盖值应落在 \(suiteName) 的 \(iconSize.key)")
+        XCTAssertEqual(try JSONDecoder().decode(Double.self, from: storedNumber), 72, "落盘类型必须是 Double（模块读 Double）")
+
+        // ③ 区间夹取（读写两侧各一次）：越界值不落进盘、盘上的越界值读出来也是端点
+        XCTAssertTrue(iconSize.writeDouble(500, config: config), "越界值照样落盘（夹取在写之前做）")
+        XCTAssertEqual(iconSize.doubleValue(from: config), LauncherGridMetrics.iconSizeRange.upperBound, "500 → 夹到 96")
+        XCTAssertEqual(
+            try JSONDecoder().decode(Double.self, from: try XCTUnwrap(suite.data(forKey: iconSize.key))),
+            LauncherGridMetrics.iconSizeRange.upperBound,
+            "盘上存的也是夹取后的值（不是「写 500 读 96」）"
+        )
+        let recentApps = try control(FrontAppModule.moduleID, "maxRecentApps")
+        XCTAssertTrue(recentApps.writeInt(99, config: config))
+        XCTAssertEqual(recentApps.intValue(from: config), FrontAppHistory.limitRange.upperBound, "99 → 夹到 8")
+        XCTAssertEqual(FrontAppHistory.clampedLimit(99), recentApps.intValue(from: config), "与模块侧的夹取同值")
+
+        // ④ 整型键写的是 `Int`（写成 Double 模块侧就读不出来——这正是本用例要堵的静默故障）
+        XCTAssertTrue(timeout.writeInt(45, config: config))
+        XCTAssertEqual(ShortcutsSettings.read(from: config).timeoutSeconds, 45, "快捷指令读侧同步：限时 45s")
+        XCTAssertEqual(
+            try JSONDecoder().decode(Int.self, from: try XCTUnwrap(suite.data(forKey: timeout.key))),
+            45,
+            "落盘类型必须是 Int（模块读 Int；写 Double 会解码失败）"
+        )
+
+        // ⑤ 布尔与字符串两条路（字符串型本批清单里没有键，读写口径仍要能过）
+        XCTAssertTrue(showOutput.writeBool(true, config: config))
+        XCTAssertTrue(ShortcutsSettings.read(from: config).showOutput)
+        let stringProbe = ModuleConfigControl(
+            moduleID: manifest.id, key: "mirrorShape", kind: .string, titleKey: "settings.modules.upstreamManaged"
+        )
+        XCTAssertFalse(stringProbe.writeString("circle", config: config), "probe manifest 没有这个键 → set 返回 false")
+        XCTAssertEqual(stringProbe.stringValue(from: config), "", "schema 之外的键读回空串（键名漂了的形态）")
+    }
+
+    /// **音乐卡那一行的界面入口**（T5 修复轮补的口子，T7 挪进允许清单）：模块 id / config 键 /
+    /// 类型 / 文案 key 四项对生产事实，另钉住「缺键回落」这一档在**假句柄**上的退化形态。
+    ///
+    /// **与 T7 之前的一处差别**（有意，见 T7 报告 §候选决策）：控件不再自带 `defaultValue`——
+    /// 回落交给 `ConfigHandle`（真句柄回落到 manifest 的 `default`，见上一条用例的 ① 档）。
+    /// 因此这里的假句柄（`RecordingConfigHandle`，没有 manifest 默认值、`get` 给 nil）读到的是
+    /// `false`：这正是「键名漂出 schema」的退化形态，**由上面那条解析用例把它钉死在 schema 内**。
     ///
     /// 数据源是**生产表本身**（不是测试另抄的键表——同 `featureCards` / `effectKeysByModuleID` 口径）。
     func testMusicAlbumArtControlMatchesManifestAndCatalog() throws {
         let control = try XCTUnwrap(
-            ModuleSettingsSection.configControl(forModuleID: MusicModule.moduleID),
-            "音乐卡必须有一条 config 控件（T5 修复轮补的就是这个界面入口）"
+            ModuleSettingsSection.configControls.first { $0.moduleID == MusicModule.moduleID && $0.key == "showAlbumArt" },
+            "音乐卡必须有一条「显示封面」控件（T5 修复轮补的就是这个界面入口）"
         )
 
         XCTAssertEqual(control.moduleID, MusicModule.moduleID, "模块 id 必须是真模块那一份字面量")
         XCTAssertEqual(control.key, "showAlbumArt", "落盘键名就是 `defaults write` 会写的那个字面量")
+        XCTAssertEqual(control.kind, .boolean, "这一个开关写的是布尔值")
+        XCTAssertEqual(control.titleKey, "settings.modules.music.showAlbumArt")
 
         let properties = try XCTUnwrap(MusicModule.manifest.config?.properties)
         let node = try XCTUnwrap(
@@ -935,75 +1233,12 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(node.type, "boolean", "这一个开关写的是布尔值")
         XCTAssertEqual(
             node.default,
-            ConfigValue.bool(control.defaultValue),
-            "回落值必须等于 manifest 里那一键的默认值（卡上与块同一个默认档）"
+            ConfigValue.bool(MusicConfigDefaults.showAlbumArt),
+            "manifest 那一键的默认值 = MusicConfigDefaults.showAlbumArt（读取侧兜底用同一个常量）"
         )
-        XCTAssertEqual(control.defaultValue, MusicConfigDefaults.showAlbumArt)
-        XCTAssertEqual(control.defaultValue, true, "默认显示（方向也要钉住）")
+        XCTAssertEqual(node.default, ConfigValue.bool(true), "默认显示（方向也要钉住）")
 
-        XCTAssertResolves(control.nameKey)
-    }
-
-    /// 控件**写路径的端到端**：写进 `com.cmeng.gourd.module.<shortID>`（probe 域，**不碰**开发机真实的
-    /// `com.cmeng.gourd.module.music`）→ **模块自己的读侧**（`MusicModule.showsAlbumArt(from:)`）
-    /// 立刻看到同一个值。
-    ///
-    /// 三件事因此被钉住：落盘的**域**（`ModuleContextFactory.configHandle(for:)` 与模块侧是同一个
-    /// `ManifestConfigHandle` 实现）、**键名**、值的**方向**——把写路径改成写反（写 false 实际写
-    /// true）时本用例红（见 T5-fix 报告 §变异）。
-    ///
-    /// 假 manifest 的 config 与音乐真模块**同一形状**（`showAlbumArt` / boolean / 默认 true）：
-    /// 本用例验的是读写口径，音乐模块自己的声明由 `testMusicModuleManifestMatchesTakeoverContract` 覆盖。
-    func testMusicAlbumArtControlWriteIsReadableByTheModule() throws {
-        let suiteName = "com.cmeng.gourd.module.probe-albumart"
-        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        suite.removePersistentDomain(forName: suiteName)          // 前置：清掉上次运行留下的覆盖值
-        defer { suite.removePersistentDomain(forName: suiteName) }
-
-        let manifest = try ModuleManifest.decode(from: Data(#"""
-        {
-          "manifestVersion": 1,
-          "id": "com.cmeng.gourd.probe-albumart",
-          "name": {"key": "module.probe-albumart.name"},
-          "icon": {"type": "symbol", "name": "music.note"},
-          "version": "1.0.0",
-          "apiVersion": "1.0",
-          "kind": "builtin",
-          "surfaces": ["home"],
-          "config": {
-            "type": "object",
-            "properties": {"showAlbumArt": {"type": "boolean", "default": true}}
-          }
-        }
-        """#.utf8))
-
-        let control = try XCTUnwrap(ModuleSettingsSection.configControl(forModuleID: MusicModule.moduleID))
-        let config = ModuleContextFactory.configHandle(for: manifest)
-
-        // 用户没写过 → 无覆盖值，卡上与块都按默认「显示」
-        XCTAssertTrue(control.isOn(config: config), "缺键回落 defaultValue（默认显示）")
-        XCTAssertEqual(
-            control.isOn(config: config),
-            MusicModule.showsAlbumArt(from: config),
-            "卡上显示的值与首页块画不画封面必须是同一个判定"
-        )
-
-        // 关掉：写 false → 落盘 → 模块读侧立刻看到 false（**写反了这里就红**）
-        XCTAssertTrue(control.write(false, config: config), "键在 schema 内 → 落盘成功")
-        XCTAssertFalse(control.isOn(config: config), "卡上立刻变关")
-        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "模块读侧同步：块不再画封面")
-
-        // 落盘形状：就在模块专属 suite 里、键名逐字、JSON 字节（与读侧的 `data(forKey:)` 配套）
-        let stored = try XCTUnwrap(
-            suite.data(forKey: control.key),
-            "覆盖值应落在 \(suiteName) 的 `\(control.key)` 上"
-        )
-        XCTAssertEqual(try JSONDecoder().decode(Bool.self, from: stored), false)
-
-        // 再打开：回程也要对（避免「只会写一边」）
-        XCTAssertTrue(control.write(true, config: config))
-        XCTAssertTrue(control.isOn(config: config))
-        XCTAssertTrue(MusicModule.showsAlbumArt(from: config))
+        XCTAssertResolves(control.titleKey)
     }
 
     /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
@@ -1047,6 +1282,103 @@ final class TakeoverEnablementTests: XCTestCase {
             EnvironmentValues().homeAlbumArtNamespace,
             "没人注入时缺省 nil（模块此时用自带 @Namespace 兜底）"
         )
+    }
+
+    // MARK: - 日历接管模块（P3 冻结批次 / T6）
+
+    /// docs/24-release-freeze.md §接口与数据形状 的 calendar 片段：**这个真模块**的 manifest 声明值
+    /// 逐条对齐（与 `testTimerModuleManifestMatchesTakeoverContract` 同款）。
+    ///
+    /// 与另外三个接管模块的两处**刻意不同**，都钉在这里：
+    /// - `surfaces == [.expanded]`（只接展开 tab：不给首页加块、不占折叠槽位——首页那条全宽日历行
+    ///   仍由上游 `NotchHomeView` 渲染，它的渲染接管不在本批）；
+    /// - `config == nil`（口径 3）：本模块没有「自己的」配置键，唯一相关的上游键就是
+    ///   `takeoverEnableKey` 本身，登记它是重复——因此组件页的日历卡上不会出现
+    ///   「由上游设置管理」那行（没有登记过任何不可编辑的键，见 `testConfigControlAllowlist…`）。
+    ///
+    /// 本用例**不写**任何真实偏好（只读钩子与常量），因此没有夹具与还原。
+    func testCalendarModuleManifestMatchesTakeoverContract() throws {
+        let manifest = CalendarModule.manifest
+        XCTAssertNoThrow(try manifest.validate())
+
+        XCTAssertEqual(manifest.id, CalendarModule.moduleID, "moduleID 与 manifest.id 必须是同一份字面量")
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.calendar")
+        XCTAssertEqual(manifest.shortID, "calendar")
+        XCTAssertEqual(manifest.name.key, "module.calendar.name")
+        XCTAssertEqual(manifest.summary?.key, "module.calendar.summary")
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "calendar"))
+        XCTAssertEqual(manifest.kind, "builtin")
+        XCTAssertEqual(manifest.surfaces, [.expanded], "只声明展开 tab（不给首页加块、不占折叠槽位）")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "接管模块不占折叠槽位")
+        XCTAssertFalse(manifest.surfaces.contains(.home), "首页那条日历行仍由上游渲染，本模块不占首页块")
+        XCTAssertNil(manifest.defaultPlacement, "tab 落模块段（无 placement → Int.max，按 id 字典序排在 launcher 之前）")
+        XCTAssertEqual(
+            manifest.defaultEnabled,
+            Defaults.Keys.showCalendar.defaultValue,
+            "= 上游 `showCalendar` 的默认值（接管键读不到时才不生效）"
+        )
+        XCTAssertEqual(
+            manifest.defaultEnabled,
+            true,
+            "上游这个开关默认是开的（方向也要钉住，避免它被悄悄改成保守值）"
+        )
+        XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属：零新增能力请求（日历数据仍走上游那条权限）")
+        XCTAssertNil(manifest.config, "口径 3：不登记 config（唯一相关的上游键就是 takeoverEnableKey 本身）")
+
+        // 两条取值型钩子：真源 = 上游那颗日历总开关；不接首页块 → 不声明块宽
+        XCTAssertEqual(CalendarModule.takeoverEnableKey?.name, Defaults.Keys.showCalendar.name)
+        XCTAssertNil(CalendarModule.homeBlockWidth, "只接展开 tab（宿主统一宽度）")
+
+        // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
+        XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// **接管键 read-through**：日历的启用真源是上游 `showCalendar`，不是它自己的 `defaultEnabled`
+    /// （登记值 `true`）——两个方向都走一遍，且**经真组合根的门**（`KernelBootstrap.enablementGate`）。
+    ///
+    /// 三点刻意写死（改动前先读）：
+    /// 1. **自己置全夹具**：`showCalendar` 读的是**测试域**（Debug 域 `com.cmeng.gourd.dev`）盘上的值，
+    ///    本机该域**缺键**（缺键走上游默认 `true`）——缺键的机器与显式写过 `false` 的机器必须走同一条
+    ///    断言，故两个方向都显式置定值，`defer` 逐字还原（原本有键写回原值、原本没键删键）；
+    /// 2. **注册走真门**：旧门（`manifests[$0]?.defaultEnabled`）读不到上游键，键关闭时也会放行；
+    /// 3. **不调 `KernelBootstrap.bootstrap()`**（文件头口径 2：那个入口会写开发机真实的
+    ///    `enableScreenAssistant`），只调注册表自己的 `bootstrap()`。
+    ///
+    /// 变异验证（T6 报告 §3）：把 `CalendarModule.takeoverEnableKey` 换成别的键或去掉 → 本条红
+    /// （第 ① 档的 `.disabled` 与 `tabEntries.isEmpty` 都会破）。
+    func testCalendarModuleEnablementReadsThroughShowCalendar() async throws {
+        let keys = [Defaults.Keys.showCalendar.name]
+        let originals = snapshotValues(of: keys)
+        defer { restoreValues(originals, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        let id = CalendarModule.moduleID
+        let expandedRequest = ContentRequest(surface: .expanded, phase: .expanded, reason: .initial)
+
+        // ① 键关着 → 门不放行：**不看** manifest 的 `defaultEnabled`（登记值 true）
+        Defaults[.showCalendar] = false
+        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[id], .disabled, "接管键 false → 启用门不放行（不看过 manifest 默认 true）")
+        XCTAssertNil(registry.instance(for: id), "未启用的模块不实例化")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "关掉 showCalendar → 日历 tab 不在投影里（与首页那条日历行一起消失）")
+        guard case .unavailable = registry.content(for: id, request: expandedRequest) else {
+            return XCTFail("未激活的模块，展开请求应降级为 .unavailable（06 §3.2）")
+        }
+
+        // ② 键开着 → 放行：进 tab 投影，展开请求拿到那个孤儿视图
+        Defaults[.showCalendar] = true
+        await registry.deactivateAll()
+        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+
+        XCTAssertEqual(registry.states[id], .active, "接管键 true → 启用门放行")
+        XCTAssertNotNil(registry.instance(for: id) as? CalendarModule, "过门的日历照常实例化")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [id], "日历的展开 tab 由模块投影产出")
+        guard case .view = registry.content(for: id, request: expandedRequest) else {
+            return XCTFail("日历的展开请求应拿到那个孤儿视图 StandaloneCalendarView（.view）")
+        }
     }
 
     // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
@@ -1096,7 +1428,9 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 「把 `settings.modules.effect.music` 改成错字」是全绿的（T6 报告 §3 变异 ②b）。
     /// 本用例保留「三条 key 在 catalog 里解析得出」这一半，值那一半交给映射表用例。
     func testTakeoverModuleCardKeysResolve() throws {
-        for manifest in [TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest] {
+        // 日历（T6）也进来了：本用例的名单 = **接管模块**的名单（四个），不要求它有「效果行」
+        //（日历卡没有 `effectKeysByModuleID` 那一条：出现位置已经写在 summary 里）。
+        for manifest in [TimerModule.manifest, MirrorModule.manifest, MusicModule.manifest, CalendarModule.manifest] {
             let nameKey = try XCTUnwrap(manifest.name.key, "\(manifest.id) 的名称 key 必须写成 Localizable key")
             XCTAssertEqual(nameKey, "module.\(manifest.shortID).name", "名称 key 形态与 label(for:) 同源")
             XCTAssertResolves(nameKey)
