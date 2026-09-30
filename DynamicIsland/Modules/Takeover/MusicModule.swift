@@ -52,9 +52,11 @@
 //     matchedGeometry 命名空间由宿主 `HomeStripView` 经 `EnvironmentValues.homeAlbumArtNamespace`
 //     注入（它持有那一条），本模块的块读它；**读不到时用自带的 `@Namespace` 兜底**——配对
 //     失效，但不崩、不空白（§已知限制 4）。
-//  6. **封面开关只切「块内画不画封面」**（D-06）：关掉后标题 / 进度 / 控制仍按原布局左对齐、
-//     封面让出的宽度归它们；**块宽声明（300/420）与内容高度都不变**——「封面关掉要不要收窄块宽」
-//     属块宽策略，留给后续反馈（docs/23-home-fit.md §明确不做 / §已知限制 5）。
+//  6. **封面开关只切「块内画不画封面」**（D-06 / p5-home-blocks / T3 起是「画多大的封面」）：
+//     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView` 一条（曲名 / 艺人 + 进度 + 控制键），
+//     打开则在那一条**前面**加一枚 **40pt 圆角小封面**——不再是改动前那个占满整块的大封面
+//     （`MusicPlayerView` 的 `AlbumArtView` 是宽高双向贪婪的 1:1 图，在紧凑条里只会撑高行）。
+//     块宽声明与形态**同批降档**（`240/300` / `.compact`，D-09），封面开关不再影响块的尺寸。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.music.name` / `module.music.summary`。
 //
@@ -71,16 +73,20 @@ import SwiftUI
 /// 默认值必须等于上游 `Defaults` 键的默认值（登记值不等于真源值就是假的登记），这里的
 /// `showAlbumArt` 没有上游真源，默认值只能落在本模块。
 enum MusicConfigDefaults {
-    /// 封面默认显示（用户 2026-09-30 问的是「能不能配置」——能力要加，但默认档维持现状：显示）。
-    static let showAlbumArt = true
+    /// 封面**默认不显示**（p5-home-blocks / T3 / D-09，翻自上一版的 `true`）。
+    ///
+    /// 用户 2026-09-30 原话：「音乐占比太大了，要缩小，**可以不显示那个图片**」——上半句由
+    /// `homeBlockWidth` / `homeFormFactor` 的降档落地，本键落地下半句。打开时画的是 40pt 小封面
+    /// （`MusicHomeBlockView`），不是改动前那个撑满整块的大封面。
+    static let showAlbumArt = false
 }
 
 // MARK: - MusicModule
 
 /// 音乐接管模块（`docs/20` §接口与数据形状 5 的 music 行）。
 ///
-/// 渲染点 = 上游那个 `MusicPlayerView(albumArtNamespace:)`（首页 strip 的音乐块），
-/// 除它之外本模块不占任何 surface。
+/// 渲染点 = 上游那个音乐块的位置（当年是 `MusicPlayerView(albumArtNamespace:)`；**T3 起**是同一条
+/// 紧凑条 `MusicHomeBlockView`，两档见那边的注释），除它之外本模块不占任何 surface。
 @MainActor
 final class MusicModule: GourdModule {
     /// 模块 id 的**唯一字面量**（manifest 与 `HomeBlockOrdering.migratingLegacyIDs` 的接收方都用它，
@@ -160,16 +166,24 @@ final class MusicModule: GourdModule {
     // `surfaces` 过滤，可见性钩子对它永远不被问到（`docs/20` §接口与数据形状 5 的 music 行同口径）。
     // 这里刻意留白：写一条 `= true` 只会让读者以为本模块有 tab。
 
-    /// 接管三件套之三：宽度声明 = **被接管块原本的宽度**（D-10）——接管是「接住原来的呈现」，
-    /// 不是顺手把音乐块从 300/420 压到宿主统一值 180/240。这个档位同时是首页 strip 高度阈值的
-    /// 输入（`HomeStripView.minimumUsableHeight` 的实测来源就是 420 宽下的封面边长）。
-    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 300, ideal: 420) }
+    /// 接管三件套之三：宽度声明（D-10）——接管时是**被接管块原本的宽度** `300/420`；
+    /// **p5-home-blocks / T3 起降档为 `240/300`**（D-09：用户「音乐占比太大了，要缩小」）。
+    ///
+    /// `min` 240 的依据：紧缩条里要放得下「曲名 / 艺人 + 进度 + 控制键」最窄的一行
+    /// （`MusicControlsView` 的固有需求），而 240 是「一行三键 + 进度条不折行」的下界；
+    /// `ideal` 300 是它富余时愿意占的宽度——**不再是 420**：那一档是为了配大封面选的，
+    /// 封面降成 40pt 小图之后 420 只会把同一行的其它块挤走。
+    ///
+    /// **块高不再由它推**：上一版 `HomeStripView.minimumUsableHeight` 的 152 是从 420 宽下的封面
+    /// 边长量出来的（见那边的注释），音乐降档后那个来源消失——现在的档高由镜子的方形边长选定。
+    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 240, ideal: 300) }
 
-    /// 首页分带批次（T7）的第四条钩子：音乐块是**大块**——封面 + 控制需要面积，因此显式答
-    /// `.large`（缺省 `.compact` 会把它挪进下方的小组件网格，封面会被压成一条）。
-    /// 形态只声明「它是什么」，摆法（主块带的丢块语义、最小可用高度 152）仍是宿主的事
-    /// （docs/26-home-widgets-and-settings.md §做法 机制六 / D-09）。
-    static var homeFormFactor: HomeFormFactor { .large }
+    /// 首页分带批次（T7）的第四条钩子：音乐块是**紧凑块**——**T3 起由 `.large` 降为 `.compact`**
+    /// （D-09）。上一版答 `.large` 是因为「封面 + 控制需要面积」，而封面已降成 40pt 小图、块宽也
+    /// 降到 240/300：一条 96 高的紧凑条正好放下「小封面 + 曲名/艺人 + 进度 + 控制键」，再占大块档
+    /// 只是白撑整行高度（这也是「音乐块仍占整行高」那条失败信号的判据）。
+    /// 形态只声明「它是什么」，摆法（档高 140 由镜子定义）仍是宿主的事（docs/29 §做法 机制四 / D-10）。
+    static var homeFormFactor: HomeFormFactor { .compact }
 
     /// 音乐块的**存在性判据**（纯函数，便于单测：口径 3）。
     ///
@@ -185,10 +199,10 @@ final class MusicModule: GourdModule {
         showStandardMediaControls && (!autoHideInactive || hasActiveSession)
     }
 
-    /// 块内**封面画不画**的解析（纯函数，便于单测：D-06）。
+    /// 块内**封面画不画**的解析（纯函数，便于单测：D-06 / T3）。
     ///
     /// 三档合一：schema 里没有这个键 / 用户没写过覆盖值 → `ConfigHandle.get` 给 `nil` → 回落
-    /// `MusicConfigDefaults.showAlbumArt`（= 显示，缺键时的呈现与 manifest 默认值一致）；
+    /// `MusicConfigDefaults.showAlbumArt`（**T3 起 = 不显示**，缺键时的呈现与 manifest 默认值一致）；
     /// 用户写过覆盖值 → 读回来的就是它（覆盖值类型不符时 `ConfigHandle` 自己回落默认值并记 warning）。
     ///
     /// **调用点必须现读**（`content(for: .home)` 每次投影都调一次）：本批的 `ConfigHandle` 没有
@@ -233,8 +247,7 @@ final class MusicModule: GourdModule {
 
 // MARK: - 首页块内容
 
-/// 音乐块的视图：**封面档与改动前的内置块逐字相同**（`MusicPlayerView(albumArtNamespace:)`），
-/// 只是搬运到了模块这一侧（一对一替换）。
+/// 音乐块的视图：**一条紧凑条**（块宽 240/300、块高 96 的紧凑档，D-09 / 口径 6）。
 ///
 /// 文件内私有：它是本模块的渲染细节，不进任何名单、不给别的模块用。
 ///
@@ -243,15 +256,17 @@ final class MusicModule: GourdModule {
 /// 一致；没人注入时（例如将来在别处渲染这个块）退回本视图自己的 `@Namespace`——同一块内的
 /// 动画仍成立，跨视图的那一对静默失效，不崩、不空白。
 ///
-/// **封面关掉的那一档**（`showsAlbumArt == false`，D-06 / 口径 6）走 `MusicControlsView` 单独一块：
-/// 它与 `MusicPlayerView` 里 HStack 的第二个孩子是**同一个视图、同一份自带布局**
-///（`maxWidth: .infinity, alignment: .leading`），因此去掉 `AlbumArtView` 后标题 / 进度 / 控制
-/// 仍是原来的位置与左对齐，封面让出的宽度归它们——不留空洞、也不塌成一列窄内容。
-/// **块宽声明不改**（300/420）：本档只是块内变宽裕（§已知限制 5）。
+/// **两档只差封面那 40pt**（`showsAlbumArt`，口径 6）：
+/// - 关（**T3 起的默认档**）→ 单独一块 `MusicControlsView`（曲名 / 艺人 + 进度条 + 控制键），
+///   与 `MusicPlayerView` 里 HStack 的第二个孩子是**同一个视图、同一份自带布局**
+///   （`maxWidth: .infinity, alignment: .leading`），因此左对齐与改动前一致、不留空洞；
+/// - 开 → 同一块 `MusicControlsView` 前面加一枚 40pt 圆角小封面（`AlbumArtThumbnailView`）。
+///   **不是**改动前的 `MusicPlayerView`：它的 `AlbumArtView` 是宽高双向贪婪的 1:1 图，在 96 高的
+///   紧凑条里只会把整条撑高（这正是「封面把行撑高」那条失败信号）。
 ///
-/// **块内不自己观察 `MusicManager`**：`MusicPlayerView` 的部件（`AlbumArtView` /
-/// `MusicControlsView`）本来就各自 `@ObservedObject` 它，这里再观察一次只是重复订阅；
-/// 「块在不在」那件事由 `content(for: .home)` 的判据与 `HomeStripView` 的观察承担。
+/// **块内不自己观察 `MusicManager`**：`MusicControlsView` / `DynamicIslandArtworkSourceView`
+/// 本来就各自 `@ObservedObject` 它，这里再观察一次只是重复订阅；「块在不在」那件事由
+/// `content(for: .home)` 的判据与 `HomeStripView` 的观察承担。
 private struct MusicHomeBlockView: View {
     @Environment(\.homeAlbumArtNamespace) private var albumArtNamespace
     @Namespace private var fallbackNamespace
@@ -259,11 +274,50 @@ private struct MusicHomeBlockView: View {
     /// （视图自己不碰 `ConfigHandle`——参数进来才是可测的分档）。
     let showsAlbumArt: Bool
 
+    /// 小封面边长（pt）：40——96 高的紧凑条里不到一半高，与右侧两行文字并排后仍不撑高行；
+    /// 也是「打开封面后仍是一条」这条验收的尺寸判据（docs/29 §验收标准 A7）。
+    private static let albumArtSide: CGFloat = 40
+
+    /// 小封面与小封面左侧的间距：8（面板里那套 8pt 呼吸感，与 `HomeStripLayout.spacing` 同值；
+    /// 旧大封面用的是 12——那是给 133pt 见方的图留的，40pt 的小图前明显过宽）。
+    private static let albumArtSpacing: CGFloat = 8
+
     var body: some View {
         if showsAlbumArt {
-            MusicPlayerView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+            HStack(alignment: .top, spacing: Self.albumArtSpacing) {
+                AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+                    .frame(width: Self.albumArtSide, height: Self.albumArtSide)
+                MusicControlsView()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         } else {
             MusicControlsView()
         }
+    }
+}
+
+/// 紧凑条里的**小封面**（40pt 圆角方，T3 / D-09）：封面来源那一层与改动前逐字相同
+/// （`DynamicIslandArtworkSourceView`——含动态封面的分支），但**不带** `AlbumArtView` 的角标 /
+/// 翻转 / 视差 / 模糊底 / `lightingEffect` 底光：那些是给 133pt 大封面做的装饰，在 40pt 里既读不出
+/// 也只会把行撑高。
+///
+/// **matchedGeometry 配对保留**（口径 5）：上一版大封面上的
+/// `.matchedGeometryEffect(id: "albumArt", in: …)` 搬到这里——展开面板的封面仍是折叠态播放器
+/// 那一枚的配对目的地，开合动画因此与改动前一致（只是目的地从 133pt 变成 40pt）。
+/// 圆角取宿主块内同一条 8pt（`HomeBandChrome.hoverCornerRadius`，40pt 边长 ≈ 1/5 的观感档），
+/// 不在模块里另立一个数。
+private struct AlbumArtThumbnailView: View {
+    let albumArtNamespace: Namespace.ID
+
+    var body: some View {
+        DynamicIslandArtworkSourceView(
+            cornerRadius: HomeBandChrome.hoverCornerRadius,
+            contentMode: .fill
+        )
+        .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
+        .clipShape(
+            RoundedRectangle(cornerRadius: HomeBandChrome.hoverCornerRadius, style: .continuous)
+        )
     }
 }

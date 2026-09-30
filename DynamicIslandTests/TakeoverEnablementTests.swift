@@ -35,7 +35,7 @@
 //  - **桥幂等（进入时先清空）**：`startTakeoverBridge` 进入时先 `removeAll()`，再按当前注册表里的
 //    接管模块逐个建订阅——重复起桥是**替换**不是翻倍，注册表清空后再起桥不会留下上一段的订阅，
 //    非接管模块不建订阅；
-//  - **块宽钩子**：声明 140/160 的模块取值一致、未声明为 nil、未注册 id 为 nil；
+//  - **块宽钩子**：声明了块宽的模块取值一致、未声明为 nil、未注册 id 为 nil；
 //  - **回弹策略**（`ModuleEnablementRollback`，D-13）：接管模块 nil（什么都不写）、非接管模块 false。
 //
 //  P2 接管批次 / T2 追加（同一个真模块的声明与计数）：
@@ -52,8 +52,8 @@
 //
 //  P2 接管批次 / T4 追加（镜子接管模块 + 首页块顺序表的历史键映射）：
 //  - **`MirrorModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
-//    `defaultPlacement == Placement(slot: nil, order: 2)`、真源键 `showMirror`、块宽 140/160、
-//    `config` 只登记上游三键；
+//    `defaultPlacement == Placement(slot: nil, order: 2)`、真源键 `showMirror`、块宽 140/140
+//    （p5-home-blocks / T3 起：方形，与宿主的大块档高同源）、`config` 只登记上游三键；
 //  - **`MirrorModule.isVisible(showMirror:cameraAvailable:)`** 四组：两段是「且」；
 //  - **`HomeBlockOrdering.migratingLegacyIDs`** 四组：旧键 → 新 id、新键优先、非映射键逐字保留、
 //    空表恒等；另有一条**经 `sorted(...)` 走一遍**的用例（映射是 `sorted` 的第一步——只测纯函数的话
@@ -62,7 +62,8 @@
 //  P2 接管批次 / T5 追加（音乐接管模块 + 命名空间环境键的默认值半边）：
 //  - **`MusicModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
 //    `defaultPlacement == Placement(slot: nil, order: 0)`（= 被接管的内置音乐块的默认序号）、
-//    真源键 `showStandardMediaControls`、块宽 300/420、`config` = 只登记上游两键 +
+//    真源键 `showStandardMediaControls`、**三条取值型声明**（p5-home-blocks / T3 起成套改：
+//    块宽 240/300、形态 `.compact`、`showAlbumArt` 默认 false）、`config` = 只登记上游两键 +
 //    本模块自己的呈现键 `showAlbumArt`（P2 首页修正批次 / T5 追加，D-06）；
 //  - **`MusicModule.isVisible(showStandardMediaControls:autoHideInactive:hasActiveSession:)`** 四组：
 //    两段是「且」（表达式逐字沿用上游那个 `shouldShowMusicPlayer`）；
@@ -73,10 +74,11 @@
 //    只是把修饰符抄进用例，不证明宿主真的注入了，故不写（见 T5 报告 §4）。
 //
 //  P2 首页修正批次 / T5 追加（音乐封面开关 `showAlbumArt`，docs/23-home-fit.md §做法 机制五 / D-06）：
-//  - manifest 的 `showAlbumArt`：`boolean`、默认 `true`（`MusicConfigDefaults`）——键名 / 类型 /
-//    默认值三条都钉住（默认值再钉一次字面量 true：用户问的是「能不能配置」，不是「默认藏起来」）；
+//  - manifest 的 `showAlbumArt`：`boolean`、默认值 = `MusicConfigDefaults`
+//    （**p5-home-blocks / T3 翻面成 `false`**，D-09：紧凑档默认不画封面）——键名 / 类型 / 默认值
+//    三条都钉住，默认值再钉一次字面量 false（方向也要钉：用户要的是「可以不显示那个图片」）；
 //  - **读取侧分档**（`MusicModule.showsAlbumArt(from:)`）三档：用户覆盖 false / 覆盖 true /
-//    缺键（schema 里没这个键也一样）回落默认显示。假体是内存 `RecordingConfigHandle`，不碰真实域。
+//    缺键（schema 里没这个键也一样）回落默认档。假体是内存 `RecordingConfigHandle`，不碰真实域。
 //
 //  P2 首页修正批次 / T5 **修复轮**追加（封面开关的界面入口——范围评审的唯一一条 Important）：
 //  - **控件登记表对生产事实**（`testMusicAlbumArtControlMatchesManifestAndCatalog`）：模块 id =
@@ -460,8 +462,8 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertEqual(
             registry.homeBlockWidth(for: wideBlockID),
-            ModuleHomeBlockWidth(min: 140, ideal: 160),
-            "声明的宽度原样取给宿主（镜子那一档）"
+            ModuleHomeBlockWidth(min: 260, ideal: 340),
+            "声明的宽度原样取给宿主（夹具样本档 260/340；真模块的档位在各自的用例里）"
         )
         XCTAssertNil(registry.homeBlockWidth(for: id), "未声明 → nil（宿主用统一值 180/240）")
         XCTAssertNil(registry.homeBlockWidth(for: ghostID), "未注册的 id → nil")
@@ -672,7 +674,7 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 与 `testTimerModuleManifestMatchesTakeoverContract` 同款：三条钩子的**行为**（真源压过
     /// overrides / 可见性过滤 / 重同步）由本文件上半段的假模块覆盖，这里钉的是真模块的声明——
     /// `surfaces == [.home]`（不声明 tab、不占折叠槽位）、`order 2`（= 被接管的内置块的默认序号，
-    /// 接管前后首页顺序一致）、真源键 `showMirror`、块宽 140/160（D-10）。
+    /// 接管前后首页顺序一致）、真源键 `showMirror`、块宽 140/140（T3 起方形，见下面的用例）。
     ///
     /// 本用例**不写**任何真实偏好（只读钩子与常量）。
     func testMirrorModuleManifestMatchesTakeoverContract() throws {
@@ -713,9 +715,13 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(properties["selectedCameraID"]?.default, ConfigValue.string(""), "空串 = 跟随第一台（上游键的默认值）")
         XCTAssertNil(properties["selectedCameraID"]?.values, "设备 id 是运行期发现的值，不列可选值")
 
-        // 两条取值型钩子：真源 = 上游总开关；块宽 = 被接管块原本的那一档
+        // 两条取值型钩子：真源 = 上游总开关；块宽 = 方形边长（T3 起收敛，见下一条用例的同源断言）
         XCTAssertEqual(MirrorModule.takeoverEnableKey?.name, Defaults.Keys.showMirror.name)
-        XCTAssertEqual(MirrorModule.homeBlockWidth, ModuleHomeBlockWidth(min: 140, ideal: 160))
+        XCTAssertEqual(
+            MirrorModule.homeBlockWidth,
+            ModuleHomeBlockWidth(min: 140, ideal: 140),
+            "T3 起收敛成方形 140/140（不再是 140/160 的窄档——理想宽到不了，圆仍是 140，块里留 20pt 空档）"
+        )
 
         // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
@@ -746,8 +752,8 @@ final class TakeoverEnablementTests: XCTestCase {
     }
 
     /// 注册表侧的接管查询对**真模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
-    /// 取回 140/160（`HomeStripView` 就靠它让镜子块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
-    /// 取回 `showMirror`（启用真源）。
+    /// 取回 140/140（`HomeStripView` 就靠它让镜子块是方形，且边长与宿主的大块档高同源，T3）、
+    /// `takeoverEnableKey(for:)` 取回 `showMirror`（启用真源）。
     ///
     /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
     /// 本用例不写任何真实偏好（镜子当前的启用状态与断言无关）。
@@ -760,8 +766,13 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertEqual(
             registry.homeBlockWidth(for: MirrorModule.moduleID),
-            ModuleHomeBlockWidth(min: 140, ideal: 160),
-            "镜子块宽度声明经注册表原样取给宿主（140/160，与接管前同一档）"
+            ModuleHomeBlockWidth(min: 140, ideal: 140),
+            "镜子块宽度声明经注册表原样取给宿主（140/140：方形，块里不留横向空档）"
+        )
+        XCTAssertEqual(
+            registry.homeBlockWidth(for: MirrorModule.moduleID)?.min,
+            HomeFlowView.largeBlockHeight,
+            "镜子的方形边长 = 宿主的大块档高（同源：宿主改档高，镜子的声明跟着改）"
         )
         XCTAssertEqual(
             registry.takeoverEnableKey(for: MirrorModule.moduleID)?.name,
@@ -847,7 +858,8 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 同款：三条钩子的**行为**（真源压过 overrides / 可用性过滤 / 重同步）由本文件上半段的假模块覆盖，
     /// 这里钉的是真模块的声明——`surfaces == [.home]`（不声明 tab、不占折叠槽位）、`order 0`
     /// （= 被接管的内置音乐块的默认序号，接管前后首页顺序一致）、真源键 `showStandardMediaControls`、
-    /// 块宽 300/420（D-10）。
+    /// **T3 的三条取值型声明各一条**：块宽 240/300（降档）、形态 `.compact`（从大块降为紧凑条）、
+    /// 封面默认关（`MusicConfigDefaults.showAlbumArt == false`）。
     ///
     /// `config` 两个键的默认值**取上游键的默认值**（D-03 / docs/20 §已知限制 1：登记值必须等于真源值，
     /// 否则这份登记就是假的）：`playerColorTinting` 与 `useMusicVisualizer` 在上游
@@ -910,13 +922,22 @@ final class TakeoverEnablementTests: XCTestCase {
         )
         XCTAssertEqual(
             properties["showAlbumArt"]?.default,
-            ConfigValue.bool(true),
-            "默认显示（用户问的是「能不能配置」，不是「默认藏起来」——方向也要钉住）"
+            ConfigValue.bool(false),
+            "T3 起默认**不显示**（D-09：用户要的是「可以不显示那个图片」——方向也要钉住，"
+                + "防止它被悄悄翻回 true）"
         )
 
-        // 两条取值型钩子：真源 = 上游总开关；块宽 = 被接管块原本的那一档（300/420，不是宿主统一值）
+        // 三条取值型声明（T3 成套改）：真源 = 上游总开关；块宽降档 240/300；形态降为紧凑档
         XCTAssertEqual(MusicModule.takeoverEnableKey?.name, Defaults.Keys.showStandardMediaControls.name)
-        XCTAssertEqual(MusicModule.homeBlockWidth, ModuleHomeBlockWidth(min: 300, ideal: 420))
+        XCTAssertEqual(
+            MusicModule.homeBlockWidth,
+            ModuleHomeBlockWidth(min: 240, ideal: 300),
+            "T3 起 240/300（不再是 300/420：那一档是配大封面选的，封面降成 40pt 小图后只会挤走同行的块）"
+        )
+        XCTAssertEqual(
+            MusicModule.homeFormFactor, .compact,
+            "T3 起紧凑档（96 高的一条）——音乐块仍占整行 152 就是这条没落地"
+        )
 
         // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
@@ -950,28 +971,29 @@ final class TakeoverEnablementTests: XCTestCase {
     }
 
     /// **封面开关的解析**（`MusicModule.showsAlbumArt(from:)`，docs/23-home-fit.md §做法 机制五 / D-06）：
-    /// 三档——用户覆盖 `false` 读到 false（这就是「关掉封面」那一档）、覆盖 `true` 读到 true、
-    /// 缺键（用户没写过，或 schema 里根本没有这个键）回落 `MusicConfigDefaults.showAlbumArt` = 显示。
+    /// 三档——用户覆盖 `false` 读到 false、覆盖 `true` 读到 true（T3 起这才是「画 40pt 小封面」那一档）、
+    /// 缺键（用户没写过，或 schema 里根本没有这个键）回落 `MusicConfigDefaults.showAlbumArt`
+    /// （**T3 起 = 不画**）。
     ///
     /// 假体是内存 `RecordingConfigHandle`（只落自己的字典，**不碰**开发机真实的
     /// `com.cmeng.gourd.module.music` 域）——因此本用例没有偏好夹具、也没有还原动作。
     ///
     /// 本用例钉的是**读取侧**（config → 布尔量）；「布尔量 → 块内画不画封面」那一段是 SwiftUI
     /// 视图分档，单测里断言不到（视图是 `private`，也不该为测试放开），只能人工验收
-    /// （截图 `.workflow/p2-home-fit/evidence/t5-albumart-{on,off}.png`）。
+    /// （T3 的截图：`.workflow/p5-home-blocks/evidence/t3-music-{bar,cover}.png`）。
     func testMusicShowsAlbumArtResolution() {
         let config = RecordingConfigHandle(schema: ["showAlbumArt"])
-        XCTAssertTrue(MusicModule.showsAlbumArt(from: config), "用户没写过这个键 → 回落到默认真（显示）")
+        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "用户没写过这个键 → 回落默认档：不画封面（T3 起）")
 
         XCTAssertTrue(config.set("showAlbumArt", to: false), "前置：覆盖值写进去了（键在 schema 内）")
-        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "用户覆盖 false → 不画封面（本次新增的那一档）")
+        XCTAssertFalse(MusicModule.showsAlbumArt(from: config), "用户覆盖 false → 不画封面（默认档，显式写死也一样）")
 
         XCTAssertTrue(config.set("showAlbumArt", to: true))
-        XCTAssertTrue(MusicModule.showsAlbumArt(from: config), "用户覆盖 true → 画封面（与改动前逐字一致）")
+        XCTAssertTrue(MusicModule.showsAlbumArt(from: config), "用户覆盖 true → 画封面（这一档现在是 40pt 小图）")
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             MusicModule.showsAlbumArt(from: RecordingConfigHandle(schema: [])),
-            "schema 里没有这个键（get 给 nil）→ 同一档回落：默认显示"
+            "schema 里没有这个键（get 给 nil）→ 同一档回落：不画"
         )
     }
 
@@ -1373,7 +1395,11 @@ final class TakeoverEnablementTests: XCTestCase {
             ConfigValue.bool(MusicConfigDefaults.showAlbumArt),
             "manifest 那一键的默认值 = MusicConfigDefaults.showAlbumArt（读取侧兜底用同一个常量）"
         )
-        XCTAssertEqual(node.default, ConfigValue.bool(true), "默认显示（方向也要钉住）")
+        XCTAssertEqual(
+            node.default,
+            ConfigValue.bool(false),
+            "T3 起默认不显示（方向也要钉住：用户要的是「可以不显示那个图片」）"
+        )
 
         XCTAssertResolves(control.titleKey)
     }
@@ -1497,7 +1523,8 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`    /// 取回 300/420（`HomeStripView` 就靠它让音乐块保持改动前的档位，D-10）、`takeoverEnableKey(for:)`
+    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
+    /// 取回 240/300（`HomeStripView` 就靠它给音乐块 T3 降档后的宽度）、`takeoverEnableKey(for:)`
     /// 取回 `showStandardMediaControls`（启用真源）。
     ///
     /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
@@ -1511,8 +1538,8 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertEqual(
             registry.homeBlockWidth(for: MusicModule.moduleID),
-            ModuleHomeBlockWidth(min: 300, ideal: 420),
-            "音乐块宽度声明经注册表原样取给宿主（300/420，与接管前同一档）"
+            ModuleHomeBlockWidth(min: 240, ideal: 300),
+            "音乐块宽度声明经注册表原样取给宿主（240/300：T3 降档后的那一档）"
         )
         XCTAssertEqual(
             registry.takeoverEnableKey(for: MusicModule.moduleID)?.name,
@@ -2598,14 +2625,16 @@ private final class TakeoverHiddenTabProbeModule: TakeoverProbeModule {
     override class func isTabVisible() -> Bool { false }
 }
 
-/// 接管模块 + 声明块宽 140/160（镜子那一档，docs/20 §接口与数据形状 5）。
+/// 接管模块 + 声明一块宽（**任意样本档** 260/340，docs/20 §接口与数据形状 5）——本夹具只证明
+/// 「声明的宽度原样经注册表取给宿主」，与某个真模块的现行声明无关（镜子的 140/140 在它自己的
+/// 用例里钉）。
 private final class TakeoverWideBlockProbeModule: TakeoverProbeModule {
     override class var manifest: ModuleManifest {
         TakeoverFixture.manifest(shortID: "probe-takeover-wide", surfaces: [.home], order: 2)
     }
 
     override class var homeBlockWidth: ModuleHomeBlockWidth? {
-        ModuleHomeBlockWidth(min: 140, ideal: 160)
+        ModuleHomeBlockWidth(min: 260, ideal: 340)
     }
 }
 

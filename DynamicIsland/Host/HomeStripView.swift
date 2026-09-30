@@ -22,7 +22,8 @@
 //  展开面板首页从「音乐 + 日历两栏写死」改成**两条带**（P2 批次），T7 起按块的形态再分一次
 //  （docs/26-home-widgets-and-settings.md §做法 机制六 / D-09）：
 //
-//  - **主块带**（`HomeStripView`，上）：大块（音乐 / 镜子）——一条横向 strip，宽度按声明自适应、
+//  - **主块带**（`HomeStripView`，上）：大块（**T3 起只剩镜子**——音乐同批降为紧凑档，D-09）——
+//    一条横向 strip，宽度按声明自适应、
 //    **富余时不拉伸**（D-02），放不下时按最小宽度收敛、仍不足则按 `order` 从尾部丢块（D-03：
 //    不滚动、不分页、不加 `ScrollView`）；
 //  - **小组件带**（`HomeWidgetBandView`，下）：紧凑块（进度 / 统计 / 待办 / 通知 / 前台应用）——
@@ -69,9 +70,10 @@ import SwiftUI
 /// 一块的宽度约束：`min` 是「低于它不如不显示」的下界，`ideal` 是「富余时就用它」的期望值。
 ///
 /// 取值来源有两处（docs/17 §接口与数据形状 6 + docs/20 §做法 机制一「块宽继承」）：
-/// **接管模块声明被接管块原本的那一档**——音乐 `300 / 420`、镜子 `140 / 160`（T4 / T5 已先后
-/// 搬到 `MirrorModule` / `MusicModule` 的 `homeBlockWidth`，宿主经
-/// `ModuleRegistry.homeBlockWidth(for:)` 取回）；**新增模块**用宿主统一声明的 `180 / 240`
+/// **接管模块声明被接管块原本的那一档**——音乐 `240 / 300`、镜子 `140 / 140`
+/// （两边都是**当前生产值**：音乐在 p5-home-blocks / T3 从 `300 / 420` 降档、镜子在同批从
+/// `140 / 160` 收敛成方形；两处声明分别在 `MusicModule` / `MirrorModule` 的 `homeBlockWidth`，
+/// 宿主经 `ModuleRegistry.homeBlockWidth(for:)` 取回）；**新增模块**用宿主统一声明的 `180 / 240`
 /// （D-11 的口径收窄为「新增模块不参与宽度决策」）。
 struct HomeBlockWidth: Equatable {
     let min: CGFloat
@@ -453,6 +455,10 @@ enum HomeBandChrome {
     /// `minimumUsableHeight` 之下」里出，两者都是 T7 明令不能动的既有取值。因此纵向的呼吸感
     /// 取**带内自然余量**（主块带默认档 156 − 音乐块 ≈152 = 4pt；小组件带的行高即内容高），
     /// 容器的高度 = 带的高度（零布局成本），横向这 8pt 是实打实的（内容宽度因此少 16pt）。
+    ///
+    /// **上面几个数是 T8 分带时期的预算**（`HomeVerticalFit` 那条带；主块带最小 152、合计 558）：
+    /// p5-home-blocks / T3 起主块带最小高 = 大块档 = 140、音乐降为紧凑档，算式里的数会跟着变，
+    /// 但结论——**纵向不做内边距**——与「余量取带内自然空间」这条口径不变。
     static let containerInset: CGFloat = 8
 
     /// 可交互条目的 hover 底浓度（机制七：0.06）。
@@ -511,7 +517,7 @@ extension View {
 
 // MARK: - 主块带
 
-/// 首页的**主块带**（大块：音乐、镜子）：一条横向 strip，规格逐字沿用 P2 批次
+/// 首页的**主块带**（大块：**T3 起只剩镜子**）：一条横向 strip，规格逐字沿用 P2 批次
 /// （docs/17 §改动点设计 2 / D-02 / D-03，见 `HomeStripLayoutMath` 的三条规则）。
 ///
 /// 块顺序 = 名单按 `HomeBlockOrdering` 排序后的**大块子序列**（覆盖值优先 → 缺键回落默认序号 →
@@ -536,17 +542,19 @@ struct HomeStripView: View {
     /// **判据是「画不满就不画」**（2026-09-29 复审裁决）：高度不足以**完整渲染**带内的块时，
     /// 整条不画，而不是画一条被切一半的封面。
     ///
-    /// **数值来源（同一批实测截图，见 `.workflow/p2-calendar-row/reports/` 的 §6.5）**：音乐块（今天
-    /// 最矮的那一档仍是它——宽 300/420 的块，T5 接管后宽度不变）从上到下需要 `18`（块内顶部偏移，
-    /// 封面起点）+ `133`（封面边长，受块宽 420 下的宽度份额约束）≈ **151.5pt**，留半 pt 取整 = **152**：
-    /// - 面板 544 → strip 174：封面下沿 + 角标 + 控制三键全在，完整 ✓（留 ~22pt 余量）；
-    /// - 面板 522 → strip 152：按此阈值刚好画满；
-    /// - 面板 504 → strip 134：封面下沿被切、角标只剩半个（`strip-hidden-panel460.png` 之前的
-    ///   `strip-clipped-panel460.png` 是同一现象的更矮一档）→ 因此 134 **不够**，阈值取 152。
+    /// **数值 = 大块档高度 `HomeFlowView.largeBlockHeight`（140）**，不再是一个独立挑出来的数：
+    /// 大块带里最高的那个块就是档高，带至少要装得下它。**来源在 T3 换过**——
+    /// 上一版是 152，从音乐块（当时唯一的大块，宽 300/420、形态 `.large`）的封面量出来：
+    /// `18`（块内顶部偏移，封面起点）+ `133`（420 宽下封面边长）≈ 151.5 → 取整 152
+    /// （实测截图见 `.workflow/p2-calendar-row/reports/` §6.5）。
     ///
-    /// 低于阈值即整条不画（这一档由 `HomeVerticalFit` 让位给小组件带）；其它大块（镜子）比音乐块矮，
-    /// 本阈值对它们偏保守——宁可少画一条，不画残片。
-    static let minimumUsableHeight: CGFloat = 152
+    /// **T3 起音乐降为紧凑档**（`240/300` / `.compact`，D-09），那个来源随之消失；今天的档高由
+    /// **镜子的方形边长**选定（`MirrorModule.homeBlockWidth` 的 `min`/`ideal`，同一批收敛成方形）：
+    /// 圆的直径 `= min(分到的宽, 行高)`，所以取块的最小宽 = 档高 = 圆的直径，一个数管三件事。
+    /// **不能「实测」**：镜子的块体是 `CameraPreviewView`（`GeometryReader` + `.aspectRatio(1, .fit)`），
+    /// 没有固有高度——「量自然高」量到的就是当时的档高，是循环（docs/29 §已知限制 7）。
+    /// 低于阈值即整条不画（这一档由 `HomeVerticalFit` 让位给小组件带）。
+    static let minimumUsableHeight: CGFloat = HomeFlowView.largeBlockHeight
 
     /// 条尾 `＋N` 提示的**预留位宽度**（docs/21 §备选与取舍 ②：固定，不按块数伸缩）。
     ///
@@ -724,8 +732,13 @@ struct HomeFlowView: View {
 
     /// 大块/紧凑块**各自的高度档**：块的形态声明（`homeFormFactor`）→ 高度。
     ///
-    /// `large` 取 **152**：那是音乐块（今天最高的大块）"封面下沿 + 角标 + 控制三键"都画得下的
-    /// 实测下界（`HomeStripView.minimumUsableHeight` 的来源，见那边的注释）；
+    /// `large` 取 **140**（T3 起）：它是**选定**的，不是量出来的——首页上唯一的大块是镜子
+    /// （音乐同批降为紧凑档），它的块体是 `CameraPreviewView`（`GeometryReader` + `aspectRatio(1, .fit)`），
+    /// **没有固有高度**（圆的直径 = `min(分到的宽, 行高)`，实测只会量到当前档高，是循环）。
+    /// 故选「镜子的方形边长 = 块的最小宽 = 140」为档高，并与 `MirrorModule.homeBlockWidth`
+    /// 同源（那边直接引用本常量）；`HomeStripView.minimumUsableHeight` 也取本常量——
+    /// **这三个数是一个数**（docs/29 §做法 机制四 / §已知限制 7；改动前是 152，来源是音乐封面，
+    /// 那个来源已随音乐降档消失）。
     /// `compact` 取 **96**：与旧小组件带的行高同值，紧凑块们本来就按这一档画的。
     static func blockHeight(for formFactor: HomeFormFactor) -> CGFloat {
         switch formFactor {
@@ -734,7 +747,7 @@ struct HomeFlowView: View {
         }
     }
 
-    static let largeBlockHeight: CGFloat = 152
+    static let largeBlockHeight: CGFloat = 140
     static let compactBlockHeight: CGFloat = 96
 
     var body: some View {

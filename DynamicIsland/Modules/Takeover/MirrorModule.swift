@@ -131,13 +131,29 @@ final class MirrorModule: GourdModule {
     // `surfaces` 过滤，可见性钩子对它永远不被问到（`docs/20` §接口与数据形状 5 的 mirror 行同口径）。
     // 这里刻意留白：写一条 `= true` 只会让读者以为本模块有 tab。
 
-    /// 接管三件套之三：宽度声明 = **被接管块原本的宽度**（D-10）——接管是「接住原来的呈现」，
-    /// 不是顺手把镜子块从 140/160 改成宿主统一值 180/240。
-    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 140, ideal: 160) }
+    /// 接管三件套之三：宽度声明（D-10）——接管时是**被接管块原本的宽度** `140/160`；
+    /// **p5-home-blocks / T3 起收敛为 `140/140`**（方形，min == ideal）。
+    ///
+    /// **为什么收敛**（docs/29 §做法 机制四 / §已知限制 7）：块体是 `CameraPreviewView`
+    /// （`GeometryReader` + `.aspectRatio(1, .fit)`），圆的直径 `= min(分到的宽, 行高)`——
+    /// min 140 与 ideal 160 之间那 20pt 是**空档**（圆仍是 140，块右缘白留 20），而档高又要
+    /// 与「圆的直径」同源。声明成方形之后：块的宽 = 档高 = 圆的直径，三件事一个数。
+    ///
+    /// **档高与块宽同源**：`min` / `ideal` 都取 `HomeFlowView.largeBlockHeight`（宿主那张
+    /// 「形态 → 档高」表的唯一字面量，= **140**）——那不是「实测」出来的（镜子的块体没有固有高度，
+    /// 「量自然高」量到的就是当时的档高，是循环），是**选定**：取镜子的方形边长 = 块的最小宽。
+    /// 将来给镜子换形态或再加一个大块，**必须重新选一个值并把两边一起改**（只改档高会让圆的直径
+    /// 跟着变，只改镜子宽度会让块里留空档）。
+    static var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(
+            min: HomeFlowView.largeBlockHeight,
+            ideal: HomeFlowView.largeBlockHeight
+        )
+    }
 
-    /// 首页分带批次（T7）的第四条钩子：镜子块是**大块**——摄像头画面需要面积（140/160 是宽度
-    /// 声明，不是高度），因此显式答 `.large`；在小组件网格里它会被压成一条 96pt 高的窄条。
-    /// 形态只声明「它是什么」，摆法仍是宿主的事（docs/26-home-widgets-and-settings.md §做法 机制六 / D-09）。
+    /// 首页分带批次（T7）的第四条钩子：镜子块是**大块**——摄像头画面需要面积（140 的方形边长
+    /// 由本块的宽度声明与宿主的档高共同钉住，T3 起首页上只剩它一个大块）。
+    /// 形态只声明「它是什么」，摆法仍是宿主的事（docs/29 §做法 机制四 / D-10）。
     static var homeFormFactor: HomeFormFactor { .large }
 
     /// 镜子块的**存在性判据**（纯函数，便于单测：口径 3）。
