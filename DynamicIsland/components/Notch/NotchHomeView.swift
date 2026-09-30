@@ -416,10 +416,16 @@ struct MusicControlsView: View {
     ///
     /// 封面尺寸 / 圆角 / 进度条样式 / 按钮外观与顺序一概未动；`GeometryReader` 仍是宽度来源
     /// （只把读数上移一层，宽度换算见 `songInfo(width:)`）。
+    ///
+    /// **密度档**（p5-home-blocks / T3 fix / D-17）：`regular`（缺省）= 上面那套，展开面板逐字不变；
+    /// `compact` = 首页音乐块那一档——标准档内容约 127pt，96 高的紧凑档里**控制三键整行被裁**
+    /// （T3 阶段 Checkpoint 上屏实测：AX 有元素、屏上没有）。紧凑档只留「曲名（单行）+ 进度 + 控制三键」：
+    /// 艺人行 / 歌词行 / 大内边距都留给展开面板，播放键从 `.large`（40）降到 `.medium`（30），
+    /// 各段高度见 `CompactMetrics`（唯一取值处；总和 ≤ 96 由单测钉住）。
     var body: some View {
         GeometryReader { geo in
-            VStack(alignment: .leading) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: controlsSpacing) {
+                VStack(alignment: .leading, spacing: CompactMetrics.titleSliderSpacing) {
                     songInfo(width: max(0, geo.size.width - Self.songInfoLeadingInset))
                         .zIndex(1) // Ensure it draws above the waveform scrubber
                     musicSlider
@@ -427,7 +433,7 @@ struct MusicControlsView: View {
                 }
                 // 与原 `songInfoAndSlider` 的留白一致（`GeometryReader` 的读数比内容宽 5pt：
                 // 这段 leading 内边距在读数里已经扣掉，见上面的 `- Self.songInfoLeadingInset`）。
-                .padding(.top, 10)
+                .padding(.top, topPadding)
                 .padding(.leading, Self.songInfoLeadingInset)
 
                 if shouldShowControlHUDRow {
@@ -442,10 +448,79 @@ struct MusicControlsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // MARK: 密度（p5-home-blocks / T3 fix / D-17）
+
+    /// 密度档：`regular`（缺省）= 展开面板那一档，逐字不变；`compact` = 首页音乐块（96 高的紧凑条）。
+    enum Density: Equatable {
+        case regular
+        case compact
+    }
+
+    /// 紧凑档的**高度预算**（D-17 的实现口径）：整条内容高 = 六项之和，必须
+    /// ≤ `HomeFlowView.compactBlockHeight`（96）。**唯一取值处**——`body` / `musicSlider` /
+    /// `slotView(for:)` 都从这里取数，`HomeStripLayoutTests.testCompactMusicBarFitsTheCompactTier`
+    /// 钉住「总和 ≤ 96」这条不变量（改任何一个数都要在那边同步）。
+    ///
+    /// 六个数的依据都是**固有高**（不是拍出来的比例）：曲名行 17 = `MarqueeText` 的
+    /// `1.3 × NSFont.headline.pointSize(13)`；进度行 34 = `MusicSliderView` 的 stacked 算式
+    /// `轨道 14（max(8, 14)）+ 间距 6 + 时间行 14`；控制行 30 = `.medium` 档 `HoverButton` 的边长
+    /// （播放键在标准档是 `.large` = 40，紧凑档缩到与其余键同档）。
+    enum CompactMetrics {
+        /// 顶部内边距（标准档 10）。
+        static let topPadding: CGFloat = 4
+        /// 曲名行：单行（标准档还叠一行艺人、可能再叠一行歌词）。
+        static let titleRowHeight: CGFloat = 17
+        /// 「曲名 ↔ 进度」的组内间距（与标准档同值 4）。
+        static let titleSliderSpacing: CGFloat = 4
+        /// 进度行：`MusicSliderView`（stacked，同一份实现）的固有高。
+        static let sliderRowHeight: CGFloat = 34
+        /// 「进度组 ↔ 控制行」的间距（标准档是 `VStack` 缺省 8）。
+        static let controlsSpacing: CGFloat = 6
+        /// 控制行：紧凑档里播放键也走 `.medium`——**每一个槽位都 ≤ 30**
+        /// （`HoverButton` 的 `.medium` 边长 = 30；媒体输出 / AirPlay / 点赞三个槽位本来也是它）。
+        static let controlsRowHeight: CGFloat = 30
+
+        /// 整条内容高（不含宿主给的块高）——「不裁不溢」的判据就是它 ≤ 96。
+        static var contentHeight: CGFloat {
+            topPadding + titleRowHeight + titleSliderSpacing + sliderRowHeight
+                + controlsSpacing + controlsRowHeight
+        }
+    }
+
+    /// 紧凑档的密度档位（`MusicHomeBlockView` 传 `.compact`；`MusicPlayerView` 不传 = 标准档）。
+    var density: Density = .regular
+
+    /// 顶部内边距（标准档 10 / 紧凑档 4）。
+    private var topPadding: CGFloat { density == .compact ? CompactMetrics.topPadding : 10 }
+
+    /// 进度行的高度（标准档 36 / 紧凑档 34）与它上方的留白（标准档 5 / 紧凑档 0）。
+    private var sliderRowHeight: CGFloat { density == .compact ? CompactMetrics.sliderRowHeight : 36 }
+    private var sliderTopPadding: CGFloat { density == .compact ? 0 : 5 }
+
+    /// 「进度组 ↔ 控制行」的间距（标准档 `VStack` 缺省 8 / 紧凑档 6）。
+    private var controlsSpacing: CGFloat { density == .compact ? CompactMetrics.controlsSpacing : 8 }
+
+    /// 播放键的尺寸档：标准档 `.large`（40），紧凑档与其余键同档 `.medium`（30）。
+    /// **仍然走同一份槽位实现**（`slotView(for:)` 用同一个 `HoverButton`）——D-17 明确不要第二套控制条。
+    private var playPauseScale: Image.Scale { density == .compact ? .medium : .large }
+
     /// 「标题 / 歌手」文字区相对音乐区块的 leading 内边距（pt）——宽度换算要用同一个值。
     private static let songInfoLeadingInset: CGFloat = 5
 
+    /// 「标题 / 歌手」文字区：紧凑档把曲名行**钉在预算那 17pt**（`CompactMetrics.titleRowHeight`）
+    /// ——不钉的话这一行的高度由字体度量决定，`contentHeight ≤ 96` 就只是估算；标准档不加任何框，
+    /// 视图树与改动前逐字相同（艺人行 / 歌词行也只在标准档）。
+    @ViewBuilder
     private func songInfo(width: CGFloat) -> some View {
+        if density == .compact {
+            songInfoContent(width: width)
+                .frame(height: CompactMetrics.titleRowHeight, alignment: .leading)
+        } else {
+            songInfoContent(width: width)
+        }
+    }
+
+    private func songInfoContent(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             MusicTitleMarqueeView(
                 text: musicManager.songTitle,
@@ -456,41 +531,44 @@ struct MusicControlsView: View {
                 frameWidth: width,
                 badgeHeight: 14
             )
-            MarqueeText(
-                $musicManager.artistName,
-                font: .headline,
-                nsFont: .headline,
-                textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor)
-                    .ensureMinimumBrightness(factor: 0.6) : .gray,
-                frameWidth: width
-            )
-            .fontWeight(.medium)
-            if enableLyrics && showCalendar {
-                let transition = AnyTransition.asymmetric(
-                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                    removal: .move(edge: .top).combined(with: .opacity)
+            // 艺人行与歌词行**只在标准档**（紧凑档 96 高，装不下；D-17 把它们留给展开面板）。
+            if density == .regular {
+                MarqueeText(
+                    $musicManager.artistName,
+                    font: .headline,
+                    nsFont: .headline,
+                    textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor)
+                        .ensureMinimumBrightness(factor: 0.6) : .gray,
+                    frameWidth: width
                 )
-
-                let line = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if !line.isEmpty {
-                    let lyricsBinding = Binding<String>(
-                        get: { musicManager.currentLyrics },
-                        set: { _ in }
+                .fontWeight(.medium)
+                if enableLyrics && showCalendar {
+                    let transition = AnyTransition.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
                     )
 
-                    MarqueeText(
-                        lyricsBinding,
-                        font: .system(size: 12, weight: .regular),
-                        nsFont: .headline,
-                        textColor: .white.opacity(0.7),
-                        minDuration: 0.35,
-                        frameWidth: width
-                    )
-                    .padding(.top, 2)
-                    .id(line)
-                    .transition(transition)
-                    .animation(.easeInOut(duration: 0.32), value: line)
+                    let line = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if !line.isEmpty {
+                        let lyricsBinding = Binding<String>(
+                            get: { musicManager.currentLyrics },
+                            set: { _ in }
+                        )
+
+                        MarqueeText(
+                            lyricsBinding,
+                            font: .system(size: 12, weight: .regular),
+                            nsFont: .headline,
+                            textColor: .white.opacity(0.7),
+                            minDuration: 0.35,
+                            frameWidth: width
+                        )
+                        .padding(.top, 2)
+                        .id(line)
+                        .transition(transition)
+                        .animation(.easeInOut(duration: 0.32), value: line)
+                    }
                 }
             }
         }
@@ -519,8 +597,8 @@ struct MusicControlsView: View {
                 guard !musicManager.isLiveStream else { return }
                 MusicManager.shared.seek(to: newValue)
             }
-            .padding(.top, 5)
-            .frame(height: 36)
+            .padding(.top, sliderTopPadding)
+            .frame(height: sliderRowHeight)
         }
     }
 
@@ -694,7 +772,7 @@ struct MusicControlsView: View {
         case .playPause:
             HoverButton(
                 icon: musicManager.isPlaying ? (musicManager.isLiveStream ? "stop.fill" : "pause.fill") : "play.fill",
-                scale: .large
+                scale: playPauseScale
             ) {
                 MusicManager.shared.togglePlay()
             }

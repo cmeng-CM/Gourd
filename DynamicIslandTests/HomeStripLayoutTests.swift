@@ -787,6 +787,38 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(Self.bothBandsMinimumHeight, 244, "140 + 8 + 96：两带一起放得下的最低高度")
     }
 
+    /// **紧凑档音乐条的高度预算**（p5-home-blocks / T3 fix / D-17）：`MusicControlsView` 紧凑档的
+    /// 六项之和必须 ≤ **紧凑档高**（`HomeFlowView.compactBlockHeight` = 96）——这是「不裁不溢」的
+    /// 算术判据（T3 阶段 Checkpoint 上屏实测过：标准档内容 ≈127pt，96 里控制三键整行被裁）。
+    ///
+    /// 六个数都是**固有高**、不是拍出来的比例（T3 fix 离线实测，`NSHostingView.fittingSize`）：
+    /// - 曲名行 17 ≥ 单行 `.headline` 的两条路径（滚动 `MarqueeText` 的 `1.3 × 13 = 16.9`、
+    ///   纯文本截断 16）；
+    /// - 进度行 34 = `MusicSliderView`（stacked，**同一份滑条实现**）的实测固有高
+    ///   （轨道 `max(8, 14)` + 间距 6 + 时间行 14）；
+    /// - 控制行 30 = `.medium` 档 `HoverButton` 的实测边长（标准档 `.large` 是 40）。
+    ///
+    /// 上屏的最终判据仍以截图为准（字体度量随系统漂，这里钉的是预算与六项取值）。
+    func testCompactMusicBarFitsTheCompactTier() {
+        typealias Metrics = MusicControlsView.CompactMetrics
+        XCTAssertEqual(Metrics.topPadding, 4, "标准档 10 → 紧凑档 4")
+        XCTAssertEqual(Metrics.titleRowHeight, 17, "单行曲名（展开面板那一档还叠艺人行 + 可能有歌词行）")
+        XCTAssertEqual(Metrics.titleSliderSpacing, 4, "组内间距与标准档同值（不动它）")
+        XCTAssertEqual(Metrics.sliderRowHeight, 34, "stacked MusicSliderView 的固有高")
+        XCTAssertEqual(Metrics.controlsSpacing, 6, "标准档的 VStack 缺省是 8")
+        XCTAssertEqual(Metrics.controlsRowHeight, 30, "播放键在紧凑档走 .medium（标准档 .large = 40）")
+
+        XCTAssertEqual(Metrics.contentHeight, 95, "六项之和（4 + 17 + 4 + 34 + 6 + 30）")
+        XCTAssertLessThanOrEqual(
+            Metrics.contentHeight, HomeFlowView.compactBlockHeight,
+            "整条内容必须装进紧凑档 \(HomeFlowView.compactBlockHeight)pt——超了就是 Checkpoint 那次「控制三键被裁」"
+        )
+        XCTAssertLessThanOrEqual(
+            max(Metrics.contentHeight, 40), HomeFlowView.compactBlockHeight,
+            "封面打开那一档：HStack 的高 = max(40pt 小封面, 控制条内容) 也必须装进紧凑档"
+        )
+    }
+
     /// **T3 的三个数是一个数**（docs/29 §做法 机制四 / D-10 / §已知限制 7）：大块档高、主块带
     /// 最小可用高与镜子的方形边长必须**同源**——只改一处就会「圆被行高卡成椭圆」或「块里留横向空档」。
     ///

@@ -53,7 +53,9 @@
 //     注入（它持有那一条），本模块的块读它；**读不到时用自带的 `@Namespace` 兜底**——配对
 //     失效，但不崩、不空白（§已知限制 4）。
 //  6. **封面开关只切「块内画不画封面」**（D-06 / p5-home-blocks / T3 起是「画多大的封面」）：
-//     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView` 一条（曲名 / 艺人 + 进度 + 控制键），
+//     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView(density: .compact)` 一条
+//     （曲名（单行）+ 进度 + 控制三键——艺人行 / 歌词行按 **D-17** 留给展开面板，
+//     标准档内容 ≈127pt 在 96 里必裁），
 //     打开则在那一条**前面**加一枚 **40pt 圆角小封面**——不再是改动前那个占满整块的大封面
 //     （`MusicPlayerView` 的 `AlbumArtView` 是宽高双向贪婪的 1:1 图：块高是声明值、不由内容决定，
 //     所以它不会把行撑高，而是**在 96pt 里铺满 96 见方**，把旁边的文字与控制键挤成窄列）。
@@ -257,15 +259,16 @@ final class MusicModule: GourdModule {
 /// 一致；没人注入时（例如将来在别处渲染这个块）退回本视图自己的 `@Namespace`——同一块内的
 /// 动画仍成立，跨视图的那一对静默失效，不崩、不空白。
 ///
-/// **两档只差封面那 40pt**（`showsAlbumArt`，口径 6）：
-/// - 关（**T3 起的默认档**）→ 单独一块 `MusicControlsView`（曲名 / 艺人 + 进度条 + 控制键），
-///   与 `MusicPlayerView` 里 HStack 的第二个孩子是**同一个视图、同一份自带布局**
-///   （`maxWidth: .infinity, alignment: .leading`），因此左对齐与改动前一致、不留空洞；
-/// - 开 → 同一块 `MusicControlsView` 前面加一枚 40pt 圆角小封面（`AlbumArtThumbnailView`）。
+/// **两档只差封面那 40pt**（`showsAlbumArt`，口径 6）；控制条两档都走**紧凑密度**
+/// （`MusicControlsView(density: .compact)`，D-17）：
+/// - 关（**T3 起的默认档**）→ 单独一块 `MusicControlsView(density: .compact)`：曲名（单行）+
+///   进度条 + 控制三键；艺人行 / 歌词行与大内边距都留给展开面板（标准档内容 ≈127pt，96 里必裁）；
+/// - 开 → 同一条前面加一枚 40pt 圆角小封面（`AlbumArtThumbnailView`）。
 ///   **不是**改动前的 `MusicPlayerView`：它的 `AlbumArtView` 是宽高双向贪婪的 1:1 图。
 ///   注意这里的真实故障形态——**块高是声明值（形态 → 档高），宿主从不量内容**，所以那张图
 ///   不会把行撑高；它会在 96pt 的块里铺满 96 见方，把旁边的曲名 / 进度 / 控制键挤成一条窄列
 ///   （对应验收要看的「文字被裁」那一档，而不是「行变高」）。
+///   两档的整条内容高都由 `MusicControlsView.CompactMetrics` 的六项预算兜住（≤ 96，有单测）。
 ///
 /// **块内不自己观察 `MusicManager`**：`MusicControlsView` / `DynamicIslandArtworkSourceView`
 /// 本来就各自 `@ObservedObject` 它，这里再观察一次只是重复订阅；「块在不在」那件事由
@@ -291,12 +294,14 @@ private struct MusicHomeBlockView: View {
             HStack(alignment: .top, spacing: Self.albumArtSpacing) {
                 AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
                     .frame(width: Self.albumArtSide, height: Self.albumArtSide)
-                MusicControlsView()
+                MusicControlsView(density: .compact)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         } else {
-            MusicControlsView()
+            // 紧凑档的密度由 `MusicControlsView.CompactMetrics` 给（D-17）：标准档内容 ≈127pt，
+            // 在 96 里控制三键整行被裁（T3 阶段 Checkpoint 上屏实测）。
+            MusicControlsView(density: .compact)
         }
     }
 }
