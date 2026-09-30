@@ -27,8 +27,14 @@
 //  默认值 `Calendar.autoupdatingCurrent`（09 §5.3 的边界要求：用户改系统时间 / 时区要跟着变）。
 //
 //  2026-09-27 形态定稿后新增两个纯函数（09 §5.3 呈现行）：
-//  - `resolveScopes(from:)`：manifest 的 `visibleScopes` 默认值 → 展示尺度（默认 **日 + 年**）；
+//  - `resolveScopes(from:)`：manifest 的 `visibleScopes` 默认值 → 展示尺度；
 //  - `remaining(for:now:calendar:)`：剩余量清单的主信息，只给结构化数值（value + unit），文案归视图。
+//
+//  **2026-09-30（p5-home-blocks / T2，docs/29 §做法 机制二 / D-03~D-05）**：默认展示尺度从
+//  **日 + 年**改为 **今天 / 本周 / 本月**（`defaultVisibleScopes`），并新增一个 `[String]` 重载
+//  ——模块侧改读 `context.config.get("visibleScopes", as: [String].self)`（组件卡的「显示的尺度」
+//  多选写的就是这个键），解析规则与原来那条 `ConfigValue?` 版**逐字一致**。两条入口共用同一份
+//  实现（`ConfigValue?` 版把 `.strings` 拆出来转调 `[String]` 版），口径不会漂成两份。
 //
 
 import Foundation
@@ -36,7 +42,7 @@ import Foundation
 /// 某个时间尺度在 `now` 所在自然区间里的完成比例。
 enum ProgressCalculator {
     /// 五种时间尺度。`rawValue` 同时是 manifest `visibleScopes` 的取值（09 §5.3）；
-    /// 声明顺序即界面上的展示顺序。
+    /// 声明顺序即界面上的展示顺序（也是组件卡那排胶囊的顺序：`allCases` 是选项表的唯一来源）。
     enum Scope: String, CaseIterable, Sendable {
         case day
         case week
@@ -53,17 +59,33 @@ enum ProgressCalculator {
         case minute
     }
 
-    /// 未配置 `visibleScopes` 时的默认展示尺度：**日 + 年**（09 §5.3 呈现行定稿）。
-    static let defaultVisibleScopes: [Scope] = [.day, .year]
+    /// 未配置 `visibleScopes` 时的默认展示尺度：**今天 / 本周 / 本月**（docs/29 §做法 机制二 / D-04）。
+    ///
+    /// 原 `[.day, .year]`：那时模块没有配置入口，屏上只有两行而简介写着五档（用户 2026-09-30
+    /// 报的「没按说明显示」）。改成三档是「出厂就是屏上那三行」——**本季 / 今年**挪到「可勾」那一档
+    /// （组件卡的「显示的尺度」多选），用户要就自己加。
+    static let defaultVisibleScopes: [Scope] = [.day, .week, .month]
 
     /// `manifest.config.properties["visibleScopes"].default` → 实际展示的尺度（纯函数）。
     ///
     /// 规则（09 §5.3 定稿）：
-    /// - 默认（`nil` / 不是 list / 空列表 / 全是未知取值）→ `defaultVisibleScopes`（日 + 年）；
+    /// - 默认（`nil` / 不是 list / 空列表 / 全是未知取值）→ `defaultVisibleScopes`（今天 / 本周 / 本月）；
     /// - 未知取值**逐项忽略**（配置被改坏不该让面板空白，07 §2 规则 4 的「回落默认、不崩」口径）；
     /// - 顺序按输入（用户给的先后即展示先后）；重复项去重（`ForEach(id:)` 的 id 必须唯一）。
+    ///
+    /// 本版只做「拆出 `.strings`」这一件事，判定本体在下一条重载里——两条入口**不可能漂**。
     static func resolveScopes(from value: ConfigValue?) -> [Scope] {
         guard case .strings(let raw)? = value else { return defaultVisibleScopes }
+        return resolveScopes(from: raw)
+    }
+
+    /// `ConfigHandle.get("visibleScopes", as: [String].self)` → 实际展示的尺度（纯函数）。
+    ///
+    /// **与上一条逐字同口径**（空表 / 全坏值 → `defaultVisibleScopes`；坏值逐项忽略；
+    /// 顺序按输入；重复项去重保留首次出现的位置）——差别只在入口类型：`ConfigHandle` 的
+    /// `[String]` 往返（`ManifestConfigHandle` 把值按 JSON 字节存，`["day","week"]` 解出来就是
+    /// `[String]`）。模块侧与设置侧走的是同一条判定（组件卡读出来勾中的项、模块画出那几行）。
+    static func resolveScopes(from raw: [String]) -> [Scope] {
         var seen: Set<Scope> = []
         let declared = raw.compactMap(Scope.init(rawValue:)).filter { seen.insert($0).inserted }
         return declared.isEmpty ? defaultVisibleScopes : declared

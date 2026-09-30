@@ -30,7 +30,7 @@
 //  `selectModule(_:)` 同时设 `selectedModuleID` 与 `currentView`。
 //  T4 试点模块 progress——进度计算（闰年 2 月 / 季度边界 / 年初年末 / 周起止随日历）、
 //  剩余量分档（`remaining`：跨天向上取整 / 跨小时 / 最后一分钟 / 刚过整点）、
-//  `visibleScopes` 解析（缺省=日+年 / 非法值忽略 / 顺序按输入）、
+//  `visibleScopes` 解析（缺省=今天+本周+本月 / 非法值忽略 / 顺序按输入，两条入口同口径）、
 //  manifest 与 config 契约、真组合根注册后的 tab 投影与展开内容。
 //  T5 待办模块 todos——分类与计数（今日 / 本周 / 所有三档的成员与 `(已办, 总量)`、
 //  「无到期时间只进所有」、今日与本周的刻意重叠、本周随 `firstWeekday`）、清单排序、
@@ -992,16 +992,21 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
-    /// `visibleScopes` 解析（纯函数）：缺省 / 非 list / 空 / 全非法 → **日 + 年**；
-    /// 非法值逐项忽略；顺序按输入；重复项去重。manifest 的默认值本身也是「日 + 年」。
+    /// `visibleScopes` 解析（纯函数）：缺省 / 非 list / 空 / 全非法 → **今天 + 本周 + 本月**；
+    /// 非法值逐项忽略；顺序按输入；重复项去重。manifest 的默认值本身也是这三档。
+    ///
+    /// **两条入口**（docs/29 §做法 机制二 / D-05）：`ConfigValue?`（manifest 的默认值）与
+    /// `[String]`（`ConfigHandle.get("visibleScopes", as: [String].self)` 的往返类型，模块侧走它）。
+    /// 第二条是本批新增的重载，判定本体在它里面、第一条只做「拆出 `.strings`」——因此这里把
+    /// 两条入口逐档对一遍（任何一条漂回「日 + 年」都会红）。
     func testProgressVisibleScopesResolution() {
-        XCTAssertEqual(ProgressCalculator.defaultVisibleScopes, [.day, .year])
-        XCTAssertEqual(ProgressCalculator.resolveScopes(from: nil), [.day, .year], "缺省 → 日 + 年")
-        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .string("day")), [.day, .year], "不是 list → 回落默认")
-        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .strings([])), [.day, .year], "空列表 → 回落默认")
+        XCTAssertEqual(ProgressCalculator.defaultVisibleScopes, [.day, .week, .month], "出厂三档（D-04）")
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: nil), [.day, .week, .month], "缺省 → 三档")
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .string("day")), [.day, .week, .month], "不是 list → 回落默认")
+        XCTAssertEqual(ProgressCalculator.resolveScopes(from: .strings([])), [.day, .week, .month], "空列表 → 回落默认")
         XCTAssertEqual(
             ProgressCalculator.resolveScopes(from: .strings(["bogus", "Week"])),
-            [.day, .year],
+            [.day, .week, .month],
             "全非法（含大小写不符的取值）→ 回落默认"
         )
 
@@ -1017,10 +1022,197 @@ final class ModuleKernelTests: XCTestCase {
             "重复项去重且保留首次出现的位置"
         )
 
+        // ② `[String]` 重载（`ConfigHandle` 的往返类型）：逐档与上面同口径
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: []),
+            [.day, .week, .month],
+            "空表 → 回落默认（`get` 拿不到键时的退化形态）"
+        )
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: ["quarter", "bogus", "quarter"]),
+            [.quarter],
+            "坏值逐项忽略 + 重复项去重（剩下的唯一一项就是 quarter）"
+        )
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: ["year", "month", "day"]),
+            [.year, .month, .day],
+            "顺序按输入（用户给的先后即展示先后）"
+        )
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: ["Day", "", "week"]),
+            [.week],
+            "大小写不符与空串都是坏值：忽略后只剩 week（不回落到默认）"
+        )
+        XCTAssertEqual(
+            ProgressCalculator.resolveScopes(from: ["nope"]),
+            [.day, .week, .month],
+            "全坏值 → 回落默认（不是空表）"
+        )
+        // 两条入口对同一份输入必须给同一个答案（判定本体只有一处）
+        for raw in [["day"], ["year", "month"], ["bogus"], [], ["quarter", "quarter", "week"]] {
+            XCTAssertEqual(
+                ProgressCalculator.resolveScopes(from: .strings(raw)),
+                ProgressCalculator.resolveScopes(from: raw),
+                "两条入口同口径（\(raw)）"
+            )
+        }
+
         XCTAssertEqual(
             ProgressCalculator.resolveScopes(from: ProgressModule.manifest.config?.properties["visibleScopes"]?.default),
-            [.day, .year],
+            [.day, .week, .month],
             "manifest 的 visibleScopes 默认值即出厂展示尺度"
+        )
+    }
+
+    /// **渲染行数裁剪**：`listedScopes(_:forWidth:height:)` = 宽度档与高度档**取小者**，
+    /// 再按 `visibleScopes` 的声明顺序取前 N 个——docs/29 §验收标准 A3 / A4 与 §已知限制 3 的
+    /// 「不缩字、不滚动、按声明顺序截断」。
+    func testProgressHomeBlockLayoutListedScopesTrimsByBothTiers() {
+        let five: [ProgressCalculator.Scope] = [.day, .week, .month, .quarter, .year]
+
+        // 默认三档：在任何块尺寸下都该三行都在（96 高 / 180 宽起）
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(ProgressCalculator.defaultVisibleScopes, forWidth: 180, height: 96),
+            [.day, .week, .month],
+            "默认就是屏上那三行（今天是 今天 / 本周 / 本月）"
+        )
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(ProgressCalculator.defaultVisibleScopes, forWidth: 240, height: 96),
+            [.day, .week, .month],
+            "宽块不会因为宽度档多画/少画"
+        )
+
+        // 五档：96 高的紧凑块放得下全部五个 → 勾满就是五行（不是「勾了第五个没反应」）
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: 240, height: 96),
+            five,
+            "96 高的块里五档全画（5×14 + 4×6 = 94 ≤ 96）"
+        )
+        // 高度档更小 → 按声明顺序只画前 N 个
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: 240, height: 54),
+            [.day, .week, .month],
+            "高度档 3 行：勾满五档也只画前三个（A4）"
+        )
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: 240, height: 34),
+            [.day, .week],
+            "高度档 2 行：只画前两个"
+        )
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: 240, height: 0),
+            [],
+            "块高 0（或被丢掉）→ 一行都不画"
+        )
+        // 宽度档更小（退化窄块）→ 只画出厂三档
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: 179.5, height: 96),
+            [.day, .week, .month],
+            "退化窄块：宽度档 3 行先截断（与高度档取小者）"
+        )
+        // 宽度取不到 → 1 行（最保守的那一档）
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes(five, forWidth: .nan, height: 96),
+            [.day],
+            "宽度取不到 → 1 行"
+        )
+
+        // **顺序恒按输入**（模块侧 `resolveScopes` 已按用户勾选先后给出顺序）：
+        // 截断取的是**前缀**，不是「前三种尺度」——本季排第二时它该在，今年排第一时它该在最上面
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes([.quarter, .year], forWidth: 240, height: 96),
+            [.quarter, .year],
+            "声明顺序即展示顺序（不是按 Scope 的原始顺序重排）"
+        )
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes([.year, .week, .day], forWidth: 240, height: 54),
+            [.year, .week, .day],
+            "声明顺序即展示顺序（三行都在）"
+        )
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.listedScopes([.year, .week, .day, .month], forWidth: 240, height: 34),
+            [.year, .week],
+            "截断取前缀：前两个是今年的在前（顺序按输入）"
+        )
+
+        // 空表 / 少于档位：不崩、不补
+        XCTAssertEqual(ProgressHomeBlockLayout.listedScopes([], forWidth: 240, height: 96), [])
+        XCTAssertEqual(ProgressHomeBlockLayout.listedScopes([.month], forWidth: 240, height: 96), [.month])
+    }
+
+    /// **覆盖值优先**（docs/29 §验收标准 A3 的取证项「覆盖值优先 + 坏值回落」）：模块侧 `scopes`
+    /// 读的是 `context.config.get("visibleScopes", as: [String].self)`——组件卡写进去的覆盖值压过
+    /// manifest 的默认值，坏值 / 空值回落出厂三档。
+    ///
+    /// 走的是**真句柄**（`ModuleContextFactory.configHandle(for:)` → `ManifestConfigHandle`），
+    /// 只是换一个 probe manifest（短名 `probe-scopes`）把域隔开：manifest 的默认值特意写成
+    /// `["month"]`（与出厂三档不同）——「覆盖值优先」与「回落 manifest 默认」两档因此各有一个
+    /// 可区分的取值（若读取侧还是旧实现「直接读 manifest 默认值」，第一条断言之后的每一条都会红）。
+    /// probe 域用完即删，**不碰**开发机真实的 `com.cmeng.gourd.module.progress`。
+    func testProgressModuleScopesReadConfigOverrideThroughTheRealHandle() throws {
+        let suiteName = "com.cmeng.gourd.module.probe-scopes"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)          // 前置：清掉上次运行留下的覆盖值
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let manifest = try ModuleManifest.decode(from: Data(#"""
+        {
+          "manifestVersion": 1,
+          "id": "com.cmeng.gourd.probe-scopes",
+          "name": {"key": "module.probe-scopes.name"},
+          "icon": {"type": "symbol", "name": "square"},
+          "version": "1.0.0",
+          "apiVersion": "1.0",
+          "kind": "builtin",
+          "surfaces": ["home"],
+          "config": {
+            "type": "object",
+            "properties": {
+              "visibleScopes": {"type": "list", "itemType": "string", "default": ["month"]}
+            }
+          }
+        }
+        """#.utf8))
+
+        let config = ModuleContextFactory.configHandle(for: manifest)
+        let context = ModuleContext(
+            moduleID: manifest.id,
+            host: HostInfo(appVersion: "0", apiVersion: HostInfo.currentAPIVersion, macOSVersion: "15.0"),
+            config: config,
+            logger: ModuleLogger(moduleID: manifest.id, shortID: manifest.shortID),
+            ui: StubUIHandle()
+        )
+        let module = ProgressModule(context: context)
+
+        // ① 没有覆盖值 → 真句柄回落到 manifest 的默认值（这也就是「组件页没勾过」的形态）
+        XCTAssertEqual(module.scopes, [.month], "缺覆盖值 → 回落 manifest 的 visibleScopes 默认值")
+
+        // ② 覆盖值优先：写入一条与默认不同的（含默认里没有的取值）
+        XCTAssertTrue(config.set("visibleScopes", to: ["day", "week", "month", "quarter", "year"]))
+        XCTAssertEqual(
+            module.scopes,
+            [.day, .week, .month, .quarter, .year],
+            "覆盖值压过 manifest 默认值——这就是「勾满五档」那一档"
+        )
+
+        // ③ 覆盖值只有一项：也照它来（不是「并上默认」）
+        XCTAssertTrue(config.set("visibleScopes", to: ["quarter"]))
+        XCTAssertEqual(module.scopes, [.quarter], "覆盖值就是全部：不并上 manifest 默认的那一项")
+
+        // ④ 坏值 / 空值：**回落出厂三档**（`resolveScopes` 的既有口径，一字不改）——
+        //    注意不是回落 manifest 的 ["month"]：判定只认 `defaultVisibleScopes` 这一个兜底
+        XCTAssertTrue(config.set("visibleScopes", to: ["bogus", "Month"]))
+        XCTAssertEqual(module.scopes, [.day, .week, .month], "覆盖值全坏 → 回落出厂三档")
+        XCTAssertTrue(config.set("visibleScopes", to: [String]()))
+        XCTAssertEqual(module.scopes, [.day, .week, .month], "空覆盖值 → 回落出厂三档（不留空块）")
+
+        // ⑤ 落盘的字节就是 `[String]`（与模块侧 `get(as: [String].self)` 同一类型：
+        //    写成别的类型就是「勾得动、模块读不到」的静默故障）
+        XCTAssertTrue(config.set("visibleScopes", to: ["week", "year"]))
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: try XCTUnwrap(suite.data(forKey: "visibleScopes"))),
+            ["week", "year"],
+            "覆盖值按 JSON 字节存（`[String]`）"
         )
     }
 
@@ -1070,8 +1262,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(properties["visibleScopes"]?.itemType, "string")
         XCTAssertEqual(
             properties["visibleScopes"]?.default,
-            ConfigValue.strings(["day", "year"]),
-            "09 §5.3 呈现行定稿：出厂只显示 日 + 年"
+            ConfigValue.strings(["day", "week", "month"]),
+            "docs/29 §做法 机制二 / D-04：出厂显示 今天 + 本周 + 本月"
         )
         XCTAssertEqual(properties["style"]?.type, "enum")
         XCTAssertEqual(properties["style"]?.values, ["ring", "bar", "text"])
@@ -1084,38 +1276,63 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// 首页块的行数分档（`ProgressHomeBlockLayout`）：`>= 220` 两行、更窄一行、宽度取不到（非有限数）
-    /// 退到一行——**最小块 180 里必须不裁不溢**（26 §做法 机制一/§验收标准 2）。
+    /// 首页块的行数分档（`ProgressHomeBlockLayout`）：**宽度档与高度档取小者**
+    /// （docs/29 §做法 机制二 / §已知限制 3、A4）。
+    ///
+    /// 宽度档：到声明最小宽（180）就够画全部五档（宽度不是行数的真实约束），更窄是退化态、
+    /// 非有限数退到 1；高度档：`floor((高 + 行距) / (行高 + 行距))`，钳 `0…5`。
+    ///
+    /// **96 高的紧凑块要放得下五档**（5×14 + 4×6 = 94）——这是「勾满五档在屏上是五行都在」
+    /// 的算术前提（D-04 的「三行填满 96」是旧版口径，本批改判，见 T2 报告 §候选决策）。
     func testProgressHomeBlockLayoutRowTiers() {
-        XCTAssertEqual(ProgressHomeBlockLayout.twoRowWidth, 220, "分档线取 26 的定值 220")
-        // 声明值域：min 180 → 一行；ideal 240 → 两行（中间留一个阈值探针）
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 180), 1, "最小块（180）只画一行")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 219.5), 1, "阈值下方仍是 1 行")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 220), 2, "恰好阈值 → 2 行")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 240), 2, "ideal 块（240）→ 2 行")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: .nan), 1, "宽度取不到（首帧 0 / NaN）退到 1 行")
+        // 行高 / 行距 / 条高：三个数一起决定高度档与画出来的东西
+        XCTAssertEqual(ProgressHomeBlockLayout.rowHeight, 14, "11pt 文字的自然行高（实测 14pt）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowSpacing, 6, "取 6 的唯一理由：96 高的块里五行放得下")
+        XCTAssertEqual(ProgressHomeBlockLayout.barHeight, 6, "进度条钉在 6pt（`.linear` 默认 20pt，不钉住行高就不是 14）")
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.allScopesWidth,
+            ProgressModule.homeBlockWidth?.min,
+            "宽度档门槛 = 模块声明的最小宽（两处必须是同一个数）"
+        )
+
+        // ① 宽度档：声明值域（180 / 240）内一律答「全部五档」——行数交给高度档
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 180), 5, "最小块（180）够画五档")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 219.5), 5, "旧版分档线 220 不再是上限")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 240), 5, "ideal 块（240）同样是五档")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 408.5), 5, "再宽也只有五档（尺度总数）")
+        // 退化窄块（低于声明最小宽）：只画出厂三档
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 179.5), 3, "低于声明最小宽 → 出厂三档")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: 0), 3, "宽度 0 也是退化态（不是「非有限数」）")
+        // 宽度取不到：最保守的一档（与旧版同口径）
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forWidth: .nan), 1, "非有限数（NaN）→ 1 行")
         XCTAssertEqual(
             ProgressHomeBlockLayout.rowLimit(forWidth: .infinity),
             1,
-            "非有限数一律不当宽度用（±∞ 同 NaN，与 TodosHomeBlockLayout.listTier 同一口径）"
+            "非有限数一律不当宽度用（±∞ 同 NaN）"
         )
 
-        // 要画的尺度 = 声明顺序的前 N 个（默认 日 + 年：窄块画「今天」、宽块画「今天 + 今年」）
-        XCTAssertEqual(
-            ProgressHomeBlockLayout.listedScopes([.day, .year], forWidth: 180),
-            [.day],
-            "窄块只画第一个尺度"
-        )
-        XCTAssertEqual(
-            ProgressHomeBlockLayout.listedScopes([.day, .year], forWidth: 240),
-            [.day, .year],
-            "宽块画两个尺度（顺序 = visibleScopes 的声明顺序）"
-        )
-        XCTAssertEqual(
-            ProgressHomeBlockLayout.listedScopes([.week, .month, .quarter], forWidth: 300),
-            [.week, .month],
-            "行数上限是 2：第三个尺度不画（不压缩行高）"
-        )
+        // ② 高度档：边界逐个钉（pitch = 14 + 6 = 20；N 行占 20N − 6）
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 96), 5, "紧凑块（96）放得下五档（94 ≤ 96）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 94), 5, "恰好放得下五行 → 仍是五行")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 93.9), 4, "差一点就是四行（不赌半个字）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 74), 4, "恰好四行 → 四行")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 54), 3, "恰好三行 → 三行（A4 的那一档）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 34), 2, "恰好两行 → 两行")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 14), 1, "恰好一行 → 一行")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 13.9), 0, "一行都放不下 → 0（不画）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 0), 0, "块高 0 → 0")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: -40), 0, "负高度 → 0（不崩、不为负）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 152), 5, "大块档（152）也只画五档（上限 = 尺度总数）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: .nan), 0, "非有限高度 → 0（高度取不到时不画）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: .infinity), 0, "±∞ 同 NaN")
+
+        // ③ 不变量：行高之和永不越界（每个高度上都要成立——块壳 `.clipped()` 会把越界裁成
+        //    「半个字」，这正是 T2 的失败信号之一）
+        for height in stride(from: 0.0, through: 260.0, by: 0.5) {
+            let rows = CGFloat(ProgressHomeBlockLayout.rowLimit(forHeight: height))
+            let used = rows * ProgressHomeBlockLayout.rowHeight + max(0, rows - 1) * ProgressHomeBlockLayout.rowSpacing
+            XCTAssertLessThanOrEqual(used, height, "块高 \(height) 下画了 \(Int(rows)) 行：内容高 \(used) 越界")
+        }
     }
 
     /// T4/T5 的端到端：`KernelBootstrap.builtinModules` 里的**真模块**经真组合根注册 → 过启用门 →
@@ -1542,8 +1759,8 @@ final class ModuleKernelTests: XCTestCase {
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
         // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
         XCTAssertTrue(
-            ["Progress", "进度"].contains(progressEntry.label),
-            "块文案应已本地化（module.progress.name），实到 \(progressEntry.label)"
+            ["Time progress", "时间进度"].contains(progressEntry.label),
+            "块文案应已本地化（module.progress.name，p5-home-blocks / T2 从「进度」改名），实到 \(progressEntry.label)"
         )
         XCTAssertFalse(
             registry.tabEntries.contains { $0.id == id },

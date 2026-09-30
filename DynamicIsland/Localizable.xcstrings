@@ -6,13 +6,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Progress"
+            "value" : "Time progress"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "进度"
+            "value" : "时间进度"
           }
         }
       }
@@ -22,13 +22,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Day/week/month/quarter/year progress"
+            "value" : "Time progress: today, this week, this month"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "日/周/月/季/年进度"
+            "value" : "时间进度：今天 / 本周 / 本月"
           }
         }
       }
@@ -68552,13 +68552,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Compact day/week/month/quarter/year progress rows on the home strip"
+            "value" : "Compact time-progress rows on the home strip: today, this week, this month (pick more scales on the card)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首页块里的紧凑进度条：日 / 周 / 月 / 季 / 年（默认今天 + 今年）"
+            "value" : "首页块里的紧凑时间进度条：今天 / 本周 / 本月（可在卡片里勾更多尺度）"
           }
         }
       }
@@ -68755,6 +68755,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示封面"
+          }
+        }
+      }
+    },
+    "settings.modules.progress.visibleScopes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scales shown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示的尺度"
           }
         }
       }

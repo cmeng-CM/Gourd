@@ -78,9 +78,9 @@
 //    两者不共用一个开关（关掉封面 ≠ 关掉音乐块）。
 //
 //  P3 冻结批次 / T7 增量（模块配置编辑口：**允许清单**，docs/24-release-freeze.md §做法 机制四 / D-06）：
-//  把那一个口子扩成一条**逐键声明的允许清单**（`ModuleSettingsSection.configControls` 七条：
+//  把那一个口子扩成一条**逐键声明的允许清单**（`ModuleSettingsSection.configControls` 七条起步：
 //  music 一条、launcher 三条、shortcuts 两条、frontapp 一条），并支持四种控件类型
-//  （`ModuleConfigControl.Kind` = boolean / integer / number / string）——`list` / `enum` 仍不渲染
+//  （`ModuleConfigControl.Kind` = boolean / integer / number / string）——`enum` 仍不渲染
 //  （§明确不做）：
 //  - **区间取模块侧既有常量**（`LauncherGridMetrics.iconSizeRange` / `.densityRange`、
 //    `FrontAppHistory.limitRange`）：读写两侧各夹一次——UI 拨不出去范围外的值，
@@ -90,6 +90,16 @@
 //    （`settings.modules.upstreamManaged`）说清；
 //  - **不自己带默认值**：缺键回落交给 `ManifestConfigHandle.get`（= manifest config 的 `default`），
 //    卡上显示什么与模块读到什么因此是同一个判定，不存在第二个默认档。
+//
+//  p5 批次 / T2 增量（docs/29-home-blocks-and-panel.md §做法 机制二 / D-05）：
+//  **多选是允许清单的第五种控件类型**（`ModuleConfigControl.Kind.multiSelect(options:titleKeys:)`），
+//  第一条登记项是进度卡的「显示的尺度」（模块 id + 键名 `visibleScopes`，选项与文案都取自
+//  `ProgressCalculator.Scope.allCases`）。三处口径与既有四条**逐字相同**（只收模块真读的键、
+//  区间/取值取模块侧常量、不自己带默认值），另有两条是多选独有的：
+//  - **写盘顺序恒 = 选项的声明顺序**（勾选先后不参与）——模块侧 `resolveScopes` 是「顺序按输入」，
+//    而用户眼里的顺序就是在卡上看到的那一排，写盘顺序跟着它才对得上（「画前三个」这条口径也因此确定）；
+//  - **读出来的值也按声明顺序收敛**（野值不落进 UI：与数值型的「读侧再夹一次」同一条理由）。
+//  `list` 型仍**只有多选这一个渲染形态**（键必须逐条登记，不按 manifest schema 自动生成控件）。
 //
 //  P3 组件批次 / T3 增量（**两节 + 两套排序**，docs/26-home-widgets-and-settings.md §做法 机制三 / D-03）：
 //  - 页面从「一张卡 = 一个模块」的平铺改成两节：**首页组件**（声明 `home` 的模块，doc 里也叫
@@ -259,25 +269,28 @@ struct ModuleSettingsSection: View {
     ///
     /// 三条口径（改动前先读）：
     ///
-    /// 1. **只收「模块自己真的读」的键**——七条都是模块侧现读现用的：
+    /// 1. **只收「模块自己真的读」的键**——八条都是模块侧现读现用的：
     ///    `music.showAlbumArt`（块内画不画封面）、`launcher.iconSize` / `.density` / `.showRecents`、
-    ///    `shortcuts.showOutput` / `.timeoutSeconds`、`frontapp.maxRecentApps`。
+    ///    `shortcuts.showOutput` / `.timeoutSeconds`、`frontapp.maxRecentApps`、
+    ///    `progress.visibleScopes`（首页块画哪几行尺度）。
     ///    **生效时机分两档**（别混为一谈）：`iconSize` / `density` / `showAlbumArt` /
-    ///    `maxRecentApps`（下一次读）/ `timeoutSeconds` / `showOutput`（下一次运行）是「下一次
-    ///    取用时就生效」；`launcher.showRecents` 慢一档——一次激活只查一次 Spotlight，
-    ///    关掉再开模块（或重启）才换档（见 `LauncherSettings` 的注释）。
+    ///    `maxRecentApps`（下一次读）、`visibleScopes`（下一次 `content(for:)`，即宿主重取内容的那一帧）、
+    ///    `timeoutSeconds` / `showOutput`（下一次运行）是「下一次取用时就生效」；`launcher.showRecents`
+    ///    慢一档——一次激活只查一次 Spotlight，关掉再开模块（或重启）才换档（见 `LauncherSettings`
+    ///    的注释）。
     /// 2. **接管模块登记的上游键不进清单**（`enableTimerFeature` / `showMirror` /
     ///    `playerColorTinting` 一类）：它们的真源在上游 `Defaults`，`ConfigHandle` 对它们不生效
     ///    （`get` 拿不到覆盖值、`set` 写进去也没人读），拨了不会有反应——卡片上改由
     ///    `settings.modules.upstreamManaged` 那行灰字说清（判据 = `upstreamManagedKeys(for:takeoverKeyName:)`）。
-    /// 3. **区间一律取模块侧既有常量**（`LauncherGridMetrics.iconSizeRange` / `.densityRange`、
-    ///    `FrontAppHistory.limitRange`）：UI 拨不出范围外的值，手改配置文件写进去的越界值也会被
-    ///    读侧夹回来——两处各写一个区间就会漂，故这里**一个字面量都不写**。
-    ///    `shortcuts.timeoutSeconds` **没有**既有区间常量 → `range: nil`（不夹取、输入框形态）：
+    /// 3. **取值一律取模块侧既有常量**（`LauncherGridMetrics.iconSizeRange` / `.densityRange`、
+    ///    `FrontAppHistory.limitRange`、`ProgressCalculator.Scope.allCases`）：UI 拨不出范围外的值，
+    ///    手改配置文件写进去的越界值也会被读侧夹回来——两处各写一个区间就会漂，故这里**一个字面量
+    ///    都不写**。`shortcuts.timeoutSeconds` **没有**既有区间常量 → `range: nil`（不夹取、输入框形态）：
     ///    发明一个区间等于替模块做它没做过的裁决（§候选决策）。
     ///
-    /// **`list` / `enum` 不渲染**（§明确不做）：shortcuts 的 `pinnedShortcuts` / `cachedShortcuts`、
-    /// timer 的 `timerPresets`、mirror 的 `mirrorShape` 仍只能改配置文件（§已知限制 2）。
+    /// **`enum` 不渲染**（§明确不做）：shortcuts 的 `pinnedShortcuts` / `cachedShortcuts`、
+    /// timer 的 `timerPresets`、mirror 的 `mirrorShape` 仍只能改配置文件（§已知限制 2）；
+    /// `list` 型今天**只有多选**这一个形态（`.multiSelect`），没有「自由输入一串值」的入口。
     static let configControls: [ModuleConfigControl] = [
         ModuleConfigControl(
             moduleID: MusicModule.moduleID,
@@ -323,6 +336,20 @@ struct ModuleSettingsSection: View {
             key: "maxRecentApps",
             kind: .integer(range: FrontAppHistory.limitRange),
             titleKey: "settings.modules.frontapp.maxRecentApps"
+        ),
+        // 进度卡：**尺度多选**（p5-home-blocks / T2，docs/29 §做法 机制二 / D-05）。
+        // 选项与文案 key 都取自 `ProgressCalculator.Scope.allCases`（模块侧的**声明顺序**）——
+        // 卡上从左到右那一排就是块里从上到下那几行，勾满而块放不下时「画前三个」的顺序因此确定。
+        // 模块 id 写**字面量**（与启动台三行同口径）：`ProgressModule` 没有 `moduleID` 常量，
+        // 解析用例把它对回注册表，写错即红。
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.progress",
+            key: "visibleScopes",
+            kind: .multiSelect(
+                options: ProgressCalculator.Scope.allCases.map(\.rawValue),
+                titleKeys: ProgressCalculator.Scope.allCases.map(\.labelKey)
+            ),
+            titleKey: "settings.modules.progress.visibleScopes"
         ),
     ]
 
@@ -669,33 +696,46 @@ struct FeatureCard: Identifiable {
 /// （`com.cmeng.gourd.module.<shortID>`）与「值按 JSON 字节存」的口径只有一处，
 /// 「设置页写了一份、模块读另一份」这类静默故障在构造上就不可能发生。
 ///
-/// **四种类型**（docs/24 §接口与数据形状）：`boolean` / `integer` / `number` / `string`。
-/// `list` / `enum` 不在此列（§明确不做）。
+/// **五种类型**（docs/24 §接口与数据形状 + docs/29 §接口与数据形状）：`boolean` / `integer` /
+/// `number` / `string` / `multiSelect`（多选，写盘类型是 `[String]`）。`enum` 不在此列（§明确不做）。
 ///
 /// **值类型必须与模块读的那一种一致**（改动前先读）：`ManifestConfigHandle` 把值按 JSON 字节存，
 /// 模块侧用 `config.get(key, as: T.self)` 读——`number` 键（launcher 的 `iconSize`）必须写
-/// `Double`、`integer` 键（frontapp 的 `maxRecentApps` / shortcuts 的 `timeoutSeconds`）必须写
-/// `Int`。JSON 的 `30.0` 解不进 `Int`（`DecodingError`），写错类型就是「拨得动、模块读不到」的
-/// 静默故障，因此**读写两条路各自按 kind 分档**，不共用一条泛型通道。
+/// `Double`、`integer` 键（frontapp 的 `maxRecentApps` / shortcuts 的 `timeoutSeconds`）必须写 `Int`、
+/// `multiSelect` 键（progress 的 `visibleScopes`）必须写 `[String]`。JSON 的 `30.0` 解不进 `Int`
+/// （`DecodingError`），写错类型就是「拨得动、模块读不到」的静默故障，因此**读写两条路各自按 kind
+/// 分档**，不共用一条泛型通道。
 ///
 /// **缺键回落 manifest 默认值**：`get` 本来就先查覆盖值、再回落 `manifest.config.properties[key].default`
 /// （`ManifestConfigHandle` 的既有语义），所以控件**不自己带一份默认值**——卡上显示的值与模块读到的
 /// 值因此是同一个判定（表里再抄一个默认值就会漂，见 T7 报告 §候选决策）。键名漂出 schema 时
-/// `get` 给 nil：控件回落 0 / false / ""，而**键名漂了要用例红**（解析用例逐条对 manifest），
+/// `get` 给 nil：控件回落 0 / false / "" / 空表，而**键名漂了要用例红**（解析用例逐条对 manifest），
 /// 不是让用户看一条错误提示。
 ///
 /// **本类型不是 `private`**：解析用例直接读这张表（与 `FeatureCard` 同一条口径）。
 struct ModuleConfigControl: Identifiable {
-    /// 控件支持的四种类型。区间是**模块侧的既有常量**（口径 3），`nil` = 模块侧本来就没夹取区间。
-    /// `integer` / `number` 分开是因为**写盘的 JSON 类型不同**（见类型注释）。
+    /// 控件支持的五种类型。区间是**模块侧的既有常量**（口径 3），`nil` = 模块侧本来就没夹取区间。
+    /// `integer` / `number` 分开是因为**写盘的 JSON 类型不同**（见类型注释）；
+    /// `multiSelect` 的 `options` 是**写盘的字面量清单**、`titleKeys` 是它们一一对应的文案 key
+    /// （两条等长、顺序即展示顺序，见 `Option`）。
     enum Kind: Equatable {
         case boolean
         case integer(range: ClosedRange<Int>?)
         case number(range: ClosedRange<Double>?)
         case string
+        case multiSelect(options: [String], titleKeys: [String])
     }
 
-    /// 模块 id：卡片按它命中（启动台三行、快捷指令两行、音乐 / 前台应用各一行）。
+    /// 多选型的一个选项：**值**（写进 config 的字面量，也是模块侧认的那一个）+ **文案 key**。
+    /// id 取值本身（同一控件内选项不重复，由解析用例钉住）。
+    struct Option: Equatable, Identifiable {
+        let value: String
+        let titleKey: String
+
+        var id: String { value }
+    }
+
+    /// 模块 id：卡片按它命中（启动台三行、快捷指令两行、音乐 / 前台应用 / 进度各一行）。
     let moduleID: String
     /// 该模块 manifest config 里的键名——**逐字一致**（解析用例拿 manifest 的 `properties` 对，
     /// 写错一个字就红；`ConfigHandle.set` 对 schema 之外的键也不落盘）。
@@ -706,6 +746,13 @@ struct ModuleConfigControl: Identifiable {
     let titleKey: String
 
     var id: String { "\(moduleID).\(key)" }
+
+    /// 多选型的选项（值 + 文案 key，一一对应）；其他类型是空表。
+    /// **顺序即展示顺序**——视图照它从左到右排，写盘也照它收敛。
+    var multiSelectOptions: [Option] {
+        guard case .multiSelect(let options, let titleKeys) = kind else { return [] }
+        return zip(options, titleKeys).map { Option(value: $0.0, titleKey: $0.1) }
+    }
 
     // MARK: 读（缺键回落 manifest 默认；数值型夹取到区间）
 
@@ -727,6 +774,14 @@ struct ModuleConfigControl: Identifiable {
 
     func stringValue(from config: ConfigHandle) -> String {
         config.get(key, as: String.self) ?? ""
+    }
+
+    /// 多选的 get：读 `[String]`（缺键回落 manifest 默认值，同上），再收敛成
+    /// **「清单里声明过的取值」∩「勾中的」**并按声明顺序排——手改配置文件写进去的野值不会在卡上
+    /// 变成一个点不掉的勾（与数值型的「读侧再夹一次」同一条理由）。
+    func selectedOptions(from config: ConfigHandle) -> [String] {
+        let chosen = Set(config.get(key, as: [String].self) ?? [])
+        return multiSelectOptions.map(\.value).filter { chosen.contains($0) }
     }
 
     // MARK: 写（只写模块专属 suite 的覆盖值；manifest 默认值一个字不动）
@@ -756,6 +811,29 @@ struct ModuleConfigControl: Identifiable {
         config.set(key, to: value)
     }
 
+    /// 多选写回：**先按声明顺序收敛**再落盘（写的是 `[String]`，`multiSelect` 模块读的就是它）。
+    /// 顺序恒 = `options` 的声明顺序（勾选先后不参与）——模块侧 `resolveScopes` 是「顺序按输入」，
+    /// 而用户眼里的顺序就是卡上那一排，两边因此对得上。
+    /// 非多选型调用它是**空操作 + false**（与 `set` 的「写不动就答 false」同形，不误写别的类型）。
+    @discardableResult
+    func writeMultiSelect(_ values: [String], config: ConfigHandle) -> Bool {
+        guard case .multiSelect = kind else { return false }
+        let chosen = Set(values)
+        return config.set(key, to: multiSelectOptions.map(\.value).filter { chosen.contains($0) })
+    }
+
+    /// 某一个选项**翻面**（未勾 → 勾上；已勾 → 取消），落盘同上。多选行的每一次点击就是这一下。
+    @discardableResult
+    func toggleMultiSelect(_ value: String, config: ConfigHandle) -> Bool {
+        var chosen = selectedOptions(from: config)
+        if let index = chosen.firstIndex(of: value) {
+            chosen.remove(at: index)
+        } else {
+            chosen.append(value)
+        }
+        return writeMultiSelect(chosen, config: config)
+    }
+
     // MARK: 区间（唯一入口：kind 里那个常量）
 
     private func clamp(_ value: Int) -> Int {
@@ -771,14 +849,14 @@ struct ModuleConfigControl: Identifiable {
         case .integer(let range):
             guard let range else { return value }
             return min(max(value, Double(range.lowerBound)), Double(range.upperBound))
-        case .boolean, .string:
+        case .boolean, .string, .multiSelect:
             return value
         }
     }
 }
 
 /// 模块 config 控件的一行：按 `kind` 分档渲染 —— 布尔 = 小开关、有区间的数值 = 滑杆 + 当前值、
-/// 没区间的数值 = 数字输入框、字符串 = 文本框。
+/// 没区间的数值 = 数字输入框、字符串 = 文本框、多选 = 一排可点的胶囊（选中填色）。
 ///
 /// **句柄每次现取**：`ModuleContextFactory.configHandle(for:)` 只是薄壳（schema 快照 + 一次
 /// `UserDefaults(suiteName:)`），而本批 config 没有 `observe`（07 §2 属 P1-3）——「改完立刻生效」
@@ -798,6 +876,9 @@ private struct ModuleConfigControlRow: View {
     /// 本批 config 没有 `observe`（07 §2 属 P1-3），所以本行只能自己叫醒自己：
     /// 令牌在 `body` 里被读一次（见 `body` 首行），写完自增 → SwiftUI 重画本行 → 现读 config。
     /// 代价：多一个只增不减的 `Int`（视图级，不进偏好、不跨渲染保存语义）。
+    ///
+    /// **多选那一行同样靠它**（p5-home-blocks / T2）：勾选的选中态就是本行自己读 config 画的，
+    /// 缺了这句「勾了不会变色」——与滑杆那一档的缺陷逐字同形。
     @State private var refreshToken = 0
 
     private var config: ConfigHandle { ModuleContextFactory.configHandle(for: manifest) }
@@ -831,6 +912,8 @@ private struct ModuleConfigControlRow: View {
             }
         case .string:
             stringRow
+        case .multiSelect:
+            multiSelectRow
         }
     }
 
@@ -961,6 +1044,48 @@ private struct ModuleConfigControlRow: View {
             .frame(width: 160)
             .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
         }
+    }
+
+    // MARK: 多选（一排可点的胶囊）
+
+    /// 多选行：左边是这一行的标题（「显示的尺度」），右边是一排**可点的胶囊**——选中填色 + 白字、
+    /// 未选中只有描边（观感与两节的 `surfaceBadge` 同一族：小、圆角、可点）。
+    ///
+    /// 点一下 = 把这一项翻面（`toggleMultiSelect`）→ 走 `commit` 落盘 + 叫醒本行与宿主。
+    /// **没有「确定」按钮**：勾上就写、写就生效（这就是 D-05 要的「勾了立刻上屏」）。
+    private var multiSelectRow: some View {
+        let selected = Set(control.selectedOptions(from: config))
+
+        return HStack(spacing: 8) {
+            Text(LocalizedStringKey(control.titleKey))
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                ForEach(control.multiSelectOptions) { option in
+                    chip(option, isOn: selected.contains(option.value))
+                }
+            }
+        }
+    }
+
+    /// 一枚胶囊。`isOn` 只决定长相；点它的动作在 `multiSelectRow` 那一层统一说明。
+    private func chip(_ option: ModuleConfigControl.Option, isOn: Bool) -> some View {
+        Button {
+            commit { control.toggleMultiSelect(option.value, config: config) }
+        } label: {
+            Text(LocalizedStringKey(option.titleKey))
+                .font(.caption)
+                .fontWeight(isOn ? .semibold : .regular)
+                .foregroundStyle(isOn ? Color.white : Color.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(isOn ? Color.accentColor : Color.clear))
+                .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.45), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        // 辅助功能：胶囊自己报得出名字（与滑杆 / 开关那两条同口径）。
+        .accessibilityLabel(Text(LocalizedStringKey(option.titleKey)))
     }
 
     // MARK: 写路径

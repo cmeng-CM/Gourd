@@ -119,16 +119,24 @@
 //    `moduleEnableOverrides`（既有启用真源，**不进摘除名单**）。
 //
 //  P3 冻结批次 / T7 追加（组件页的模块配置编辑口——**允许清单**，docs/24 §做法 机制四）：
-//  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：七条清单项逐条钉死，
+//  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：八条清单项逐条钉死，
 //    每条都断言「模块 id 是已注册模块」「键在 manifest 的 `config.properties` 里」「kind 与声明的
 //    `type` 一致」「文案在 zh-Hans 里解析得出」「(模块 id, 键) 不重复」——键名写错一个字即红
 //    （T7 的变异验证靶子）；
 //  - **两处边界**（`testConfigControlAllowlistExcludesTakeoverUpstreamKeys`）：接管模块登记的上游键
 //    不进清单（真源在上游 `Defaults`，拨了没人读），且它们的卡片必须出那行
 //    「由上游设置管理」；非接管模块（含没有 `config` 的日历）一律不出；
-//  - **写路径端到端**（`testConfigControlWritePathsShareTheModuleConfigHandle`）：四种控件类型各写
+//  - **写路径端到端**（`testConfigControlWritePathsShareTheModuleConfigHandle`）：五种控件类型各写
 //    一遍，落盘在 probe 域（`…module.probe-config` 用完即删），**模块自己的读侧**立刻看到同一个值；
 //    另钉住「写盘的 JSON 类型」与「区间夹取读写各一次」。
+//
+//  p5-home-blocks / T2 追加（进度卡的**尺度多选**——允许清单的第五种控件类型，docs/29 §做法 机制二 / D-05）：
+//  - **清单新条**：`com.cmeng.gourd.progress.visibleScopes`（`.multiSelect`）逐条对 manifest；
+//    多选↔`list` 的类型配对、选项与文案 key 的 1:1、以及「manifest 默认值必须是可勾的选项」
+//    都收在允许清单用例里；选项的具体取值与顺序由 `testProgressVisibleScopesControlMatchesManifestAndCatalog`
+//    钉死（= `ProgressCalculator.Scope.allCases`）；
+//  - **多选读写口径**：`toggleMultiSelect` 翻面、野值丢弃、**顺序恒按选项声明顺序**（写侧与读侧
+//    各收敛一次）、非多选型调用写多选是空操作（见上面那条端到端用例的 ⑥ 档）。
 //
 //  P3 冻结批次 / T6 追加（日历接管模块——孤儿视图 `StandaloneCalendarView` 的展开 tab）：
 //  - **`CalendarModule` 的 manifest 契约**：`surfaces == [.expanded]`（不含 `.compact` / `.home`）、
@@ -979,9 +987,10 @@ final class TakeoverEnablementTests: XCTestCase {
     /// ④ 文案 key 在宿主 bundle 的 zh-Hans 里**解析得出来**（没进 catalog → 一行没有标签的控件）；
     /// ⑤ 表里 **(模块 id, 键) 不重复**（重复 = 两个控件写同一个键，是谁在生效说不清）。
     ///
-    /// 另把**七条清单项逐条钉死**（模块 id + 键名），因为「清单少了一条」在 ①~⑤ 下是**全绿**的
+    /// 另把**八条清单项逐条钉死**（模块 id + 键名），因为「清单少了一条」在 ①~⑤ 下是**全绿**的
     /// ——少一条只是「那个键没入口」，不违反任何一条断言（§已知限制 1 点名接受：清单是滞后的，
     /// 没有自动发现机制；这里用一条显式名单把它钉住，去掉任意一条即红）。
+    ///（p5-home-blocks / T2 从七条加到**八条**：进度卡的 `visibleScopes` 多选。）
     ///
     /// 注册用 `enabled: { _ in true }`（不读任何偏好键、不落状态）、**不调** `bootstrap()`：
     /// 本用例只看 manifest 与文案，不激活任何模块。
@@ -1006,8 +1015,9 @@ final class TakeoverEnablementTests: XCTestCase {
                 "com.cmeng.gourd.shortcuts.showOutput",
                 "com.cmeng.gourd.shortcuts.timeoutSeconds",
                 "com.cmeng.gourd.frontapp.maxRecentApps",
+                "com.cmeng.gourd.progress.visibleScopes",
             ],
-            "七条 = docs/24 §做法 机制四 点名的七个键（顺序不动，去/改任意一条都会红）"
+            "八条 = docs/24 §做法 机制四 点名的七个键 + docs/29 §做法 机制二 的 visibleScopes（顺序不动，去/改任意一条都会红）"
         )
 
         // ①②③ 数据源 = 注册表里的真 manifest（先补注册：`setUp` 的 `deactivateAll()` 把
@@ -1032,7 +1042,7 @@ final class TakeoverEnablementTests: XCTestCase {
                 "② `\(control.key)` 不在 \(control.moduleID) 的 manifest config.properties 里（键名写错一个字？）"
             )
 
-            // ③ 类型 ↔ kind（四种一一对应；`list` / `enum` 不在清单里）
+            // ③ 类型 ↔ kind（五种一一对应；`enum` 不在清单里）
             switch control.kind {
             case .boolean:
                 XCTAssertEqual(node.type, "boolean", "\(control.id) 的 kind 是 boolean，manifest 声明的是 \(node.type)")
@@ -1042,10 +1052,38 @@ final class TakeoverEnablementTests: XCTestCase {
                 XCTAssertEqual(node.type, "number", "\(control.id) 的 kind 是 number，manifest 声明的是 \(node.type)")
             case .string:
                 XCTAssertEqual(node.type, "string", "\(control.id) 的 kind 是 string，manifest 声明的是 \(node.type)")
+            case .multiSelect(let options, let titleKeys):
+                // 多选 ↔ `list`（itemType string）：写盘的是一个字符串表
+                XCTAssertEqual(node.type, "list", "\(control.id) 的 kind 是 multiSelect，manifest 声明的是 \(node.type)")
+                XCTAssertEqual(node.itemType, "string", "\(control.id) 的多选项必须是字符串（itemType）")
+                XCTAssertFalse(options.isEmpty, "\(control.id) 的多选没有选项——那一行会是空的")
+                XCTAssertEqual(
+                    Set(options).count,
+                    options.count,
+                    "\(control.id) 的选项有重复值（两个胶囊写同一个字面量）"
+                )
+                XCTAssertEqual(
+                    titleKeys.count,
+                    options.count,
+                    "\(control.id) 的 options 与 titleKeys 必须一一对应（`multiSelectOptions` 靠它 zip）"
+                )
+                // 选项必须能落盘：manifest 的默认值里出现的取值都得是清单里的选项之一
+                // （否则「出厂那几档」在卡上一个都勾不上，用户也改不回默认）
+                if case .strings(let declared)? = node.default {
+                    for value in declared {
+                        XCTAssertTrue(
+                            options.contains(value),
+                            "\(control.id) 的默认值 `\(value)` 不在选项里——出厂档在卡上勾不上"
+                        )
+                    }
+                }
             }
 
             // ④ 文案
             XCTAssertResolves(control.titleKey)
+            for titleKey in control.multiSelectOptions.map(\.titleKey) {
+                XCTAssertResolves(titleKey)
+            }
         }
     }
 
@@ -1118,15 +1156,16 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
-    /// 控件**写路径的端到端**（四种类型各走一遍）：写进 `com.cmeng.gourd.module.<shortID>`
+    /// 控件**写路径的端到端**（五种类型各走一遍）：写进 `com.cmeng.gourd.module.<shortID>`
     /// （probe 域，**不碰**开发机真实的模块域）→ **模块自己的读侧**立刻看到同一个值
     /// （`MusicModule.showsAlbumArt(from:)` / `LauncherSettings.read(from:)` / `ShortcutsSettings.read(from:)`）。
     ///
-    /// 四件事因此被钉住：落盘的**域**（`ModuleContextFactory.configHandle(for:)` 与模块侧是同一个
+    /// 五件事因此被钉住：落盘的**域**（`ModuleContextFactory.configHandle(for:)` 与模块侧是同一个
     /// `ManifestConfigHandle` 实现）、**键名**、值的**类型**（`integer` 键写 `Int`、`number` 键写
-    /// `Double`——写错模块侧 `get` 就是 nil，本用例红）、以及**区间夹取**（越界值写进去读到的是端点）。
+    /// `Double`、`multiSelect` 键写 `[String]`——写错模块侧 `get` 就是 nil，本用例红）、
+    /// **区间夹取**（越界值写进去读到的是端点）、以及多选独有的**顺序收敛**（恒按选项声明顺序）。
     ///
-    /// 假 manifest 的 config 与四个真模块**同一形状**（键名 / 类型 / 默认值都照抄）：
+    /// 假 manifest 的 config 与五个真模块**同一形状**（键名 / 类型 / 默认值都照抄）：
     /// 本用例验的是读写口径，各模块自己的声明由各自的 manifest 用例覆盖。
     /// probe 域用完即删。
     func testConfigControlWritePathsShareTheModuleConfigHandle() throws {
@@ -1154,7 +1193,8 @@ final class TakeoverEnablementTests: XCTestCase {
               "showRecents": {"type": "boolean", "default": true},
               "showOutput": {"type": "boolean", "default": false},
               "timeoutSeconds": {"type": "integer", "default": 30},
-              "maxRecentApps": {"type": "integer", "default": 5}
+              "maxRecentApps": {"type": "integer", "default": 5},
+              "visibleScopes": {"type": "list", "itemType": "string", "default": ["day", "week", "month"]}
             }
           }
         }
@@ -1240,6 +1280,52 @@ final class TakeoverEnablementTests: XCTestCase {
         )
         XCTAssertFalse(stringProbe.writeString("circle", config: config), "probe manifest 没有这个键 → set 返回 false")
         XCTAssertEqual(stringProbe.stringValue(from: config), "", "schema 之外的键读回空串（键名漂了的形态）")
+
+        // ⑥ 多选（p5-home-blocks / T2 的第五种类型）：缺键回落 manifest 默认 → 翻面写回 → 顺序按选项声明
+        let scopesProbe = ModuleConfigControl(
+            moduleID: manifest.id,
+            key: "visibleScopes",
+            kind: .multiSelect(options: ["day", "week", "month", "quarter", "year"], titleKeys: ["a", "b", "c", "d", "e"]),
+            titleKey: "settings.modules.progress.visibleScopes"
+        )
+        XCTAssertEqual(
+            scopesProbe.selectedOptions(from: config),
+            ["day", "week", "month"],
+            "缺键回落 manifest 默认值（卡上勾中的就是模块读到的那一档）"
+        )
+        XCTAssertTrue(scopesProbe.toggleMultiSelect("quarter", config: config), "勾上「本季」")
+        XCTAssertEqual(
+            scopesProbe.selectedOptions(from: config),
+            ["day", "week", "month", "quarter"],
+            "翻面后按**选项声明顺序**收敛（本季排在默认三档之后）"
+        )
+        // 落盘类型必须是 `[String]`（模块侧读的就是它；写成别的类型就是「勾得动、模块读不到」）
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: try XCTUnwrap(suite.data(forKey: scopesProbe.key))),
+            ["day", "week", "month", "quarter"]
+        )
+        XCTAssertTrue(scopesProbe.toggleMultiSelect("day", config: config), "取消「今天」")
+        XCTAssertEqual(
+            scopesProbe.selectedOptions(from: config),
+            ["week", "month", "quarter"],
+            "取消一项后剩下的仍按声明顺序（不是按点击先后）"
+        )
+        // 写进去的野值（不在选项里的取值）不落盘：与数值型的「写侧夹取」同一条理由
+        XCTAssertTrue(scopesProbe.writeMultiSelect(["day", "bogus", "day"], config: config))
+        XCTAssertEqual(
+            scopesProbe.selectedOptions(from: config),
+            ["day"],
+            "野值被丢掉、重复值被收敛成一项"
+        )
+        // 顺序与勾选先后无关：倒着写进去，读出来仍按声明顺序
+        XCTAssertTrue(scopesProbe.writeMultiSelect(["year", "month", "day"], config: config))
+        XCTAssertEqual(scopesProbe.selectedOptions(from: config), ["day", "month", "year"], "写侧也按声明顺序收敛")
+        // 手改配置文件塞进野值 → 读侧只认选项里的那几个（卡上不会出现点不掉的勾）
+        XCTAssertTrue(config.set("visibleScopes", to: ["bogus", "month", "month"]))
+        XCTAssertEqual(scopesProbe.selectedOptions(from: config), ["month"], "读侧同样收敛")
+        // 非多选型调用写多选 = 空操作 + false（不误写别的类型）
+        XCTAssertFalse(showOutput.writeMultiSelect(["day"], config: config), "布尔控件不是多选型 → 不落盘")
+        XCTAssertTrue(ShortcutsSettings.read(from: config).showOutput, "上一次的布尔值一个字节没动")
     }
 
     /// **音乐卡那一行的界面入口**（T5 修复轮补的口子，T7 挪进允许清单）：模块 id / config 键 /
@@ -1274,6 +1360,57 @@ final class TakeoverEnablementTests: XCTestCase {
             "manifest 那一键的默认值 = MusicConfigDefaults.showAlbumArt（读取侧兜底用同一个常量）"
         )
         XCTAssertEqual(node.default, ConfigValue.bool(true), "默认显示（方向也要钉住）")
+
+        XCTAssertResolves(control.titleKey)
+    }
+
+    /// **进度卡那一行的界面入口**（p5-home-blocks / T2，docs/29 §做法 机制二 / D-05）：模块 id /
+    /// config 键 / 控件类型 / 选项与文案 / 行标题五項对生产事实——数据源是**生产表本身**
+    /// （同 `testMusicAlbumArtControlMatchesManifestAndCatalog` 的口径）。
+    ///
+    /// 选项与文案 key 都取自 `ProgressCalculator.Scope.allCases`：**顺序即模块的声明顺序**，
+    /// 也即「勾满五档而块放不下时画前三个」那个顺序（模块侧 `listedScopes` 取的是前缀）。
+    /// 类型那一档在允许清单用例里已按 kind 分档断言（`.multiSelect` ↔ manifest 的 `list`），
+    /// 这里把**具体取值**钉死：选项写错一个字 / 少一档（比如漏了 quarter），这里就红。
+    func testProgressVisibleScopesControlMatchesManifestAndCatalog() throws {
+        let control = try XCTUnwrap(
+            ModuleSettingsSection.configControls.first { $0.moduleID == "com.cmeng.gourd.progress" && $0.key == "visibleScopes" },
+            "进度卡必须有一条「显示的尺度」控件（D-05 要的就是这个入口）"
+        )
+
+        XCTAssertEqual(control.moduleID, ProgressModule.manifest.id, "模块 id 必须是真模块那一份字面量")
+        XCTAssertEqual(control.key, "visibleScopes", "落盘键名就是模块侧 `get` 读的那一个字面量")
+        XCTAssertEqual(control.titleKey, "settings.modules.progress.visibleScopes")
+
+        // 五档选项 + 一一对应的文案 key（都取自模块侧，不在设置页另抄一份）
+        XCTAssertEqual(
+            control.multiSelectOptions.map(\.value),
+            ProgressCalculator.Scope.allCases.map(\.rawValue),
+            "选项顺序 = `Scope.allCases`（勾满而块放不下时画前三个的那个顺序）"
+        )
+        XCTAssertEqual(
+            control.multiSelectOptions.map(\.titleKey),
+            ProgressCalculator.Scope.allCases.map(\.labelKey),
+            "文案 key 复用模块侧的行标签（`module.progress.scope.<rawValue>`）"
+        )
+        XCTAssertEqual(
+            control.multiSelectOptions.map(\.value),
+            ["day", "week", "month", "quarter", "year"],
+            "五档逐条写死（漏一档 / 改名即红）"
+        )
+
+        let properties = try XCTUnwrap(ProgressModule.manifest.config?.properties)
+        let node = try XCTUnwrap(
+            properties[control.key],
+            "控件的键名必须与 manifest config 的那一键逐字一致（`\(control.key)` 不在 schema 里）"
+        )
+        XCTAssertEqual(node.type, "list", "这个键写的是字符串表")
+        XCTAssertEqual(node.itemType, "string")
+        XCTAssertEqual(
+            node.default,
+            ConfigValue.strings(["day", "week", "month"]),
+            "manifest 那一键的默认值 = 出厂三档（`ProgressCalculator.defaultVisibleScopes`）"
+        )
 
         XCTAssertResolves(control.titleKey)
     }
