@@ -91,6 +91,10 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         "enableLLMUsageFeature",
         // 提醒 / 日历来源（选中哪些日历 = 要用户重选一遍）
         "calendarSelectionState",
+        // 授权相关的记账键（提醒 / 日历的授权本身在 TCC 里，应用侧只有这两条「问没问过」；
+        // 丢了会再问一遍 / 重新弹系统授权）
+        "didPromptAccessibilityOnce",
+        "didPromptLocationOnce",
         // 剪贴板历史与固定项（裸键：`ClipboardManager` 直接写 `UserDefaults.standard`）
         "ClipboardHistory",
         "ClipboardPinnedItems",
