@@ -199,6 +199,47 @@ T4 的两条宿主级用例；`TakeoverEnablementTests` 27 → **30**；`Shortcu
 是**宽度预算的必然**（四块需可用宽 ≥864，面板 ≈932pt 起）而不是缺陷；封面关掉后块宽仍 300/420；块内网格溢出静默不画；
 `showsScrollFades` 的默认值与 `MusicHomeBlockView` 的分档**没有自动化断言**（靠唯一实参 / 截图）。
 
+### 已交付 · `p3-freeze`（2026-09-30）
+
+**冻结 v0.1.0**（设计 [24](24-release-freeze.md)，9 个任务 / 15 条决策）。范围：① 版本身份分家
+（`VERSION` / `MARKETING_VERSION` = `0.1.0`，构建号 1197，DMG 名 `壶中天-0.1.0.dmg`）；② 许可与归属合规四笔
+（NOTICE 日期与改名、TRADEMARKS 无背书、COPYRIGHT_ASSETS、自建文件版权头）+ `docs/03`/`04` 口径；
+③ CHANGELOG 分家（顶部自有段 + 上游历史保留）；④ 冒烟清单 `docs/25-release-smoke.md` 成文；
+⑤ 独立日历接线成日历模块的展开 tab（`showCalendar` 一个开关管两处）；⑥ 组件页配置编辑口（允许清单 7 条 / 4 模块，
+接管键标「由上游设置管理」）；⑦ README 重写 + 带图例的用户手册（`docs/guide/` + 7 张仓库内截图）；
+⑧ 通知 × 谓词的自动化断言 + `＋N` tooltip 时延记档。**收尾时另修一枚关闭态「日进度 pill」**（见下）。
+
+**本批追加的缺陷修复（收尾取证）**：用户报「收起态长期挂着一枚亮度 HUD」——取证落在 **`progress` 模块的
+折叠态中央槽位**（`sun.max` + 日进度百分比，`ProgressModule.swift` 的 `ProgressCompactView`），
+关闭态与亮度 HUD 同形；`inlineHUD` / `enableBrightnessHUD` 与它无关（那两条管的是亮度 HUD 自己的链）。
+修法是该模块**不再占折叠槽位**（`surfaces` 只留 `expanded`、`slot` 记 `nil`、`order 30` 仍供展开 tab 排序），
+进度改在展开面板看；`docs/09` §5.3 / `docs/14` / CHANGELOG 同步。证据：收起态 0/15/30/45/60/75 秒逐张干净
+（`evidence/hud-fix-collapsed.png`）、亮度 HUD 仍正常弹（`evidence/hud-fix-brightness-works.png`）、
+变异（把 `surfaces` 改回）pill 复现（`evidence/hud-fix-mutation-repro.png`）、偏好前后逐键一致。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1 | 版本身份分家 | `VERSION` / 两处 `MARKETING_VERSION` = `0.1.0`、构建号 1197；应用与 `dist/壶中天-0.1.0.dmg` 自报 0.1.0 |
+| T2 | 许可与归属合规补口 | NOTICE 加首次修改日期与改名重打包；TRADEMARKS 加 nominative use 一句、删「以 Atoll 之名营销」；COPYRIGHT_ASSETS 分段；自建 `.swift` 统一版权头（上游文件头一字未动） |
+| T3 | CHANGELOG 分家 | 顶部 `[0.1.0] - 2026-09-30` 自有段（本批又补 2 条新增 + 1 条缺陷修复）；上游历史保留并注明来源 |
+| T4 | 冒烟清单成文 | `docs/25-release-smoke.md`：逐条「动作 → 期望 → 证据」+ 前置条件 |
+| T5 | 两处断言/观感缺口 | `TakeoverEnablementTests` 给 `willAlsoCloseSystemBanner` 补可构造用例（句柄台账两态）+ 变异红；`＋N` 悬停时延写进 `docs/21` |
+| T6 | 日历展开 tab | `Modules/Takeover/CalendarModule.swift`（`surfaces [.expanded]`、真源 `showCalendar`、内容 = 孤儿视图 `StandaloneCalendarView()`）；内置清单 9 → 10 |
+| T7 | 组件页配置编辑口 | 允许清单 7 条 / 4 模块（music / launcher / shortcuts / frontapp），读写共用 `ManifestConfigHandle`；另修「写完本行不重画」（行级 `@State refreshToken`） |
+| T8 | README + 带图例手册 | `README.md` 68 行（顶部一句话写「修改版本」、归属小节给上游版本号与不背书、不挂徽章）；`docs/guide/README.md` 七节 + 7 张实机截图（①②③ 烧进图里） |
+| T9 | 文档回写 | 本段 + [24](24-release-freeze.md) 的 §实际交付 / §已知限制 6·7 / §决策摘要 D-10…D-15；CHANGELOG 补口 |
+
+**测试**：`DynamicIslandTests` **367 条 0 失败**（本轮只动 `ModuleKernelTests` 里 progress 的三组断言）。
+五段变异各有红（T5 谓词、T6 日历接管键、T7 配置键可解析 / 写路径、本批 `surfaces`）。
+
+**上屏证据**（`.workflow/p3-freeze/evidence/`）：`t1-*`、`t2-*`、`t5-*`、`t6-calendar-tab.png` / `t6-calendar-month-nav.png`、
+`t7-config-controls.png` / `t7-launcher-config.png` / `t7-launcher-effect.png` / `t7-stale-value-before-fix.png`、
+`t8-raw-*.png`（7 张）+ `docs/guide/assets/*.png`、`hud-fix-*.png`（收起态 75 秒采样 / 亮度 HUD / 变异复现）。
+
+**遗留**：`dist/壶中天-0.1.0.dmg` 与本地 `v0.1.0` 标签由控制器收尾（本批不做远端动作）；
+`docs/guide` 的图与手册靠纪律保持一致（[24](24-release-freeze.md) §已知限制 4）；日历 tab 下方留白见 §已知限制 7；
+配置控件的 `list` / `enum` 型仍只能改配置文件（§已知限制 1·2）。
+
 ### 下一批 · 登记（2026-09-29）
 
 > **2026-09-29 增补**：下一批的完整优先级清单（含本批暴露的缺口）已收在 [16](16-nookx-reference.md) **§4.4**，按 P0 / P1 / P2 分档并给了成本、依赖与判据。**P0 四项**：~~① 通知组件在首页有块~~、~~② 组件卡片说清"开了会看到什么、在哪看"~~、~~③ 待办块窄宽度下也显示清单~~（**三项已在 `p2-p0-visible` 批次落地，2026-09-29**）；**④ 月历入口回归仍待做**（需要先定形态：点日期头进月历 vs 加一个 calendar tab——这是产品选择，等用户拍板）。下面四项属 **P1**。

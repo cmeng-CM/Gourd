@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   右键固定），扫描本机应用目录 + 按 Spotlight 使用数据排序，零权限、零私有 API。
 - **组件页**：第二段给不改渲染归属的七个功能各一张上游开关卡（卡即那个 `Defaults` 键的镜像 +
   一行「开了会在哪看到什么」）；接管卡写出写路径与生效位置，跨模块顺序节按实现收敛。
+- **日历展开 tab**（`p3-freeze`）：原本只有 `#Preview` 的独立月历（`StandaloneCalendarView`）接线成
+  `com.cmeng.gourd.calendar` 模块的展开 tab——展开面板多一个「日历」入口（月历可翻月 + 当日清单），
+  与首页日历行由**同一个 `showCalendar` 开关**控制。
+- **组件页配置编辑口**（`p3-freeze`）：音乐 / 启动台 / 快捷指令 / 前台应用四个模块的**有效配置项**
+  可以直接在组件页拨动并即时生效（按允许清单逐键渲染，只支持 boolean / integer / number / string 四种；
+  接管模块登记的上游键不进清单，卡上以一行灰字标注「由上游设置管理」）。
+- **关闭态的「日进度 pill」退回展开面板**（`p3-freeze`，缺陷修复）：`progress` 模块原本在关闭态中央槽位
+  常驻一枚「尺度图标 + 百分比」（默认 `sun.max` + `53%`），**与亮度 HUD 同形**，容易被当成「收起态挂着一枚
+  亮度 HUD」。该模块不再占折叠槽位（`surfaces` 只留 `expanded`），进度改在展开面板看；它与
+  `inlineHUD` / `enableBrightnessHUD` 无关——那两条管的是亮度 HUD 自己的链。
 
 ### 首页条与 `＋N`（docs/21 / 23）
 
