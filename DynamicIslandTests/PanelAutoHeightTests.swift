@@ -412,9 +412,12 @@ final class PanelAutoHeightTests: XCTestCase {
         PanelAutoHeight.homeContentHeight = nil
         XCTAssertEqual(openNotchSize.height, 333, "持有者为 nil → 回落手动值")
 
-        // auto + 内容高离谱（超过可配上界）：夹到上界（这里屏未知 → 850）。
+        // auto + 内容高离谱（超过可配上界）：夹到上界（上界本身与屏相关，期望值按同一个函数取）。
+        let upper = effectiveOpenNotchHeightUpperBound(
+            screenVisibleHeight: NSScreen.main?.visibleFrame.height
+        )
         PanelAutoHeight.homeContentHeight = 5000
-        XCTAssertEqual(openNotchSize.height, openNotchHeightRange.upperBound, "内容高再大也不越过 850")
+        XCTAssertEqual(openNotchSize.height, upper, "内容高再大也不越过有效上界")
     }
 
     // MARK: - 右下角把手（D-16）
