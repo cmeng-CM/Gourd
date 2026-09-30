@@ -24,6 +24,16 @@
 //  - 身份 `id` 的 pid 兜底（无 bundleID 的进程）；
 //  - 夹取区间本身：`clampedLimit(1) == 3` / `(99) == 8` / `(5) == 5`。
 //
+//  T4 段（`FrontAppModule`，§接口与数据形状 4 + §做法 机制三/机制四）：
+//
+//  - manifest 逐字段契约（只声明 `home`、默认关、零权限、`order 30`、config 一键、文案可解析）；
+//  - 内容分发（`home` → `.view`，其余 surface → `.none`）与 `deactivate()` 的幂等；
+//  - 块宽回落：模块不声明 `homeBlockWidth`，注册表对「已注册但不声明」回 nil（宿主统一值）；
+//  - `maxRecentApps` 的读 → 夹：模块显式传进 store 的值被夹一次后写进 `recentLimit`。
+//
+//  视图（`FrontAppHomeBlockView`）不进单测：它只做呈现（排布、悬停、点击转发），
+//  历史口径与上限都在 T3 的纯函数与 store 里——这里只钉"模块把哪一份内容交出去"。
+//
 //  四条刻意写死的口径（改动前先读）：
 //
 //  1. **样本行全是合成的**：本机 `/usr/bin/shortcuts list --show-identifiers` 恰两行
@@ -656,6 +666,122 @@ final class ShortcutsFrontAppTests: XCTestCase {
         )
     }
 
+    // MARK: - T4：前台应用模块（manifest / 内容分发 / 块宽回落）
+
+    /// manifest 逐字段对齐 docs/22 §接口与数据形状 4：**只声明 `home`**、默认关、零权限、
+    /// config 一键 `maxRecentApps`（默认 5）、文案 key 都能从宿主 bundle 解析。
+    func testFrontAppManifestContract() throws {
+        let manifest = FrontAppModule.manifest
+        XCTAssertNoThrow(try manifest.validate(), "真模块的 manifest 必须过校验（含 symbol 可解析性）")
+
+        XCTAssertEqual(manifest.manifestVersion, 1)
+        XCTAssertEqual(manifest.id, "com.cmeng.gourd.frontapp")
+        XCTAssertEqual(FrontAppModule.moduleID, "com.cmeng.gourd.frontapp", "moduleID 是 id 的唯一字面量来源")
+        XCTAssertEqual(manifest.shortID, "frontapp")
+        XCTAssertEqual(manifest.name.key, "module.frontapp.name")
+        XCTAssertEqual(manifest.summary?.key, "module.frontapp.summary")
+        XCTAssertEqual(manifest.icon.type, "symbol")
+        XCTAssertEqual(manifest.icon.name, "app.badge")
+        XCTAssertEqual(manifest.version, "1.0.0")
+        XCTAssertEqual(manifest.apiVersion, HostInfo.currentAPIVersion)
+        XCTAssertEqual(manifest.kind, "builtin")
+
+        XCTAssertEqual(manifest.surfaces, [.home], "只声明 home（docs/22 §接口与数据形状 4 / D-06）")
+        XCTAssertFalse(manifest.surfaces.contains(.expanded), "展开 tab 不占（本批只做首页块）")
+        XCTAssertFalse(manifest.surfaces.contains(.compact), "折叠槽位不占（左右槽位已降级，§备选与取舍 ④）")
+        XCTAssertFalse(manifest.surfaces.contains(.lockscreen))
+
+        XCTAssertEqual(manifest.defaultEnabled, false, "新增模块一律默认关（docs/22 D-06 / docs/14 T-12）")
+        XCTAssertTrue(
+            manifest.permissions.isEmpty,
+            "零权限：NSWorkspace 通知与 NSRunningApplication 都是公开 API（§接口与数据形状 4）"
+        )
+        XCTAssertEqual(
+            manifest.defaultPlacement,
+            Placement(slot: nil, order: 30),
+            "首页块顺序 30（待办 20 与通知 40 之间，§接口与数据形状 4）"
+        )
+        XCTAssertNil(manifest.defaultPlacement?.slot, "slot 只在含 compact 时有意义，本模块不占槽位")
+
+        let properties = try XCTUnwrap(manifest.config?.properties)
+        XCTAssertEqual(Set(properties.keys), ["maxRecentApps"], "config 只有这一个键")
+        XCTAssertEqual(properties["maxRecentApps"]?.type, "integer")
+        XCTAssertEqual(
+            properties["maxRecentApps"]?.default,
+            .int(FrontAppHistory.defaultLimit),
+            "默认值只有一个来源：`FrontAppHistory.defaultLimit`"
+        )
+        XCTAssertEqual(FrontAppHistory.defaultLimit, 5, "文档口径：默认 5（运行时夹取 3…8）")
+
+        // 文案 key 可解析（06 §3.3 R5：视图内不写字面量文案；catalog 没编进宿主 bundle 时这里会红）
+        for key in [
+            "module.frontapp.name",
+            "module.frontapp.summary",
+            "module.frontapp.current",
+            "module.frontapp.recent",
+            "module.frontapp.emptyRecent",
+        ] {
+            let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+            XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
+            XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
+        }
+    }
+
+    /// 内容分发：`home` → `.view`（当前应用 + 最近切换）；**`.compact` / `.expanded` / `.lockscreen`
+    /// 一律 `.none`**（不占位、不算失败——本批的契约，也是"折叠态与展开 tab 没有多出东西"的判据）。
+    ///
+    /// 块宽走**宿主默认**：模块不声明 `homeBlockWidth`，注册表对"已注册但不声明"同样回 nil
+    /// （`HomeStripView` 因此用统一值 180/240，docs/17 D-11）。
+    func testFrontAppModuleServesOnlyHomeSurfaceAndFallsBackToHostWidth() async throws {
+        let module = FrontAppModule(context: frontAppContext())
+        try await module.activate()
+
+        guard case .view = module.content(for: request(.home)) else {
+            return XCTFail("home 请求应拿到首页块的 .view（当前应用 + 最近切换）")
+        }
+        for surface in [Surface.compact, .expanded, .lockscreen] {
+            guard case .none = module.content(for: request(surface)) else {
+                return XCTFail("\(surface.rawValue) 未声明 → 必须答 .none（不占位）")
+            }
+        }
+
+        await module.deactivate()
+        // `deactivate()` 幂等（06 §3.3 / T3 的 store）：重复调用不崩、也不再摘第二次
+        await module.deactivate()
+
+        XCTAssertNil(FrontAppModule.homeBlockWidth, "只有接管模块声明块宽，新增模块不参与宽度决策（docs/17 D-11）")
+
+        // 注册表侧同一条回落（`HomeStripView` 的真实取法）：未注册 → nil；已注册但不声明 → 仍然 nil。
+        // 注册表是**单例**，用完 `deactivateAll()` 清干净（别的用例的 setUp 也清，这里不留尾）。
+        let registry = ModuleRegistry.shared
+        XCTAssertNil(registry.homeBlockWidth(for: FrontAppModule.moduleID), "未注册的 id → nil")
+        registry.register([FrontAppModule.self], enabled: { _ in true })
+        XCTAssertNil(
+            registry.homeBlockWidth(for: FrontAppModule.moduleID),
+            "已注册但不声明 → nil（宿主统一值 180/240）"
+        )
+        await registry.deactivateAll()
+    }
+
+    /// `maxRecentApps` 这条线的**读 → 夹**：store 收下模块显式传进来的原样值，夹一次（3…8）
+    /// 写进 `recentLimit`——视图拿到的就是这个值（T3 口径 3 的接线由 T4 的模块负责传值）。
+    ///
+    /// 用**会落盘**的假 config（不碰 `com.cmeng.gourd.module.frontapp` 真实域）：只验读到的值与类型。
+    func testFrontAppStoreClampsTheValueTheModulePassesIn() {
+        let config = RecordingConfigHandle(schema: ["maxRecentApps"])
+        XCTAssertTrue(config.set("maxRecentApps", to: 99))
+
+        let store = FrontAppStore(config: config, logger: frontAppLogger())
+        store.start(selfBundleID: "com.cmeng.gourd.test", maxRecentApps: config.get("maxRecentApps", as: Int.self))
+        XCTAssertEqual(store.recentLimit, 8, "99 → 夹到上界 8（模块原样传，夹取在 store 那一处）")
+        store.deactivate()
+
+        let tight = FrontAppStore(config: RecordingConfigHandle(schema: ["maxRecentApps"]), logger: frontAppLogger())
+        tight.start(selfBundleID: nil, maxRecentApps: 1)
+        XCTAssertEqual(tight.recentLimit, 3, "1 → 夹到下界 3")
+        tight.deactivate()
+    }
+
     // MARK: - 夹具（T2）
 
     private func logger() -> ModuleLogger {
@@ -673,6 +799,23 @@ final class ShortcutsFrontAppTests: XCTestCase {
             host: HostInfo(appVersion: "0", apiVersion: HostInfo.currentAPIVersion, macOSVersion: "15.0"),
             config: config ?? RecordingConfigHandle(),
             logger: logger(),
+            ui: SilentUIHandle()
+        )
+    }
+
+    /// 前台应用模块的 logger（T4）：`shortID` 只用于拼 subsystem。
+    private func frontAppLogger() -> ModuleLogger {
+        ModuleLogger(moduleID: FrontAppModule.moduleID, shortID: "frontapp")
+    }
+
+    /// 前台应用模块的 `ModuleContext` 假体（T4）：config 给**只认 `maxRecentApps` 的**会落盘假体
+    /// （缺键时模块兜 `FrontAppHistory.defaultLimit`），因此**不碰** `com.cmeng.gourd.module.frontapp`。
+    private func frontAppContext(config: ConfigHandle? = nil) -> ModuleContext {
+        ModuleContext(
+            moduleID: FrontAppModule.moduleID,
+            host: HostInfo(appVersion: "0", apiVersion: HostInfo.currentAPIVersion, macOSVersion: "15.0"),
+            config: config ?? RecordingConfigHandle(schema: ["maxRecentApps"]),
+            logger: frontAppLogger(),
             ui: SilentUIHandle()
         )
     }
