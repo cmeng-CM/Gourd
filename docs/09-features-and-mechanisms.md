@@ -280,17 +280,27 @@
 
 ### 5.4 系统 Shortcuts 上岛 `shortcuts`
 
+> **2026-09-30 落地（`p2-shortcuts-frontapp`）**：`com.cmeng.gourd.shortcuts` 已实现——**只声明 `expanded`**
+> （展开面板一个 tab：搜索框 + 刷新按钮 + 列表 + 结果行）、`defaultEnabled = false`、
+> `permissions ["shortcuts:run"]`（06 §7.1 既有条目，**零新增 capability**）。取数
+> `/usr/bin/shortcuts list --show-identifiers`（**原始行**存进 `cachedShortcuts`，解析只有一份）、运行
+> `shortcuts run <identifier>`（`showOutput` 时加 `--output-path` 读回临时文件、读完即删）；
+> **限时**（`timeoutSeconds`，默认 30s）+ **模块级禁并发**（`isRunning` 为真时后到的运行请求直接返回）；
+> 失败把系统原话摆出来（stderr 摘要；系统没给 stderr 时退到 `exit <退出码>`）。设计见
+> [22](22-shortcuts-and-frontapp.md)。**未做**：`--input-path`（Shelf 联动，没有输入源）、文件夹分组、
+> 折叠态槽位（随左右槽位那批）、大输出落盘 + 「在 Finder 中显示」。
+
 | 项 | 设计 |
 |---|---|
-| 枚举 | `/usr/bin/shortcuts list --show-identifiers`（**已实测**：支持 `--folders`、`--folder-name`）。结果**缓存进配置**，提供手动刷新按钮；不要每次进岛都起子进程 |
-| 标识 | 用**identifier** 而不是名称（名称可重复、可随时改；identifier 稳定） |
-| 运行 | `/usr/bin/shortcuts run <identifier>`（**已实测**：支持 `--input-path` / `--output-path` / `--output-type`）。子进程调用需**限时 30s + 禁止并发**（沿用 §3.2 既有模式） |
-| 输入联动 | 把 **Shelf 暂存架的文件**作为 `--input-path` 传进去（"把文件拖到岛上 → 交给某个快捷指令处理"）——与已有功能自然联动 |
-| 输出回显 | `--output-path` 写临时文件 → 读回 → 在岛上显示结果（适合"生成文本/查询类"快捷指令）；输出过大则只显示前 N 行并给"在 Finder 中显示" |
-| 呈现 | 展开面板一个 tab（列表 + 搜索 + 固定）+ 可选折叠态槽位（最近使用的 1 个快捷指令） |
-| 配置 | `pinnedShortcuts`（identifier 列表）、`showOutput`（bool）、`timeoutSeconds` |
-| 权限 | 无额外权限（首次运行可能触发系统自动化提示，需实测定） |
-| 工作量 | 低～中（2～3 天） |
+| 枚举 | `/usr/bin/shortcuts list --show-identifiers`（**已实测**：支持 `--folders`、`--folder-name`）。结果**缓存进配置**，提供手动刷新按钮；不要每次进岛都起子进程。**实现口径**：缓存键是 **`cachedShortcuts`**（`list<string>`，默认 `[]`，存**命令输出的原始行**、不是解析后的对象）；**进 tab 不取数**——`load()` 只读一次本地 config 里的缓存（读偏好，不扫盘、不起子进程），只有「首次进入且缓存为空」与「点刷新」两处会起子进程 |
+| 标识 | 用**identifier** 而不是名称（名称可重复、可随时改；identifier 稳定）。**实现口径**：解析规则 = **从行尾往回找第一个 ` (`**（名称里可以有空格、也可以有括号）；名称侧或 identifier 侧去空白后为空、或形状不符的行**整行丢弃**（不猜、不补默认名） |
+| 运行 | `/usr/bin/shortcuts run <identifier>`（**已实测**：支持 `--input-path` / `--output-path` / `--output-type`）。子进程调用需**限时 30s + 禁止并发**（沿用 §3.2 既有模式）。**实现口径**：限时值取自 manifest config 的 `timeoutSeconds`（`integer`，默认 `30`）；闸门是模块级的（`isRunning`），运行期间所有行的运行按钮与刷新按钮都禁用（刷新会换掉正在跑的那条的 identifier 语义）；超时 → `terminate()` 记 `.timedOut`、**不重试**；失败把 stderr 摘要（去空白、最多 3 行）摆进结果行。**超时是软界**：`terminate()` 后仍要等子进程真的退出（详见 [22](22-shortcuts-and-frontapp.md) §已知限制 10） |
+| 输入联动 | 把 **Shelf 暂存架的文件**作为 `--input-path` 传进去（"把文件拖到岛上 → 交给某个快捷指令处理"）——与已有功能自然联动。**未做（本批）：**`--input-path` 挂在 shelf 上，shelf 未落地、没有输入源 |
+| 输出回显 | `--output-path` 写临时文件 → 读回 → 在岛上显示结果（适合"生成文本/查询类"快捷指令）；输出过大则只显示前 N 行并给"在 Finder 中显示"。**实现口径**：读回后**即删**临时文件；**只在 runner 侧截一次**——前 `ShortcutRunResult.maxOutputLines`（**40**）行 + 末尾一行截断提示（`module.shortcuts.outputTruncated`），视图直接显示 `output`、不重算行数。**未做**：「在 Finder 中显示」与大输出落盘（要先定"落在哪、留多久、怎么清理"） |
+| 呈现 | 展开面板一个 tab（列表 + 搜索 + 固定）+ ~~可选折叠态槽位（最近使用的 1 个）~~ **未做**（只声明 `expanded`，槽位随折叠态左右槽位那批）。**实现口径**：tab = 搜索框 + 刷新按钮 + 列表（固定项在最前）+ 底部结果行；搜索词是 UI 局部 `@State`、不进 `Defaults`（面板重开 = 干净的一屏） |
+| 配置 | `pinnedShortcuts`（identifier 列表）、`showOutput`（bool）、`timeoutSeconds`、**`cachedShortcuts`**（清单缓存，存原始行）。**四键均已落地**（`DynamicIsland/Modules/Shortcuts/ShortcutsModule.swift` 的 manifest），默认值只有 `ShortcutsConfigDefaults` 一处；`pinnedShortcuts` / `cachedShortcuts` 是状态键（`load` / `refresh` / `togglePin` 读写）、`showOutput` / `timeoutSeconds` 在运行那一刻读一次 |
+| 权限 | 无额外权限（首次运行可能触发系统自动化提示，需实测定）。**2026-09-30 落地口径**：零系统 TCC；capability `shortcuts:run` 如实声明（06 §7.1，内置模块不过授予流程但仍声明，[14](14-module-manifests.md) T-9）。**"首次运行会不会弹提示"本批没有现场证据**（单测不跑真命令、也没有人工点过一次）——口径仍是"可能触发"，未被推翻也未被证实 |
+| 工作量 | 低～中（2～3 天）；**已落地**（`p2-shortcuts-frontapp`，2026-09-30；`DynamicIslandTests/ShortcutsFrontAppTests.swift` 26 条用例） |
 
 ### 5.5 通知上岛 `notifications`（本轮风险最高的一项）
 
@@ -368,6 +378,8 @@
 
 **2026-09-30 增补（`p2-honesty`）：丢块不再无声**——宽度不够被规则③ 丢掉的块在**条尾**得到一个 `＋N` 小胶囊（悬停列被丢块名，用户据此知道"把面板拉宽就能看见"；`＋N` 是符号 + 数字、语言无关，不进 `Localizable.xcstrings`）。预留位在**纯函数**里定：`plan(…:tailReserve:)` 多一个入参（缺省 0）与两个出参 `droppedCount` / `tailReserveUsed`，判定三步（不丢块不预留 / 丢块才按 `available − tailReserve` 重算 / 预留版一块都放不下就退回基线）；视图与 Layout 的宽度声明**同源**（视图先把每块解析成非可选数组，同一个数组既喂块壳也喂 `HomeStripLayout(items:tailHintWidth:)`，Layout 不再从 subviews 取声明）。**丢块规则一字未动**（仍从尾部丢、不滚动、不压扁）；预留位固定 34pt，边界处可能因此**多丢一块**（[21](21-strip-honesty.md) §已知限制 6）。全量测试 **315 条 0 失败**（`HomeStripLayoutTests` 17 → **21**）。同一批把通知 × 的四格语义写进 §5.5（**只改文案，行为未动**）。
 
+**2026-09-30 增补（P2 批次 `p2-shortcuts-frontapp`）：strip 多一块「前台应用」、展开面板多一个「快捷指令」tab**——两个都是**新增模块**（`com.cmeng.gourd.frontapp` / `com.cmeng.gourd.shortcuts`，都默认关、都只声明一个既有 surface、零新增 capability）。前台应用块是**模块块**（走 `homeEntries` 那条既有名单，宿主统一块宽 180/240、`order 30` 夹在待办 20 与通知 40 之间）：上半 = 当前前台应用的图标 28 + 名称，下半 = 最近切换过的一排 20pt 小图标（点一下 `activate` 切回去；点开刘海让壶中天自己成为前台时整条忽略，`current` 留上一次的真前台）；事件源 = `NSWorkspace.shared.notificationCenter` 的 `didActivateApplicationNotification`（公开 API，**零 TCC、零私有 API**），历史口径 = 去重 + 移到最前 + 截到 `maxRecentApps`（默认 5、夹取 3…8）+ 排除自身，全在纯函数里。快捷指令 tab 只声明 `expanded`（不进 strip）。**这一批的"块"没有新机制**：块名单、宽度声明、丢块规则、`＋N` 提示都逐字沿用本节（[22](22-shortcuts-and-frontapp.md) / [14](14-module-manifests.md) §1 两行）。**本批暴露的两条 strip 边界**：前台应用块**窄块里会少画格子**（180pt 最多 6 个、240pt 8 个，配 7/8 时超出部分静默不画且没有提示——丢的是块内格子、不是整块）与该块在"音乐会话 + 镜子"同开时按规则③ 被丢（[22](22-shortcuts-and-frontapp.md) §已知限制 13 / 7）。全量测试 **341 条 0 失败**（+26）。
+
 展开面板首页从「音乐 + 日历两栏写死」改成**一条横向 strip**（用户定稿的结构，来源 [16](16-nookx-reference.md) §5.1 要点 5「首页 = 已开启组件的横向拼装」）。模块系统由此第一次变成用户可见的产品面：**开关即拼装**。**2026-09-29 晚 `p2-calendar-row` 改判**：首页的结构描述由"一条 strip"改为「strip 一排 + 全宽日历行」两排（上段），strip 自身的块机制（来源 / 宽度分配 / 开关）与本节其余内容逐字不变。
 
 | 项 | 设计 |
@@ -386,7 +398,7 @@
 | 测试 | `HomeStripLayoutTests`（16 条，三条规则 + 边界 + 不变量）、`ModuleToggleTests`（14 条，`setEnabled` 幂等 / 终态 / 代次作废）、`ModuleKernelTests` 里的 todos 与首页投影断言；`DynamicIslandTests` 合计 **199 条**（**2026-09-29 晚 `p2-calendar-row` 后为 215 条**：本批 +11——`WheelPickerIndexMath` 5 / `MonthGridLayoutTests` 5 / `HomeCalendarRowLayoutTests` 1；其间 `p2-p0-visible` 另有 +5） |
 | 工作量 | 中（5 个实现任务，**已落地**，P2 批次 p2-home-strip，2026-09-29） |
 
-**不做**（与首页 strip 无耦合或需要本批没有的事件源）：折叠态左右槽位的图标网格、待办面板"左导航 + 右看板"重构、前台应用联动、充电瞬浮——四项均已登记为下一批（[12](12-p1-batches.md)）。
+**不做**（与首页 strip 无耦合或需要本批没有的事件源）：折叠态左右槽位的图标网格、待办面板"左导航 + 右看板"重构、~~前台应用联动~~、充电瞬浮——**四项均已登记为下一批**（[12](12-p1-batches.md)）。**2026-09-30 改判**：**前台应用联动已落地**（批次 `p2-shortcuts-frontapp`）——做的是**首页块形态**（见下段），**折叠态侧槽形态仍未做**（它要的左右槽位与上面那项一起还挂在下一批）。
 
 ---
 
@@ -431,7 +443,7 @@
 | 项 | 结论 |
 |---|---|
 | **通知上岛的能力边界** | ✅ **接受**："能显示通知、能点击打开 App"即可，不要求关闭/回复。因此主方案（只读通知库 + `NSWorkspace` 打开 App）成立，AX 仅作降级 |
-| **模块化边界** | ✅ **接受**：接管 10 个（nowplaying、lyrics、stats、calendar、shelf、timer、clipboard、controls、weather、mirror）+ 新增 5 个模块（launcher、lunar、progress、shortcuts、notifications）+ 终端配置；其余（HUD、取色器、下载监控、笔记、隐私指示灯、空闲动画、AI…）**保持上游原样**，不追求 100% 模块化。**2026-09-28 增补**：新增模块再添 `todos`（待办，§5.7，第 6 个新增模块），它是当前折叠态中央槽位的默认内容；`progress` 保留代码但 `defaultEnabled` 改 `false`（§5.3）。**2026-09-30 进度（P2 接管批次 `p2-takeover`）：接管 3/10 已落地**——**计时器 / 镜子 / 音乐**的渲染点已交给模块（模块拥有渲染点，**启用真源 = 上游那个开关键本身**），上游那三处写死的渲染分支（Timer tab / 镜子块 / 音乐块）删除、不并存；其余 7 个（lyrics、stats、calendar、shelf、clipboard、controls、weather）**本批不改渲染归属**，只在组件页第二段「功能」各得一张上游开关卡（纯登记：卡 = 那个 `Defaults` 键的镜像 + 一行"开了在哪看到什么"）。另注：`nowplaying` 本批只落了它的 `home` 形态（首页音乐块），`compact` / `expanded` 与三个 media capability 待后续批次。逐项清单见 [14](14-module-manifests.md) §1，设计与决策见 [20](20-component-page.md) |
+| **模块化边界** | ✅ **接受**：接管 10 个（nowplaying、lyrics、stats、calendar、shelf、timer、clipboard、controls、weather、mirror）+ 新增 5 个模块（launcher、lunar、progress、shortcuts、notifications）+ 终端配置；其余（HUD、取色器、下载监控、笔记、隐私指示灯、空闲动画、AI…）**保持上游原样**，不追求 100% 模块化。**2026-09-28 增补**：新增模块再添 `todos`（待办，§5.7，第 6 个新增模块），它是当前折叠态中央槽位的默认内容；`progress` 保留代码但 `defaultEnabled` 改 `false`（§5.3）。**2026-09-30 增补（P2 批次 `p2-shortcuts-frontapp`）：新增模块再添 `frontapp`（前台应用，第 7 个新增模块——它的"首页块"那半在 [16](16-nookx-reference.md) §4.2 A5 的建议形态里，但**不在 P1-0 的清单里**；侧槽那半仍未做），同批落地 `shortcuts`（快捷指令，原第 4 个新增模块，只声明 `expanded`）**；两个都默认关、零新增 capability（`shortcuts:run` 早已在 06 §7.1）、零 TCC，逐条见 §5.4 / §5.8 与 [14](14-module-manifests.md) §1 两行。**2026-09-30 进度（P2 接管批次 `p2-takeover`）：接管 3/10 已落地**——**计时器 / 镜子 / 音乐**的渲染点已交给模块（模块拥有渲染点，**启用真源 = 上游那个开关键本身**），上游那三处写死的渲染分支（Timer tab / 镜子块 / 音乐块）删除、不并存；其余 7 个（lyrics、stats、calendar、shelf、clipboard、controls、weather）**本批不改渲染归属**，只在组件页第二段「功能」各得一张上游开关卡（纯登记：卡 = 那个 `Defaults` 键的镜像 + 一行"开了在哪看到什么"）。另注：`nowplaying` 本批只落了它的 `home` 形态（首页音乐块），`compact` / `expanded` 与三个 media capability 待后续批次。逐项清单见 [14](14-module-manifests.md) §1，设计与决策见 [20](20-component-page.md) |
 | **"不需要的上游功能"如何落地** | ✅ **用上游已有开关的默认值**：首启时把 `enableScreenAssistant` 等开关写成 `false`（在 `Kernel/ConfigStore` 初始化时写入，**不改上游源码**）。比从界面移除便宜得多，也避免了删除接线 |
 | **终端形态** | ✅ **走外部 App（Ghostty）**，`mode` 默认 `external`；内嵌 SwiftTerm 代码保留但不作为目标形态。**优先级最低，放 P2b 最后** |
 | ~~Metal Toolchain~~ | ✅ **已安装**；基线构建已跑通（`BUILD SUCCEEDED`，产物 116MB） |

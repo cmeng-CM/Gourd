@@ -136,15 +136,39 @@ P1 开工前必须补齐的三项设计（[02](02-roadmap.md) 已列为前置）
 
 提交范围 `682b4bd8..c6799692`（T1 `8eafb8be`：纯函数预留位 + 同源重构 + 提示视图 + 4 条用例；T2 `d23ede48`：只读谓词分档文案 + `docs/09` §5.5 四格表；T3 `14261efe`：文档回写；末尾 `c6799692`：**T2 修复**——新 key 进 `ModuleKernelTests` 解析名单。范围非连续，修复那一笔夹在 T3 之后）。`docs/17` 已知限制 22 已就地改判（"strip 没有 `+N` 提示"那条关闭）。
 
+### 已交付 · `p2-shortcuts-frontapp`（2026-09-30）
+
+两个**新增内置模块**：**快捷指令**（展开面板一个 tab：搜系统快捷指令、点一下跑、固定常用的——取数与运行都走 `/usr/bin/shortcuts`，限时 + 模块级禁并发、缓存存原始行）与**前台应用联动**（首页一块：当前前台应用的图标与名称 + 最近切换的一排小图标，点一下切回去——事件源是 `NSWorkspace` 的"某应用被激活"通知，公开 API、零 TCC）。设计 [22](22-shortcuts-and-frontapp.md)（含 D-01…D-21）。它落的是 [16](16-nookx-reference.md) §4.2 A5「前台应用联动显示」的**首页块**一半（**侧槽一半仍留**），同时把 `docs/14` §1 里原位挂着零实现的 `shortcuts` 行做成真模块。
+
+提交范围 `412f72e3..4480f453`（T1 `412f72e3` 解析/过滤/子进程接缝 · T2 `8c2df58b` 快捷指令模块与 tab UI · T3 `67bf8431` 前台历史纯函数与事件源 store · T4 `4480f453` 前台应用模块与首页块；**本批的文档回写提交在其后**）。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1 | 快捷指令：解析、过滤与子进程接缝 | `ShortcutListParser.parse`（**从行尾往回找第一个 ` (`**，形状不符即丢、不猜）/ `ShortcutFiltering.visible`（固定在前保持固定表顺序，搜索对 name 与 identifier 大小写不敏感）/ `ShortcutRunResult`；两个注入点（`ShortcutsListing` / `ShortcutsRunning`）+ 两个真实现（`list` 与 `run` 都限时、`Task` 竞速 + 超时 `terminate()`、输出走 `--output-path` 读回即删） |
+| T2 | 快捷指令模块与 tab UI | manifest（`[.expanded]` / 默认关 / `["shortcuts:run"]` / config 四键）+ `ShortcutsStore`（`load` 读缓存、`refresh` **先写回原始行再发布**、`togglePin` 先落盘再刷新、`run` 走 `isRunning` 闸门）+ tab 视图（搜索框 / 刷新 / 列表 / 结果行 / 空态）；`builtinModules` 加一行；xcstrings +15 键 |
+| T3 | 前台应用历史纯函数与事件源 store | `FrontAppSnapshot` / `FrontAppHistory`（去重移前、截到上限、排除自身、夹取 3…8 的 `clampedLimit`）**不依赖 AppKit**；`FrontAppStore` 订阅 `didActivateApplicationNotification`、初值取 `frontmostApplication`（只种 `current`）、夹取只做一次、按 id 缓存图标 |
+| T4 | 前台应用模块与首页块 | `FrontAppModule`（`[.home]` / `order 30` / 默认关 / `[]` / config 一键 `maxRecentApps`）+ 同文件的首页块视图（当前应用图标 28 + 名称、最近一排 20pt 小图标可点回切、空态画 `—`、块内 `capacity(forWidth:)` 排版预算）；`builtinModules` 加一行；xcstrings +5 键 |
+| T5 | 文档回写 | 本文 + [22](22-shortcuts-and-frontapp.md) 终稿（接口签名 / 已知限制 9~14 / 实际交付 / D-08…D-21）+ [14](14-module-manifests.md) §1 两行与 §4.1、开头与 T-1/T-5/T-9/T-12 计数 + [09](09-features-and-mechanisms.md) §5.4/§5.8/§8.1 + [16](16-nookx-reference.md) §4.2 A5 与 §4.4 P1-8 |
+
+**本批边界（零新增权限、零新增 capability）**：快捷指令声明的是 06 §7.1 **既有**的 `shortcuts:run`，前台应用 `permissions: []`；两个都零 TCC、零私有 API、`defaultEnabled: false`。**唯一的既有面扩展**是快捷指令会起 `/usr/bin/shortcuts` 子进程（限时 + 禁并发，沿用 §3.2 既有模式）——`docs/15` 的台账口径不变（系统 CLI，不是私有 API）。
+
+**本批没做**（[22](22-shortcuts-and-frontapp.md) §明确不做）：`--input-path`（Shelf 联动，没有输入源）、文件夹分组、快捷指令的折叠态槽位与前台应用的**折叠态侧槽**（都随左右槽位那批）、大输出落盘 + 「在 Finder 中显示」、窗口标题、按 App 的信息模板、持久历史。
+
+**测试**：`DynamicIslandTests` 315 → **341 条 0 失败**（新增 `ShortcutsFrontAppTests` **26 条**：解析 5 / 过滤 4 / 快捷指令 manifest 契约 2 / 快捷指令取数与并发闸门 5 / `RecordingConfigHandle` 假体自检 1 / 前台历史 6 / 前台模块 3；`ModuleKernelTests` 内置清单 8 → **9 行**并同步两段投影断言）。改动文件新增告警 0。
+
+**覆盖审计**：`workflow.py check p2-shortcuts-frontapp` **零 ERROR**（一条 WARN：D-01…D-07 七条决策来源是 agent、未逐条经用户确认）；D-07 的四个不做项（`input-path` / `folders` / `windowTitle` / `showInFinder`）在 `DynamicIsland/` 与 `DynamicIslandTests/` 全域 grep **零命中**、用例文件里 `Process(` 零命中；`func parse(lines` 在 `ShortcutCatalog.swift:43`；`clampedLimit` 定义 `FrontAppHistory.swift:87`、调用点唯一（`FrontAppStore.swift:70`）；`capacity(forWidth:)` 在 `FrontAppModule.swift:265`。
+
+**遗留**（详见 [22](22-shortcuts-and-frontapp.md) §实际交付 末段与 §已知限制 1/10/13）：真跑一条系统快捷指令、首次运行的系统自动化提示、首页块的点小图标回切、前台事件的真实投递、列表缓存的过期行为——**都没有本批的现场证据**（用例不跑真命令、前台样本全是手造快照）。两条实现期实测的边界：**超时是软界**（`terminate()` 后仍要等子进程真的退出，子进程忽略 `SIGTERM` 时实际用时超过 `timeoutSeconds`）；**前台块窄块里最多画 6 格**（180pt 下，配 7/8 时超出的静默不画、没有 `＋N` 提示）。
+
 ### 下一批 · 登记（2026-09-29）
 
 > **2026-09-29 增补**：下一批的完整优先级清单（含本批暴露的缺口）已收在 [16](16-nookx-reference.md) **§4.4**，按 P0 / P1 / P2 分档并给了成本、依赖与判据。**P0 四项**：~~① 通知组件在首页有块~~、~~② 组件卡片说清"开了会看到什么、在哪看"~~、~~③ 待办块窄宽度下也显示清单~~（**三项已在 `p2-p0-visible` 批次落地，2026-09-29**）；**④ 月历入口回归仍待做**（需要先定形态：点日期头进月历 vs 加一个 calendar tab——这是产品选择，等用户拍板）。下面四项属 **P1**。
 
-四项都来自 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组（"值得参考"6 项）里本批未落地的部分；本批的「明确不做」已逐条给过排除理由（[17](17-nookx-adoption.md)）。
+四项都来自 [16-nookx-reference.md](16-nookx-reference.md) §4.2 A 组（"值得参考"6 项）里本批未落地的部分；本批的「明确不做」已逐条给过排除理由（[17](17-nookx-adoption.md)）。**2026-09-30 更新**：其中 **A5 的首页块一半已落地**（`p2-shortcuts-frontapp`），侧槽一半仍留；其余三项不变。
 
 | # | 项 | 来源 |
 |---|---|---|
 | A2 | 折叠态两侧槽位的"可视化图标选择网格" | [16](16-nookx-reference.md) §4.2 A 组第 2 项 |
-| A4 | 待办面板的"左导航 + 右看板"与优先级胶囊 | [16](16-nookx-reference.md) §4.2 A 组第 4 项 |
-| A5 | 前台应用联动显示 | [16](16-nookx-reference.md) §4.2 A 组第 5 项 |
+| A4 | 待办面板的"左导航 + 右看板"与优先级胶囊（**2026-09-29 已落地**，批次 `p2-todos-facelift`） | [16](16-nookx-reference.md) §4.2 A 组第 4 项 |
+| ~~A5~~ | ~~前台应用联动显示~~ **首页块形态已落地（`p2-shortcuts-frontapp`，2026-09-30）**：首页一块显示当前前台应用 + 最近切换（点小图标切回，事件源 = `NSWorkspace` 前台变化通知）；**折叠态侧槽形态仍留**（随 A2 那批） | [16](16-nookx-reference.md) §4.2 A 组第 5 项 |
 | A6 | 充电接入时的瞬浮 | [16](16-nookx-reference.md) §4.2 A 组第 6 项 |
