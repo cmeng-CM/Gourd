@@ -47,6 +47,19 @@ git merge atoll/dev
 - 上游改动集中在扩展宿主时（那是我们改动最多的区域），优先手工挑选提交而不是整树合并。
 - **同步成本取决于接触面积**：我们对上游文件的修改只允许落在 [08-p0-checklist.md](08-p0-checklist.md) P0-7 的白名单内，其余改动一律进新目录（`DynamicIsland/Kernel|Runtime|Modules`）。
 
+**同步后检查单（合并成功、验证通过之后，逐条改完再提交）**
+
+1. **上游版本号**：把 `NOTICE` fork 声明块的 `基线: tag …` 换成本次跟到的上游 tag（上游 tag 形态见
+   `git -C ~/workspace/github/Atoll tag`）；`NOTICE` §一 的"Atoll"登记行的 tag 一并改（同一事实两处出现）。
+2. **基线 commit**：把 `NOTICE` fork 声明块 `基线:` 行里的 commit 短 hash 换成新基线的短 hash
+   （`git -C ~/workspace/github/Atoll rev-parse --short <tag>`）；本文件 §1 表格里 `Atoll` 行的
+   `（基线 \`v2.3.3-beta.3\` / \`c7305ec\`）` 同批改。⚠️ 基线一变，[03-license-matrix.md](03-license-matrix.md)
+   §1 的「本仓库的 GPL 义务落点」表与 §2 的 Atoll 行也要跟着核一遍。
+3. **修改日期**：`NOTICE` 的 `首次修改日期:` **保持首次值不动**（§5(a) 要的"相关日期"以它为准，
+   见 [03-license-matrix.md](03-license-matrix.md) §1 的 GPL 行）；本次同步若带进了新的改动，
+   在同一行追加最近一次修改日期（形如 `首次修改日期: 2026-09-27；最近同步: <YYYY-MM-DD>`）。
+   这三个字段都是**手工维护**的，没有自动校验（见 [24](24-release-freeze.md) §已知限制 5）。
+
 **参考仓库——按需刷新，不必保留历史**
 
 ```bash

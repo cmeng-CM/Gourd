@@ -10,8 +10,11 @@
   上游仓库: https://github.com/Ebullioscopic/Atoll
   许可: GNU General Public License v3.0（本仓库以 GPL-3.0 分发，LICENSE 为 GPL-3.0 全文）
   基线: tag v2.3.3-beta.3 / commit c7305ec
+  首次修改日期: 2026-09-27（后续改动见 git 历史）
   修改说明: 本仓库应用工程 fork 自 Atoll，保留上游全部功能文件，扩展通道线协议名一律冻结不改；
             改动范围以 git 历史与本工作流各任务的提交信息为准（口径见 ADR 决策 D-09），不逐文件加行内注释。
+  改名与重打包: 产品名 壶中天 / Gourd；Bundle ID com.cmeng.gourd（Debug 构建为 com.cmeng.gourd.dev）；
+            分发产物名 壶中天-<ver>.dmg。上游原名 Atoll / DynamicIsland 及其 Bundle ID 不再使用。
 
 
 上游 Atoll 的 boring.notch 署名声明（原样保留）

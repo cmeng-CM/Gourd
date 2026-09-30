@@ -1,3 +1,14 @@
+壶中天（Gourd）— 商标声明（Trademarks）
+=====================================
+
+本仓库（壶中天 / Gourd）是 Atoll 的修改版本。本仓库中出现的 `Atoll` 名称仅用于指明代码来源
+（nominative use，指明出处），不表示任何隶属或授权关系：本仓库与 Atoll 项目及其维护者
+**无隶属关系，也未获其背书**（no affiliation, no endorsement）。
+
+
+以下为上游 Atoll 原有的商标声明（原文逐字保留，不得移除或修改）。
+其中「the product is explicitly marketed as Atoll」一句的适用范围见本节末尾的说明。
+
 Atoll (DynamicIsland) - Trademarks
 
 Atoll and DynamicIsland are trademarks of their respective owners.
@@ -7,3 +18,9 @@ or infringement; the product is explicitly marketed as Atoll.
 All other trademarks, service marks, and logos appearing in this project
 are the property of their respective owners and used for identification
 purposes only.
+
+
+【适用范围说明】「the product is explicitly marketed as Atoll」一句描述的是**上游项目 Atoll 自身**
+的营销事实，**该句适用于上游项目，不适用于本修改版**。本仓库（壶中天 / Gourd）不以 Atoll 之名营销：
+产品名、Bundle ID 与分发产物名均不使用 Atoll / DynamicIsland（见 `NOTICE` 的 fork 声明）。
+（本条属商标与命名口径，**不是 GPL-3.0 的义务**：GPL-3.0 并未要求被许可人声明"无背书"。）

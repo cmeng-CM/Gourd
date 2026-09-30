@@ -6,3 +6,28 @@ Unless otherwise noted, the original assets created specifically for Atoll
 This includes original media, artwork, animations, and other creative assets
 unique to Atoll. Third-party assets retain their original licenses and
 copyrights; see NOTICE and any THIRD_PARTY_LICENSES files for details.
+
+
+壶中天（Gourd）自建资产版权
+==========================
+
+以下段落只覆盖**本仓库（壶中天 / Gourd）自建**的资产，与上面的上游段落分段：
+上面那段是上游 Atoll 的原文（逐字保留），不因本修改版而改变。
+
+Unless otherwise noted, the original assets created specifically for Gourd
+(壶中天) are Copyright (C) 2026 Gourd Contributors.
+
+This includes original media, artwork, animations, and other creative assets
+unique to this fork — e.g. the Gourd logo (`GourdLogo.imageset`) and the app
+icon variants added by this repository.
+
+本仓库自建清单（随新增资产同步维护）：
+
+| 资产 | 落点 | 版权 |
+|---|---|---|
+| Gourd 标志 | `DynamicIsland/Assets.xcassets/GourdLogo.imageset` | Copyright (C) 2026 Gourd Contributors |
+
+**从上游继承的资产不在上述范围内**：它们仍归本文开头的上游段落所列的版权人（Atoll 贡献者）
+所有，本仓库只做改名与重打包，不改其版权归属。
+Third-party assets retain their original licenses and copyrights; see NOTICE
+and any THIRD_PARTY_LICENSES files for details.

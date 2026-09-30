@@ -9,17 +9,31 @@
 | **MIT / BSD / ISC** | ✅ 可以 | 保留原版权声明与许可文本（进 `NOTICE` 或随文件保留 `LICENSE`） |
 | **Apache-2.0** | ✅ 可以 | 保留版权与许可、保留上游 `NOTICE`（若有）、注意专利授权条款；修改文件需标注 |
 | **MPL-2.0** | ✅ 可以 | **文件级 copyleft**：MPL 文件必须保持 MPL 并保留声明；修改过的 MPL 文件其源码需公开（其余文件可用 GPL） |
-| **GPL-2.0 / GPL-3.0** | ✅ 可以 | 整体按 GPL-3.0 分发；提供完整源码；保留版权与许可；标注修改 |
+| **GPL-2.0 / GPL-3.0** | ✅ 可以 | 整体按 GPL-3.0 分发（§5(c)）；逐字复制源码须保留版权与许可声明（§4）；分发二进制须提供对应源码（§6）；**标注修改并给相关日期**（§5(a)）；标注以本许可发布及 §7 附加条款（§5(b)）。**§5(d) 豁免**——上游 Atoll 的交互界面本就未显示 Appropriate Legal Notices，依 §5(d) 末句"上游没有的，你的作品也不必加上"，**本仓库 App 内无需许可窗**（这不是遗漏，是豁免） |
 | **AGPL-3.0** | ❌ 不并入 | 除非整个项目接受 AGPL。仅可阅读思路 |
 | **无 LICENSE 文件** | ❌ 不并入 | 默认保留所有权利。仅可阅读思路与文档 |
 | **README 声明许可但缺 LICENSE 文件** | ⚠️ 有条件使用 | 声明本身是该作者的授权意图，但缺许可文本属不合规状态。**可先用**，但必须在首次分发二进制前解决：向上游提 issue/PR 补齐文件，或换实现。登记时须标注"待上游补文件" |
 | **专有 / 未知** | ❌ 不并入 | 同上 |
 
+**本仓库的 GPL 义务落点**（fork 增量；条号逐条对应上表 **GPL-2.0 / GPL-3.0** 行的括号）：
+
+| 条号 | 义务 | 本仓库落点 |
+|---|---|---|
+| §4 | 逐字复制源码时保留版权与许可声明 | 上游文件头（`Copyright (C) 2024-2026 Atoll Contributors` + GPL 全文声明）**一字未改**；资产版权分段见 `COPYRIGHT_ASSETS` |
+| §5(a) | 标注修改**并给相关日期** | `NOTICE` 的 fork 声明块：基线 `v2.3.3-beta.3` / `c7305ec`、首次修改日期 **2026-09-27**（后续见 git 历史）、改名与重打包（壶中天 / Gourd、`com.cmeng.gourd`、`壶中天-<ver>.dmg`）；**自建 `.swift` 文件头**（`Modified for Gourd (2026-09-30)` + Gourd 版权行） |
+| §5(b) | 标注以本许可发布、无担保、含 §7 附加条款（若有） | 上游文件头原文保留；`NOTICE` / `TRADEMARKS` 声明本仓库以 GPL-3.0 分发 |
+| §5(c) | 整部作品按 GPL 授权 | `LICENSE` = GPL-3.0 全文，仓库根 |
+| §6 | 分发二进制须提供对应源码 | `NOTICE` §四.1；发布时同步给出可编译源码归档 |
+| §5(d) | 交互界面显示 Appropriate Legal Notices | **豁免**：上游没有，本仓库也不必加 → App 内无许可窗（见 §明确不做 的对应条目，[24](24-release-freeze.md)） |
+
+⚠️ `TRADEMARKS` 里的"无隶属关系、未获背书"**不是 GPL 义务**（GPL-3.0 并未要求被许可人作此声明），
+它是商标法与上游 `TRADEMARKS` 的约束——引用依据时别写错。
+
 ## 2. 本项目涉及项目的判定
 
 | 项目 | 许可 | 用途 | 使用方式 | 需要做的事 |
 |---|---|---|---|---|
-| [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll) | GPL-3.0 | **代码基座** | fork | 保留原版权头；改名的同时保留 LICENSE 与署名；标注"基于 Atoll 修改" |
+| [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll) | GPL-3.0 | **代码基座** | fork | 保留原版权头；改名的同时保留 LICENSE 与署名；标注"基于 Atoll 修改"（§5(a)：还要给**修改日期**与**改名与重打包**，落点见 `NOTICE` 的 fork 声明块） |
 | [TheBoredTeam/boring.notch](https://github.com/TheBoredTeam/boring.notch) | GPL-3.0 | 功能对照/局部合并 | vendored 局部代码 | 同上；按文件登记来源 |
 | [Lakr233/NotchDrop](https://github.com/Lakr233/NotchDrop) | MIT | 文件暂存 + AirDrop | 局部代码 | 保留 MIT 声明 |
 | [MuQY1818/OpenYoink](https://github.com/MuQY1818/OpenYoink) | MIT | 拖拽暂存形态 | 局部代码 | 保留 MIT 声明 |
