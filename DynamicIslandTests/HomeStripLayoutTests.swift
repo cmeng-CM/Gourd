@@ -45,6 +45,9 @@
 import Defaults
 import XCTest
 
+import AppKit
+import SwiftUI
+
 @testable import Gourd
 
 @MainActor
@@ -57,6 +60,19 @@ final class HomeStripLayoutTests: XCTestCase {
     private static let calendar = HomeStripLayoutMath.Item(min: 200, ideal: 260)
     private static let mirror = HomeStripLayoutMath.Item(min: 140, ideal: 160)
     private static let moduleBlock = HomeStripLayoutMath.Item(min: 180, ideal: 240)
+
+    /// 770pt 面板下 strip 的可用宽：`770 − 两侧各 34pt`（内边距常量链推导，docs/17 §接口与数据形状 6；
+    /// 像素反推 ≈703，两个口径都在同一档——这里取常量链的口径）。
+    private static let panelWidth770StripWidth: CGFloat = 702
+
+    /// **生产档四块**（T4 复现的输入）：音乐那一档 300/420 + 三个模块档 180/240
+    /// （`HomeStripView.moduleBlockWidth` 的统一值）。770/900/1088 三档面板都拿这一组算。
+    private static let productionFourBlockItems: [HomeStripLayoutMath.Item] = [
+        HomeStripLayoutMath.Item(min: 300, ideal: 420),
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+    ]
 
     /// 块间距：本文件**改动前**口径的宿主恒定值（`HomeStripView` 曾为 12）。既有用例的数字都按
     /// 这个值算过，因此保留不动；宿主**现值**走 `HomeStripLayout.spacing`（2026-09-29 改为 8），
@@ -858,6 +874,139 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
+    // MARK: - 面板宽度下的摆放（T4：被判为可见的块必须真的画出来）
+
+    /// **770pt 面板的复现固化**（T4，docs/23-home-fit.md §做法 机制四 / §验收标准 4）。
+    ///
+    /// 探针实测的机制（`.workflow/p2-home-fit/evidence/probe-770/`）：`HomeStripLayout` 上报的宽度是
+    /// 「可见块宽 + 间隙」——丢块路径下它比可用宽窄（770pt 面板：可用 702 → 上报 488）。SwiftUI 的
+    /// **下一趟布局会拿这个上报宽度再问它一次**（尺寸反馈）；没有 `HomeStripView` 里那句「提案宽钉在
+    /// 可用宽上」时，第二趟按 488 重算 plan，预留 34pt 的 ＋N 位后 `visibleCount` 从 2 掉到 1——
+    /// 屏上只剩第一块，而视图那份（按 702 算）仍显示 ＋2。用户看到的就是「只显示播放器、右侧空着」。
+    ///
+    /// 判据是**渲染真值**：每块拿到的尺寸（`GeometryReader` 上报）必须与 plan 一一对上——
+    /// 可见块拿到 plan 的分配宽 + strip 满高，被丢的块是零尺寸，空白块数等于 `droppedCount`。
+    /// 修复前这一条会红（变异：把 `HomeStripView` 的 `.frame(width: available, …)` 去掉即可复现）。
+    func testMinimumPanelWidthGivesEveryPlanVisibleBlockItsWidth() async {
+        homeBlockSizeLog.reset()
+        registerProbes([
+            HomeWideProbeModule.self,
+            HomeNarrowAProbeModule.self,
+            HomeNarrowBProbeModule.self,
+            HomeNarrowCProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let items = Self.productionFourBlockItems
+        let available = Self.panelWidth770StripWidth
+        let height: CGFloat = 212
+        let plan = HomeStripLayoutMath.plan(
+            items: items,
+            available: available,
+            spacing: HomeStripLayout.spacing,
+            tailReserve: HomeStripView.droppedHintWidth
+        )
+
+        // 锚：先把「这道题该是什么答案」钉住（数值变了要有人复核，而不是被断言静默吸收）
+        XCTAssertEqual(available, 702, "770pt 面板的 strip 可用宽 = 770 − 两侧各 34（docs/17 §接口与数据形状 6）")
+        XCTAssertEqual(plan.visibleCount, 2, "四块（音乐档 300/420 + 三个模块档 180/240）在 702 下只放得下两块")
+        XCTAssertEqual(plan.droppedCount, 2, "剩下两块靠条尾 ＋2 提示（docs/21）")
+        XCTAssertTrue(plan.tailReserveUsed)
+
+        renderRealHomeStrip(available: available, height: height)
+
+        assertRenderedSizesMatchPlan(plan, height: height)
+    }
+
+    /// 三个面板宽度各过一遍（770 / 900 / 1088 → strip 可用宽 702 / 832 / 1020）：**任何宽度下
+    /// 「拿到尺寸的块 == plan 的 visibleCount」**，且宽度与 plan 的分配宽一致。
+    ///
+    /// 900（可用 832）是「＋1 + 两块可见」那一档（丢块路径 + 预留位），也是修复前唯一还会
+    /// **＋N 与实际不符**的中间档；1088（可用 1020）走规则 ②（全可见、无提示），是防过度修复的对照。
+    func testEveryPlanVisibleBlockGetsItsWidthAcrossPanelWidths() async {
+        registerProbes([
+            HomeWideProbeModule.self,
+            HomeNarrowAProbeModule.self,
+            HomeNarrowBProbeModule.self,
+            HomeNarrowCProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let items = Self.productionFourBlockItems
+        let height: CGFloat = 212
+        for (panelWidth, expectedVisible) in [(CGFloat(770), 2), (900, 3), (1088, 4)] {
+            homeBlockSizeLog.reset()
+            let available = panelWidth - 68
+            let plan = HomeStripLayoutMath.plan(
+                items: items,
+                available: available,
+                spacing: HomeStripLayout.spacing,
+                tailReserve: HomeStripView.droppedHintWidth
+            )
+
+            XCTAssertEqual(plan.visibleCount, expectedVisible, "面板 \(panelWidth)pt（可用 \(available)）的可见块数")
+            XCTAssertEqual(plan.droppedCount, items.count - expectedVisible)
+            XCTAssertEqual(plan.tailReserveUsed, plan.droppedCount > 0, "丢块才用预留位")
+
+            renderRealHomeStrip(available: available, height: height)
+            assertRenderedSizesMatchPlan(plan, height: height)
+        }
+    }
+
+    /// 渲染真值与 plan 的逐块对照：可见块 = 分配宽 + 满高；被丢的块 = 零尺寸；空白块数 == `droppedCount`。
+    private func assertRenderedSizesMatchPlan(
+        _ plan: HomeStripLayoutMath.Plan,
+        height: CGFloat,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let ids = HomeSizedProbeModule.ids
+        XCTAssertEqual(ids.count, plan.widths.count + plan.droppedCount, "夹具块数应与 plan 的输入块数一致", file: file, line: line)
+
+        for (index, id) in ids.enumerated() {
+            let size = homeBlockSizeLog.size(of: id)
+            if index < plan.visibleCount {
+                XCTAssertEqual(
+                    size.width, plan.widths[index], accuracy: 0.5,
+                    "第 \(index) 块（\(id)）应拿到 plan 的分配宽 \(plan.widths[index])，实到 \(size.width)（「被判可见却没画出来」= T4 的复现）",
+                    file: file, line: line
+                )
+                XCTAssertEqual(size.height, height, accuracy: 0.5, "可见块应拿满 strip 高", file: file, line: line)
+            } else {
+                XCTAssertEqual(
+                    size, .zero,
+                    "第 \(index) 块（\(id)）被 plan 丢掉 → 必须是零尺寸（显式 `.zero` 提案），实到 \(size)",
+                    file: file, line: line
+                )
+            }
+        }
+
+        let blanks = ids.filter { homeBlockSizeLog.size(of: $0) == .zero }
+        XCTAssertEqual(
+            blanks.count, plan.droppedCount,
+            "条尾 ＋\(plan.droppedCount) 与实际空白块数必须一致（实到空白 \(blanks.count) 块：\(blanks)）",
+            file: file, line: line
+        )
+    }
+
+    /// 把**真的 `HomeStripView`** 放进 `NSHostingView` 跑一趟布局：尺寸反馈只在真布局里发生
+    /// （纯函数测不到，探针脚本已验证），因此这里必须挂真视图而不是复刻一份结构——复刻的话，
+    /// 被测的就成了复刻件，`HomeStripView` 里那句修复反而是「测外之物」。
+    private func renderRealHomeStrip(available: CGFloat, height: CGFloat) {
+        let host = NSHostingView(rootView: HomeStripHost().frame(width: available, height: height))
+        host.frame = CGRect(x: 0, y: 0, width: available, height: height)
+        host.layoutSubtreeIfNeeded()
+    }
+
+    /// 挂载壳：`HomeStripView` 要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的）。
+    private struct HomeStripHost: View {
+        @Namespace private var albumArtNamespace
+
+        var body: some View {
+            HomeStripView(albumArtNamespace: albumArtNamespace)
+        }
+    }
+
     // MARK: - 夹具
 
     /// 与 `ModuleKernelTests` 的注册口径一致：启用门是 `manifests[id]?.defaultEnabled ?? false`
@@ -983,5 +1132,104 @@ private final class HomeFailedProbeModule: HomeProbeModule {
 private final class HomeOptInProbeModule: HomeProbeModule {
     override class var manifest: ModuleManifest {
         HomeStripFixture.manifest(shortID: "probe-home-optin", surfaces: [.home], order: 3, defaultEnabled: false)
+    }
+}
+
+// MARK: - 假模块 / 摆放取证夹具（T4）
+
+/// 首页块的**尺寸探针块**：假模块的内容就是它——`GeometryReader` 每趟布局都上报一次拿到的尺寸，
+/// 留下的最后一份即**渲染真值**（被 `HomeStripLayout` 丢掉的块拿 `.zero` 提案 → 尺寸为零）。
+private struct HomeBlockSizeProbe: View {
+    let id: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            let _ = homeBlockSizeLog.record(id, proxy.size)
+            Color.clear
+        }
+    }
+}
+
+/// 探针块的落点。**文件级**：假模块由注册表 `init(context:)` 实例化，拿不到用例里的局部对象。
+private let homeBlockSizeLog = HomeBlockSizeLog()
+
+/// 尺寸落点（键 = 模块 id）。只在主线程读写（SwiftUI 布局与用例都在主线程）。
+private final class HomeBlockSizeLog {
+    private(set) var byID: [String: CGSize] = [:]
+
+    func reset() { byID.removeAll() }
+
+    func record(_ id: String, _ size: CGSize) { byID[id] = size }
+
+    /// 没被记过 = 没拿到尺寸（与 `.zero` 同解）。
+    func size(of id: String) -> CGSize { byID[id] ?? .zero }
+}
+
+/// 假首页块：只声明 `.home`，块宽按参数声明（对齐生产档：接管块 300/420、新增模块 180/240）。
+///
+/// **根 conformer**（与 `TakeoverEnablementTests` 的 `TakeoverProbeBase` 同形）：`homeBlockWidth`
+/// 写在**类体**里而不是留给协议扩展的默认实现——只有类体里的成员才会进 vtable，注册表的元类型
+/// 查询（`registry.homeBlockWidth(for:)`）才会走到子类的 `override`。
+private class HomeSizedProbeModule: GourdModule {
+    class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-sized", surfaces: [.home])
+    }
+
+    /// 本模块声明的块宽（nil = 走宿主统一值 180/240，与新增模块同口径）。
+    class var homeBlockWidth: ModuleHomeBlockWidth? { nil }
+
+    /// 夹具四块的 id（**按 `order` 升序**，与 `HomeStripView.resolvedHomeBlocks()` 的排序同序）。
+    static let ids = [
+        "com.cmeng.gourd.probe-wide",
+        "com.cmeng.gourd.probe-narrow-a",
+        "com.cmeng.gourd.probe-narrow-b",
+        "com.cmeng.gourd.probe-narrow-c",
+    ]
+
+    let context: ModuleContext
+
+    required init(context: ModuleContext) {
+        self.context = context
+    }
+
+    func activate() async throws {}
+
+    func deactivate() async {}
+
+    func content(for request: ContentRequest) -> ModuleContent {
+        guard request.surface == .home else { return .none }
+        return .view(AnyView(HomeBlockSizeProbe(id: Self.manifest.id)))
+    }
+}
+
+/// 接管块那一档（音乐 300/420，order 0）：丢块路径下第一块永远保得住，用它检验**第二块**也真的画出来。
+private final class HomeWideProbeModule: HomeSizedProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-wide", surfaces: [.home], order: 0)
+    }
+
+    override class var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(min: 300, ideal: 420)
+    }
+}
+
+/// 模块块档（宿主统一 180/240）第二块：702 下它与 wide 一起是「可见的两块」。
+private final class HomeNarrowAProbeModule: HomeSizedProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-narrow-a", surfaces: [.home], order: 20)
+    }
+}
+
+/// 模块块档第三块：702 下被丢、832 下可见（900pt 面板那一档）。
+private final class HomeNarrowBProbeModule: HomeSizedProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-narrow-b", surfaces: [.home], order: 30)
+    }
+}
+
+/// 模块块档第四块：只有 1020 宽（1088pt 面板）才放得下——防「修过头」的对照。
+private final class HomeNarrowCProbeModule: HomeSizedProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-narrow-c", surfaces: [.home], order: 40)
     }
 }

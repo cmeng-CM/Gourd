@@ -377,6 +377,15 @@ struct HomeStripView: View {
                         .environment(\.homeAlbumArtNamespace, albumArtNamespace)
                     }
                 }
+                // **提案宽钉在可用宽上**（2026-09-30 T4 取证后的修复，唯一一处）：`HomeStripLayout`
+                // 上报的宽度是「可见块宽 + 间隙」（丢块时比可用宽窄，见 D-02/D-03），SwiftUI 的下一趟
+                // 布局会把**这个上报宽度**当作新提案再问它一次（尺寸反馈）——于是 plan 的输入从 702
+                // 变成 488、预留 34pt 后 `visibleCount` 从 2 掉到 1，屏上只剩第一块，而视图那份按可用宽
+                // 算的 plan 仍显示 ＋2（770pt 面板的实测复现：`.workflow/p2-home-fit/evidence/probe-770/`）。
+                // 这一行让每趟布局提案的都是 strip 的可用宽（视图与 Layout 因此拿到**同一个宽度输入**，
+                // 与 T1「D-03 同源」同一条口径）；条的**绘制**不变——块仍按 plan 分配宽从左上角摆，
+                // 富余仍留在尾部。
+                .frame(width: available, alignment: .topLeading)
 
                 if plan.tailReserveUsed {
                     // 提示位**锚在尾部边缘**（`x = available − droppedHintWidth`，D-01）：**不要用
