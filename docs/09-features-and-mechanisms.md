@@ -402,6 +402,92 @@
 
 **不做**（与首页 strip 无耦合或需要本批没有的事件源）：折叠态左右槽位的图标网格、待办面板"左导航 + 右看板"重构、~~前台应用联动~~、充电瞬浮——**四项均已登记为下一批**（[12](12-p1-batches.md)）。**2026-09-30 改判**：**前台应用联动已落地**（批次 `p2-shortcuts-frontapp`）——做的是**首页块形态**（见下段），**折叠态侧槽形态仍未做**（它要的左右槽位与上面那项一起还挂在下一批）。
 
+### 5.9 设置页逐页意义判定与重排（2026-09-30 增补；P3 批次 `p3-widgets` / T5）
+
+用户要求（本轮末条反馈）：「设置里面的功能清单是否需要重新分组排序，同时分析是否存在无用的，无用的去掉」。
+判据是**三条**：① 这一页里的键在**设置页之外有没有读点**（`grep` 计数，见下表口径）；② 拨动**有没有可观察效果**；
+③ 该功能**有没有入口**（首页块 / 面板 tab / 全局热键 / 菜单）。**三条齐 = 保留；任一不满足 = 删页留码**
+（摘入口、不删上游代码，枚举处留一行注释说明原因）。设计依据 [26](26-home-widgets-and-settings.md) §做法 机制五、D-06 / D-07 / D-08。
+
+**读点计数的口径**（下表数字都由它产出，可复现）：键名在 `DynamicIsland/**/*.swift` 里出现、**排除**
+`DynamicIsland/components/Settings/**`（设置页自己）与 `models/Constants.swift`（键声明），**跳过纯注释行**；
+计数单位是行。设置页的键天然在设置页里有一处写点，这一列量的是"**这一页之外还有谁在用**"。
+
+**重排结果**（组顺序 = `SettingsTabGroup.allCases` 顺序；**不设「上游功能」分组**——D-07）：
+
+| 组 | 页（组内顺序） |
+|---|---|
+| （无节头）通用 / 外观 | 通用、外观 |
+| 媒体与显示 | 媒体、实时活动、锁屏、设备 |
+| **效率** | 计时器、剪贴板、日历、统计、终端、暂存器、取色器、下载、屏幕助手、快捷键 |
+| 系统 | 控制（HUD 与 OSD）、电池 |
+| 集成 | 扩展、组件（**相邻**：同一类"可扩展性"设置） |
+| （无节头）关于 | 关于 |
+
+原「实用工具」与「开发者」两组**取消**，页全部并入「效率」（组标题沿用 `.xcstrings` 里已有的
+"Productivity" → 中文「效率」，**不新造 key**）；「效率」也**移到「系统」之前**（计时器 / 剪贴板 / 日历
+这些是日常页，控制 / 电池配一次就不动）。快捷键页归入「效率」末尾（它配的正是其余各页的热键，同属实用工具）。
+
+**逐页意义判定表**（代表键 = 该页读点最多的那两三个；读点 = 非设置页读点合计）：
+
+| 页 | 代表键（非设置页读点） | 页内读点合计 | 可观察效果 | 入口 | 判定 |
+|---|---|---|---|---|---|
+| 通用 | `enableMinimalisticUI` 87、`closedNotchWidth` 14 | 215 | 有 | 全局（界面模式 / 手势 / 多屏） | 保留 |
+| 外观 | `notchHeight` 50、`showMirror` 19 | 305 | 有 | 全局（外观 / 颜色 / 图标） | 保留 |
+| 媒体 | `enableLyrics` 39、`showStandardMediaControls` 19 | 304 | 有 | 首页块（音乐）+ 面板 tab | 保留 |
+| 实时活动 | `enableReminderLiveActivity` 10、`showDoNotDisturbIndicator` 5 | 62 | 有 | HUD / 刘海指示器 | 保留 |
+| 锁屏 | `lockScreenWeatherProviderSource` 9、`lockScreenShowCalendarEvent` 7 | 200 | 有 | macOS 锁屏面（组件） | 保留 |
+| 设备 | `showBluetoothBatteryPercentageText` 8、`showAirPodsListeningModeChanges` 8 | 162 | 有 | HUD（蓝牙 / 音量） | 保留 |
+| 计时器 | `enableTimerFeature` 22、`timerPresets` 20、`timerDisplayMode` 12 | 290 | 有 | 面板 tab + 热键 | 保留 |
+| 剪贴板 | `enableClipboardManager` 17、`clipboardDisplayMode` 13 | 34 | 有 | 面板 tab / 刘海图标 / 热键 | 保留 |
+| 日历 | `hideAllDayEvents` 18、`hideCompletedReminders` 18、`showCalendar` 16 | 128 | 有 | 首页日历行 + 面板 tab | 保留，**精简**（见下） |
+| 统计 | `enableStatsFeature` 19、`showCpuGraph` 8 | 63 | 有 | 首页块（统计） | 保留，**LLM 用量段删**（见下） |
+| 终端 | `enableTerminalFeature` 9、`terminalStickyMode` 4 | 34 | 有 | 面板 tab + 热键 | 保留 |
+| 暂存器 | `quickShareProvider` 10、`dynamicShelf` 4 | 22 | 有 | 面板 tab（Shelf） | 保留 |
+| 取色器 | `enableColorPickerFeature` 11、`showColorFormats` 3 | 18 | 有 | 刘海图标 + 热键 | 保留 |
+| 下载 | `enableDownloadListener` 3、`selectedDownloadIndicatorStyle` 1 | 4 | 有 | 下载进行时的 live activity | 保留 |
+| 屏幕助手 | `enableScreenAssistant` 9、`geminiApiKey` 10 | 20 | 有 | 热键（悬浮面板，首启默认关） | 保留 |
+| 快捷键 | `enableShortcuts` 14、`enableClipboardManager` 17（同页引用） | 101 | 有 | **它本身就是入口页**（为其余页配热键） | 保留 |
+| 控制（HUD 与 OSD） | `enableCustomOSD` 31、`enableVerticalHUD` 32、`enableSystemHUD` 21 | 210 | 有 | HUD 浮层（音量 / 亮度 / 键盘背光） | 保留 |
+| 电池 | `showBatteryIndicator` 6、`showPowerStatusIcons` 5 | 45 | 有 | 刘海 / 菜单栏电池指示 | 保留 |
+| 扩展 | `enableThirdPartyExtensions` 12、`enableExtensionNotchExperiences` 9（页内另外三个键的读点在扩展服务里） | 21（`ExtensionsSettings` 直接引用的两个键） | 有 | 扩展 tab / 扩展动态岛体验 | 保留 |
+| 组件 | 模块 manifest（`ModuleRegistry.manifests` 全量；键是各模块自己的启用真源，见 [14](14-module-manifests.md)） | 见各模块 | 有（开关 / 排序即时改首页块与面板 tab，T3） | 组件页即模块入口 | 保留 |
+| 关于 | `releaseName` / `updateChannel`（读点在设置目录内的 `SoftwareUpdater`） | 0 | 有（版本与更新通道） | 应用菜单 / 更新器 | 保留 |
+| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | 有（`enableNotes` 打开后展开面板多一个 Notes tab） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口是**本页自己** | **删页留码**（D-06） |
+| **LLM 用量**（统计页里的一段，不是独立页） | `enableLLMUsageFeature` 1（`TabSelectionView` 的 Usage tab）、四个 `enable*Provider` 各 1（`UsageProvider`） | 5 | 有（同上：打开后多一个 Usage tab） | 同上（唯一入口是本页这一段自己） | **删段留码**（D-08） |
+
+**「无实际设置意义 → 删」的两处落点**（都**只摘入口**，上游代码与偏好键一个字没删）：
+
+1. **笔记设置页**（`SettingsTab.notes`）：从 `availableTabs` 摘掉（`title` / `systemImage` / `tint` / `group` /
+   `detailView` 分支与 `NotesSettingsView` 全部原样保留，`isTabVisible` 里那一档也保留），将来把 `.notes`
+   加回数组即整页复活。**与 [26](26-home-widgets-and-settings.md) §背景与目标 表第 4 行的一处措辞不符**：
+   那里写「本产品没有任何入口指向它」——严格讲不成立（`enableNotes` 打开后 `TabSelectionView` 会真的多出
+   一个 Notes tab），准确表述是「**默认关且唯一入口在本页**」；判定结论（删）不变，理由换成"入口自举不算入口"。
+2. **统计页的 LLM 用量段**：`Enable LLM Usage Monitor` 开关与 `LLM Providers`（Claude / Codex / Cursor /
+   Antigravity）整段摘掉，连带五条搜索项一并删（否则搜索会给出"点进去什么都没有"的死建议）；
+   `enableLLMUsageFeature` 与四个 provider 键、`UsageProvider`、`NotchLLMUsageView`、
+   `TabSelectionView` 里那条 Usage tab 分支全部保留。
+
+**日历设置页的「精简」**：摘掉「Lock Screen Reminder Widget」与「Calendar Widget」两节（锁屏提醒 chip、
+锁屏的下一个日程、倒计时 / 全天时长 / 事件后窗口等 12 个控件）——它们配的是**锁屏组件**、与"日历数据"
+不是一回事，且**每一个控件在「锁屏」页都有一套同样的**（同键、同 Picker）。保留的是：权限状态、
+`showCalendar`（首页日历行与面板 tab 的总闸）、事件清单三条（`hideCompletedReminders` / `showFullEventTitles` /
+`autoScrollToNextEvent`）、全天事件（`hideAllDayEvents`）、提醒 live activity 三条、第三方日历应用三条。
+键与控件代码未删（`LockScreenSettings` 照旧），要恢复就是把那些行拿回来。
+
+**顺带记下的"零读点键"**（留在页里，本批不动——它们多半是**只写不读的历史键**或读点在设置目录内）：
+`selectedDownloadIconStyle`（下载页）、`hasSeenOSDAlphaWarning`（控制页）、`systemHUDSensitivity`（设备页）、
+`expandedDragDetection`（暂存器页）、`customVisualizers`（外观页）、`colorHistorySize`（取色器页）、
+`releaseName` / `updateChannel`（关于页，读点在 `components/Settings/SoftwareUpdater.swift`）。
+
+**同一批（T3）组件页的结构变化**——本节 §5.8 的「组件开关」一行描述的是
+**一张卡 = 一个模块的平铺 + 一条首页块顺序节**（T3 之前）；
+本批改为**两节**：**首页组件**（声明 `home` 的模块，开关管"在不在首页"、顺序写 `homeBlockOrder`）与
+**面板组件**（声明 `expanded` 的模块，开关管"单不单独出面板 tab"、顺序写**新键 `panelOrder`**），
+每行 = 图标 + 名称 + 开关 + 上移 / 下移；两节各自的开关只管各自的 surface（同一个模块可同时在两节）。
+`tabEntries` 的排序键随之改为 `(panelOrder[id] ?? defaultPlacement?.order ?? Int.max, id)`（同一条算式
+`ModuleRegistry.panelRank` 也被设置页用来显示顺序）。设计与决策见 [26](26-home-widgets-and-settings.md) §做法 机制三、D-03。
+
 ---
 
 ## 6. 路线图映射

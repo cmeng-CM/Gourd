@@ -18,27 +18,37 @@ import SwiftUIIntrospect
 import UniformTypeIdentifiers
 
 /// Groups for organizing settings tabs in the sidebar.
+///
+/// **P3 设置批次 / T5 重排（docs/26-home-widgets-and-settings.md §做法 机制五 / D-07 / D-08）**：
+/// 侧栏按主题 + 使用频率重排，**不设「上游功能」分组**——凡「实用工具」属性的页一律并入
+/// `.productivity`（它显示为「效率」，见 `title`）。因此本次**删掉两个分组**
+/// （`.utilities` 实用工具 / `.developer` 开发者）并把它们的页搬进 `.productivity`：
+/// 分组少一层、页少一次归类，用户找东西少想一步。
+///
+/// **顺序**（= 枚举声明顺序 = 侧栏顺序，`groupedFilteredTabs` 按 `allCases` 走）：
+/// 通用 / 外观（`.core`，无节头）→ 媒体与显示 → **效率** → 系统 → 集成 → 关于（`.info`，无节头）。
+/// 「效率」在「系统」**之前**是本次重排的一条：计时器 / 剪贴板 / 日历 / 统计 / 终端这些是
+/// 日常用得最多的，排在「控制 / 电池」这类配置一次就不动的页前面。
 private enum SettingsTabGroup: String, CaseIterable, Identifiable {
     case core
     case mediaAndDisplay
-    case system
     case productivity
-    case utilities
-    case developer
+    case system
     case integrations
     case info
 
     var id: String { rawValue }
 
     /// Display title for the section header.  `nil` means no visible header.
+    ///
+    /// `.productivity` 的英文字面是 "Productivity"（`.xcstrings` 里已有 zh-Hans「效率」），
+    /// 本批沿用这条文案：**不新造 key**，中文界面显示的就是「效率」。
     var title: String? {
         switch self {
         case .core:             return nil
         case .mediaAndDisplay:  return String(localized: "Media & Display")
-        case .system:           return String(localized: "System")
         case .productivity:     return String(localized: "Productivity")
-        case .utilities:        return String(localized: "Utilities")
-        case .developer:        return String(localized: "Developer")
+        case .system:           return String(localized: "System")
         case .integrations:     return String(localized: "Integrations")
         case .info:             return nil
         }
@@ -64,6 +74,11 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case downloads
     case shelf
     case shortcuts
+    /// **笔记页（T5 起不再出现在侧栏，代码全部保留）**：`enableNotes` 默认关、模块清单里没有它、
+    /// 首页块与热键都没有它，唯一入口就是这一页自己——判定为"无实际设置意义 → 删页留码"
+    /// （D-06；三条判据与读点计数见 `availableTabs` 的注释与 `docs/09` 的判定表）。
+    /// **本 case 与 `NotesSettingsView` 一个字没删**：`title` / `systemImage` / `tint` / `group` /
+    /// `detailView` 分支都还在，把 `.notes` 加回 `availableTabs` 即整页复活。
     case notes
     case terminal
     case modules
@@ -72,16 +87,28 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// Which sidebar group this tab belongs to.
+    ///
+    /// **T5 重排的唯一映射表**（判定与读点计数见 `docs/09-features-and-mechanisms.md` 的逐页意义判定表）：
+    /// - 通用 / 外观（`.core`，无节头）：每次装完机都会碰的两页；
+    /// - 媒体与显示：媒体 / 实时活动 / 锁屏 / 设备——都在调"刘海上看什么、怎么看"；
+    /// - **效率（`.productivity`）**：计时器、剪贴板、日历、统计、终端、暂存器、取色器、下载、
+    ///   屏幕助手、快捷键——**原「实用工具」与「开发者」两页一并并进来**（D-07：不设「上游功能」
+    ///   分组，"实用工具"属性的页都归这一组）；组内按使用频率排，故统计 / 终端紧跟在日历之后；
+    /// - 系统：控制（HUD 与 OSD）/ 电池——一次配好就不动的系统级浮层；
+    /// - 集成：扩展 / 组件——同一类"可扩展性"设置，两页必须相邻；
+    /// - 关于（`.info`，无节头）。
+    ///
+    /// **`.notes` 仍留着 case（含 `title` / `systemImage` / `tint` / `detailView` 与
+    /// `NotesSettingsView` 本体）**，但它**不再出现在 `availableTabs` 里**——判定与理由见那里。
     var group: SettingsTabGroup {
         switch self {
         case .general, .appearance:                                          return .core
         case .media, .liveActivities, .lockScreen, .devices:                 return .mediaAndDisplay
+        case .timer, .clipboard, .calendar, .stats, .terminal, .shelf,
+             .colorPicker, .downloads, .screenAssistant, .shortcuts:         return .productivity
         case .hudAndOSD, .battery:                                           return .system
-        case .timer, .calendar, .notes:                                      return .productivity
-        case .clipboard, .screenAssistant, .colorPicker, .shelf,
-             .downloads, .shortcuts:                                         return .utilities
-        case .stats, .terminal:                                              return .developer
         case .extensions, .modules:                                          return .integrations
+        case .notes:                                                         return .productivity
         case .about:                                                         return .info
         }
     }
@@ -482,11 +509,28 @@ struct SettingsView: View {
         .padding(.vertical, 4)
     }
 
+    /// 侧栏实际列出的页（**顺序 = 组内顺序**，组间顺序在 `SettingsTabGroup.allCases`）。
+    ///
+    /// **T5（docs/26 §做法 机制五 / D-06 / D-07 / D-08）**：按主题 + 使用频率重排——
+    /// 通用 / 外观 → 媒体与显示 → 效率（计时器、剪贴板、日历、统计、终端、暂存器、取色器、
+    /// 下载、屏幕助手、快捷键）→ 系统（控制、电池）→ 集成（扩展、组件）→ 关于。
+    /// 组里不再有「实用工具 / 开发者」，也**没有「上游功能」这一类**（用户明确不要）。
+    ///
+    /// ### 为什么 `.notes` 不在这份名单里（**删页留码**）
+    ///
+    /// 逐页意义判定的三条（读点 / 可观察效果 / 入口，判定表见 `docs/09` 与 `.workflow/p3-widgets/reports/T3+T5.md`）：
+    /// ① 读点**有**（`NotchNotesView` 5 处、`TabSelectionView` 3 处、`matters.swift` / 协调器各 1 处）；
+    /// ② 可观察效果**有**（`enableNotes` 打开后展开面板会多一个 Notes tab）；
+    /// ③ 但**入口默认不存在**：`enableNotes` 默认 `false`、模块清单里没有它、首页块与热键都没有它——
+    /// 唯一能把它打开的就是**这一页自己**，即"入口自举"。
+    /// 用户判定（D-06）：「确定没有用就去掉」——**摘入口、留代码**：本行删掉、`case notes`
+    /// 与 `detailView` 分支与 `NotesSettingsView` 全部原样保留（`git` 里只是这一处 + 一条 case 注释），
+    /// 将来要恢复，把 `.notes` 加回本数组即可（`isTabVisible` 也保留着它的极简模式判据）。
     private var availableTabs: [SettingsTab] {
-        // Ordered to match group layout: core → media & display → system →
-        // productivity → utilities → developer → integrations → info.
+        // Ordered to match group layout: core → media & display → efficiency →
+        // system → integrations → info.
         let ordered: [SettingsTab] = [
-            // Core
+            // Core（通用 / 外观）
             .general,
             .appearance,
             // Media & Display
@@ -494,24 +538,21 @@ struct SettingsView: View {
             .liveActivities,
             .lockScreen,
             .devices,
+            // Efficiency（原「实用工具」+「开发者」两组的全部页；按使用频率排）
+            .timer,
+            .clipboard,
+            .calendar,
+            .stats,
+            .terminal,
+            .shelf,
+            .colorPicker,
+            .downloads,
+            .screenAssistant,
+            .shortcuts,
             // System
             .hudAndOSD,
             .battery,
-            // Productivity
-            .timer,
-            .calendar,
-            .notes,
-            // Utilities
-            .clipboard,
-            .screenAssistant,
-            .colorPicker,
-            .shelf,
-            .downloads,
-            .shortcuts,
-            // Developer
-            .stats,
-            .terminal,
-            // Integrations
+            // Integrations（组件与扩展相邻：同一类"可扩展性"设置）
             .extensions,
             .modules,
             // Info
@@ -906,11 +947,10 @@ struct SettingsView: View {
 
             // Stats
             SettingsSearchEntry(tab: .stats, title: "Enable system stats monitoring", keywords: ["stats", "monitoring"], highlightID: SettingsTab.stats.highlightID(for: "Enable system stats monitoring")),
-            SettingsSearchEntry(tab: .stats, title: "Enable LLM Usage Monitor", keywords: ["llm", "usage", "ai", "monitor"], highlightID: SettingsTab.stats.highlightID(for: "Enable LLM Usage Monitor")),
-            SettingsSearchEntry(tab: .stats, title: "Claude Provider", keywords: ["llm", "claude", "provider", "toggle"], highlightID: SettingsTab.stats.highlightID(for: "Claude Provider")),
-            SettingsSearchEntry(tab: .stats, title: "Codex Provider", keywords: ["llm", "codex", "provider", "toggle"], highlightID: SettingsTab.stats.highlightID(for: "Codex Provider")),
-            SettingsSearchEntry(tab: .stats, title: "Cursor Provider", keywords: ["llm", "cursor", "provider", "toggle"], highlightID: SettingsTab.stats.highlightID(for: "Cursor Provider")),
-            SettingsSearchEntry(tab: .stats, title: "Antigravity Provider", keywords: ["llm", "antigravity", "provider", "toggle"], highlightID: SettingsTab.stats.highlightID(for: "Antigravity Provider")),
+            // LLMUsageSectionRemoved（T5）：这里原有五条 LLM 用量 / provider 的搜索项
+            //（Enable LLM Usage Monitor + Claude / Codex / Cursor / Antigravity Provider）——
+            // 对应的开关行已整段摘掉（理由见 `StatsSettings.body`），搜索项一并删，
+            // 否则搜索会给出"点进去什么都没有"的死建议。
             SettingsSearchEntry(tab: .stats, title: "Stop monitoring after closing the notch", keywords: ["stats", "auto stop"], highlightID: SettingsTab.stats.highlightID(for: "Stop monitoring after closing the notch")),
             SettingsSearchEntry(tab: .stats, title: "CPU Usage", keywords: ["cpu", "graph"], highlightID: SettingsTab.stats.highlightID(for: "CPU Usage")),
             SettingsSearchEntry(tab: .stats, title: "Temperature unit", keywords: ["cpu", "temperature", "celsius", "fahrenheit"], highlightID: SettingsTab.stats.highlightID(for: "Temperature unit")),
@@ -959,6 +999,9 @@ struct SettingsView: View {
         // 有哪些块，与界面风格无关（docs/17 §改动点设计 5）。
         case .modules:
             return true
+        // `.notes` 留在这一档里是**代码保留**的印记（T5 摘的是入口，不是功能）：
+        // 它的页已经不在 `availableTabs` 里，这一档今天走不到；将来把 `.notes` 加回去时，
+        // 极简模式下的行为与改动前逐字一致（不需要重新想）。
         case .timer, .stats, .clipboard, .screenAssistant, .colorPicker, .shelf, .notes, .terminal:
             return !enableMinimalisticUI
         default:
@@ -3143,54 +3186,16 @@ struct CalendarSettings: View {
     @Default(.reminderPresentationStyle) var reminderPresentationStyle
     @Default(.reminderLeadTime) var reminderLeadTime
     @Default(.reminderSneakPeekDuration) var reminderSneakPeekDuration
-    @Default(.enableLockScreenReminderWidget) var enableLockScreenReminderWidget
-    @Default(.lockScreenReminderChipStyle) var lockScreenReminderChipStyle
     @Default(.hideAllDayEvents) var hideAllDayEvents
     @Default(.hideCompletedReminders) var hideCompletedReminders
     @Default(.showFullEventTitles) var showFullEventTitles
     @Default(.autoScrollToNextEvent) var autoScrollToNextEvent
-    @Default(.lockScreenShowCalendarCountdown) private var lockScreenShowCalendarCountdown
-    @Default(.lockScreenShowCalendarEvent) private var lockScreenShowCalendarEvent
-    @Default(.lockScreenShowCalendarEventEntireDuration) private var lockScreenShowCalendarEventEntireDuration
-    @Default(.lockScreenShowCalendarEventAfterStartWindow) private var lockScreenShowCalendarEventAfterStartWindow
-    @Default(.lockScreenShowCalendarTimeRemaining) private var lockScreenShowCalendarTimeRemaining
-    @Default(.lockScreenShowCalendarStartTimeAfterBegins) private var lockScreenShowCalendarStartTimeAfterBegins
-    @Default(.lockScreenCalendarEventLookaheadWindow) private var lockScreenCalendarEventLookaheadWindow
-    @Default(.lockScreenCalendarSelectionMode) private var lockScreenCalendarSelectionMode
-    @Default(.lockScreenSelectedCalendarIDs) private var lockScreenSelectedCalendarIDs
-    @Default(.lockScreenShowCalendarEventAfterStartEnabled) private var lockScreenShowCalendarEventAfterStartEnabled
     @Default(.enableThirdPartyCalendarApp) private var enableThirdPartyCalendarApp
     @Default(.selectedCalendarApp) private var selectedCalendarApp
     @Default(.fantasticalDefaultView) private var fantasticalDefaultView
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.calendar.highlightID(for: title)
-    }
-
-    private enum CalendarLookaheadOption: String, CaseIterable, Identifiable {
-        case mins15 = "15m"
-        case mins30 = "30m"
-        case hour1 = "1h"
-        case hours3 = "3h"
-        case hours6 = "6h"
-        case hours12 = "12h"
-        case restOfDay = "rest_of_day"
-        case allTime = "all_time"
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .mins15: return "15 mins"
-            case .mins30: return "30 mins"
-            case .hour1: return "1 hour"
-            case .hours3: return "3 hours"
-            case .hours6: return "6 hours"
-            case .hours12: return "12 hours"
-            case .restOfDay: return "Rest of the day"
-            case .allTime: return "All time"
-            }
-        }
     }
 
     var body: some View {
@@ -3310,159 +3315,15 @@ struct CalendarSettings: View {
                             .frame(width: 60, alignment: .trailing)
                     }
                 }
+                // LockScreenWidgetsMovedOut（T5 精简，docs/26 §做法 机制五 / D-06）：
+                // 这里原有两节——「Lock Screen Reminder Widget」与「Calendar Widget」
+                // （锁屏提醒 chip、锁屏的下一个日程、倒计时 / 全天时长 / 事件后窗口等十余个开关）。
+                // 它们配的是**锁屏组件**，与这一页的主题（日历数据）不是一回事；更要紧的是**每一项都已在
+                // 「锁屏」页里有一套一模一样的控件**（`LockScreenSettings`：同一个键、同一个 Picker），
+                // 同一件事两处配，用户只会怀疑哪一处才算数。故从本页摘掉，同一件事只留一处入口。
+                // **键与控件代码都没删**（可逆）：`LockScreenSettings` 与 `Constants.swift` 里的键、
+                // `LockScreenWeatherWidget` / `LockScreenReminderWidget` 照旧；要恢复就是把这些行拿回来。
 
-                Section(header: Text("Lock Screen Reminder Widget")) {
-                    Defaults.Toggle(key: .enableLockScreenReminderWidget) {
-                        Text("Show lock screen reminder")
-                    }
-                    .settingsHighlight(id: highlightID("Show lock screen reminder"))
-
-                    Picker("Chip color", selection: $lockScreenReminderChipStyle) {
-                        ForEach(LockScreenReminderChipStyle.allCases) { style in
-                            Text(style.localizedName).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(!enableLockScreenReminderWidget || !enableReminderLiveActivity)
-                    .settingsHighlight(id: highlightID("Chip color"))
-                }
-
-                Section(
-                    header: Text("Calendar Widget"),
-                    footer: Text("Displays your next upcoming calendar event above or below the weather capsule. Calendar selection here is independent from the Dynamic Island calendar filter.")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                ) {
-                    Defaults.Toggle(key: .lockScreenShowCalendarEvent) {
-                        Text("Show next calendar event")
-                    }
-                    .settingsHighlight(id: highlightID("Show next calendar event"))
-
-                    LabeledContent("Show events within the next") {
-                        HStack {
-                            Spacer(minLength: 0)
-                            Picker("", selection: $lockScreenCalendarEventLookaheadWindow) {
-                                ForEach(CalendarLookaheadOption.allCases) { option in
-                                    Text(option.title).tag(option.rawValue)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show events within the next"))
-
-                    Toggle("Show events from all calendars", isOn: Binding(
-                        get: { lockScreenCalendarSelectionMode == "all" },
-                        set: { useAll in
-                            if useAll {
-                                lockScreenCalendarSelectionMode = "all"
-                            } else {
-                                lockScreenCalendarSelectionMode = "selected"
-                                lockScreenSelectedCalendarIDs = Set(calendarManager.eventCalendars.map { $0.id })
-                            }
-                        }
-                    ))
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show events from all calendars"))
-
-                    if lockScreenCalendarSelectionMode != "all" {
-                        HStack {
-                            Spacer()
-                            Button("Deselect All") {
-                                lockScreenSelectedCalendarIDs = []
-                            }
-                            .buttonStyle(.link)
-                        }
-                        .padding(.top, 2)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(calendarManager.eventCalendars, id: \.id) { calendar in
-                                Toggle(isOn: Binding(
-                                    get: { lockScreenSelectedCalendarIDs.contains(calendar.id) },
-                                    set: { isOn in
-                                        if isOn {
-                                            lockScreenSelectedCalendarIDs.insert(calendar.id)
-                                        } else {
-                                            lockScreenSelectedCalendarIDs.remove(calendar.id)
-                                        }
-                                    }
-                                )) {
-                                    HStack(spacing: 8) {
-                                        Circle()
-                                            .fill(Color(calendar.color))
-                                            .frame(width: 8, height: 8)
-                                        Text(calendar.title)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 4)
-                        .padding(.leading, 2)
-                        .disabled(!lockScreenShowCalendarEvent)
-                    }
-
-                    Defaults.Toggle(key: .lockScreenShowCalendarCountdown) {
-                        Text("Show countdown")
-                    }
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show countdown"))
-
-                    Defaults.Toggle(key: .lockScreenShowCalendarEventEntireDuration) {
-                        Text("Show event for entire duration")
-                    }
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show event for entire duration"))
-                    .onChange(of: Defaults[.lockScreenShowCalendarEventEntireDuration]) { _, newValue in
-                        if newValue {
-                            Defaults[.lockScreenShowCalendarEventAfterStartEnabled] = false
-                        }
-                    }
-
-                    Defaults.Toggle(key: .lockScreenShowCalendarEventAfterStartEnabled) {
-                        Text("Hide active event and show next upcoming event")
-                    }
-                    .disabled(!lockScreenShowCalendarEvent || lockScreenShowCalendarEventEntireDuration)
-                    .settingsHighlight(id: highlightID("Hide active event and show next upcoming event"))
-
-                    LabeledContent("Show event after it starts") {
-                        HStack {
-                            Spacer(minLength: 0)
-                            Picker("", selection: $lockScreenShowCalendarEventAfterStartWindow) {
-                                Text("1 min").tag("1m")
-                                Text("5 mins").tag("5m")
-                                Text("10 mins").tag("10m")
-                                Text("15 mins").tag("15m")
-                                Text("30 mins").tag("30m")
-                                Text("45 mins").tag("45m")
-                                Text("1 hour").tag("1h")
-                                Text("2 hours").tag("2h")
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    .disabled(!lockScreenShowCalendarEvent || lockScreenShowCalendarEventEntireDuration || !lockScreenShowCalendarEventAfterStartEnabled)
-
-                    Text("Turn off 'Show event for entire duration' to use the post-start duration option.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Defaults.Toggle(key: .lockScreenShowCalendarTimeRemaining) {
-                        Text("Show time remaining")
-                    }
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show time remaining"))
-
-                    Defaults.Toggle(key: .lockScreenShowCalendarStartTimeAfterBegins) {
-                        Text("Show start time after event begins")
-                    }
-                    .disabled(!lockScreenShowCalendarEvent)
-                    .settingsHighlight(id: highlightID("Show start time after event begins"))
-                }
                 
                 // MARK: - Third-party Calendar Integration
                 Section {
@@ -7443,6 +7304,9 @@ private struct TimerPresetComponentControl: View {
 struct StatsSettings: View {
     @ObservedObject var statsManager = StatsManager.shared
     @Default(.enableStatsFeature) var enableStatsFeature
+    /// **键继续留着，页面上的开关已被摘掉**（T5 判定：见 `body` 里 `LLMUsageSectionRemoved` 那段注释）。
+    /// `@Default` 不读也不写也合法——保留它只为让"这一页曾经有过 LLM 用量开关"这件事在类型层面可见，
+    /// 免得后来人以为这里从来没接过这个键。
     @Default(.enableLLMUsageFeature) var enableLLMUsageFeature
     @Default(.statsStopWhenNotchCloses) var statsStopWhenNotchCloses
     @Default(.statsUpdateInterval) var statsUpdateInterval
@@ -7490,49 +7354,29 @@ struct StatsSettings: View {
                     // Note: Smart monitoring will handle starting when switching to stats tab
                 }
 
-                Defaults.Toggle(key: .enableLLMUsageFeature) {
-                    Text("Enable LLM Usage Monitor")
-                }
-                .settingsHighlight(id: highlightID("Enable LLM Usage Monitor"))
+                // LLMUsageSectionRemoved（T5，docs/26 §做法 机制五 / D-08）：这里是
+                // 「Enable LLM Usage Monitor」开关与下面 `LLM Providers` 一整段（Claude / Codex /
+                // Cursor / Antigravity 四个 provider 开关）原来的位置。
+                //
+                // **删页留码**：整段摘掉，`enableLLMUsageFeature` 与四个 `enable*Provider` 键、
+                // `UsageProvider`、`NotchLLMUsageView` 与 `TabSelectionView` 里那条 Usage tab 分支
+                // **一个字都没删**（可逆）。
+                //
+                // 判定（三条判据：读点 / 可观察效果 / 入口）：
+                // - 读点**只有 1 处**（`TabSelectionView`：`if Defaults[.enableLLMUsageFeature]` 追加一个
+                //   Usage tab）；四个 provider 键各只有 1 处（`UsageProvider`）；
+                // - 可观察效果有（打开后多一个 Usage tab），但**入口默认不存在**：`enableLLMUsageFeature`
+                //   默认 `false`，唯一能打开它的就是本页这一段自己（"入口自举"）；
+                // - 用户判定（D-08）："无实际设置意义就删"→ 删这一整段。
+                // 判定表与逐页读点计数见 `docs/09-features-and-mechanisms.md`。
 
             } header: {
                 Text("General")
             } footer: {
-                Text("When enabled, the Stats tab will display real-time system performance graphs. This feature requires system permissions and may use additional battery. Enabling LLM Usage Monitor adds a Usage tab that tracks token usage and spend across your configured AI providers.")
+                Text("When enabled, the Stats tab will display real-time system performance graphs. This feature requires system permissions and may use additional battery.")
                     .multilineTextAlignment(.trailing)
                     .foregroundStyle(.secondary)
                     .font(.caption)
-            }
-
-            if enableLLMUsageFeature {
-                Section {
-                    Defaults.Toggle(key: .enableClaudeProvider) {
-                        Text("Claude")
-                    }
-                    .settingsHighlight(id: highlightID("Claude Provider"))
-
-                    Defaults.Toggle(key: .enableCodexProvider) {
-                        Text("Codex")
-                    }
-                    .settingsHighlight(id: highlightID("Codex Provider"))
-
-                    Defaults.Toggle(key: .enableCursorProvider) {
-                        Text("Cursor")
-                    }
-                    .settingsHighlight(id: highlightID("Cursor Provider"))
-
-                    Defaults.Toggle(key: .enableAntigravityProvider) {
-                        Text("Antigravity")
-                    }
-                    .settingsHighlight(id: highlightID("Antigravity Provider"))
-                } header: {
-                    Text("LLM Providers")
-                } footer: {
-                    Text("Choose which AI providers appear in the Usage tab.")
-                        .multilineTextAlignment(.trailing)
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
             }
 
             if enableStatsFeature {
