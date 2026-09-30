@@ -19,7 +19,7 @@
 
 | 条号 | 义务 | 本仓库落点 |
 |---|---|---|
-| §4 | 逐字复制源码时保留版权与许可声明 | 上游文件头（`Copyright (C) 2024-2026 Atoll Contributors` + GPL 全文声明）**一字未改**；资产版权分段见 `COPYRIGHT_ASSETS` |
+| §4 | 逐字复制源码时保留版权与许可声明 | 上游各文件头的版权行 + GPL 全文声明**一字未改**（原文见 `NOTICE` / `COPYRIGHT_ASSETS`）；资产版权分段见 `COPYRIGHT_ASSETS` |
 | §5(a) | 标注修改**并给相关日期** | `NOTICE` 的 fork 声明块：基线 `v2.3.3-beta.3` / `c7305ec`、首次修改日期 **2026-09-27**（后续见 git 历史）、改名与重打包（壶中天 / Gourd、`com.cmeng.gourd`、`壶中天-<ver>.dmg`）；**自建 `.swift` 文件头**（`Modified for Gourd (2026-09-30)` + Gourd 版权行） |
 | §5(b) | 标注以本许可发布、无担保、含 §7 附加条款（若有） | 上游文件头原文保留；`NOTICE` / `TRADEMARKS` 声明本仓库以 GPL-3.0 分发 |
 | §5(c) | 整部作品按 GPL 授权 | `LICENSE` = GPL-3.0 全文，仓库根 |
