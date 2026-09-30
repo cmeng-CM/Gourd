@@ -68306,6 +68306,91 @@
         }
       }
     },
+    "settings.appearance.heightMode.auto" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自适应"
+          }
+        }
+      }
+    },
+    "settings.appearance.heightMode.manual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手动"
+          }
+        }
+      }
+    },
+    "settings.appearance.panelLayout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel layout"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板布局"
+          }
+        }
+      }
+    },
+    "settings.appearance.resetLayout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset to defaults"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复默认"
+          }
+        }
+      }
+    },
+    "settings.appearance.resetLayout.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puts the home widgets and the expanded panel back to their factory layout and size (block order, hidden lists, panel height, panel component switches); it does not touch your account, permissions or content (reminders/calendar access, calendar sources, clipboard history, shortcut list)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把首页与展开面板的排布和尺寸恢复出厂（块顺序、隐藏清单、面板高度、面板组件开关），不动你的账号、权限与内容（提醒/日历授权、日历来源、剪贴板历史、快捷指令清单）。"
+          }
+        }
+      }
+    },
     "settings.features.effect.enableNotes" : {
       "localizations" : {
         "en" : {

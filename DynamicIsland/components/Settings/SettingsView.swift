@@ -875,6 +875,8 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .appearance, title: "Corner radius scaling", keywords: ["corner radius", "shape"], highlightID: SettingsTab.appearance.highlightID(for: "Corner radius scaling")),
             SettingsSearchEntry(tab: .appearance, title: "Use simpler close animation", keywords: ["close animation", "notch"], highlightID: SettingsTab.appearance.highlightID(for: "Use simpler close animation")),
             SettingsSearchEntry(tab: .appearance, title: "Notch Width", keywords: ["expanded notch", "width", "resize"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch width")),
+            SettingsSearchEntry(tab: .appearance, title: "Panel height mode", keywords: ["panel layout", "auto height", "manual height", "自适应", "高度模式", "面板布局"], highlightID: SettingsTab.appearance.highlightID(for: "Panel height mode")),
+            SettingsSearchEntry(tab: .appearance, title: "Reset panel layout", keywords: ["reset", "restore defaults", "factory", "layout", "恢复默认", "重置", "面板布局"], highlightID: SettingsTab.appearance.highlightID(for: "Reset panel layout")),
             SettingsSearchEntry(tab: .appearance, title: "Expanded notch height", keywords: ["expanded height", "open notch", "height", "panel size"], highlightID: SettingsTab.appearance.highlightID(for: "Expanded notch height")),
             SettingsSearchEntry(tab: .appearance, title: "Panel background", keywords: ["notch panel", "liquid glass", "frosted", "background"], highlightID: SettingsTab.appearance.highlightID(for: "Panel background")),
             SettingsSearchEntry(tab: .appearance, title: "Enable colored spectrograms", keywords: ["spectrogram", "audio"], highlightID: SettingsTab.appearance.highlightID(for: "Enable colored spectrograms")),
@@ -4229,6 +4231,8 @@ struct Appearance: View {
     @Default(.selectedAppIconID) private var selectedAppIconID
     @Default(.openNotchWidth) var openNotchWidth
     @Default(.openNotchHeight) var openNotchHeight
+    /// 展开面板的高度模式（p5-home-blocks / T6 落键，T8 给 UI）：`"auto"` 自适应（默认）/ `"manual"`。
+    @Default(.panelHeightMode) private var panelHeightMode
     @Default(.closedNotchWidth) var closedNotchWidth
     @Default(.customizePhysicalNotchWidth) var customizePhysicalNotchWidth
     @Default(.nonNotchHeight) var nonNotchHeight
@@ -4258,6 +4262,9 @@ struct Appearance: View {
     @State private var name: String = ""
     @State private var url: String = ""
     @State private var speed: CGFloat = 1.0
+
+    /// 「面板布局」组「恢复默认」的二次确认（p5-home-blocks / T8）。破坏性动作，弹一次再走。
+    @State private var showingResetLayoutConfirmation = false
 
     /// Whether the main screen has a physical notch.
     private var mainScreenHasPhysicalNotch: Bool {
@@ -4353,6 +4360,8 @@ struct Appearance: View {
                     Text("Display Style")
                 }
             }
+
+            panelLayoutControls()
 
             notchHeightControls()
 
@@ -5006,6 +5015,73 @@ struct Appearance: View {
         }
     }
 
+    /// 面板布局（p5-home-blocks / T8，docs/29 §做法 机制七）：展开高度模式 + 「恢复默认」。
+    ///
+    /// - **高度模式**：自适应（默认）/ 手动，写的就是 T6 落键的 `Defaults[.panelHeightMode]`
+    ///   （尺寸链路读它：自适应档面板贴内容、手动档逐字是今天那条）。两个分段用
+    ///   `PanelAutoHeight.modeAuto` / `modeManual` 当 tag——档名是键的取值，不另立枚举；
+    ///   那个 `Picker` 的标签取本组标题（`labelsHidden` 只藏视觉那一份，无障碍读得到）。
+    /// - **恢复默认**：破坏性动作，先 `confirmationDialog` 再走 `PanelLayoutDefaults.reset()`
+    ///   （清单与判据在那个文件里）。footer 与弹窗 message 是同一句：重置什么、不动什么。
+    /// - 本组不放开关：首页块 / 面板组件的开关在「组件」页各自该在的地方（D-06 去重）。
+    @ViewBuilder
+    private func panelLayoutControls() -> some View {
+        Section {
+            Picker(selection: $panelHeightMode) {
+                Text(LocalizedStringKey("settings.appearance.heightMode.auto"))
+                    .tag(PanelAutoHeight.modeAuto)
+                Text(LocalizedStringKey("settings.appearance.heightMode.manual"))
+                    .tag(PanelAutoHeight.modeManual)
+            } label: {
+                Text(LocalizedStringKey("settings.appearance.panelLayout"))
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel(Text(LocalizedStringKey("settings.appearance.panelLayout")))
+            .settingsHighlight(id: highlightID("Panel height mode"))
+
+            Button(role: .destructive) {
+                showingResetLayoutConfirmation = true
+            } label: {
+                Label(
+                    LocalizedStringKey("settings.appearance.resetLayout"),
+                    systemImage: "arrow.counterclockwise"
+                )
+            }
+            .buttonStyle(.bordered)
+            .settingsHighlight(id: highlightID("Reset panel layout"))
+            .confirmationDialog(
+                Text(LocalizedStringKey("settings.appearance.resetLayout")),
+                isPresented: $showingResetLayoutConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button(role: .destructive) {
+                    resetPanelLayout()
+                } label: {
+                    Text(LocalizedStringKey("settings.appearance.resetLayout"))
+                }
+            } message: {
+                Text(LocalizedStringKey("settings.appearance.resetLayout.footer"))
+            }
+        } header: {
+            Text(LocalizedStringKey("settings.appearance.panelLayout"))
+        } footer: {
+            Text(LocalizedStringKey("settings.appearance.resetLayout.footer"))
+        }
+    }
+
+    /// 「恢复默认」按下并确认之后实际做的事：重置 + 既有的「设置已改」收尾。
+    ///
+    /// 重置清单里有订阅的那几个键（`panelHeightMode` / `hiddenHomeModules` / `homeBlockOrder` /
+    /// `moduleEnableOverrides` / `showCalendar` / `openNotchWidth` / `enableStatsFeature` …）自己会
+    /// 触发 `DynamicIslandApp` 的窗口尺寸重算；**`openNotchHeight` 没有订阅**（与两个滑块同一条：
+    /// 高度那一档的下一次生效点在展开时），所以照那两个滑块的收尾补一条 `notchHeightChanged`
+    /// （窗口重新定位 / 同步多屏）——不新开第二条 resize 链。
+    private func resetPanelLayout() {
+        PanelLayoutDefaults.reset()
+        NotificationCenter.default.post(name: Notification.Name.notchHeightChanged, object: nil)
+    }
+
     @ViewBuilder
     private func notchHeightControls() -> some View {
         Section {
@@ -5105,6 +5181,10 @@ struct Appearance: View {
             .onChange(of: openNotchHeight) {
                 NotificationCenter.default.post(name: Notification.Name.notchHeightChanged, object: nil)
             }
+            // 自适应档禁用（p5-home-blocks / T8）：本滑块写的 `openNotchHeight` 在那一档被内容高取代，
+            // 留着能拖就是本仓明确规避的「拖了没用」（与右下角拖动把手同一条先例，D-16）。
+            // 位置不动——手动档就是改动前那一行；档位由上面「面板布局」组切。
+            .disabled(!PanelLayoutDefaults.expandHeightSliderEnabled(heightMode: panelHeightMode))
             .settingsHighlight(id: highlightID("Expanded notch height"))
         } header: {
             Text("Notch Height")
