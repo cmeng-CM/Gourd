@@ -34,20 +34,23 @@
 //     `moduleEnableOverrides` 与 `manifest.defaultEnabled` 都不再看——「模块开不开」与
 //     「统计功能开不开」是同一个布尔量，不存在第二份状态。组件页那张卡拨的就是它
 //     （`ModuleEnablementWrite` 对非 nil 接管键写上游键）。
-//  3. **宽度声明 = 220 / 300**（26 §做法 机制一 给统计的定值，比进度宽一档）：三行
-//     「标签 + 值 + 细条」在最小块里必须不裁不溢——220 下固定宽度约 150pt（图标 12 + 三格标签
-//     + 三格数值 `%.1f%%` + 间隙），细条仍拿得到 ~70pt。**模块不参与块宽决策**（D-11 口径），
-//     分档只按 26 的定值；宿主 `HomeStripLayoutMath` 恒给 ≥ `min`。
+//  3. **宽度声明 = 220 / 300**（26 §做法 机制一 给统计的定值，比进度宽一档）：三个环
+//     （`StatsRingMetrics.regularRingDiameter` 46）+ 两个间距（10）= **158 ≤ 220**——最小块里
+//     不裁不溢，判据与用例都在 `StatsRingMetrics.rowWidth(forWidth:)`（T9 / 机制八）。
+//     **模块不参与块宽决策**（D-11 口径），分档只按 26 的定值；宿主 `HomeStripLayoutMath` 恒给 ≥ `min`。
 //  4. **`config` 只登记不接管**（D-03 / §已知限制 1）：`enableStatsFeature` 是**真源键**
 //     （= 本模块的 `takeoverEnableKey`），另三格图表可见性键是**登记键**——上游
 //     `StatsSettings` 设置页仍读写它们（完整图的入口在那里，26 §备选与取舍 ②），模块侧
 //     与 `ConfigHandle` 都不碰。默认值**从上游键取**（`Defaults.Keys.<键>.defaultValue`），
 //     不另抄一个字面量——两处各写一个数就会漂。
-//  5. **内容 = 迷你版**（26 §已知限制 3）：CPU / 内存 / GPU 各一行「标签 + 当前值 + 细条」，
-//     **不画历史曲线**（完整图在设置页的统计设置里看）。三格的顺序、标签与图标**沿用上游
-//     `NotchStatsView` 那一套**（标签 key 就是它用的 `CPU` / `Memory` / `GPU` 三条、图标
-//     `cpu` / `memorychip` / `display`），值走 `StatsManager` 的 `*UsageString`（同一份
-//     `StatsFormatting` 口径）——两个呈现面因此不漂。
+//  5. **内容 = 三环并排**（T9 / 26 §做法 机制八 / D-11）：CPU / 内存 / GPU 各一个环，**环心百分比、
+//     环下 9pt 标签**，**不画历史曲线**（完整图在设置页的统计设置里看）。三个环的**顺序与标签**
+//     **沿用上游 `NotchStatsView` 那一套**（标签 key 就是它用的 `CPU` / `Memory` / `GPU` 三条），
+//     值走 `StatsManager` 的 `*UsageString`（同一份 `StatsFormatting` 口径）——两个呈现面因此不漂。
+//     形态对齐既有先例 `TodoScopeRing`（线宽与环心字号随直径退档、环轨 `white.opacity(0.12)`）。
+//     **不画行首图标**（环的形态里没有它的位置：环心是数值、环下是标签）；`Row.symbolName` 随之删除。
+//     **分色只在首页这一面**（CPU 青 / 内存 紫 / GPU 琥珀，取的是面板既有的系统色家族，不新造
+//     hex）：上游那三张图画的是蓝 / 绿 / 紫，两面不同色这件事在报告里记了候选决策。
 //  6. **采样驱动挂在块自己的生命周期上**（本模块的裁决，见「采样驱动」一节）：上游的
 //     `StatsManager.startMonitoring()` 原先只由「展开面板停在统计 tab」触发
 //     （`ContentView` 的 `updateMonitoringState(notchIsOpen:currentView:)`）。tab 摘掉后
@@ -166,7 +169,7 @@ final class StatsModule: GourdModule {
     /// `stopMonitoring()`——面板重新打开时块会自己把采样再拉起来（口径 6）。
     func deactivate() async {}
 
-    /// 只答 `home`：迷你条。`.expanded` / `.compact` / `.lockscreen` 一律 `.none`（口径 1）。
+    /// 只答 `home`：三环（T9）。`.expanded` / `.compact` / `.lockscreen` 一律 `.none`（口径 1）。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .home:
@@ -177,18 +180,83 @@ final class StatsModule: GourdModule {
     }
 }
 
-// MARK: - 首页块（迷你条）
+// MARK: - 三环的尺寸与取舍
 
-/// 迷你条的三行：**顺序即显示顺序（CPU → 内存 → GPU）**。
+/// 三环的**尺寸与取舍**（纯函数，无 SwiftUI 依赖；单测在 `TakeoverEnablementTests` 的统计一节）。
 ///
-/// 标签与图标**逐字沿用上游 `NotchStatsView` 那一套**（口径 5）：标签 key 就是它
-/// `String(localized: "CPU")` / `"Memory"` / `"GPU"` 用的那三条，图标就是那三张图的
-/// `cpu` / `memorychip` / `display`——首页块与展开图（今天在设置页预览）在用户眼里必须是同一种说法。
+/// 口径（docs/26-home-widgets-and-settings.md §做法 机制八 / D-11，用户 2026-09-30 追加指示）：
+/// 三个环并排，直径 **46pt**（块宽 < 200 时退 **40pt**），环间距 **10pt**；
+/// 进度 = 2pt 亮描边叠在 5pt 主环上，环轨 `white.opacity(0.12)`；环心百分比、环下 9pt 标签。
 ///
-/// 抽成枚举（而不是在视图里写死三行）是为了让单测能直接钉住「键 / 图标解析得出来」
+/// **「不裁」是一句可断言的话**（不是感觉）：宿主给统计块的最小宽是 220
+/// （`StatsModule.homeBlockWidth.min`），而 `rowWidth(forWidth: 220) = 3 × 46 + 2 × 10 = 158 ≤ 220`。
+/// 块更窄时直径退一档（40）——算得出来、钉得住，因此不必靠上屏目测。
+enum StatsRingMetrics {
+    /// **环直径的唯一判据**：块宽 < `compactThreshold` 退一档。
+    ///
+    /// 宽取不到（首帧 0 / NaN / 无穷）时给**小档**：宁可画小一点，也不要画出被裁的三个环。
+    static func ringDiameter(forWidth width: CGFloat) -> CGFloat {
+        guard width.isFinite else { return compactRingDiameter }
+        return width < compactThreshold ? compactRingDiameter : regularRingDiameter
+    }
+
+    /// 常规档直径（26 §做法 机制八 的定值）。
+    static let regularRingDiameter: CGFloat = 46
+    /// 紧凑档直径（块宽不到 `compactThreshold` 时）。
+    static let compactRingDiameter: CGFloat = 40
+    /// 常规 / 紧凑两档的**分界**（`< 200` 退档；200 本身仍是常规档，阈值取闭区间下界）。
+    static let compactThreshold: CGFloat = 200
+
+    /// 三个环的间距（机制八 的定值：`46 × 3 + 10 × 2 = 158`）。
+    static let ringSpacing: CGFloat = 10
+
+    /// 主环线宽（5pt）——亮描边（2pt）压在它上面，读起来像「通电的环」。
+    static let mainLineWidth: CGFloat = 5
+    /// 亮描边线宽（2pt）：**比主环亮**，是进度的那一笔。
+    static let highlightLineWidth: CGFloat = 2
+    /// 主环的不透明度：比亮描边暗一档（同一支指标色，"环带 + 灯丝"的层次）。
+    static let mainRingOpacity: Double = 0.45
+    /// 环轨不透明度（与既有 `TodoScopeRing` 的 `white.opacity(0.15)` 同族，机制八 取 0.12）。
+    static let trackOpacity: Double = 0.12
+    /// 亮描边的发光半径（2.5 ≈ 机制八 的 2–3）。
+    static let glowRadius: CGFloat = 2.5
+
+    /// 环心百分比的字号：直径退档时**跟着退**（对齐 `TodoScopeRing` 的「环心字号随直径退档」）。
+    ///
+    /// 46 → 11 而不是 12：`22.8%` 这类值在 46 的环里用 12pt 会顶到 5pt 环带的内侧（实测宽 38.5 >
+    /// 内径 36），11pt 才是「读数即焦点」又不压环带的那一档。
+    static func counterFontSize(forDiameter diameter: CGFloat) -> CGFloat {
+        diameter >= regularRingDiameter ? 11 : 10
+    }
+
+    /// 环心文字的**可用宽度**（= 环内径 − 两侧各 2pt 呼吸）。
+    ///
+    /// 视图把这条件当作 `Text` 的最大宽：`100.0%` 这种偏长的值靠 `minimumScaleFactor` 收进来，
+    /// **永远不压到 5pt 的环带上**（这条与 `counterFontSize` 一起保证环心可读）。
+    static func counterMaxWidth(forDiameter diameter: CGFloat) -> CGFloat {
+        max(0, diameter - 2 * (mainLineWidth + 2))
+    }
+
+    /// 三环横排的总宽（含间距）——**「不裁」的判据**：任何块宽下都该 `<= 块宽`
+    /// （生产档：220 → 158、180 → 140）。
+    static func rowWidth(forWidth width: CGFloat, spacing: CGFloat = ringSpacing) -> CGFloat {
+        3 * ringDiameter(forWidth: width) + 2 * max(0, spacing)
+    }
+}
+
+// MARK: - 首页块（三环并排）
+
+/// 三环的三个指标：**顺序即显示顺序（CPU → 内存 → GPU）**。
+///
+/// 顺序与标签**逐字沿用上游 `NotchStatsView` 那一套**（口径 5）：标签 key 就是它
+/// `String(localized: "CPU")` / `"Memory"` / `"GPU"` 用的那三条——首页块与展开图（今天在设置页
+/// 预览）在用户眼里必须是同一种说法。**环不画行首图标**（T9 起形态是环：环心数值 + 环下标签，
+/// 图标只在展开图里出现），因此上游那三个 SF Symbol 不再登记在这里。
+///
+/// 抽成枚举（而不是在视图里写死三行）是为了让单测能直接钉住「键 / 分色 / 值口径」
 /// （`TakeoverEnablementTests` 的 manifest 契约用例逐条查这三行）。
 enum StatsHomeBlockLayout {
-    /// 一行：CPU / 内存 / GPU。
+    /// 一个指标。
     enum Row: String, CaseIterable, Identifiable {
         case cpu
         case memory
@@ -205,17 +273,20 @@ enum StatsHomeBlockLayout {
             }
         }
 
-        /// 行首图标（= 上游三张图的符号名）。
-        var symbolName: String {
+        /// 这一格的**指标色**（26 §做法 机制八：CPU 青 / 内存 紫 / GPU 琥珀）。
+        ///
+        /// 取的是**面板既有的系统色家族**里的三支（`.cyan` / `.purple` / `.orange`——它们在本产品
+        /// 里都在用：磁盘图 `.cyan`、GPU 详情 `.purple`、待办与网络 `.orange`），**不新造一套 hex**。
+        var ringColor: Color {
             switch self {
-            case .cpu: return "cpu"
-            case .memory: return "memorychip"
-            case .gpu: return "display"
+            case .cpu: return .cyan
+            case .memory: return .purple
+            case .gpu: return .orange
             }
         }
 
-        /// 这一行的当前值文案：取 `StatsManager` 的 `*UsageString`（`StatsFormatting.percentage`
-        /// 的既有口径，`%.1f%%`）——**不在这里另发明一个格式**，首页块与统计页因此不可能显示两个数。
+        /// 这一格的当前值文案：取 `StatsManager` 的 `*UsageString`（`StatsFormatting.percentage`
+        /// 的既有口径，`%.1f%%`）——**不在这里另发明一个格式**，首页环心与统计页因此不可能显示两个数。
         func valueText(in stats: StatsManager) -> String {
             switch self {
             case .cpu: return stats.cpuUsageString
@@ -224,9 +295,9 @@ enum StatsHomeBlockLayout {
             }
         }
 
-        /// 细条的进度（0…1）：`StatsManager` 的三个用量都是 0…100 的百分数，
-        /// 这里夹到 0…1（`ProgressView(value:)` 的越界值会画到框外）。
-        func barValue(in stats: StatsManager) -> Double {
+        /// 环的进度（0…1）：`StatsManager` 的三个用量都是 0…100 的百分数，
+        /// 这里夹到 0…1（越界值会画到环外）。
+        func progressValue(in stats: StatsManager) -> Double {
             let percent: Double
             switch self {
             case .cpu: percent = stats.cpuUsage
@@ -237,17 +308,20 @@ enum StatsHomeBlockLayout {
         }
     }
 
-    /// 迷你条要画的行（顺序 = `allCases` 的顺序：CPU → 内存 → GPU）。
+    /// 首页块要画的环（顺序 = `allCases` 的顺序：CPU → 内存 → GPU）。
     ///
-    /// **恒三行、不按块宽或图表开关减行**（口径 4/5）：块高矮跳变比少画一行更烦人，
-    /// 而 220 的最小块宽本来就是按三行算出来的（口径 3）。
+    /// **恒三个环、不按块宽或图表开关减环**（口径 4/5）：块高矮跳变比少画一个环更烦人，
+    /// 而 220 的最小块宽本来就是按三环算出来的（口径 3 / `StatsRingMetrics.rowWidth(forWidth:)`）。
     static let rows: [Row] = Row.allCases
 }
 
-/// 首页块：**迷你条**——CPU / 内存 / GPU 各一行「图标 + 标签 + 当前值 + 细条」。
+/// 首页块：**三环并排**——CPU / 内存 / GPU 各一个环（环心百分比、环下标签）。
 ///
 /// 只读、无控件（这正是用户判定「没有控制按钮 → 改为首页小部件」的理由）、无空态：
 /// `StatsManager` 的三个用量在没有采样时是 `0.0`（首帧），采样一起来就是真值。
+///
+/// **形态为什么是环**（用户 2026-09-30 追加指示 / 机制八）：三行横条太占空间，环在同样信息量下
+/// 更矮、且「读数即焦点」（百分比在环心）；形态与配色对齐既有 `TodoScopeRing` 先例。
 ///
 /// **采样驱动**（口径 6）：块的 `.task` 里跑一个只做一件事的看门狗——`isMonitoring` 为假就
 /// `startMonitoring()`（上游 `ContentView` 在「面板打开且不在统计 tab」时会 0.1s 后停掉采样，
@@ -260,16 +334,23 @@ private struct StatsHomeBlockView: View {
     @ObservedObject private var stats = StatsManager.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(StatsHomeBlockLayout.rows) { row in
-                StatsHomeRow(
-                    row: row,
-                    valueText: row.valueText(in: stats),
-                    barValue: row.barValue(in: stats)
-                )
+        // 宽度用 `GeometryReader` 读**放置后**的尺寸（不是测量）：直径据此退档（`StatsRingMetrics`），
+        // 三个环的总宽因此永远 ≤ 块宽——「不裁」由纯函数保证，视图不再自己算。
+        GeometryReader { proxy in
+            let diameter = StatsRingMetrics.ringDiameter(forWidth: proxy.size.width)
+
+            HStack(alignment: .top, spacing: StatsRingMetrics.ringSpacing) {
+                ForEach(StatsHomeBlockLayout.rows) { row in
+                    StatsRingView(
+                        row: row,
+                        valueText: row.valueText(in: stats),
+                        progress: row.progressValue(in: stats),
+                        diameter: diameter
+                    )
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await driveSampling() }
         .onDisappear { StatsManager.shared.stopMonitoring() }
     }
@@ -290,40 +371,66 @@ private struct StatsHomeBlockView: View {
     }
 }
 
-/// 迷你条的一行：图标 + 标签 + 当前值 + 细条。
+/// 一个指标环：**环轨 + 主环（5pt）+ 亮描边（2pt + 淡发光）+ 环心百分比 + 环下 9pt 标签**。
 ///
-/// 排版与进度首页块同一套（图标 12pt 宽、标签 / 数值显式白色系、细条吃掉剩余宽度）：
-/// 标签与数值 `fixedSize()`，细条 `frame(maxWidth: .infinity)`——窄块里被压缩的永远是条，
-/// 不是文字（口径 3 的 220 下条仍有 ~70pt）。
-private struct StatsHomeRow: View {
+/// 「科技风」只做三件事（机制八，克制、可维护、不引第三方）：
+/// ① 按指标分色（`Row.ringColor`，取自面板既有的系统色家族）；
+/// ② 细描边 + 淡发光（2pt 的亮描边压在 5pt 的主环上，外加深色 `shadow`）；
+/// ③ 等宽数字（`monospacedDigit()`，刷新时不跳动）。
+///
+/// 直径与字号都由 `StatsRingMetrics` 给（纯函数，有用例）；环心文字的可用宽度也由它给
+/// （`counterMaxWidth`）——超长的值（如 `100.0%`）在这条宽度里缩放，**不压环带、不撑破环**。
+private struct StatsRingView: View {
     let row: StatsHomeBlockLayout.Row
     let valueText: String
-    let barValue: Double
+    let progress: Double
+    let diameter: CGFloat
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: row.symbolName)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(width: 12)
+        VStack(spacing: 2) {
+            ZStack {
+                // ① 环轨（与既有 `TodoScopeRing` 同一族的白，机制八 取 0.12）。
+                Circle()
+                    .stroke(.white.opacity(StatsRingMetrics.trackOpacity), lineWidth: StatsRingMetrics.mainLineWidth)
+
+                // ② 主环（进度那一笔的底色，同一支指标色但暗一档）。
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        row.ringColor.opacity(StatsRingMetrics.mainRingOpacity),
+                        style: StrokeStyle(lineWidth: StatsRingMetrics.mainLineWidth, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+
+                // ③ 亮描边 + 淡发光：叠在主环上的细一笔，「通电的环」。
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        row.ringColor,
+                        style: StrokeStyle(lineWidth: StatsRingMetrics.highlightLineWidth, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: row.ringColor.opacity(0.8), radius: StatsRingMetrics.glowRadius)
+
+                // 环心：百分比（先拼 String 再给 Text，走 verbatim 重载，不做本地化查表）。
+                Text(verbatim: valueText)
+                    .font(.system(
+                        size: StatsRingMetrics.counterFontSize(forDiameter: diameter),
+                        weight: .semibold,
+                        design: .rounded
+                    ))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: StatsRingMetrics.counterMaxWidth(forDiameter: diameter))
+            }
+            .frame(width: diameter, height: diameter)
 
             Text(LocalizedStringKey(row.labelKey))
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
-                .fixedSize()
-
-            // 条在中、值在右：数值固定宽度（`%.1f%%` 恒等宽字形，`monospacedDigit` 只是双保险），
-            // 采样每次写值都只动数字，条与文字的相对位置不抖。
-            ProgressView(value: barValue)
-                .progressViewStyle(.linear)
-                .frame(maxWidth: .infinity)
-
-            Text(verbatim: valueText)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .fixedSize()
         }
     }
 }

@@ -129,11 +129,17 @@
 //  - **`StatsModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded`——D-02
 //    「不需要单独面板」，上游那条 Stats tab 分支与本批同删）、`defaultPlacement ==
 //    Placement(slot: nil, order: 50)`、真源键 `enableStatsFeature`、块宽 220/300、`config` = 真源键
-//    + 三格图表可见性键（登记键）；迷你条三行的标签 key / 图标 / 值口径（`StatsHomeBlockLayout`）
-//    逐条钉住；
+//    + 三格图表可见性键（登记键）；三环的标签 key / 值口径（`StatsHomeBlockLayout`）逐条钉住；
 //  - **接管键 read-through**：`enableStatsFeature` 关 → `.disabled` + 首页块投影为空 +
 //    首页请求降级 `.unavailable`；开 → `.active` + 进首页块投影 + 首页请求拿到迷你条（`.view`）。
 //    两个方向都走真门，这是本批的变异验证靶子（换掉接管键 → 本条红）。
+//
+//  p3-widgets / T9 追加（统计块从三行横条改**环状**，docs/26 §做法 机制八 / D-11）：
+//  - **尺寸纯函数 `StatsRingMetrics`**：直径 46（宽 < 200 退 40）、环间距 10、主环 5pt + 亮描边 2pt、
+//    环轨 0.12、环心字号随直径退档、环心文字可用宽 = 内径 − 两侧各 2；
+//  - **「不裁」有断言**：宿主给统计块的最小宽 220 下三环 + 间距 = 158 ≤ 220，180 下 140 ≤ 180
+//    （这条是 T9 的变异验证靶子：直径恒 46 → 窄档那条红）；
+//  - **分色取自面板既有的系统色家族**：CPU 青 / 内存 紫 / GPU 琥珀（不新造 hex）。
 //
 //  三条刻意写死的口径（改动前先读）：
 //
@@ -1465,12 +1471,11 @@ final class TakeoverEnablementTests: XCTestCase {
         // 迷你条的三行：键 / 图标 / 值口径都要对得上（顺序 = 显示顺序 CPU → 内存 → GPU）
         XCTAssertEqual(StatsHomeBlockLayout.rows.map(\.id), ["cpu", "memory", "gpu"])
         XCTAssertEqual(StatsHomeBlockLayout.rows.map(\.labelKey), ["CPU", "Memory", "GPU"], "标签复用上游统计页那三条 key")
-        for row in StatsHomeBlockLayout.rows {
-            XCTAssertNotNil(
-                NSImage(systemSymbolName: row.symbolName, accessibilityDescription: nil),
-                "\(row.id) 的图标 \(row.symbolName) 不是可解析的 SF Symbol"
-            )
-        }
+        XCTAssertEqual(
+            StatsHomeBlockLayout.rows.map(\.ringColor),
+            [.cyan, .purple, .orange],
+            "三环分色（机制八：CPU 青 / 内存 紫 / GPU 琥珀；取面板既有的系统色家族，不新造一套）"
+        )
         // 标签解析：**只对 `Memory` 用 `XCTAssertResolves`**——它的 zh-Hans 译名（`内存`）与 key 不同形；
         // 另两条（`CPU` / `GPU`）的 zh-Hans 译文就是 key 本身，helper 的「译文 != key」判据对它们不适用
         // （那两条的契约是「key 与上游统计页逐字一致」，已由上面那条相等断言钉住）。
@@ -1483,10 +1488,58 @@ final class TakeoverEnablementTests: XCTestCase {
         )
         XCTAssertEqual(StatsHomeBlockLayout.Row.gpu.valueText(in: StatsManager.shared), StatsManager.shared.gpuUsageString)
         // 细条进度：用量是 0…100 的百分数 → 夹到 0…1（越界会画到框外）
-        XCTAssertEqual(StatsHomeBlockLayout.Row.cpu.barValue(in: StatsManager.shared), StatsManager.shared.cpuUsage / 100, accuracy: 1e-9)
+        XCTAssertEqual(StatsHomeBlockLayout.Row.cpu.progressValue(in: StatsManager.shared), StatsManager.shared.cpuUsage / 100, accuracy: 1e-9)
 
         // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
+    }
+
+    /// 三环的**直径分档**：宽 ≥ 200 用 46、更窄退 40；宽取不到（0 / NaN / 无穷）一律退小档
+    /// ——宁可画小一点，也不要画出三个被裁的环。
+    ///
+    /// 变异验证（T9 §变异）：`ringDiameter(forWidth:)` 改成恒 46 → 本条与下面那条「不裁」一起红。
+    func testStatsRingDiameterStepsDownInNarrowBlocks() {
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 300), 46)
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 220), 46, "宿主给的最小宽仍是常规档")
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 200), 46, "阈值取闭区间下界：200 不收缩")
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 199.9), 40, "刚过阈值就退一档")
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 180), 40)
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 0), 40, "首帧取不到宽")
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: -10), 40)
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: .nan), 40)
+        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: .infinity), 40)
+    }
+
+    /// **「不裁」是一句可断言的话**：三环 + 两个间距的总宽必须 ≤ 块宽——生产档两处都过一遍
+    /// （220 = `StatsModule.homeBlockWidth.min` → 158；180 = 模块统一最小档 → 140）。
+    ///
+    /// 变异验证（T9 §变异）：`ringDiameter(forWidth:)` 恒 46 → 窄档这条的 140 变 158（断言红）。
+    func testThreeRingsNeverExceedTheAvailableBlockWidth() {
+        XCTAssertEqual(StatsModule.homeBlockWidth, ModuleHomeBlockWidth(min: 220, ideal: 300), "口径 3 的定值")
+        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 220), 158, "3 × 46 + 2 × 10")
+        XCTAssertLessThanOrEqual(StatsRingMetrics.rowWidth(forWidth: 220), 220, "220 最小宽下不裁")
+        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 180), 140, "3 × 40 + 2 × 10")
+        XCTAssertLessThanOrEqual(StatsRingMetrics.rowWidth(forWidth: 180), 180, "180 档下也不裁")
+        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 0), 140, "取不到宽时按小档算总宽")
+    }
+
+    /// 三环的**线宽 / 环轨 / 环心**三项刻度（机制八「科技风只做三件事」的可断言部分）：
+    /// 主环 5pt + 亮描边 2pt、环轨 `white.opacity(0.12)`、环心字号随直径退档、
+    /// 环心文字的可用宽**在环带内侧**（文字不压环带）。
+    func testStatsRingLineWidthsAndCounterMetrics() {
+        XCTAssertEqual(StatsRingMetrics.mainLineWidth, 5)
+        XCTAssertEqual(StatsRingMetrics.highlightLineWidth, 2)
+        XCTAssertEqual(StatsRingMetrics.trackOpacity, 0.12)
+        XCTAssertEqual(StatsRingMetrics.ringSpacing, 10)
+
+        XCTAssertEqual(StatsRingMetrics.counterFontSize(forDiameter: 46), 11)
+        XCTAssertEqual(StatsRingMetrics.counterFontSize(forDiameter: 40), 10, "直径退档时字号跟着退")
+        XCTAssertEqual(StatsRingMetrics.counterMaxWidth(forDiameter: 46), 32)
+        XCTAssertLessThan(
+            StatsRingMetrics.counterMaxWidth(forDiameter: 46),
+            46 - 2 * StatsRingMetrics.mainLineWidth,
+            "环心文字的可用宽必须落在 5pt 环带的内侧"
+        )
     }
 
     /// **接管键 read-through**：统计的启用真源是上游 `enableStatsFeature`，不是它自己的
