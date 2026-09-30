@@ -1503,7 +1503,12 @@ struct ContentView: View {
     @ViewBuilder
       func NotchLayout() -> some View {
           VStack(alignment: .leading) {
-              VStack(alignment: .leading) {
+              // **表头与内容之间的这道间距是显式的**（p5-home-blocks / T6，控制器 2026-10-01 实机测量）：
+              // 原先不写 `spacing:` 走的是平台默认值 8——它落在面板的**可见黑框以内**、吃掉首页的可用高
+              // （实测：日历行因此整行被流方案丢掉），却不在任何一处被算进「面板高 − 内容高」的预算里。
+              // 取值不变（默认同样是 8），只是把它提成具名常量并计入 `PanelAutoHeight.homeVerticalPadding`
+              // 那一份预算（那里的表把这一项也列进去了）。
+              VStack(alignment: .leading, spacing: PanelAutoHeight.notchLayoutSpacing) {
                   if coordinator.firstLaunch {
                       Spacer()
                       HelloAnimation().frame(width: 200, height: 80).onAppear(perform: {

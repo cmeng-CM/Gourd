@@ -1553,6 +1553,106 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
+    // MARK: - 自动高度：首页真拿得到它自己那份 plan 的需求（p5-home-blocks / T6）
+
+    /// **自动高度下，首页拿到的 frame ≥ 它自己那份 plan 的需求**（T6 控制器 2026-10-01 实机测量）。
+    ///
+    /// 这条是**行为护栏**，不是常数断言：面板高由生产函数 `PanelAutoHeight.panelHeight(...)` 算，
+    /// 首页真拿到的 frame 由面板内**每一项**折出来（下面逐项注明出处），再用生产 plan 在同一个
+    /// frame 上判「日历行还在不在」，最后真渲染一遍。常数只要少一段，frame 就低于需求、日历行被
+    /// 整行丢掉——实机那次（`homeVerticalPadding` 漏掉 `NotchLayout` 里表头与内容之间那道 8pt 缝）
+    /// 就是这么丢的：AX 树里 0 个日格、面板下方空出约 300pt。
+    func testAutoPanelHeightLeavesTheHomeTheHeightItsOwnPlanNeeds() async {
+        homeBlockSizeLog.reset()
+        registerProbes([HomeCompactAProbeModule.self])
+        await ModuleRegistry.shared.bootstrap()
+
+        let savedShowCalendar = Defaults[.showCalendar]
+        Defaults[.showCalendar] = true
+        defer { Defaults[.showCalendar] = savedShowCalendar }
+
+        // 夹具：一块紧凑块（宿主统一档 180/240、档高 96）+ 日历行（294）。
+        let available = Self.panelWidth770StripWidth
+        let bandWidth = Self.bandContentWidth(forHostingWidth: available)
+        let items = [flowItem(180, 240, HomeFlowView.compactBlockHeight)]
+        // 表头高取实机的 `max(24, closedNotchHeight)` 那一档；它在**内容侧**（`contentHeight(...)`
+        // 把它折进内容高），所以下面对 frame 的两处减法里都不该再出现它第二遍。
+        let headerHeight: CGFloat = 28
+
+        // ① 自然内容高（与接缝同一套生产调用：`naturalFlowBudget` 预算下的 plan → `contentHeight`）
+        let naturalPlan = HomeFlowLayout.plan(
+            items: items,
+            availableWidth: bandWidth,
+            availableHeight: PanelAutoHeight.naturalFlowBudget(
+                hostChrome: headerHeight + PanelAutoHeight.homeVerticalPadding,
+                screenVisibleHeight: nil
+            ),
+            calendarHeight: HomeCalendarRow.rowHeight,
+            metrics: flowMetrics
+        )
+        let content = PanelAutoHeight.contentHeight(
+            from: naturalPlan,
+            calendarHeight: HomeCalendarRow.rowHeight,
+            calendarSpacing: HomeCalendarRow.rowSpacing,
+            headerHeight: headerHeight
+        )
+        let requirement = content - headerHeight
+        XCTAssertEqual(
+            requirement,
+            HomeFlowView.compactBlockHeight + HomeCalendarRow.rowSpacing + HomeCalendarRow.rowHeight,
+            "自然内容 = 流（96）+ 缝（8）+ 日历行（294）+ 表头（28）——先把这个等式钉住，下面的 frame 才有意义"
+        )
+
+        // ② 面板高走**生产函数**（auto 档；上界取不到屏 → 850，不触界）
+        let panelHeight = PanelAutoHeight.panelHeight(
+            contentHeight: content,
+            mode: PanelAutoHeight.modeAuto,
+            manualHeight: 200,
+            screenVisibleHeight: nil
+        )
+
+        // ③ 首页真拿到的 frame = 面板高 − 面板内除首页内容之外的每一项（**逐项写死**，每项带出处）：
+        //    表头 = `NotchLayout` 的 `max(24, closedNotchHeight)`（实机档 28）；
+        //    16 = `NotchHomeView` 的 `.padding(8)` 上下各一；
+        //    12 = `ContentView` 的 `.padding([.horizontal, .bottom], open ? 12 : 0)` 底边；
+        //     4 = 同一处的 `.padding(.top, isIsland ? 0 : notchTopScreenBleedAmount)`；
+        //     8 = `NotchLayout` 里表头与内容之间那道缝（`notchLayoutSpacing`）。
+        //
+        //    **刻意不引用 `homeVerticalPadding`**：引用它会让「常数」与「链路」用同一个符号，
+        //    常数缩水时两边一起缩、用例照样绿（这正是上一版用例被评审判为无效的原因）。
+        //    这几项是**链路的事实**（实机测过），常数必须 ≥ 它们的和——这就是本用例的判据。
+        let chainBelowHeader = 16 + 12 + 4 + PanelAutoHeight.notchLayoutSpacing
+        let frame = panelHeight - headerHeight - chainBelowHeader
+        XCTAssertGreaterThanOrEqual(
+            frame, requirement,
+            "自动高度下面板必须给得住首页它自己那份 plan 的需求（少一段 → 日历行整行被丢）"
+        )
+
+        // ④ 同一个 frame 上跑一遍**生产 plan**：它想要的行必须一行不少（那块紧凑块 + 日历行）
+        let drawnPlan = HomeFlowLayout.plan(
+            items: items,
+            availableWidth: bandWidth,
+            availableHeight: frame,
+            calendarHeight: HomeCalendarRow.rowHeight,
+            metrics: flowMetrics
+        )
+        XCTAssertTrue(
+            drawnPlan.showsCalendarRow,
+            "frame ≥ 需求时日历行必须留下（plan 的阈值是闭区间；实机那次它是被丢掉的那一行）"
+        )
+        XCTAssertEqual(drawnPlan.rowsDrawn, 1, "紧凑块那一行也在，且不被丢")
+        XCTAssertEqual(drawnPlan.droppedCount, 0, "两块（一块 + 日历行）都不丢")
+
+        // ⑤ 真渲染一遍（同一个 frame、同一份夹具）：接缝把块摆出来（不是零提案的空布局）。
+        //    用带 `vm` 的那只挂载壳——这一档的 frame 放得下日历行，它会被真的构造出来。
+        renderCalendarBearingHome(available: available, height: frame)
+        XCTAssertEqual(
+            homeBlockSizeLog.size(of: HomeCompactProbeModule.ids[0]).height,
+            HomeFlowView.compactBlockHeight,
+            "接缝在自动高度的 frame 里把紧凑块摆出来了（拿到档高 96，不是被丢成 0）"
+        )
+    }
+
     /// 把**真的接缝**（`HomeBandedHomeView`）放进 `NSHostingView` 跑一趟布局：尺寸反馈只在真布局里
     /// 发生（纯函数测不到，探针脚本已验证），因此这里必须挂真视图而不是复刻一份结构——复刻的话，
     /// 被测的就成了复刻件，接缝里那句「提案宽钉在可用宽上」反而是「测外之物」。
@@ -1570,6 +1670,31 @@ final class HomeStripLayoutTests: XCTestCase {
     /// 把**真的接缝**放进 `NSHostingView`，夹具是**紧凑块**（走小组件带）——换行那条渲染真值用它。
     private func renderBandedWidgets(available: CGFloat, height: CGFloat) {
         renderRealHomeStrip(available: available, height: height)
+    }
+
+    /// **带日历行的挂载壳**（T6 的自动高度用例专用）：比上面那个多给一样环境对象——`vm`。
+    /// `HomeCalendarRow` 用 `@EnvironmentObject var vm`，而其余渲染用例的 frame 都放不下日历行
+    /// （它从不被构造），只有「日历行真的画出来」的那一条会撞上它：不给就崩在 `EnvironmentObject` 上，
+    /// 用例的断言根本走不到（T6 实测：`Fatal error: No ObservableObject of type DynamicIslandViewModel found`）。
+    private struct CalendarBearingHomeHost: View {
+        private let viewModel = DynamicIslandViewModel()
+        @Namespace private var albumArtNamespace
+
+        var body: some View {
+            HomeBandedHomeView(
+                albumArtNamespace: albumArtNamespace,
+                panelHeaderHeight: 28,
+                pointerInsidePanel: false
+            )
+            .environmentObject(viewModel)
+        }
+    }
+
+    /// 把带日历行的那个挂载壳放进 `NSHostingView` 跑一趟布局（与 `renderRealHomeStrip` 同形）。
+    private func renderCalendarBearingHome(available: CGFloat, height: CGFloat) {
+        let host = NSHostingView(rootView: CalendarBearingHomeHost().frame(width: available, height: height))
+        host.frame = CGRect(x: 0, y: 0, width: available, height: height)
+        host.layoutSubtreeIfNeeded()
     }
 
     /// 挂载壳：接缝要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的），
