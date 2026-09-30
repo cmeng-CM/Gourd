@@ -46,7 +46,14 @@
 //  - `contentHeight(from:)` = 流内容高 + （画了日历行时的「缝 + 行高」）+ 面板表头；非有限项按 0；
 //  - `naturalFlowBudget(...)` = 面板高上界 − 宿主垂直开销（有限数，不是无界）；
 //  - `panelHeaderHeight(...)` = `max(24, effectiveClosedNotchHeight)`（与
-//    `DynamicIslandCalendar` / `NotchTimerView` / `ContentView` 表头三处同源的那个数）。
+//    `DynamicIslandCalendar` / `NotchTimerView` / `ContentView` 表头三处同源的那个数）；
+//  - `homeVerticalPadding` = **面板内三处内边距的逐项求和**（16 + 12 + 4，每一项带出处；
+//    加在返回尺寸**之上**的阴影带 18 与顶出血 4 刻意不计——见该常数的注释与 T6 评审 P2）。
+//
+//  **种子与持有者的往返**（T6 评审 P1）
+//  - 持有者口径 = `面板高 − homeVerticalPadding`，尺寸层再 `+ homeVerticalPadding` → 对区间内的
+//    任何面板高都必须**幂等**；不幂等就是漂移源（光标在面板里时 `heldForPointer` 会把种子原样
+//    写回，每个 resize 事件推高一段）。
 //
 //  **尺寸出口**
 //  - `openNotchSize`（`matters.swift`）在 auto 下读过渡持有者、manual 下逐字读滑块值；
@@ -104,14 +111,19 @@ final class PanelAutoHeightTests: XCTestCase {
         )
 
         // ② auto：内容高 + 上下内边距，未触界时逐字就是这个和。
-        XCTAssertEqual(PanelAutoHeight.homeVerticalPadding, 16, "= `NotchHomeView` 的 `.padding(8)` 上下各一")
+        // 面板内的三处内边距逐项求和（T6 评审 P2）：`NotchHomeView` 的 8+8、`ContentView`
+        // 展开态的底边 12、刘海屏的顶出血 4（唯一的具名来源是 `notchTopScreenBleedAmount`）。
+        // **不含** `notchShadowPaddingStandard`（18）与 `adjustedSizeForScreen` 的顶出血——
+        // 那两项是加在 `panelHeight(...)` 返回值**之上**的窗口尺寸，折进来就是双重计数。
+        XCTAssertEqual(notchTopScreenBleedAmount, 4, "顶出血那一项的具名来源（matters.swift）")
+        XCTAssertEqual(PanelAutoHeight.homeVerticalPadding, 16 + 12 + 4, "= 8+8（NotchHomeView）+ 12（ContentView 底边）+ 4（顶出血）")
         XCTAssertEqual(
             PanelAutoHeight.panelHeight(
                 contentHeight: 300, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 200, screenVisibleHeight: nil
             ),
-            316,
-            "300 + 16；nil 屏 → 上界回落 850，不触界"
+            300 + 32,
+            "300 + 32（宿主内边距 32）；nil 屏 → 上界回落 850，不触界"
         )
 
         // ③ 下界夹取：内容极小（甚至 0）也不低于可配下界 120。
@@ -291,8 +303,8 @@ final class PanelAutoHeightTests: XCTestCase {
                 seedPanelHeight: 900, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 200, screenVisibleHeight: nil, contentHeight: { _ in content }
             ),
-            416,
-            "900 → 416（416 = 400 + 16）"
+            432,
+            "900 → 432（432 = 400 + 32）"
         )
 
         // 种子低于内容 → **长高**（不是单向棘轮：只许收缩时这一档永远长不上去）。
@@ -301,18 +313,18 @@ final class PanelAutoHeightTests: XCTestCase {
                 seedPanelHeight: 150, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 200, screenVisibleHeight: nil, contentHeight: { _ in content }
             ),
-            416,
-            "150 → 416（这一条就是「不是棘轮」的判据）"
+            432,
+            "150 → 432（这一条就是「不是棘轮」的判据）"
         )
 
         // 已经是不动点：一步返回同一个值。
         XCTAssertEqual(
             PanelAutoHeight.convergedPanelHeight(
-                seedPanelHeight: 416, mode: PanelAutoHeight.modeAuto,
+                seedPanelHeight: 432, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 200, screenVisibleHeight: nil, contentHeight: { _ in content }
             ),
-            416,
-            "416 是不动点"
+            432,
+            "432 是不动点"
         )
 
         // 夹取后不回改内容：内容高到顶时收敛值就是上界（无屏信息 → 850）。
@@ -333,8 +345,8 @@ final class PanelAutoHeightTests: XCTestCase {
                 manualHeight: 200, screenVisibleHeight: nil,
                 contentHeight: { height in height >= 500 ? 400 : 200 }
             ),
-            216,
-            "900 → 416 → 216 → 216：阶跃探针在 216（= 200 + 16）上稳定"
+            232,
+            "900 → 432 → 232 → 232：阶跃探针在 232（= 200 + 32）上稳定"
         )
 
         // manual：不读内容（一步返回手动值），种子怎么给都一样。
@@ -353,7 +365,7 @@ final class PanelAutoHeightTests: XCTestCase {
                 seedPanelHeight: .nan, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 120, screenVisibleHeight: nil, contentHeight: { _ in content }
             ),
-            416,
+            432,
             "种子 NaN → 从手动值 120 起算，仍然收敛到内容高"
         )
     }
@@ -383,6 +395,51 @@ final class PanelAutoHeightTests: XCTestCase {
 
     // MARK: - 尺寸出口：auto 读持有者、manual 逐字读滑块
 
+    /// **持有者往返必须幂等**（T6 评审 P1 的护栏）：持有者写的是 `面板高 − homeVerticalPadding`，
+    /// 尺寸层读回来再 `+ homeVerticalPadding` —— 对区间内的任何面板高这两个方向必须回到同一个数。
+    ///
+    /// 为什么这条是漂移的护栏：接缝的种子取的是**权威的当前面板高**（`openNotchSize.height`），
+    /// 光标在面板里时 `heldForPointer` 会把种子原样写回持有者；若持有者口径与 `panelHeight(...)`
+    /// 的加数不一致（例如种子由「几何高 + 假设的开销」重建、而假设比真实少一段），写回的就不是
+    /// 当前值而是「当前值 ± 那一段」，下一次重算再拿它当种子——**每个 resize 事件都推走一段**。
+    /// 这里把一致性钉在纯函数层：种子取权威值时，往返必然回到原值。
+    func testHolderPaddingRoundTripKeepsTheAuthoritativeSeedFromDrifting() {
+        let panelHeights: [CGFloat] = [
+            openNotchHeightRange.lowerBound,   // 下界（120）：夹取后仍在区间内
+            200,                               // 滑块的出厂档
+            432,                               // 内容高 400 + 内边距 32
+            630,                               // 曾经的默认面板档
+            openNotchHeightRange.upperBound    // 无屏信息时的上界（850）
+        ]
+        for panelHeight in panelHeights {
+            let holderValue = panelHeight - PanelAutoHeight.homeVerticalPadding
+            XCTAssertEqual(
+                PanelAutoHeight.panelHeight(
+                    contentHeight: holderValue,
+                    mode: PanelAutoHeight.modeAuto,
+                    manualHeight: 200,
+                    screenVisibleHeight: nil
+                ),
+                panelHeight,
+                "面板高 \(panelHeight) 经持有者往返必须回到同一个数（口径不一致就是漂移源）"
+            )
+        }
+        // 敏感性：持有者多写了 20pt（正是「种子由几何高 + 少算一段的假设开销重建」时的形态）→
+        // 面板高就跟着涨 20pt。这条把 P1 那个漂移的成因钉在纯函数层：多写的那一段 = 涨的那一段，
+        // 1:1 —— 所以两侧的加数必须同一份，种子必须取权威值。
+        let driftedHolderValue = (432 - PanelAutoHeight.homeVerticalPadding) + 20
+        XCTAssertEqual(
+            PanelAutoHeight.panelHeight(
+                contentHeight: driftedHolderValue,
+                mode: PanelAutoHeight.modeAuto,
+                manualHeight: 200,
+                screenVisibleHeight: nil
+            ),
+            432 + 20,
+            "持有者多写 20pt → 面板高多 20pt（漂移 1:1）"
+        )
+    }
+
     func testOpenNotchSizeReadsHolderInAutoAndVerbatimManualInManual() {
         let savedMode = Defaults[.panelHeightMode]
         let savedHeight = Defaults[.openNotchHeight]
@@ -403,10 +460,10 @@ final class PanelAutoHeightTests: XCTestCase {
             "manual 档不读内容高（改动前那条：`clampedOpenNotchHeight(Defaults[.openNotchHeight])`）"
         )
 
-        // auto：读持有者 → `内容 + 16` → 夹取。
+        // auto：读持有者 → `内容 + 宿主内边距` → 夹取。
         Defaults[.panelHeightMode] = PanelAutoHeight.modeAuto
         PanelAutoHeight.homeContentHeight = 400
-        XCTAssertEqual(openNotchSize.height, 416, "auto 档 = 内容高 400 + 上下内边距 16")
+        XCTAssertEqual(openNotchSize.height, 432, "auto 档 = 内容高 400 + 宿主内边距 32")
 
         // auto + 还没有人算过（首帧）：回落手动值（§已知限制 2 的「首帧一拍」）。
         PanelAutoHeight.homeContentHeight = nil

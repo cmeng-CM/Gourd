@@ -58,15 +58,34 @@ enum PanelAutoHeight {
 
     // MARK: - 宿主垂直内边距（auto 加在内容高之上的那一份）
 
-    /// 首页内容之外、**面板高度之内**的上下内边距 = `NotchHomeView` 给首页内容包的 `.padding(8)`
-    /// 上下各一（`NotchHomeView.mainContent` 的那句，非极简档）。
+    /// 展开面板**内容区上下**的宿主内边距 = 面板里那三处内边距的**逐项求和**（每一项都带出处）：
     ///
-    /// 它是 `panelHeight(...)` 在 auto 下加的唯一一份：面板表头（`DynamicIslandHeader`）由接缝
-    /// 折进**内容高**里（见下面 `contentHeight(from:)` 与持有者的注释）——表头高随屏 / 配置变
-    /// （`panelHeaderHeight(...)`），写不成这里的常量；而它对「面板高 = 内容 + 内边距」这条式子
-    /// 必须**不低估**（少算表头 → 可用高比内容矮一截 → 最后一行被流方案整行丢掉），
-    /// 所以只能由知道 `vm` 的那一层给。
-    static let homeVerticalPadding: CGFloat = 16
+    /// | 项 | 出处 |
+    /// |---|---|
+    /// | **+16** | `NotchHomeView.swift` 的 `.padding(Defaults[.enableMinimalisticUI] ? 0 : 8)`（上下各一，非极简档） |
+    /// | **+12** | `ContentView.swift` 的 `.padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)`（展开态的底边） |
+    /// | **+4** | `ContentView.swift` 的 `.padding(.top, isIslandMode ? 0 : notchTopScreenBleedAmount)`（刘海屏的顶出血，`notchTopScreenBleedAmount = 4`） |
+    ///
+    /// **刻意不计入的两项**——它们在 `panelHeight(...)` 的返回值**之上**又加了一次窗口尺寸，
+    /// 折进本常数就是把同一段距离算两遍：
+    /// - `+18`（`matters.swift` 的 `notchShadowPaddingStandard`）：`addShadowPadding(to:isMinimalistic:)`
+    ///   在 `DynamicIslandApp.calculateRequiredNotchSize` 里加在**返回尺寸上**（窗口比这里返回的值
+    ///   高 18）；把阴影带折进内容侧，面板就会白留 18pt。
+    /// - `+4`（`DynamicIslandApp.adjustedSizeForScreen` 的 `notchTopScreenBleed`）：同一份顶出血在
+    ///   窗口一侧再加一次——上面那 **+4** 是它在**面板内**的那一侧，这一项在面板外，不重复计。
+    ///
+    /// 逐项求和 = **32**。口径：**面板的可见黑框 ≈ `panelHeight(...)` 返回的那个值**（用户滑块 /
+    /// 拖动读数说的就是它），于是「返回的面板高 − 内容自然高（含表头）」必须等于面板内的三处内边距，
+    /// 流拿到的可用高才恰好等于内容自然高（零富余）——面板底部的可见留白因此只剩 `NotchHomeView`
+    /// 的 8 与 `ContentView` 的 12（= 20pt，设计内的呼吸感）。
+    ///
+    /// **与既有先例的关系**：`DynamicIslandCalendar.availableTodayListHeight` 用的是
+    /// 「面板高 − 表头 − 16」（只算 `NotchHomeView` 那一项）；本常数是同一条算式补全到三处内边距
+    /// （T6 评审 P2：只写 16 是把面板自己的 12 + 4 漏在预算外）。若上屏实测发现面板底部留白比
+    /// 20pt 还多出约 18–22pt（= 上方那两项其实**在**可见黑框内、`返回高 + 22 = 黑框`），
+    /// 那时的正确值是把它们折回来（32 − 22 = 10）——见报告 §候选决策 7 的两个候选与实测判据。
+    /// 作用范围：**刘海屏的展开态**（浮动药丸模式顶部不占 4，见上表第三项的 `isIslandMode`）。
+    static let homeVerticalPadding: CGFloat = 16 + 12 + 4
 
     /// 展开态内容**上方面板表头**的高度（`NotchLayout` 给 `DynamicIslandHeader` 的高度：
     /// `max(24, vm.effectiveClosedNotchHeight)`）。
