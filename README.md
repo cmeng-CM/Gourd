@@ -1,83 +1,68 @@
-# 壶中天 · Gourd — 可定制的 macOS 灵动岛工作台
+# 壶中天 · Gourd
 
-> 自用 + 开源。以刘海（notch）为命令面板，把媒体、歌词、系统状态、文件暂存、快捷启动、快捷控制、AI 协作都收进屏幕顶部那一小块地方，并且**一切功能皆可开关、可扩展、可替换**。
+> **自用 + 开源**的 macOS **刘海工作台**：把屏幕顶部那一小块（刘海 / 刘海位）做成命令面板——媒体、歌词、系统状态、文件暂存、快捷启动、快捷控制、通知与自建小工具都收在这里，**一切功能皆可开关、可扩展**。
 >
+> **这是一个修改版本（modified version）**：本项目 fork 自 [Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0），基线 tag `v2.3.3-beta.3`（commit `c7305ec`），自 **2026-09-27** 起由本仓库维护修改；上游版权声明与 GPL-3.0 全文原样保留（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）。
 >
-> **名字取意：壶中天（壶中天地）**——一个小容器里装下一整个天地；屏幕顶部那个小口展开，就是你的整块工作台。
-> 典出《后汉书·方术传》费长房入壶，壶中有玉堂严丽；李白"壶中别有日月天"、王维"坐知千里外，跳向一壶中"。
-> 而"壶"在中国神话里本就是海上仙山之一（《列子·汤问》渤海之东五山：岱舆、员峤、**方壶**、瀛洲、蓬莱）——与代码基座 [Atoll](https://github.com/Ebullioscopic/Atoll)（环礁）同属海洋意象。
-> 英文名 **Gourd**（取"壶"之意）；Bundle ID `com.cmeng.gourd`。
+> 「壶中天」取意壶中天地——一个小容器里装下一整块工作台；屏幕顶部那个小口展开，就是你的全部工具。
 
-## 一句话现状
+<p align="center"><img src="docs/guide/assets/01-home-strip.png" width="920"></p>
 
-**应用工程已进仓库：Atoll 基线 `v2.3.3-beta.3`（`c7305ec`）的历史已接入 `main`，改名与基座落地（P0）已完成**——构建产物仍是 `Gourd.app`（`PRODUCT_NAME=Gourd`、Bundle ID `com.cmeng.gourd`，Debug 为 `com.cmeng.gourd.dev`），`tools/build.sh --install` / `--dmg` 落地时命名为 `壶中天.app`（DMG 为 `dist/壶中天-<ver>.dmg`）；合规与 CI 配置就位、上游功能零删减。本机构建命令见 [docs/10](docs/10-p0-execution.md)；尚未做的是 P1 起的模块化与业务实现（`docs/02-roadmap.md`）。仓库**无远端、CI 从未实跑**（见 docs/10「已知限制」）。
+## 与 Atoll 的关系
 
-## 关键决策（详见 [docs/00-decisions.md](docs/00-decisions.md)）
+- **代码来路**：应用工程 fork 自 [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0），基线锁定 tag **`v2.3.3-beta.3`**（commit `c7305ec`）；上游完整历史保留在 `main`，季度同步走原生 `git merge`。
+- **改了哪些**：改名与重打包（产品名 **壶中天 / Gourd**、Bundle ID `com.cmeng.gourd`、产物 `壶中天-<版本>.dmg`）；版本号改为自有序列（本版本 **0.1.0**）；加模块化内核与自建模块（启动台 / 农历 / 进度 / 待办 / 快捷指令 / 通知 / 前台应用）；默认值收敛与界面中文化。**上游功能一个未删**——不需要的用「默认关」表达。
+- **改的时间**：首次修改 **2026-09-27**，后续改动见 git 历史与 [CHANGELOG.md](CHANGELOG.md) 顶部的自有变更段。
+- **与上游的关系**：`Atoll` 仅用于指明代码来源。**本项目与 Atoll 项目及其维护者无隶属关系，也未获其背书**（nominative use；见 [TRADEMARKS](TRADEMARKS)）。
 
-| 决策 | 结论 |
-|---|---|
-| 许可证路线 | **GPL-3.0**（自用 + 开源）。因此可自由融合 MIT / Apache-2.0 / MPL-2.0 的代码，代价是**不能上 Mac App Store** |
-| 代码基座 | fork **[Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)**，因为它已有 XPC 扩展架构（boring.notch 的扩展系统还在路线图里未实现） |
-| 上游使用方式 | **能当依赖就不 fork**：MIT 项目优先做 SPM 依赖或按目录引进，只有基座是真 fork |
-| 插件宿主 | 先做进程外 XPC + JSON 描述符校验；JS 沙箱（JavaScriptCore）作为第二阶段 |
-| 参考但**不可复制代码** | [SuperIsland](https://github.com/shobhit99/SuperIsland)（仓库无 LICENSE）、[notchi](https://github.com/sk-ruban/notchi)（AGPL-3.0） |
+## 功能
 
-## 术语
+- **首页工作台（strip）**：媒体块、前台应用块、通知块、待办块、镜子块各占一格；宽度不够时按顺序丢块，条尾给 `＋N` 而不是静默消失。
+- **首页日历行**：整月网格 + 当天清单，与展开面板的「日历」tab 由同一个开关控制。
+- **展开面板**：顶部 tab 栏 + 各功能页（主页 / 文件暂存 / 统计 / 备注 / 终端 / 调色盘 / 日历 / 启动台…），tab 由模块注册表投影产出。
+- **媒体与歌词**：正在播放的曲目、进度与控制，锁屏媒体 widget，逐行歌词（默认关）。
+- **系统指标与 HUD**：CPU / 内存 / 网络 / 磁盘 / GPU / 温度；音量、亮度、键盘背光、电池的 HUD 直接在刘海处显示。
+- **效率工具**：剪贴板历史与固定片段、倒计时（计时器 tab）、日历与提醒、待办（写回系统提醒事项）。
+- **文件暂存（暂存器）**：把文件拖进刘海暂存，再拖出或 AirDrop。
+- **自建模块**：快捷启动（可搜索、可固定的应用网格）、农历、日 / 周 / 月 / 季 / 年进度、系统「快捷指令」上岛、通知上岛、外部终端（Ghostty 等）。
+- **组件页**：一个模块一张卡——默认开 / 关、「开了会在哪看到什么」、能拨的配置直接拨；改不了的键明确标「由上游设置管理」。
+- **一切皆开关**：每个功能可独立开关、独立配置、独立崩溃隔离（模块协议见 [docs/06](docs/06-module-protocol.md)）。
 
-| 词 | 指什么 |
-|---|---|
-| **上游 / upstream** | 我们 fork 的基座 **Atoll**（`Ebullioscopic/Atoll`），以及将来引进代码的第三方开源项目。文档里"上游有 / 上游没有"都是这个意思，不指任何云服务 |
-| **基座** | 被 fork 的应用工程本身（Atoll） |
-| **岛 / 刘海面板** | 壶中天自己的浮动面板窗口（折叠态=compact，展开态=expanded，另有 lockscreen 锁屏面） |
-| **模块 / module** | 一个可独立开关、独立配置、独立崩溃隔离的功能单元（内置或插件，共用同一份 manifest 模型，见 [docs/06](docs/06-module-protocol.md)） |
+## 安装
 
-## 目录约定
+1. **构建**（全程本机完成，不依赖 GitHub；需要 Xcode）：
+   ```bash
+   sh tools/build.sh --install     # 构建并装到 /Applications/壶中天.app
+   sh tools/build.sh --dmg         # 或在 dist/ 产出 壶中天-0.1.0.dmg
+   ```
+2. **安装**：`--install` 已装好；用 DMG 的话把「壶中天」拖进「应用程序」。
+3. **放行**：首次打开若被 Gatekeeper 拦下，右键 → 打开（或到「系统设置 → 隐私与安全性」点「仍要打开」）。
 
-```
-~/workspace/github/
-├── Atoll/                 ← 基座（fork 源，已拉取，含完整历史）
-├── boring.notch/          ← 功能对照实现（GPL，可合并）
-├── NotchDrop/ OpenYoink/ DynamicNotchKit/ ...   ← 功能来源（MIT/Apache/MPL）
-└── gourd/                 ← 本项目仓库（应用名 壶中天 / Gourd；目录已于 2026-09-27 由 lagoon 改名）
-    ├── DynamicIsland.xcodeproj/   ← 应用工程（Bundle ID com.cmeng.gourd；上游文件名保留不改）
-    ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射、P0 执行方案
-    ├── tools/             ← 本仓库自身的工具：上游同步与校验脚本
-    ├── scripts/           ← 上游自带的构建辅助 ruby 脚本（随基线引入，不改）
-    ├── upstreams.tsv      ← 机器可读的上游清单（用途 + 许可 + 使用方式）
-    ├── NOTICE             ← 上游署名（GPL 义务之一）
-    └── LICENSE            ← GPL-3.0
-```
+应用是**菜单栏小工具**（没有 Dock 图标）：启动后看屏幕顶部（刘海 / 刘海位），鼠标悬停即展开。
 
-## 上手
+## 使用说明
 
-```bash
-# 1) 按清单校验上游是否齐全
-bash tools/verify-upstreams.sh
+**装上之后怎么用**——安装、权限清单、每个模块做什么、设置页怎么用、快捷键、常见问题、更新与卸载，全在用户手册：**[docs/guide/README.md](docs/guide/README.md)**（7 张实机截图，红圈序号逐条对应）。
+给发布者的自检清单一页：[docs/25-release-smoke.md](docs/25-release-smoke.md)。
 
-# 2) 拉取缺失的上游 / 更新已有上游
-bash tools/sync-upstreams.sh
+## 常见问题
 
-# 3) 阅读设计，从 docs/02-roadmap.md 的 P0 开始
-```
+- **功能开了却没反应？** 接管模块的启用真源是**上游那个开关键**（如 `enableTimerFeature` / `showMirror` / `showStandardMediaControls`）——组件页与上游设置页拨的是同一个开关；卡片上标了「由上游设置管理（改了不生效）」的项，请到上游设置页改。
+- **面板窄的时候首页条少了几块？** 宽度不够时按顺序从尾部丢块，条尾 `＋N` 就是「还有几块没显示」；拉宽面板即可（含媒体的四块约需面板 ≥892pt）。
+- **为什么要摄像头 / 完全磁盘访问这类权限？** 功能是本地实现的（媒体走私有框架 + 子进程、通知读本机通知库、镜子直开摄像头）；**本项目不新增出站请求、不上传数据**。权限可以不给——对应功能降级（例如通知块显示「不可读」）而不是崩溃。
+- **通知的 × 为什么有时只从岛上移除？** 只有近 10 秒内有 AX 句柄的通知才能顺手把系统那条也关掉，更早的只能从列表移除——文案会如实分档说明（[docs/21](docs/21-strip-honesty.md)）。
+- **版本号为什么是 0.1.0？** 它是「第一个冻结的自用版」：功能面已成型，但接管模块配置的写路径、tab 排序等仍留着空档，报 1.0.0 会误导将来的自己（[docs/24](docs/24-release-freeze.md) §备选与取舍 ①）。
 
-## 文档索引
+## 归属与致谢
 
-| 文档 | 内容 |
-|---|---|
-| [docs/00-decisions.md](docs/00-decisions.md) | ADR（10 条）：许可证路线、基座选型、依赖策略、插件宿主、禁引清单、元数据分层、插件渲染边界、P0 冻结范围、基线锁定、功能策略 |
-| [docs/01-architecture.md](docs/01-architecture.md) | 分层架构、模块协议、插件宿主、配置与主题、数据源、分发 |
-| [docs/02-roadmap.md](docs/02-roadmap.md) | P0～P4 阶段任务、验收标准、风险 |
-| [docs/03-license-matrix.md](docs/03-license-matrix.md) | 许可证矩阵与合并规则（含禁止清单） |
-| [docs/04-upstreams.md](docs/04-upstreams.md) | 上游仓库清单、用途、同步策略 |
-| [docs/05-feature-map.md](docs/05-feature-map.md) | Nook X 功能 → 本项目模块 → 代码来源 |
-| [docs/06-module-protocol.md](docs/06-module-protocol.md) | **模块协议与描述符（字段级）**：Manifest / GourdModule / 内容描述符三层分离、descriptor.json 全字段表、ConfigSchema 词汇、权限白名单、apiVersion 策略、19 个校验错误码 |
-| [docs/07-config-and-events.md](docs/07-config-and-events.md) | **配置模型与事件契约（字段级）**：config.json 结构与迁移链、密钥走 Keychain、事件信封与投递/背压语义、首批 13 个事件的 payload |
-| [docs/08-p0-checklist.md](docs/08-p0-checklist.md) | **P0 工程改造清单**：基线冻结、git 结构、改名清单（含刻意冻结项）、依赖治理、CI、合规、上游接触白名单、可执行验收命令 |
-| [docs/09-features-and-mechanisms.md](docs/09-features-and-mechanisms.md) | **功能清单与实现机制（范围已定稿）**：40+ 功能的实现机制 × 动作（保留接管 / 保留不投入 / 新增），6 项新增功能的详细设计、私有 API 与子进程代价清单、待讨论项 |
-| [docs/10-p0-execution.md](docs/10-p0-execution.md) | **P0 执行方案与回写**：设计文档（方案五节 + 接口与数据形状 / 已知限制 / 实际交付 / 决策摘要 D-01…D-12）——「P0 到底改了什么」的长期记录 |
+- **上游基座**：[Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0）——应用工程 fork 自它，其内嵌的 boring.notch 署名原样保留。
+- **组件与参考**：[boring.notch](https://github.com/TheBoredTeam/boring.notch)（GPL-3.0）、[exelban/stats](https://github.com/exelban/stats)（MIT）、[MediaRemoteAdapter](https://github.com/ungive/mediaremote-adapter)（BSD-3-Clause）、[NotchDrop](https://github.com/Lakr233/NotchDrop)（MIT）等，完整清单在 [NOTICE](NOTICE) 与 [docs/03](docs/03-license-matrix.md)。
 
-> 上游事实校正（三条）：① Atoll 的默认分支是 `dev` 而非 `main`；其"扩展系统"是**内容推送 API + 授权模型 + 声明式渲染管线**，**没有**插件包格式、descriptor.json、apiVersion 协商与看门狗——这部分要从零自建（[docs/06](docs/06-module-protocol.md) §0 与 ADR-0006）。② **上游已实现了约 40 个用户可见功能**，P2 的主体工作是接管、包装与模块化，而非从零写（[docs/09](docs/09-features-and-mechanisms.md)）。③ **范围已定稿**（ADR-0011 + ADR-0012）：**上游功能一个不删**（不需要的用"默认不启用"表达）；**按需新增 6 项**——快捷启动、农历、日/周/月/季/年进度、系统 Shortcuts 上岛、通知上岛、终端可配置为 Ghostty。新增部分全部做成独立模块，不改上游文件。
+## 文档
+
+- [docs/00-decisions.md](docs/00-decisions.md)（ADR）、[docs/01-architecture.md](docs/01-architecture.md)（架构 + 术语 + 目录约定）、[docs/02-roadmap.md](docs/02-roadmap.md)（路线图）。
+- 用户手册 [docs/guide/README.md](docs/guide/README.md)；发布自检 [docs/25-release-smoke.md](docs/25-release-smoke.md)。
 
 ## 许可证
 
-本项目以 **GPL-3.0** 分发。分发二进制时必须同时提供完整源码，保留 [NOTICE](NOTICE) 中的上游署名，并标注修改。禁止把本项目代码并入闭源产品（包括上架 App Store 的商业版本）。
+**GNU General Public License v3.0**（[LICENSE](LICENSE)）。本项目是 Atoll 的修改版本（fork，首次修改 **2026-09-27**），以 GPL-3.0 分发：分发二进制须同时提供完整源码、保留上游署名并标注修改；禁止并入闭源产品（含上架 Mac App Store 的商业版本）。

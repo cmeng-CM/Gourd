@@ -176,3 +176,34 @@ public protocol GourdModule: AnyObject {
 | 私有 API 诱惑（媒体控制等） | 上架风险（本项目不分发到商店，风险降低） | 记录每处私有 API 用途与降级路径，走适配器模式隔离 |
 | 插件生态做起来后失控 | 维护成本 | `apiVersion` 与权限从第一天就版本化；插件不做向后兼容承诺，只保证宿主不崩 |
 | 单人维护精力 | 可持续性 | 模块之间零耦合，任何模块可以停下不管；优先做自己每天用的五个模块 |
+
+## 10. 术语
+
+> 2026-09-30 由 README 移入（[24](24-release-freeze.md) §做法 机制一：README 重写后按同类项目的骨架收窄，术语与目录约定属工程口径，归到这里）。内容与迁移前的 README 逐字一致。
+
+| 词 | 指什么 |
+|---|---|
+| **上游 / upstream** | 我们 fork 的基座 **Atoll**（`Ebullioscopic/Atoll`），以及将来引进代码的第三方开源项目。文档里"上游有 / 上游没有"都是这个意思，不指任何云服务 |
+| **基座** | 被 fork 的应用工程本身（Atoll） |
+| **岛 / 刘海面板** | 壶中天自己的浮动面板窗口（折叠态=compact，展开态=expanded，另有 lockscreen 锁屏面） |
+| **模块 / module** | 一个可独立开关、独立配置、独立崩溃隔离的功能单元（内置或插件，共用同一份 manifest 模型，见 [docs/06](06-module-protocol.md)） |
+
+## 11. 目录约定
+
+> 同上，2026-09-30 由 README 移入；目录树照搬，另加两处现状注记：`docs/` 下的 `guide/`（用户手册）与 `tools/` 的打包脚本。
+
+```
+~/workspace/github/
+├── Atoll/                 ← 基座（fork 源，已拉取，含完整历史）
+├── boring.notch/          ← 功能对照实现（GPL，可合并）
+├── NotchDrop/ OpenYoink/ DynamicNotchKit/ ...   ← 功能来源（MIT/Apache/MPL）
+└── gourd/                 ← 本项目仓库（应用名 壶中天 / Gourd；目录已于 2026-09-27 由 lagoon 改名）
+    ├── DynamicIsland.xcodeproj/   ← 应用工程（Bundle ID com.cmeng.gourd；上游文件名保留不改）
+    ├── docs/              ← 决策、架构、路线图、许可证矩阵、功能映射、P0 执行方案
+    │                             （用户手册在 docs/guide/，发布自检在 docs/25）
+    ├── tools/             ← 本仓库自身的工具：上游同步、校验与打包脚本
+    ├── scripts/           ← 上游自带的构建辅助 ruby 脚本（随基线引入，不改）
+    ├── upstreams.tsv      ← 机器可读的上游清单（用途 + 许可 + 使用方式）
+    ├── NOTICE             ← 上游署名（GPL 义务之一）
+    └── LICENSE            ← GPL-3.0
+```
