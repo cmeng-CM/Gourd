@@ -68610,6 +68610,74 @@
         }
       }
     },
+    "settings.modules.group.home" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home widgets"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页组件"
+          }
+        }
+      }
+    },
+    "settings.modules.group.home.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These rows control what shows up on the home screen (the two bands plus the calendar row). Switch a row off and that block stops appearing on the home screen; the arrows reorder it. A module can also appear in Panel tabs — the two sections are independent: a switch here only manages the home surface, and a switch there only manages whether the module gets its own tab."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一段管的是「首页上有没有它」：开关关掉，这个块就不在首页出现；上下箭头改它在首页里的先后。同一个模块也可能出现在「面板组件」那一节（例如待办、通知）——**两节互不影响：这里的开关只管首页这一面，那一节的开关只管它单不单独出面板 tab**。"
+          }
+        }
+      }
+    },
+    "settings.modules.group.panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel tabs"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板组件"
+          }
+        }
+      }
+    },
+    "settings.modules.group.panel.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These rows control which modules get their own tab in the expanded panel, and in what order. A module that also has a home widget (Calendar, To-dos, Notifications) can keep its home block while its tab is switched off here — the two sections are independent."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。"
+          }
+        }
+      }
+    },
     "settings.modules.launcher.density" : {
       "localizations" : {
         "en" : {

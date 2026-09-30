@@ -1552,6 +1552,43 @@ extension Defaults.Keys {
     /// `HomeBlockOrdering.sorted(_:defaultOrder:id:overrides:)`。
     static let homeBlockOrder = Key<[String: Int]>("homeBlockOrder", default: [:])
 
+    /// 面板块（展开 tab）的**用户排序覆盖**（P3 批次 / T3，docs/26-home-widgets-and-settings.md
+    /// §做法 机制三 / §接口与数据形状）：
+    /// 键 = 模块 id，值 = 序号（升序，越小越靠左）。
+    ///
+    /// **与 `homeBlockOrder` 是两套键、互不影响**（D-03）：同一个模块可以在首页与面板两组里名次不同，
+    /// 共用一个键会让两组互相踩。**缺键 = 用户未表达**——回落 manifest 的 `defaultPlacement.order`，
+    /// 因此从未调过面板块顺序的用户的 tab 顺序与改动前逐字一致，无需数据迁移。表里出现**未知 id**
+    /// （模块被移除 / 改名）一律忽略：不占位、不报错（同 `homeBlockOrder` 的口径）。
+    ///
+    /// 消费点两处、读的是同一份：`ModuleRegistry.tabEntries`（排序键，`panelRank` 是唯一算式）
+    /// 与设置页「组件」面板组（展示 + 写入）。写入是**整表覆盖**（`HomeBlockOrdering.table(for:)`
+    /// 的同一口径：表里的值 = 屏幕上看到的顺序），只在用户真的点了上移 / 下移时发生。
+    static let panelOrder = Key<[String: Int]>("panelOrder", default: [:])
+
+    /// 首页面上被用户**单独摘掉**的模块 id（P3 批次 / T3，docs/26 §做法 机制三）：
+    /// 「首页组件」那一节里把开关拨到关 —— 但模块**还有另一个 surface**（panel）时，
+    /// 关的是「在首页显示」这一件事，模块本身继续开着（它的 tab 照旧）。
+    ///
+    /// **为什么需要它**：两节各自的开关只管各自的 surface（节头写明的口径）。若两节都写
+    /// `moduleEnableOverrides` / 上游真源键，则关掉首页那一下会连面板 tab 一起摘掉——两节互相干扰
+    /// （T3 的失败信号）。
+    ///
+    /// **只有一个 surface 的模块不进这张表**：对它们「关掉首页显示」与「关掉模块」是同一件事，
+    /// 写盘仍走 `ModuleEnablementWrite`（沿用既有真源，不新增第二份状态——进度 / 统计的开关口径）。
+    /// 判据见 `ModuleSurfaceSwitch.effect(turningOn:hasOtherSurface:)`。
+    ///
+    /// **缺键 / 空表 = 什么都没摘掉**：升级用户的首页与改动前逐字一致。表里出现**未知 id**
+    /// （模块被移除 / 改名）一律忽略。消费点唯一：`ModuleRegistry.homeEntries`（首页块的名单来源）。
+    static let hiddenHomeModules = Key<[String]>("hiddenHomeModules", default: [])
+
+    /// 面板面上被用户**单独摘掉**的模块 id（P3 批次 / T3）：与 `hiddenHomeModules` 同一条口径，
+    /// surface 换成面板——「面板组件」那一节里把开关拨到关，模块若还声明 `home`（首页块照旧）
+    /// 就只摘 tab；只有一个 surface 的模块仍走既有启用真源。
+    ///
+    /// 消费点唯一：`ModuleRegistry.tabEntries`（tab 名单的来源）。
+    static let hiddenPanelModules = Key<[String]>("hiddenPanelModules", default: [])
+
     /// 通知浮层是否显示正文（09 §5.5 的配置项 `showBodyInHUD`；键名与设计稿一致）。
     ///
     /// **默认 true（用户 2026-09-28 明确要求默认显示正文）**；设计稿原口径为 false

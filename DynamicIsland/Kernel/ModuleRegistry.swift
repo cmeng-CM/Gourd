@@ -33,6 +33,14 @@
 //  P3 组件批次 / T7 增量：第三条同形查询 `homeFormFactor(for:)`（docs/26 §做法 机制六 / D-09）
 //  ——首页块属于主块带还是小组件带，宿主按它切两条带。同样不缓存。
 //
+//  P3 组件批次 / T3 增量（设置页「首页组件 / 面板组件」两节，docs/26 §做法 机制三 / D-03）：
+//  - `tabEntries` 的**排序键**改由纯函数 `panelRank` 给出（`Defaults[.panelOrder]` 覆盖 →
+//    `defaultPlacement.order` → `Int.max`），比较器其余部分（同值按 id 字典序）不动；
+//  - 两条投影各多一条**用户显式摘除**的过滤（`hiddenPanelModules` / `hiddenHomeModules`）——
+//    「两节各自的开关只管各自的 surface」这一条口径的落点：同时有 home + panel 两面的模块
+//    （待办 / 通知）在一个面上被关掉时，另一个面照旧。只有一面的模块不进那两张表（关掉即
+//    写启用真源本身，不新增第二份状态）。
+//
 
 import Combine
 import Defaults
@@ -367,19 +375,31 @@ public final class ModuleRegistry: ObservableObject {
 
     // MARK: - UI 投影
 
-    /// 展开面板的 tab 列表：仅 `active` 且 `surfaces` 含 `.expanded`，
-    /// 按 `order` 升序、同 `order` 按 id 字典序（`order` 缺省 = `Int.max`，排最后）。
+    /// 展开面板的 tab 列表：仅 `active` 且 `surfaces` 含 `.expanded`、且**没有被用户在这个面上摘掉**
+    /// （`hiddenPanelModules`），按 `panelOrder` 升序、缺键回落 `defaultPlacement.order`、再同值按
+    /// id 字典序（`order` 缺省 = `Int.max`，排最后）。
     ///
     /// **可见性钩子**（docs/20 §做法 机制一）：过滤条件里还有 `isTabVisible()`（缺省 true）——
     /// 「启用」不总是等价于「tab 出不出来」（计时器还要求 `timerDisplayMode == .tab`）。
     /// 与另外两条投影一样**每次读都现问一次**（不缓存），模块因此按当下状态回答。
-    /// 比较器与排序**不动**（order → id 字典序）。
+    ///
+    /// **排序键改由 `panelRank` 给出**（P3 批次 / T3，docs/26 §做法 机制三 / D-03）：用户覆盖
+    /// （`Defaults[.panelOrder]`）优先 → `defaultPlacement.order` → `Int.max`；比较器的其余部分
+    /// （同值按 id 字典序）一个字没动。设置页面板组用**同一个算式**显示顺序，两处不存在第二套口径。
+    ///
+    /// **本投影是唯一读偏好的一条**（与 `homeEntries` 不同——首页的排序覆盖由 `HomeBandCatalog`
+    /// 在调用侧注入）：摘掉某个面板块是「名单」而不是「顺序」的事，过滤发生在名单生成处；宿主侧
+    /// （`TabSelectionView` / `matters.swift`）只消费名单、不认识偏好键，因此这一层是唯一能落它的
+    /// 地方（同一个键的写入点是设置页，写完调 `objectWillChange.send()` 叫醒观察者）。
     public var tabEntries: [ModuleTabEntry] {
-        manifests.values
+        let panelOrder = Defaults[.panelOrder]
+        let hidden = Set(Defaults[.hiddenPanelModules])
+        return manifests.values
             .filter {
                 states[$0.id] == .active
                     && $0.surfaces.contains(.expanded)
                     && (moduleTypes[$0.id]?.isTabVisible() ?? true)
+                    && !hidden.contains($0.id)
             }
             .map { manifest in
                 ModuleTabEntry(
@@ -389,7 +409,20 @@ public final class ModuleRegistry: ObservableObject {
                     order: manifest.defaultPlacement?.order ?? Int.max
                 )
             }
-            .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
+            .sorted {
+                let lhs = Self.panelRank($0.id, defaultOrder: $0.order, panelOrder: panelOrder)
+                let rhs = Self.panelRank($1.id, defaultOrder: $1.order, panelOrder: panelOrder)
+                return (lhs, $0.id) < (rhs, $1.id)
+            }
+    }
+
+    /// 面板组的排序键：**唯一算式**（`tabEntries` 投影与设置页面板组共用）。
+    ///
+    /// `panelOrder[id]`（用户覆盖）→ `defaultOrder`（`defaultPlacement.order`，缺省 `Int.max`）。
+    /// 纯函数（偏好由调用方注入），因此「面板排序」这条口径可以用固定输入单测——
+    /// 两处各写一份算式就会漂（表侧写错必须能被用例抓到）。
+    public static func panelRank(_ id: String, defaultOrder: Int, panelOrder: [String: Int]) -> Int {
+        panelOrder[id] ?? defaultOrder
     }
 
     /// 折叠态中央槽位的候选：`active` 且 `surfaces` 含 `.compact`，
@@ -411,8 +444,15 @@ public final class ModuleRegistry: ObservableObject {
             .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
     }
 
-    /// 首页 strip 的块列表：`active` 且 `surfaces` 含 `.home`，
-    /// 按 `order` 升序、同 `order` 按 id 字典序（与 `tabEntries` / `compactEntries` 同一比较器）。
+    /// 首页 strip 的块列表：`active` 且 `surfaces` 含 `.home`、且**没有被用户在这个面上摘掉**
+    /// （`hiddenHomeModules`），按 `order` 升序、同 `order` 按 id 字典序（与 `tabEntries` /
+    /// `compactEntries` 同一比较器）。
+    ///
+    /// **摘掉某块是「名单」的事**（P3 批次 / T3，docs/26 §做法 机制三）：设置页「首页组件」那一节
+    /// 对**同时还有 panel 面**的模块拨关时，写 `hiddenHomeModules`（只有 home 一面的模块写的是
+    /// 启用真源本身——不新增第二份状态，见 `ModuleSurfaceSwitch`）；本投影据此把它从首页名单里去掉，
+    /// 模块自己照旧活着（panel tab 不受影响）。顺序覆盖（`homeBlockOrder`）仍由调用侧注入
+    /// （`HomeBandCatalog.resolve`）——两条偏好的性质不同：一条改名单、一条改顺序。
     ///
     /// 与另两条投影一样**不做缓存**：每次读都现算（`manifests` / `states` 都是 `@Published`
     /// 的派生量，缓存会让「注册后 / 激活后 / 停用后」三个时刻的视图不一致）。
@@ -421,8 +461,13 @@ public final class ModuleRegistry: ObservableObject {
     /// 条目——投影层不做这件事：投影是**声明**（manifest 说愿意在首页占一块），
     /// 内容是**表态**（这一刻有没有东西可画），两者分开才不会让一次 `.none` 影响后续刷新。
     public var homeEntries: [ModuleHomeEntry] {
-        manifests.values
-            .filter { states[$0.id] == .active && $0.surfaces.contains(.home) }
+        let hidden = Set(Defaults[.hiddenHomeModules])
+        return manifests.values
+            .filter {
+                states[$0.id] == .active
+                    && $0.surfaces.contains(.home)
+                    && !hidden.contains($0.id)
+            }
             .map { manifest in
                 ModuleHomeEntry(
                     id: manifest.id,

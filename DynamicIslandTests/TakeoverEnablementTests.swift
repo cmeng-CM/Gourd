@@ -105,6 +105,18 @@
 //    没有 `en` 值，原先的 `Bundle.main.localizedString + != key` 跟着机器语言走（英语环境下红）。
 //    Swift 在 Darwin 上没导入带 `localization:` 的四参重载，故用等价的 `.lproj` 子 bundle 形态。
 //
+//  p3-widgets / T3 追加（组件页两节：**分组 + 面板排序 + 两节各自的开关**，docs/26 §做法 机制三 / D-03）：
+//  - **两节的判据对生产事实**：`ModuleSurfaceGroup.surface` = home / expanded 两条，真模块每一节都找得到
+//    归属，待办 / 通知同时在两节里（节头那句「可能同时在两节」的实例）；四条节文案在 zh-Hans 里解析得出；
+//  - **`panelRank` 纯函数**：用户覆盖 → 默认序号 → `Int.max`；`panelOrder` 影响 `tabEntries` 顺序
+//    （端到端：真注册表 + 两个假模块 + 真偏好键）；新键的**名字 / 默认值 / 序列化往返**（临时 suite）；
+//  - **两组写盘互不影响**：顺序键两个（`homeBlockOrder` / `panelOrder`）、摘除名单两张，写一组不碰另一组，
+//    翻盘算式（`ModuleSurfaceGroup.orderTable`）的「名单没变返回 nil = 不写盘」三档；
+//  - **一次拨动的语义**（`ModuleSurfaceSwitch.effect` 三档 + `hasOtherSurface` / `isOn` / `updated` 纯函数）；
+//  - **写路径端到端**（`ModuleSurfaceToggleWriter`）：双面模块关首页 → 只写 `hiddenHomeModules`、
+//    模块仍 active、面板 tab 照旧、启用真源一个字节没动；关面板 → 反过来；单面模块关 → 写
+//    `moduleEnableOverrides`（既有启用真源，**不进摘除名单**）。
+//
 //  P3 冻结批次 / T7 追加（组件页的模块配置编辑口——**允许清单**，docs/24 §做法 机制四）：
 //  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：七条清单项逐条钉死，
 //    每条都断言「模块 id 是已注册模块」「键在 manifest 的 `config.properties` 里」「kind 与声明的
@@ -171,6 +183,11 @@ final class TakeoverEnablementTests: XCTestCase {
     private let failingID = "com.cmeng.gourd.probe-takeover-failing"
     private let baseID = "com.cmeng.gourd.probe-takeover-base"
     private let ghostID = "com.cmeng.gourd.probe-takeover-ghost"
+
+    /// T3 两节用例的三个夹具 id（与 `TakeoverFixture.manifest(shortID:)` 同址派生）。
+    private let surfaceAID = "com.cmeng.gourd.probe-surface-a"
+    private let surfaceBID = "com.cmeng.gourd.probe-surface-b"
+    private let surfaceDualID = "com.cmeng.gourd.probe-surface-dual"
 
     // MARK: - 隔离
 
@@ -1785,6 +1802,318 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    // MARK: - 组件页两节：分组 / 面板排序 / 两节各自的开关（p3-widgets / T3）
+
+    /// 两节的判据就是 `home` / `expanded` 这两个 surface，且**每一节在真模块里都找得到归属**
+    /// （判据写在 `ModuleSurfaceGroup.surface` 上，表侧写错——比如把 panel 接到 `.compact`——
+    /// 真模块的声明就对不上了）。
+    func testSurfaceGroupCriteriaMatchRealModuleDeclarations() {
+        XCTAssertEqual(ModuleSurfaceGroup.allCases.map(\.surface), [.home, .expanded], "两节的判据与顺序")
+        XCTAssertEqual(ModuleSurfaceGroup.allCases.map(\.rawValue), ["home", "panel"])
+
+        let manifests = [
+            TodosModule.manifest,
+            NotificationsModule.manifest,
+            ProgressModule.manifest,
+            StatsModule.manifest,
+            MusicModule.manifest,
+            MirrorModule.manifest,
+            FrontAppModule.manifest,
+            LauncherModule.manifest,
+            ShortcutsModule.manifest,
+            CalendarModule.manifest,
+            TimerModule.manifest,
+        ]
+        for manifest in manifests {
+            let groups = ModuleSurfaceGroup.allCases.filter { manifest.surfaces.contains($0.surface) }
+            XCTAssertFalse(groups.isEmpty, "\(manifest.id) 两节都进不去（既没声明 home 也没声明 expanded）")
+        }
+
+        // 「同一个模块可能同时在两节」有实例：待办 / 通知声明 home + expanded → 两节各一行。
+        for dual in [TodosModule.manifest, NotificationsModule.manifest] {
+            XCTAssertEqual(
+                ModuleSurfaceGroup.allCases.filter { dual.surfaces.contains($0.surface) },
+                [.home, .panel],
+                "\(dual.id) 应同时在两节里（节头那句「可能同时在两节」的实例）"
+            )
+        }
+    }
+
+    /// 四条节文案（两节各一条标题 + 一条脚注）在 zh-Hans 里解析得出——节头那句
+    /// 「同一个模块可能同时在两节，各自的开关只管各自的 surface」就是脚注里写的。
+    func testSurfaceGroupTextsResolve() {
+        for group in ModuleSurfaceGroup.allCases {
+            XCTAssertResolves(group.titleKey)
+            XCTAssertResolves(group.footerKey)
+        }
+    }
+
+    /// `panelRank`（面板组排序的**唯一算式**）：用户覆盖 → 默认序号 → `Int.max`（没有 placement）。
+    func testPanelRankPrefersUserOverrideThenPlacementThenLast() {
+        let overrides = ["a": 99, "b": 1]
+        XCTAssertEqual(ModuleRegistry.panelRank("a", defaultOrder: 10, panelOrder: overrides), 99, "覆盖值优先")
+        XCTAssertEqual(ModuleRegistry.panelRank("c", defaultOrder: 10, panelOrder: overrides), 10, "缺键回落默认序号")
+        XCTAssertEqual(ModuleRegistry.panelRank("d", defaultOrder: Int.max, panelOrder: overrides), Int.max, "没有 placement → 排最后")
+        XCTAssertEqual(ModuleRegistry.panelRank("a", defaultOrder: 10, panelOrder: [:]), 10, "空表 = 全回落默认")
+    }
+
+    /// `panelOrder` 影响 `tabEntries` 的顺序（端到端：真注册表 + 假模块 + 真偏好键）。
+    /// 「重启后仍按它」的判据是这一条 + `testPanelOrderKeyRoundTripsThroughTheStore`（同一个键）。
+    func testPanelOrderReordersTabEntries() async {
+        let keys = [Defaults.Keys.panelOrder.name]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        Defaults[.panelOrder] = [:]
+
+        registry.register([SurfacePanelProbeA.self, SurfacePanelProbeB.self], enabled: { _ in true })
+        await registry.bootstrap()
+
+        // 缺键：按 `defaultPlacement.order`（A = 10 → B = 20）。
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceAID, surfaceBID], "缺键时按 defaultPlacement.order")
+
+        Defaults[.panelOrder] = [surfaceAID: 20, surfaceBID: 10]
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceBID, surfaceAID], "panelOrder 覆盖后顺序翻转")
+
+        // 只覆盖一个：被覆盖的排到另一个前面，另一个仍拿自己的默认序号。
+        Defaults[.panelOrder] = [surfaceAID: -1]
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceAID, surfaceBID], "只覆盖一个时另一个照旧回落默认序号")
+    }
+
+    /// `panelOrder` 键的**新键契约**：名字 + 声明默认值（空表 = 用户未表达）+ 序列化往返。
+    ///
+    /// 往返走一个**临时 suite**（不碰开发机真实域，同 `ModuleKernelTests` 的 `homeBlockOrder` 口径）。
+    func testPanelOrderKeyRoundTripsThroughTheStore() throws {
+        XCTAssertEqual(Defaults.Keys.panelOrder.name, "panelOrder")
+        XCTAssertTrue(Defaults.Keys.panelOrder.defaultValue.isEmpty, "缺键 = 用户未表达（空表）")
+
+        let suiteName = "com.cmeng.gourd.tests.panelOrder"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let key = Defaults.Key<[String: Int]>("panelOrder", default: [:], suite: suite)
+        XCTAssertTrue(Defaults[key].isEmpty, "缺键时是空表")
+        Defaults[key] = ["com.cmeng.gourd.probe-surface-a": 2, "com.cmeng.gourd.probe-surface-b": 0]
+        XCTAssertEqual(
+            Defaults[key],
+            ["com.cmeng.gourd.probe-surface-a": 2, "com.cmeng.gourd.probe-surface-b": 0],
+            "写盘 → 读回逐字相同（重启后读到的就是这一份）"
+        )
+    }
+
+    /// 两组写盘**互不影响**：顺序键是两个（`homeBlockOrder` / `panelOrder`）、摘除名单也是两张——
+    /// 移动 / 摘掉一组时，另一组一个字节都不动。算式用的是视图同一条
+    /// （`ModuleSurfaceGroup.orderTable` + `writeOrderTable` / `setHidden`）。
+    func testSurfaceOrderTablesAndHiddenListsAreIndependent() {
+        let keys = [
+            Defaults.Keys.homeBlockOrder.name,
+            Defaults.Keys.panelOrder.name,
+            Defaults.Keys.hiddenHomeModules.name,
+            Defaults.Keys.hiddenPanelModules.name,
+        ]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        Defaults[.homeBlockOrder] = [:]
+        Defaults[.panelOrder] = [:]
+        Defaults[.hiddenHomeModules] = []
+        Defaults[.hiddenPanelModules] = []
+
+        let ids = ["a", "b", "c"]
+        // 翻盘算式：整表覆盖；名单没变（已在顶 / 底、id 不在名单里）返回 nil = 不写盘。
+        XCTAssertEqual(ModuleSurfaceGroup.orderTable(ids: ids, moving: "b", direction: .up), ["b": 0, "a": 1, "c": 2])
+        XCTAssertNil(ModuleSurfaceGroup.orderTable(ids: ids, moving: "a", direction: .up), "已在顶：不写盘")
+        XCTAssertNil(ModuleSurfaceGroup.orderTable(ids: ids, moving: "c", direction: .down), "已在底：不写盘")
+        XCTAssertNil(ModuleSurfaceGroup.orderTable(ids: ids, moving: "z", direction: .up), "不在名单里：不写盘")
+
+        let moved = ModuleSurfaceGroup.orderTable(ids: ids, moving: "c", direction: .up) ?? [:]
+        ModuleSurfaceGroup.panel.writeOrderTable(moved)
+        XCTAssertEqual(Defaults[.panelOrder], ["a": 0, "c": 1, "b": 2], "面板那一组写的是 panelOrder")
+        XCTAssertTrue(Defaults[.homeBlockOrder].isEmpty, "写面板那一组不动首页那一组")
+
+        ModuleSurfaceGroup.home.writeOrderTable(moved)
+        XCTAssertEqual(Defaults[.homeBlockOrder], ["a": 0, "c": 1, "b": 2], "首页那一组写的是 homeBlockOrder")
+        XCTAssertEqual(Defaults[.panelOrder], ["a": 0, "c": 1, "b": 2], "……反过来也一样：面板那份没被动过")
+
+        // 两张摘除名单同理：各写各的键。
+        ModuleSurfaceGroup.home.setHidden(true, for: "a")
+        XCTAssertEqual(Defaults[.hiddenHomeModules], ["a"])
+        XCTAssertTrue(Defaults[.hiddenPanelModules].isEmpty, "关首页不动面板那张名单")
+
+        ModuleSurfaceGroup.panel.setHidden(true, for: "a")
+        XCTAssertEqual(Defaults[.hiddenPanelModules], ["a"])
+        XCTAssertEqual(Defaults[.hiddenHomeModules], ["a"], "关面板不动首页那张名单")
+
+        ModuleSurfaceGroup.home.setHidden(false, for: "a")
+        XCTAssertTrue(Defaults[.hiddenHomeModules].isEmpty)
+        XCTAssertEqual(Defaults[.hiddenPanelModules], ["a"], "取消首页摘除也不动面板那张名单")
+    }
+
+    /// 拨动的判据（纯函数，三档）：置开 → 启用 + 显示；置关且还有另一个面 → 只摘本节；
+    /// 置关且本节是唯一的面 → 关模块本身。
+    func testSurfaceSwitchEffectThreeWays() {
+        XCTAssertEqual(ModuleSurfaceSwitch.effect(turningOn: true, hasOtherSurface: false), .enableAndShow)
+        XCTAssertEqual(ModuleSurfaceSwitch.effect(turningOn: true, hasOtherSurface: true), .enableAndShow)
+        XCTAssertEqual(ModuleSurfaceSwitch.effect(turningOn: false, hasOtherSurface: true), .hideOnSurface)
+        XCTAssertEqual(ModuleSurfaceSwitch.effect(turningOn: false, hasOtherSurface: false), .disableModule)
+    }
+
+    /// 「还有另一个面」与开关 get 的判据（纯函数）：只有 home ↔ panel 互为他面，`compact` 不算
+    /// （它没有自己的开关，算进去会让 `compact + home` 的模块两节都关不掉）。
+    func testHasOtherSurfaceAndSwitchGet() {
+        XCTAssertTrue(ModuleSurfaceGroup.hasOtherSurface([.home, .expanded], in: .home))
+        XCTAssertTrue(ModuleSurfaceGroup.hasOtherSurface([.home, .expanded], in: .panel))
+        // 每一节的「另一个面」就是另一节的那条判据（home ↔ panel）。
+        XCTAssertTrue(ModuleSurfaceGroup.hasOtherSurface([.home], in: .panel), "面板那一边的「另一个面」是 home")
+        XCTAssertTrue(ModuleSurfaceGroup.hasOtherSurface([.expanded], in: .home), "首页那一边的「另一个面」是 expanded")
+        XCTAssertFalse(ModuleSurfaceGroup.hasOtherSurface([.home], in: .home), "只有 home → 首页是它唯一的面")
+        XCTAssertFalse(ModuleSurfaceGroup.hasOtherSurface([.expanded], in: .panel), "只有 expanded → 面板是它唯一的面")
+        XCTAssertFalse(ModuleSurfaceGroup.hasOtherSurface([.home, .compact], in: .home), "compact 不是「另一个面」")
+        XCTAssertFalse(ModuleSurfaceGroup.hasOtherSurface([.expanded, .compact], in: .panel))
+        XCTAssertFalse(ModuleSurfaceGroup.hasOtherSurface([], in: .home))
+
+        XCTAssertTrue(ModuleSurfaceGroup.isOn(moduleEnabled: true, isHidden: false))
+        XCTAssertFalse(ModuleSurfaceGroup.isOn(moduleEnabled: true, isHidden: true), "被本节摘掉 → 这一节的开关是关的")
+        XCTAssertFalse(ModuleSurfaceGroup.isOn(moduleEnabled: false, isHidden: false))
+    }
+
+    /// 摘除名单的增删（纯函数）：置真追加（不重复）、置假滤掉；未知 id 也照办（没有接收者，无害）。
+    func testHiddenListUpdateIsIdempotent() {
+        XCTAssertEqual(ModuleSurfaceGroup.updated([], id: "a", hidden: true), ["a"])
+        XCTAssertEqual(ModuleSurfaceGroup.updated(["a"], id: "a", hidden: true), ["a"], "重复置真不追加第二份")
+        XCTAssertEqual(ModuleSurfaceGroup.updated(["a", "b"], id: "a", hidden: false), ["b"])
+        XCTAssertEqual(ModuleSurfaceGroup.updated(["a"], id: "z", hidden: false), ["a"])
+        XCTAssertEqual(ModuleSurfaceGroup.updated(["a"], id: "z", hidden: true), ["a", "z"])
+    }
+
+    /// 两节各自的开关只管各自的 surface（端到端：`ModuleSurfaceToggleWriter.write`）：
+    /// 双面模块在**首页那一节**被关掉 → 只写 `hiddenHomeModules`（模块仍 `.active`、面板 tab 照旧、
+    /// 启用真源一个字节没动）；再打开 → 首页块回来、别的键仍没被动过。
+    func testHomeSwitchOnDualSurfaceModuleKeepsItsPanelTab() async {
+        let keys = [
+            Defaults.Keys.hiddenHomeModules.name,
+            Defaults.Keys.hiddenPanelModules.name,
+            Defaults.Keys.moduleEnableOverrides.name,
+        ]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        Defaults[.hiddenHomeModules] = []
+        Defaults[.hiddenPanelModules] = []
+        Defaults[.moduleEnableOverrides] = [:]
+
+        registry.register([SurfaceDualProbeModule.self], enabled: { _ in true })
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[surfaceDualID], .active, "前置：双面模块已激活")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [surfaceDualID], "前置：首页投影里有它")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceDualID], "前置：面板投影里也有它")
+
+        await ModuleSurfaceToggleWriter.write(
+            false,
+            manifest: SurfaceDualProbeModule.manifest,
+            group: .home,
+            registry: registry
+        )
+
+        XCTAssertEqual(Defaults[.hiddenHomeModules], [surfaceDualID], "关首页 = 只写首页那张摘除名单")
+        XCTAssertTrue(Defaults[.hiddenPanelModules].isEmpty, "面板那张名单不动")
+        XCTAssertNil(Defaults[.moduleEnableOverrides][surfaceDualID], "模块没被关（不写启用真源）")
+        XCTAssertEqual(registry.states[surfaceDualID], .active, "模块仍活着")
+        XCTAssertTrue(registry.homeEntries.isEmpty, "首页投影里没有了")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceDualID], "面板 tab 照旧")
+
+        await ModuleSurfaceToggleWriter.write(
+            true,
+            manifest: SurfaceDualProbeModule.manifest,
+            group: .home,
+            registry: registry
+        )
+
+        XCTAssertTrue(Defaults[.hiddenHomeModules].isEmpty, "置开 = 取消本节的摘除")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [surfaceDualID], "首页块回来")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceDualID], "面板 tab 一直在")
+    }
+
+    /// 反方向：双面模块在**面板那一节**被关掉 → 只摘 tab，首页块照旧（`tabEntries` 里没有它、
+    /// `homeEntries` 里还有它）。
+    func testPanelSwitchOnDualSurfaceModuleKeepsItsHomeBlock() async {
+        let keys = [
+            Defaults.Keys.hiddenHomeModules.name,
+            Defaults.Keys.hiddenPanelModules.name,
+            Defaults.Keys.moduleEnableOverrides.name,
+        ]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        Defaults[.hiddenHomeModules] = []
+        Defaults[.hiddenPanelModules] = []
+        Defaults[.moduleEnableOverrides] = [:]
+
+        registry.register([SurfaceDualProbeModule.self], enabled: { _ in true })
+        await registry.bootstrap()
+
+        await ModuleSurfaceToggleWriter.write(
+            false,
+            manifest: SurfaceDualProbeModule.manifest,
+            group: .panel,
+            registry: registry
+        )
+
+        XCTAssertEqual(Defaults[.hiddenPanelModules], [surfaceDualID], "关面板 = 只写面板那张摘除名单")
+        XCTAssertTrue(Defaults[.hiddenHomeModules].isEmpty, "首页那张名单不动")
+        XCTAssertNil(Defaults[.moduleEnableOverrides][surfaceDualID], "模块没被关")
+        XCTAssertEqual(registry.states[surfaceDualID], .active, "模块仍活着")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "tab 投影里没有了")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [surfaceDualID], "首页块照旧")
+    }
+
+    /// 只有一个面的模块：关掉它就是关掉模块本身——写**既有启用真源**
+    /// （`ModuleEnablementWrite` → 非接管模块写 `moduleEnableOverrides`），**不进摘除名单**
+    /// （「不新增第二份状态」：进度 / 统计的开关口径）。
+    func testSingleSurfaceModuleSwitchWritesTheExistingEnablementKey() async {
+        let keys = [
+            Defaults.Keys.hiddenPanelModules.name,
+            Defaults.Keys.moduleEnableOverrides.name,
+        ]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        Defaults[.hiddenPanelModules] = []
+        Defaults[.moduleEnableOverrides] = [:]
+
+        registry.register([SurfacePanelProbeB.self], enabled: { _ in true })
+        await registry.bootstrap()
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceBID], "前置：面板投影里有它")
+
+        await ModuleSurfaceToggleWriter.write(
+            false,
+            manifest: SurfacePanelProbeB.manifest,
+            group: .panel,
+            registry: registry
+        )
+
+        XCTAssertEqual(Defaults[.moduleEnableOverrides][surfaceBID], false, "非接管模块写 moduleEnableOverrides")
+        XCTAssertTrue(Defaults[.hiddenPanelModules].isEmpty, "单面模块不进摘除名单（关掉就是关模块）")
+        XCTAssertEqual(registry.states[surfaceBID], .disabled)
+        XCTAssertTrue(registry.tabEntries.isEmpty, "投影随之消失")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [], "它本来就不在首页投影里")
+
+        await ModuleSurfaceToggleWriter.write(
+            true,
+            manifest: SurfacePanelProbeB.manifest,
+            group: .panel,
+            registry: registry
+        )
+
+        XCTAssertEqual(Defaults[.moduleEnableOverrides][surfaceBID], true, "再打开 = 启用真源写回 true")
+        XCTAssertEqual(registry.states[surfaceBID], .active)
+        XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceBID])
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。
@@ -2046,5 +2375,32 @@ private final class TakeoverFailingProbeModule: TakeoverProbeModule {
     override func activate() async throws {
         TakeoverLedger.activations[Self.manifest.id, default: 0] += 1
         throw ActivationFailure()
+    }
+}
+
+/// 两个**非接管**、只声明 `.expanded` 的假模块（p3-widgets / T3 的面板组排序用例）：
+/// 默认序号差 10（A = 10 → B = 20），够判「缺键按 defaultPlacement.order」与「panelOrder 覆盖后翻转」。
+///
+/// 非接管（`takeoverEnableKey` 缺省 nil）是刻意的：写路径那一半要走 `moduleEnableOverrides`
+/// （接管模块写的是上游键，那条另有既有用例）。
+private final class SurfacePanelProbeA: TakeoverProbeBase {
+    override class var manifest: ModuleManifest {
+        TakeoverFixture.manifest(shortID: "probe-surface-a", surfaces: [.expanded], order: 10)
+    }
+}
+
+/// 见 `SurfacePanelProbeA`（默认序号 20）。
+private final class SurfacePanelProbeB: TakeoverProbeBase {
+    override class var manifest: ModuleManifest {
+        TakeoverFixture.manifest(shortID: "probe-surface-b", surfaces: [.expanded], order: 20)
+    }
+}
+
+/// 一个**双面**模块（`home + expanded`）：两节各自的开关用例需要它——关掉一面时另一面必须照旧
+/// （节头那句「各自的开关只管各自的 surface」的判据）。故意不含 `.compact`：本批只有 home / panel
+/// 两个面有自己的开关（`ModuleSurfaceGroup.hasOtherSurface` 的口径）。
+private final class SurfaceDualProbeModule: TakeoverProbeBase {
+    override class var manifest: ModuleManifest {
+        TakeoverFixture.manifest(shortID: "probe-surface-dual", surfaces: [.home, .expanded], order: 5)
     }
 }

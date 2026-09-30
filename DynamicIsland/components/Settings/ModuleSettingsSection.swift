@@ -87,6 +87,24 @@
 //  - **不自己带默认值**：缺键回落交给 `ManifestConfigHandle.get`（= manifest config 的 `default`），
 //    卡上显示什么与模块读到什么因此是同一个判定，不存在第二个默认档。
 //
+//  P3 组件批次 / T3 增量（**两节 + 两套排序**，docs/26-home-widgets-and-settings.md §做法 机制三 / D-03）：
+//  - 页面从「一张卡 = 一个模块」的平铺改成两节：**首页组件**（声明 `home` 的模块，doc 里也叫
+//    「内置块 + 声明 home 的模块」——内置块今天为空，见 `homeRows`）与**面板组件**（声明 `expanded`
+//    的模块）。名单来源仍是**全量 manifest**（含未启用）——关掉的组件必须还在这份名单里，
+//    否则用户再也开不回来（`progress` / `stats` 默认关，这条是它们的唯一入口）。
+//  - **两节的顺序写两个键**：首页写 `homeBlockOrder`（沿用）、面板写**新键** `panelOrder`
+//    （D-03：两组顺序是两件事，共用一个键会让它们互相踩）。面板那一节的比较器与
+//    `ModuleRegistry.tabEntries` **同一算式**（`ModuleRegistry.panelRank`），不存在第二套口径。
+//  - **两节的开关只管各自的 surface**（节头写明的口径）：模块同时有 home 与 panel 两面时
+//    （待办 / 通知），在一个面上关掉只写 `hiddenHomeModules` / `hiddenPanelModules`，
+//    模块本身继续开着（另一个面照旧）；只有一个面的模块写的是**既有启用真源**
+//    （`ModuleEnablementWrite`——进度 / 统计的开关口径：不新增第二份状态）。
+//    这一步的语义与写路径收在 `ModuleSurfaceSwitch` + `ModuleSurfaceToggleWriter`（纯函数 +
+//    唯一写入口），视图只负责把 UI 事件转成一次调用，用例直接钉这两处。
+//  - 卡片的**其余内容一个字没动**（图标 / 名称 / surfaces 徽标 / 效果行 / 默认关闭 / 摘要 /
+//    config 控件 / 上游管理 / 失败态）——只是每张卡多了「上移 / 下移」两个按钮（沿用既有
+//    `Move Up` / `Move Down` 文案），并知道自己属于哪一节。
+//
 
 import Defaults
 import SwiftUI
@@ -102,8 +120,11 @@ struct ModuleSettingsSection: View {
     /// 「先落盘再刷新」因此是**一次写操作**，不存在两份状态对不上的窗口。
     @Default(.homeBlockOrder) private var homeBlockOrder
 
+    /// 面板块的用户排序覆盖（P3 / T3，**新键**）：与 `homeBlockOrder` 各自独立（D-03）。
+    @Default(.panelOrder) private var panelOrder
+
     // 内置块的开关级门控（`showStandardMediaControls` / `showMirror`）在 T6 收敛后**不再需要**：
-    // 音乐与镜子已是模块块，顺序名单里只有模块块（详见 `orderRows`）。
+    // 音乐与镜子已是模块块，两节的名单里只有模块（详见 `homeRows`）。
 
     /// 数据源 = 注册表**全量** manifest（含未启用），按 `id` 升序（docs/17 §改动点设计 5）。
     private var manifests: [ModuleManifest] {
@@ -112,7 +133,7 @@ struct ModuleSettingsSection: View {
 
     var body: some View {
         Form {
-            // 内置块里只剩首页日历行不在这份卡片名单里（音乐 / 镜子已是模块卡片）——docs/17
+            // 内置块里只剩首页日历行不在两节的名单里（音乐 / 镜子已是模块）——docs/17
             // §已知限制 5 的缓解措施：日历行由上游 `Defaults` 键门控，开关在下方「功能」段。
             Section {
                 Text(LocalizedStringKey("settings.modules.builtinHint"))
@@ -121,17 +142,15 @@ struct ModuleSettingsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
-                ForEach(manifests, id: \.id) { manifest in
-                    ModuleSettingsCard(registry: registry, manifest: manifest)
-                }
-            }
+            // 两节：首页组件（控制「在不在首页」）在前，面板组件（控制「单不单独出面板/tab」）在后
+            // ——首页是用户最常看的那一面（机制三）。
+            surfaceSection(.home)
 
-            // 「功能」段**紧跟组件卡之后**（D-07：先看得见模块、再看得见还没模块化的上游功能），
-            // 顺序节放最后（它只列模块块，见 `orderRows`）。
+            surfaceSection(.panel)
+
+            // 「功能」段**跟在两节之后**（D-07：先看得见模块、再看得见还没模块化的上游功能）。
+            // 顺序节已被两节吸收（每行自己的上移 / 下移），不再单列一节。
             featuresSection
-
-            orderSection
         }
         .navigationTitle(Text(LocalizedStringKey("settings.modules.title")))
     }
@@ -353,71 +372,81 @@ struct ModuleSettingsSection: View {
         }
     }
 
-    // MARK: 首页块顺序
+    // MARK: 两节的行（首页组件 / 面板组件）
 
-    /// 顺序行的一项：内置块或模块块（这一页只关心身份 / 名称 / 图标 / 默认序号）。
-    private struct OrderRow: Identifiable {
-        let id: String
-        let name: String
-        let symbolName: String
-        let defaultOrder: Int
-    }
-
-    /// 顺序行的名单：**只列模块块**（`homeEntries` = 已激活且声明 `home` 的模块）。
+    /// 两节里的一行：一个**声明了本节 surface** 的模块（P3 / T3）。
     ///
-    /// **T6 收敛**：接管之后首页块只认模块 id（音乐 / 镜子已是模块块），因此这里不再生成
-    /// `builtin.music` / `builtin.mirror` 两条内置行（它们点不动了：块 id 已经换成模块 id）；
-    /// 内置块里只剩**首页日历行**，它不在 strip 里（`NotchHomeView` 的下排全宽行），本来就不进
-    /// 顺序表——所以这一节现在只有模块块。
+    /// 名单来源是**全量 manifest**（`manifests`，含未启用）而不是 `homeEntries` / `tabEntries`
+    /// 那两条投影——理由与卡片页逐字相同：投影只含已激活的，用它会让关掉的组件从名单里消失
+    /// （`progress` / `stats` 默认关，这里的行就是它们唯一的入口）。
     ///
     /// **判据比首页少一档、是刻意的**：首页还叠加运行期条件（音乐要有会话、镜子要摄像头可用、
     /// 模块块要 `content(for: .home)` 不答 `.none`）。这一页只用**配置级判据**，否则列表会随
-    /// 「有没有在放歌」「摄像头在不在」抖动，用户刚点的行会跳走。代价：列表里可能出现此刻首页
+    /// 「有没有在放歌」「摄像头在不在」抖动，用户刚点的行会跳走。代价：名单里可能出现此刻首页
     /// 看不到的块（音乐没会话时），反之首页也可能画出这里没列的块（模块答 `.none` 的那个不在此列）。
-    private var orderRows: [OrderRow] {
-        var rows: [OrderRow] = []
+    private struct SurfaceRow: Identifiable {
+        let manifest: ModuleManifest
+        /// 该模块的默认序号（`defaultPlacement?.order ?? Int.max`）——两节的排序键都用它兜底。
+        let defaultOrder: Int
 
-        for entry in registry.homeEntries {
-            rows.append(
-                OrderRow(
-                    id: entry.id,
-                    name: entry.label,
-                    symbolName: entry.symbolName,
-                    defaultOrder: entry.order
-                )
-            )
-        }
+        var id: String { manifest.id }
+    }
 
-        return HomeBlockOrdering.sorted(
-            rows,
+    private func surfaceRow(_ manifest: ModuleManifest) -> SurfaceRow {
+        SurfaceRow(manifest: manifest, defaultOrder: manifest.defaultPlacement?.order ?? Int.max)
+    }
+
+    /// **首页组件**那节的名单：全量 manifest 里声明 `.home` 的，按**首页那条唯一算式**排序
+    /// （`HomeBlockOrdering.sorted` + `homeBlockOrder` 覆盖）——这一页显示的顺序就是首页渲染的顺序，
+    /// 不存在第二套口径。
+    ///
+    /// **内置块今天为空**（「内置块 + 声明 `home` 的模块」这句话在今天的产品里只剩后半句）：
+    /// strip 上的音乐 / 镜子已是模块块，唯一的内置块是**首页日历行**——它是 strip 之外的全宽行
+    /// （`HomeCalendarRow`），顺序固定在最下、不在 `homeBlockOrder` 的语义里（给它两个点不动的
+    /// 上移 / 下移比不列它更坏），它的开关仍在下面「功能」段（`showCalendar` 那张卡）。
+    /// 将来若有内置块真的进 strip，在 `homeRows` 里补一行、并让 `HomeBlockOrdering` 认它即可。
+    private var homeRows: [SurfaceRow] {
+        HomeBlockOrdering.sorted(
+            manifests.filter { $0.surfaces.contains(.home) }.map(surfaceRow),
             defaultOrder: { $0.defaultOrder },
             id: { $0.id },
             overrides: homeBlockOrder
         )
     }
 
-    private var orderSection: some View {
-        Section {
-            if orderRows.isEmpty {
-                Text(LocalizedStringKey("settings.modules.order.empty"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(orderRows.enumerated()), id: \.element.id) { index, row in
-                    HomeBlockOrderRow(
-                        name: row.name,
-                        symbolName: row.symbolName,
-                        isFirst: index == 0,
-                        isLast: index == orderRows.count - 1,
-                        moveUp: { move(row, direction: .up) },
-                        moveDown: { move(row, direction: .down) }
-                    )
-                }
+    /// **面板组件**那节的名单：全量 manifest 里声明 `.expanded` 的，按 `ModuleRegistry.panelRank`
+    /// 与 id 字典序排——与 `ModuleRegistry.tabEntries` **同一算式**（那个投影还多一条
+    /// `isTabVisible()` 与启用过滤，见 `SurfaceRow` 的注释）。
+    private var panelRows: [SurfaceRow] {
+        manifests
+            .filter { $0.surfaces.contains(.expanded) }
+            .map(surfaceRow)
+            .sorted {
+                let lhs = ModuleRegistry.panelRank($0.id, defaultOrder: $0.defaultOrder, panelOrder: panelOrder)
+                let rhs = ModuleRegistry.panelRank($1.id, defaultOrder: $1.defaultOrder, panelOrder: panelOrder)
+                return (lhs, $0.id) < (rhs, $1.id)
+            }
+    }
+
+    /// 一节的全部内容：卡（图标 + 名称 + 开关 + 上移 / 下移 + 卡片原有的每一行）+ 节头 / 节脚注。
+    private func surfaceSection(_ group: ModuleSurfaceGroup) -> some View {
+        let rows = group == .home ? homeRows : panelRows
+        return Section {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                ModuleSettingsCard(
+                    registry: registry,
+                    manifest: row.manifest,
+                    group: group,
+                    isFirst: index == 0,
+                    isLast: index == rows.count - 1,
+                    moveUp: { move(row, in: group, direction: .up) },
+                    moveDown: { move(row, in: group, direction: .down) }
+                )
             }
         } header: {
-            Text(LocalizedStringKey("settings.modules.order.title"))
+            Text(LocalizedStringKey(group.titleKey))
         } footer: {
-            Text(LocalizedStringKey("settings.modules.order.footer"))
+            Text(LocalizedStringKey(group.footerKey))
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -425,14 +454,186 @@ struct ModuleSettingsSection: View {
 
     /// 上移 / 下移一行：**先落盘、再刷新**（docs/18 §处理链路）。
     ///
-    /// 写的是**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`）；名单在点击这一刻现取
-    /// （而不是捕获渲染时的那一份），因此「点之前名单刚好变了」（模块被开关）也按最新名单算。
-    /// 名单没变（已在顶 / 底，或该行已不在名单里）**不写盘**——用户没表达就不留痕迹。
-    private func move(_ row: OrderRow, direction: HomeBlockOrdering.MoveDirection) {
-        let ids = orderRows.map(\.id)
-        let moved = HomeBlockOrdering.moved(ids, moving: row.id, direction: direction)
-        guard moved != ids else { return }
-        Defaults[.homeBlockOrder] = HomeBlockOrdering.table(for: moved)
+    /// 写的是本节的**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`，两节共用
+    /// `ModuleSurfaceGroup.orderTable`）；名单在点击这一刻现取（而不是捕获渲染时的那一份），
+    /// 因此「点之前名单刚好变了」（模块被开关 / 被摘掉）也按最新名单算。
+    private func move(_ row: SurfaceRow, in group: ModuleSurfaceGroup, direction: HomeBlockOrdering.MoveDirection) {
+        let ids = (group == .home ? homeRows : panelRows).map(\.id)
+        guard let table = ModuleSurfaceGroup.orderTable(ids: ids, moving: row.id, direction: direction) else {
+            // 名单没变（已在顶 / 底，或该行已不在名单里）**不写盘**——用户没表达就不留痕迹。
+            return
+        }
+        group.writeOrderTable(table)
+    }
+}
+
+// MARK: - 两节（首页组件 / 面板组件）
+
+/// 组件页的两节（P3 批次 / T3，docs/26-home-widgets-and-settings.md §做法 机制三 / D-03）。
+///
+/// **本枚举是两节的唯一身份**：节头 / 节脚注的文案 key、进哪一节的判据（`surface`）、
+/// 「另一个面」的判据（`hasOtherSurface`）、两个偏好键的落点（`writeOrderTable` / `setHidden`）
+/// 都从它取——视图与用例共用，两处各写一份就会漂。
+///
+/// **两节不是互斥的**（节头文案写明的口径）：日历 / 待办 / 通知这类模块同时声明 `home` 与
+/// `expanded`，因此两节里各有一行；两行的开关**各管各自的 surface**（见 `ModuleSurfaceSwitch`）。
+enum ModuleSurfaceGroup: String, CaseIterable, Identifiable {
+    /// 首页组件：控制「在不在首页」。
+    case home
+    /// 面板组件：控制「单不单独出面板 / tab」。
+    case panel
+
+    var id: String { rawValue }
+
+    /// 本节的判据：manifest 的 `surfaces` 含它才进这一节。
+    var surface: Surface {
+        switch self {
+        case .home: return .home
+        case .panel: return .expanded
+        }
+    }
+
+    /// 节头 / 节脚注的本地化 key（`settings.modules.group.<raw>` / `…<raw>.footer`）。
+    var titleKey: String { "settings.modules.group.\(rawValue)" }
+    var footerKey: String { "settings.modules.group.\(rawValue).footer" }
+
+    /// 「另一个面」判据：关掉本节开关时，模块是否还留在别处——决定关的是**表面**还是**模块本身**。
+    ///
+    /// 只有 home ↔ panel 互为他面：`compact`（折叠态中央槽位）是常驻展示、没有自己的开关
+    /// （06 §6.2 的三槽布局属 P2+，本批未落地），把它算成「还有别处」会让一个只声明
+    /// `compact + home` 的模块两节都关不掉——那是个关不掉的开关。
+    ///
+    /// 纯函数（吃 `[Surface]` 不吃 manifest），用例拿几个字面量就能把两档钉住。
+    static func hasOtherSurface(_ surfaces: [Surface], in group: ModuleSurfaceGroup) -> Bool {
+        surfaces.contains(group == .home ? .expanded : .home)
+    }
+
+    /// 本节开关的 get 半边（纯函数）：模块**开着**且**没在本节被摘掉**。
+    ///
+    /// `moduleEnabled` 由调用方按注册表状态判定（`.active` / `.activating` → true，其余 false，
+    /// 与卡片既有那一条逐字一致）；`isHidden` 取自本节的摘除名单。
+    static func isOn(moduleEnabled: Bool, isHidden: Bool) -> Bool {
+        moduleEnabled && !isHidden
+    }
+
+    /// 一组顺序的**翻盘算式**（两节共用）：返回要落盘的整表；名单没变（已在顶 / 底、id 不在名单里）
+    /// 返回 `nil`——「用户没表达就不留痕迹」那一条的判据，视图据此不写盘。
+    ///
+    /// 整表覆盖（而不是只写被移动的那一格）的口径与理由见 `HomeBlockOrdering.table(for:)`。
+    static func orderTable(
+        ids: [String],
+        moving id: String,
+        direction: HomeBlockOrdering.MoveDirection
+    ) -> [String: Int]? {
+        let moved = HomeBlockOrdering.moved(ids, moving: id, direction: direction)
+        guard moved != ids else { return nil }
+        return HomeBlockOrdering.table(for: moved)
+    }
+
+    /// 本节的**顺序覆盖键**落盘：首页 → `homeBlockOrder`、面板 → `panelOrder`（**两个键**，D-03）。
+    func writeOrderTable(_ table: [String: Int]) {
+        switch self {
+        case .home: Defaults[.homeBlockOrder] = table
+        case .panel: Defaults[.panelOrder] = table
+        }
+    }
+
+    /// 本节的**摘除名单**落盘：首页 → `hiddenHomeModules`、面板 → `hiddenPanelModules`。
+    func setHidden(_ hidden: Bool, for id: String) {
+        switch self {
+        case .home: Defaults[.hiddenHomeModules] = Self.updated(Defaults[.hiddenHomeModules], id: id, hidden: hidden)
+        case .panel: Defaults[.hiddenPanelModules] = Self.updated(Defaults[.hiddenPanelModules], id: id, hidden: hidden)
+        }
+    }
+
+    /// 名单的增删（纯函数，用例直接钉）：置真 = 追加到尾部（没有重复项就不动）、置假 = 滤掉它。
+    ///
+    /// **不排序**：存的是集合语义（谁被摘掉了），渲染时的先后由块的顺序决定——名单里留着一个
+    /// 早已不在注册表里的 id（模块被移除 / 改名）也没有接收者，与 `homeBlockOrder` 的未知 id 同口径。
+    static func updated(_ ids: [String], id: String, hidden: Bool) -> [String] {
+        if hidden { return ids.contains(id) ? ids : ids + [id] }
+        return ids.filter { $0 != id }
+    }
+}
+
+/// 一节里那一次「开关拨动」的**语义**（纯函数；写路径见 `ModuleSurfaceToggleWriter`）。
+///
+/// **两节各自的开关只管各自的 surface**（节头写明的口径）：模块同时有 home 与 panel 两面时，
+/// 在一个面上关掉只摘掉**那个面**；只有一个面的模块没有「另一个面」可去，关掉它就是关掉模块。
+enum ModuleSurfaceSwitch {
+    /// 一次拨动要做的三件事之一。
+    enum Effect: Equatable {
+        /// 置开：确保模块启用 + 把 id 从本节摘除名单里去掉（幂等）。
+        case enableAndShow
+        /// 置关，且模块**还有另一个面**：只在本节摘掉它——模块继续开着，另一个面照旧。
+        case hideOnSurface
+        /// 置关，且本节是它**唯一的面**：关掉模块本身（写既有启用真源，不新增第二份状态）。
+        case disableModule
+    }
+
+    /// 拨动的判据（纯函数，两档 `hasOtherSurface` × 两个方向 = 三种结果）。
+    static func effect(turningOn: Bool, hasOtherSurface: Bool) -> Effect {
+        if turningOn { return .enableAndShow }
+        return hasOtherSurface ? .hideOnSurface : .disableModule
+    }
+}
+
+/// 一次拨动的**唯一写路径**（视图只负责把 UI 事件转成这次调用，用例直接钉这三步）。
+///
+/// 三步的顺序与卡片原先那条逐字一致（**先落盘、再改内存**，docs/17 §处理链路）：
+/// 1. **落盘**：按 `ModuleSurfaceSwitch.effect` 分档——`enableAndShow` 写启用真源为真并取消本节
+///    摘除；`hideOnSurface` **只**写本节摘除名单（启用真源一个字节不动）；`disableModule` 写启用
+///    真源为假，并把本节摘除记录一并清掉（模块关了，留着那条记录只会在下次打开时让它「莫名其妙
+///    地不出现」）；
+/// 2. **改内存**：`await registry.setEnabled(...)`；
+/// 3. **失败回弹**沿用既有两档（D-13）：接管模块什么都不写（它的偏好就是上游总开关）、
+///    非接管模块写回 `false`——绝不再调 `setEnabled(false)`（那会把 `failed` 降级成 `.disabled`）。
+///
+/// 收尾发一次 `objectWillChange`：摘除名单那一条改动**没有别的观察者**（首页 strip 与 tab 条
+/// 观察的是注册表，不是那个偏好键），不叫醒它们的话，拨完开关首页不会重排
+/// （与 `ModuleConfigControlRow.commit` 同一条理由）。
+@MainActor
+enum ModuleSurfaceToggleWriter {
+    static func write(
+        _ on: Bool,
+        manifest: ModuleManifest,
+        group: ModuleSurfaceGroup,
+        registry: ModuleRegistry
+    ) async {
+        let takeoverKey = registry.takeoverEnableKey(for: manifest.id)
+        let effect = ModuleSurfaceSwitch.effect(
+            turningOn: on,
+            hasOtherSurface: ModuleSurfaceGroup.hasOtherSurface(manifest.surfaces, in: group)
+        )
+
+        switch effect {
+        case .enableAndShow:
+            group.setHidden(false, for: manifest.id)
+            ModuleEnablementWrite.write(true, for: manifest.id, takeoverKey: takeoverKey)
+            let state = await registry.setEnabled(true, for: manifest.id)
+            rollBackIfNeeded(state, manifest: manifest, takeoverKey: takeoverKey)
+        case .hideOnSurface:
+            group.setHidden(true, for: manifest.id)
+        case .disableModule:
+            group.setHidden(false, for: manifest.id)
+            ModuleEnablementWrite.write(false, for: manifest.id, takeoverKey: takeoverKey)
+            let state = await registry.setEnabled(false, for: manifest.id)
+            rollBackIfNeeded(state, manifest: manifest, takeoverKey: takeoverKey)
+        }
+
+        registry.objectWillChange.send()
+    }
+
+    /// 启动失败 → 开关回弹：**只把偏好写回**（不碰内核状态，D-13）。写什么由策略给出：
+    /// 接管模块 → `nil`（什么都不写）、非接管模块 → `false`（把用户的开关拨回去）。
+    private static func rollBackIfNeeded(
+        _ state: ModuleRuntimeState,
+        manifest: ModuleManifest,
+        takeoverKey: Defaults.Key<Bool>?
+    ) {
+        guard case .failed = state else { return }
+        guard let rollback = ModuleEnablementRollback.preferenceToWrite(takeoverKey: takeoverKey) else { return }
+        ModuleEnablementWrite.write(rollback, for: manifest.id, takeoverKey: takeoverKey)
     }
 }
 
@@ -816,45 +1017,6 @@ private struct FeatureCardRow: View {
 
 // MARK: - 首页块顺序的一行
 
-/// 顺序行：图标 chip + 名称 + 上移 / 下移（与组件卡同一套排版：图标 chip 在左、动作在右、
-/// 相同的行内边距；按钮文案沿用既有 `Move Up` / `Move Down` 两条 key，不新增说法）。
-private struct HomeBlockOrderRow: View {
-    let name: String
-    let symbolName: String
-    let isFirst: Bool
-    let isLast: Bool
-    let moveUp: () -> Void
-    let moveDown: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ModuleSymbolChip(symbolName: symbolName)
-
-            Text(name)
-                .fontWeight(.medium)
-
-            Spacer(minLength: 12)
-
-            Button(action: moveUp) {
-                Image(systemName: "chevron.up")
-            }
-            .buttonStyle(.borderless)
-            .disabled(isFirst)
-            .help(Text(LocalizedStringKey("Move Up")))
-            .accessibilityLabel(Text(LocalizedStringKey("Move Up")))
-
-            Button(action: moveDown) {
-                Image(systemName: "chevron.down")
-            }
-            .buttonStyle(.borderless)
-            .disabled(isLast)
-            .help(Text(LocalizedStringKey("Move Down")))
-            .accessibilityLabel(Text(LocalizedStringKey("Move Down")))
-        }
-        .padding(.vertical, 4)
-    }
-}
-
 // MARK: - 图标 chip
 
 /// 组件卡与顺序行共用的图标 chip（24×24、accent 底的圆角方块）。
@@ -880,13 +1042,29 @@ private struct ModuleSymbolChip: View {
 
 // MARK: - 卡片
 
-/// 一个组件一张卡：SF Symbol 图标 + 名称 + 摘要 + surfaces 徽标 + 开关。
+/// 一个组件一张卡：SF Symbol 图标 + 名称 + 摘要 + surfaces 徽标 + 上移 / 下移 + 开关。
 ///
 /// 图标与文案的解析顺序与 `ModuleRegistry` 的投影**逐字同序**（名称走 `label(for:)`、
 /// 摘要走同一套 key → `table["en"]` 回落）：卡片上显示的必须与展开 tab / 首页块认的是同一份。
+///
+/// **P3 / T3 起卡片属于某一节**（`group`）：同一个模块可能同时出现在两节（声明了 home 与 expanded），
+/// 那时两节各有一张同形的卡，**两节的开关各管各自的 surface**（见 `ModuleSurfaceGroup` /
+/// `ModuleSurfaceSwitch`），上移 / 下移也只在本节内重排（写本节的顺序键）。
 private struct ModuleSettingsCard: View {
     @ObservedObject var registry: ModuleRegistry
     let manifest: ModuleManifest
+    /// 本卡片在哪一节（决定：开关读哪张摘除名单、写哪个顺序键、上移 / 下移重排哪一份名单）。
+    let group: ModuleSurfaceGroup
+    /// 本节里的位置（两端置灰那两个按钮）。
+    let isFirst: Bool
+    let isLast: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+
+    /// 本节的**摘除名单**（两节的开关各读各自的那一张；`@Default` 是 `DynamicProperty`，
+    /// 写盘即重绘本卡片——另一个面那一节的卡也会重绘，因为读的是同一个键的两条路）。
+    @Default(.hiddenHomeModules) private var hiddenHomeModules
+    @Default(.hiddenPanelModules) private var hiddenPanelModules
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -957,6 +1135,11 @@ private struct ModuleSettingsCard: View {
 
             Spacer(minLength: 12)
 
+            // 上移 / 下移：**在本节里**重排这一行（写本节的顺序键，见 `move(_:in:direction:)`）。
+            // 按钮形态与文案沿用既有那条顺序行的口径（`Move Up` / `Move Down`，`borderless` +
+            // 两端置灰），**不引入拖拽**（docs/26 §明确不做）。
+            orderButtons
+
             Toggle(isOn: toggle) {
                 Text(ModuleRegistry.label(for: manifest))
             }
@@ -966,15 +1149,49 @@ private struct ModuleSettingsCard: View {
         .padding(.vertical, 4)
     }
 
+    /// 卡片右侧的两个排序按钮（在开关左边、与开关同一行）。
+    private var orderButtons: some View {
+        HStack(spacing: 4) {
+            Button(action: moveUp) {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isFirst)
+            .help(Text(LocalizedStringKey("Move Up")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Up")))
+
+            Button(action: moveDown) {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isLast)
+            .help(Text(LocalizedStringKey("Move Down")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Down")))
+        }
+    }
+
     // MARK: 开关
 
-    /// get：**只读注册表状态**（偏好不是真源，内存状态才是）。
+    /// 本节的开关 get（P3 / T3）：**模块开着 **且** 没在本节被摘掉**（两节各自的开关只管各自的
+    /// surface，见 `ModuleSurfaceGroup.isOn`）。前半截只读注册表状态（偏好不是真源，内存状态才是）：
     /// `.active` / `.activating` → on；`.disabled` → off；**`nil`（已注册未判定）也按 off**；
     /// `.failed` → off（并见 `isFailed`：开关同时被禁用）。
     private var isOn: Bool {
+        let moduleEnabled: Bool
         switch registry.states[manifest.id] {
-        case .some(.active), .some(.activating): return true
-        case .some(.disabled), .some(.failed), .none: return false
+        case .some(.active), .some(.activating): moduleEnabled = true
+        case .some(.disabled), .some(.failed), .none: moduleEnabled = false
+        }
+        return ModuleSurfaceGroup.isOn(moduleEnabled: moduleEnabled, isHidden: isHiddenOnSurface)
+    }
+
+    /// 本节是否被用户显式摘掉（`hiddenHomeModules` / `hiddenPanelModules`）。
+    ///
+    /// **本卡片两节的开关各读各自的那一张名单**（`@Default` 观察的是同一个键，两节因此都会重绘）。
+    private var isHiddenOnSurface: Bool {
+        switch group {
+        case .home: return hiddenHomeModules.contains(manifest.id)
+        case .panel: return hiddenPanelModules.contains(manifest.id)
         }
     }
 
@@ -994,29 +1211,23 @@ private struct ModuleSettingsCard: View {
         )
     }
 
-    /// set：**先落盘再改内存**（docs/17 §处理链路）。落盘只经 `ModuleEnablementWrite.write`——它是
-    /// 组件页写开关的**唯一入口**：接管模块写的是上游那个总开关（`enableTimerFeature` /
-    /// `showStandardMediaControls` / `showMirror`），非接管模块写 `moduleEnableOverrides`。
+    /// set：**一次拨动 = 一次 `ModuleSurfaceToggleWriter.write`**（先落盘再改内存，docs/17 §处理链路）。
+    ///
+    /// 写什么由那一处按 `ModuleSurfaceSwitch.effect` 裁决（P3 / T3）：置开 → 启用真源 + 取消本节摘除；
+    /// 置关且模块还有另一个面 → **只**写本节的摘除名单；置关且本节是唯一的面 → 写既有启用真源
+    /// （`ModuleEnablementWrite`，接管模块写上游总开关、非接管写 `moduleEnableOverrides`）。
+    /// `localizedError` 那一档（启动失败的回弹）也在写路径里（D-13 的两档），本处不再重一遍。
     private var toggle: Binding<Bool> {
         Binding(
             get: { isOn },
             set: { newValue in
-                let takeoverKey = registry.takeoverEnableKey(for: manifest.id)
-                ModuleEnablementWrite.write(newValue, for: manifest.id, takeoverKey: takeoverKey)
                 Task {
-                    let state = await registry.setEnabled(newValue, for: manifest.id)
-                    // 启动失败 → 开关回弹：**只把偏好写回**（不碰内核状态——`setEnabled(false)` 会把
-                    // failed 降级成 `.disabled`，D-13 禁止）。写什么由策略给出（D-13 的**两档**）：
-                    // 非接管模块 → `false`（把用户的开关拨回去）；接管模块 → `nil`，**什么都不写**
-                    //（它的偏好就是上游总开关，回弹等于「因为模块激活失败，把用户的功能关了」）。
-                    // 界面刷新不需要额外触发：这一路必然伴随 `states` 的真变化
-                    //（`nil` / `.disabled` → 写入 `.failed`），`@Published` 会重绘；
-                    // 而「已是 failed」时开关本来就不可点。
-                    if case .failed = state {
-                        if let rollback = ModuleEnablementRollback.preferenceToWrite(takeoverKey: takeoverKey) {
-                            ModuleEnablementWrite.write(rollback, for: manifest.id, takeoverKey: takeoverKey)
-                        }
-                    }
+                    await ModuleSurfaceToggleWriter.write(
+                        newValue,
+                        manifest: manifest,
+                        group: group,
+                        registry: registry
+                    )
                 }
             }
         )

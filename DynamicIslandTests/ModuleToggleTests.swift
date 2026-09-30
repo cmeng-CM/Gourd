@@ -44,6 +44,13 @@
 //    缺键回落 manifest 值、未注册 id 回落 false；把它喂给 `register` 时登记状态随之变化；
 //  - **内核不写偏好**：`setEnabled` 不碰 `Defaults[.moduleEnableOverrides]`（写盘是设置页的事）。
 //
+//  p3-widgets / T3 追加（**面级隐藏**：`hiddenHomeModules` / `hiddenPanelModules`）：
+//  - **一个面上的隐藏只摘那一个面**：`hiddenHomeModules` 里加了 id → `homeEntries` 不再有它，
+//    而 `tabEntries` / `compactEntries` 照旧、`states` 仍 `.active`、实例仍在（摘一面 ≠ 关模块）；
+//    反方向（`hiddenPanelModules`）同理，且两张名单互不影响；
+//  - **内核仍然不写偏好**：`setEnabled` 一趟之后，三条新键（两张摘除名单 + `panelOrder`）
+//    在持久域里都不存在——写它们的是设置页的 `ModuleSurfaceToggleWriter`。
+//
 //  偏好卫生：注册表是单例、`Defaults.Keys.moduleEnableOverrides` 落开发机真实域——
 //  每个用例的 `setUp` 都先 `deactivateAll()`（它连 `manifests` / `moduleTypes` 一起清，
 //  因此**用例必须自己重新 `register(...)`**，否则 `setEnabled` 直接命中「未注册」分支）
@@ -89,6 +96,10 @@ final class ModuleToggleTests: XCTestCase {
     /// 清掉偏好键（见文件头：不能靠写 `[:]`）。
     private func clearOverrides() {
         Defaults.reset(Defaults.Keys.moduleEnableOverrides.name)
+        // p3-widgets / T3 的两条**面级**偏好同理：用例之间不能串味。
+        Defaults.reset(Defaults.Keys.hiddenHomeModules.name)
+        Defaults.reset(Defaults.Keys.hiddenPanelModules.name)
+        Defaults.reset(Defaults.Keys.panelOrder.name)
     }
 
     /// 注册口径与 `ModuleKernelTests` / `HomeStripLayoutTests` 一致：
@@ -459,6 +470,60 @@ final class ModuleToggleTests: XCTestCase {
             UserDefaults.standard.persistentDomain(forName: domain)?[Defaults.Keys.moduleEnableOverrides.name],
             "持久域里不应留下这个键（注册域的默认值不算）"
         )
+    }
+
+    // MARK: - 面级开关（p3-widgets / T3：两节各自的开关只管各自的 surface）
+
+    /// **一个面上的隐藏只摘那一个面**（T3 的口径）：`hiddenHomeModules` 里加了 id，首页投影不再有它，
+    /// 但面板与折叠态两条投影照旧——模块本身仍 `.active`（与「置关」是三件不同的事）。
+    func testHidingOnOneSurfaceKeepsTheOtherProjections() async {
+        let registry = ModuleRegistry.shared
+        registerProbes([ToggleProbeModule.self])
+        await registry.bootstrap()
+        // 夹具 `defaultEnabled = false`（启用门落 `.disabled`）→ 用例自己置开。
+        await registry.setEnabled(true, for: id)
+        XCTAssertEqual(registry.states[id], .active, "前置：模块已激活")
+        XCTAssertEqual(registry.homeEntries.map(\.id), [id], "前置：三条投影都在")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [id])
+        XCTAssertEqual(registry.compactEntries.map(\.id), [id])
+
+        Defaults[.hiddenHomeModules] = [id]
+
+        XCTAssertTrue(registry.homeEntries.isEmpty, "首页投影不再有它")
+        XCTAssertEqual(registry.tabEntries.map(\.id), [id], "面板投影照旧")
+        XCTAssertEqual(registry.compactEntries.map(\.id), [id], "折叠态投影照旧")
+        XCTAssertEqual(registry.states[id], .active, "模块仍活着（摘一面不是关模块）")
+        XCTAssertNotNil(registry.instance(for: id), "实例没被摘")
+
+        Defaults[.hiddenPanelModules] = [id]
+
+        XCTAssertTrue(registry.homeEntries.isEmpty, "首页那张名单没被动过（它还摘着）")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "面板投影不再有它")
+        XCTAssertEqual(registry.compactEntries.map(\.id), [id], "折叠态投影仍不受影响（它没有自己的开关）")
+
+        // 取消首页那一面的摘除 → 首页投影回来，面板照样摘着（两张名单互不影响）。
+        Defaults[.hiddenHomeModules] = []
+        XCTAssertEqual(registry.homeEntries.map(\.id), [id], "取消首页摘除 → 首页块回来")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "面板那张名单不受影响")
+    }
+
+    /// **内核仍然不写偏好**（T3 的那三条键一起钉）：`setEnabled` 只改内存状态，面级偏好由设置页写。
+    func testSetEnabledDoesNotTouchSurfacePreferences() async throws {
+        let registry = ModuleRegistry.shared
+        registerProbes([ToggleProbeModule.self])
+
+        await registry.setEnabled(true, for: id)
+        await registry.setEnabled(false, for: id)
+
+        let domain = try XCTUnwrap(Bundle.main.bundleIdentifier, "测试宿主就是 Gourd.app，bundle id 必须可解析")
+        let persistent = UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
+        for key in [
+            Defaults.Keys.hiddenHomeModules.name,
+            Defaults.Keys.hiddenPanelModules.name,
+            Defaults.Keys.panelOrder.name,
+        ] {
+            XCTAssertNil(persistent[key], "内核不得写 \(key)（面级偏好是设置页的事）")
+        }
     }
 }
 
