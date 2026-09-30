@@ -5027,7 +5027,7 @@ struct Appearance: View {
     @ViewBuilder
     private func panelLayoutControls() -> some View {
         Section {
-            Picker(selection: $panelHeightMode) {
+            Picker(selection: panelHeightModeBinding) {
                 Text(LocalizedStringKey("settings.appearance.heightMode.auto"))
                     .tag(PanelAutoHeight.modeAuto)
                 Text(LocalizedStringKey("settings.appearance.heightMode.manual"))
@@ -5068,6 +5068,23 @@ struct Appearance: View {
         } footer: {
             Text(LocalizedStringKey("settings.appearance.resetLayout.footer"))
         }
+    }
+
+    /// 高度模式两段选择的绑定：**未知存量值显示为「自适应」**。
+    ///
+    /// `panelHeightMode` 是裸字符串键（与 `timerDisplayMode` 同形），存量值可能是未知串；尺寸层
+    /// 对未知串的判定是 `PanelAutoHeight.isAuto` = **按默认档 auto**。界面跟着行为走——不然
+    /// 会出现「两段都没选中、可面板明明在自适应」这种状态与行为对不上的样子；用户点一下
+    /// 就把值落回两个合法档名之一（写回的是 `modeAuto` / `modeManual` 这两个字面量）。
+    private var panelHeightModeBinding: Binding<String> {
+        Binding(
+            get: {
+                PanelAutoHeight.isAuto(panelHeightMode)
+                    ? PanelAutoHeight.modeAuto
+                    : PanelAutoHeight.modeManual
+            },
+            set: { panelHeightMode = $0 }
+        )
     }
 
     /// 「恢复默认」按下并确认之后实际做的事：重置 + 既有的「设置已改」收尾。
