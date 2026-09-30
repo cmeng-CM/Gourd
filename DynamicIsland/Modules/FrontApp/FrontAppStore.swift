@@ -8,7 +8,18 @@
 //  历史的口径全在纯函数 `FrontAppHistory`（去重 / 移到最前 / 截到上限 / 排除自身），
 //  本文件只管四件事：**订阅、映射、发布、动作**。
 //
-//  四条刻意写死的口径（改动前先读）：
+//  **块里画什么**（docs/23-home-fit.md §做法 机制三，2026-09-30 改）：不再是 `recent`（那是"本进程
+//  活过的那几次切换"），而是 `switcherApps` —— **现取** `NSWorkspace.shared.runningApplications`，
+//  只列可激活的常规 App。`recent` 保留，但**降级成排序依据**（当前应用 → `recent` → 名称）。
+//  过滤与排序全在纯函数 `FrontAppSwitcher`（文件末尾），取数走注入点 `FrontAppRunningAppsProvider`
+//  （默认真实现读 `NSWorkspace`，用例给假体，于是用例不依赖跑测试这台机器上开着什么）。
+//
+//  五条刻意写死的口径（改动前先读）：
+//
+//  0. **台前调度那类系统的 UI 进程不列**（2026-09-30 加，D-04）：它们不是 `.regular`
+//     （`activationPolicy` 是 `.accessory` / `.prohibited`），对它们调 `activate()` 系统直接拒——
+//     用户看到的「点了没反应」就是这里来的。**列一个点不动的行比不列更糟**，所以过滤放在数据层：
+//     视图不会拿到"画得出但点不动"的条目。
 //
 //  1. **不读窗口标题**（§明确不做）：那要辅助功能权限（TCC）；本批零权限，只做"应用本身"
 //     （图标 / 名称 / 最近切换）——所以这里从头到尾没有 `AXUIElement`，也没有窗口名；
@@ -40,6 +51,8 @@ final class FrontAppStore: ObservableObject {
 
     private let config: ConfigHandle
     private let logger: ModuleLogger
+    /// 「取所有正在运行的 App」的**注入点**（先给默认值：生产走 `NSWorkspace`；用例给假体，见文件末尾）。
+    private let runningAppsProvider: FrontAppRunningAppsProvider
 
     /// 观察者 token（非 nil = 已订阅；`deactivate()` 置回 nil，因此摘了还能再 `start`）。
     private var activationToken: NSObjectProtocol?
@@ -50,9 +63,34 @@ final class FrontAppStore: ObservableObject {
     /// id → 图标（`icon(forFile:)` 的结果按 id 缓存；首页块反复重绘时不重复取图）。
     private var iconCache: [String: NSImage] = [:]
 
-    init(config: ConfigHandle, logger: ModuleLogger) {
+    /// 额外接收"所有打开的常规 App"的注入点（`runningApps`）：**默认真实现**读
+    /// `NSWorkspace.shared.runningApplications`，用例传构造的条目（口径 0 的过滤与排序因此可测）。
+    init(
+        config: ConfigHandle,
+        logger: ModuleLogger,
+        runningApps: @escaping FrontAppRunningAppsProvider = FrontAppStore.systemRunningApps
+    ) {
         self.config = config
         self.logger = logger
+        self.runningAppsProvider = runningApps
+    }
+
+    // MARK: 现取的"所有打开的常规 App"
+
+    /// 所有打开的**常规** App（docs/23-home-fit.md §做法 机制三）：当前应用在前，其余按 `recent`
+    /// 的次序、再按名称。**每次访问现取一次**（不用通知累积）——用户要的是"所有打开的软件"，
+    /// 现取天然包含"本进程启动前就开着的 App"，历史做不到。
+    ///
+    /// 代价是每次绘制现取一次进程表（本机 159 个进程实测 **0.02ms**，与 `NSWorkspace` 的既有用法同级），
+    /// 因此这个 getter 里没有缓存、没有时间窗：`recent` 在过滤排序里**只当排序依据**。
+    /// 过滤与排序（含排除自身）全在纯函数 `FrontAppSwitcher.apps(...)` 里，这里只负责"取一次 + 传进去"。
+    var switcherApps: [FrontAppSnapshot] {
+        FrontAppSwitcher.apps(
+            from: runningAppsProvider(),
+            current: current,
+            recent: recent,
+            selfBundleID: selfBundleID
+        )
     }
 
     // MARK: 生命周期
@@ -89,17 +127,19 @@ final class FrontAppStore: ObservableObject {
 
     /// 点一个小图标 = 把那个应用切到前台（§机制三）。
     ///
-    /// 已是前台的点了是**空操作**（系统返回 false，这里只记一条日志，不报错、不弹窗）；
-    /// 进程已退出（应用重启后 pid 变了）时找不到 `NSRunningApplication`，同样只是空操作。
+    /// **两条失败路径都记 `warn` 日志**（2026-09-30 起，D-04）：进程已退出（应用重启后 pid 变了、
+    /// 或它在我们取完表之后才退出）→ 找不到 `NSRunningApplication`；进程还在但系统拒绝 `activate()`。
+    /// 这两种都**不报错、不弹窗**，只在日志里留下一条可以事后追溯的记录——"点了没反应，日志里也
+    /// 没有"是上一版最难查的一种状态。
     func activate(_ snapshot: FrontAppSnapshot) {
         guard let app = NSRunningApplication(processIdentifier: snapshot.pid) else {
-            logger.info("激活 \(snapshot.name)（\(snapshot.id)）：进程已不在")
+            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——进程已不在")
             return
         }
         if app.activate() {
-            logger.info("激活：\(snapshot.name)（\(snapshot.id)）")
+            logger.info("激活：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）")
         } else {
-            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id)）")
+            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——系统拒绝了 activate()")
         }
     }
 
@@ -118,6 +158,24 @@ final class FrontAppStore: ObservableObject {
     }
 
     // MARK: 内部
+
+    /// 注入点的**默认实现**：读一次 `NSWorkspace.shared.runningApplications`，摊成可判定的字段
+    /// （`FrontAppRunningApp` 的字段与 `NSRunningApplication` 的取法一一对应）。
+    ///
+    /// `runningApplications` 是公开 API（不新增权限、不新增出站请求），列的是"正在运行的 App"、
+    /// 不含窗口（§已知限制 1）。**筛选不在这里**：`.regular` / 排除自身 / 名称都判在纯函数
+    /// `FrontAppSwitcher.apps(...)` 里——"取数"与"筛选"因此各自可替换、可测试。
+    @MainActor
+    static func systemRunningApps() -> [FrontAppRunningApp] {
+        NSWorkspace.shared.runningApplications.map { app in
+            FrontAppRunningApp(
+                pid: app.processIdentifier,
+                bundleID: app.bundleIdentifier,
+                name: app.localizedName,
+                activationPolicy: app.activationPolicy
+            )
+        }
+    }
 
     /// 订阅前台变化（`queue: .main` → 回调已在主线程；写法照 `DynamicIsland/DynamicIslandApp.swift:214-219`
     /// 的既有先例：`userInfo` 里取 `NSRunningApplication`）。
@@ -194,5 +252,100 @@ final class FrontAppStore: ObservableObject {
     /// 是不是本应用自己（判据走纯函数，口径只有一处）。
     private func isSelf(_ snapshot: FrontAppSnapshot) -> Bool {
         FrontAppHistory.excludingSelf([snapshot], selfBundleID: selfBundleID).isEmpty
+    }
+}
+
+// MARK: - 现取"所有打开的常规 App"（注入点 + 纯函数口径）
+
+/// 一次 `NSWorkspace.shared.runningApplications` 里的**可判定字段**——**不是 `NSRunningApplication`
+/// 本身**：那个类没有公开构造器，用例造不出假体，而「筛 `.regular` / 丢无效 pid / 排除自身」这几条
+/// 恰恰是最该被用例钉住的（块里列出来的每一格都必须点得动，D-04）。所以把它们摊成值类型。
+///
+/// 字段与取法一一对应：`pid` = `processIdentifier`、`bundleID` = `bundleIdentifier`、
+/// `name` = `localizedName`（**可为 nil**，过滤在纯函数里做）、`activationPolicy` = `activationPolicy`。
+/// **图标路径不在这里**：图标只有一条路（`icon(for:)`），不因数据来源变化多出第二条。
+struct FrontAppRunningApp: Equatable {
+    let pid: pid_t
+    let bundleID: String?
+    let name: String?
+    let activationPolicy: NSApplication.ActivationPolicy
+
+    init(pid: pid_t, bundleID: String?, name: String?, activationPolicy: NSApplication.ActivationPolicy) {
+        self.pid = pid
+        self.bundleID = bundleID
+        self.name = name
+        self.activationPolicy = activationPolicy
+    }
+}
+
+/// 「取所有正在运行的 App」的**注入点**：生产实现 = `FrontAppStore.systemRunningApps`（读真
+/// `NSWorkspace`），用例传构造的条目——于是用例既不依赖跑测试这台机器上开着什么，也不起真进程。
+typealias FrontAppRunningAppsProvider = @MainActor () -> [FrontAppRunningApp]
+
+/// `switcherApps` 的**纯函数口径**：过滤 → 排除自身 → 排序 → 去重。四条各管一件事（注释见实现）。
+///
+/// 顺序就是契约（docs/23-home-fit.md §做法 机制三 / §接口与数据形状）：
+/// **当前应用 → `recent` 里的次序 → 名称（本地化比较）→ pid**；最后一项只为"稳定"兜底
+/// （Swift 的 `sorted` 不保证稳定，同名同 id 时不能让两轮渲染给出不同次序）。
+enum FrontAppSwitcher {
+
+    /// 条目 → 可画的 App 列表。`current` / `recent` / `selfBundleID` 都从参数进来（不读 store），
+    /// 因此用例能用手造值驱动全部边界。
+    static func apps(
+        from running: [FrontAppRunningApp],
+        current: FrontAppSnapshot?,
+        recent: [FrontAppSnapshot],
+        selfBundleID: String?
+    ) -> [FrontAppSnapshot] {
+        // ① 过滤 + 映射：三条判据各自挡住一类"列出来也点不动"的条目
+        //    （非 `.regular`：台前调度那类系统 UI 进程；`pid <= 0`：没有可激活进程；
+        //    名字 nil / 空 / 只有空白：画出来是一格空白图标，用户认不出是谁）。
+        //    名字**原样带过来**（与 `snapshot(of:)` 同一条口径：显示用的名字不在这里改写）。
+        var snapshots: [FrontAppSnapshot] = []
+        for entry in running {
+            guard entry.activationPolicy == .regular, entry.pid > 0 else { continue }
+            guard let name = entry.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            snapshots.append(FrontAppSnapshot(bundleID: entry.bundleID, name: name, pid: entry.pid))
+        }
+
+        // ② 排除自身：「自身」的判据只有一处（`FrontAppHistory.excludingSelf`，口径 2）。
+        let others = FrontAppHistory.excludingSelf(snapshots, selfBundleID: selfBundleID)
+
+        // ③ 排序：当前应用置顶 → 最近切换过的按 `recent` 的次序 → 其余按名称。
+        //    `recent` 里有重复 id 时取**更靠前的那次**（新在前），不崩、也不挑后面的。
+        let recentRank = Dictionary(
+            recent.enumerated().map { ($0.element.id, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // `recent` 的条目带着 **pid**：同一个 bundleID 跑了两份时，`recentRank` 分辨不出是哪一份
+        // （它按 id 建索引），pid 才分得出"你刚用的是哪一份"——去重那一步（④）靠它挑对实例。
+        let recentPids = Set(recent.map(\.pid))
+        let currentID = current?.id
+        let ordered = others.sorted { lhs, rhs in
+            let lhsIsCurrent = lhs.id == currentID
+            let rhsIsCurrent = rhs.id == currentID
+            if lhsIsCurrent != rhsIsCurrent { return lhsIsCurrent }
+
+            let lhsRank = recentRank[lhs.id] ?? Int.max
+            let rhsRank = recentRank[rhs.id] ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+
+            switch lhs.name.localizedStandardCompare(rhs.name) {
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame:
+                // 同名（绝大多数是同 id 的两个实例）：优先留最近用过的那一份，其余按 pid 升序
+                let lhsUsed = recentPids.contains(lhs.pid)
+                let rhsUsed = recentPids.contains(rhs.pid)
+                if lhsUsed != rhsUsed { return lhsUsed }
+                return lhs.pid < rhs.pid
+            }
+        }
+
+        // ④ 同一个 `id` 只留一格：同一个 .app 被 `open -n` 起两份时，两条条目的 `id` 会撞，
+        //    而 `ForEach` 的 id 撞了会让 SwiftUI 认错格子。留下的是**排序里靠前的那一份**
+        //    （因此"最近切换过的那一份"优先——它的 pid 才是该点的那个）。
+        var seen = Set<String>()
+        return ordered.filter { seen.insert($0.id).inserted }
     }
 }

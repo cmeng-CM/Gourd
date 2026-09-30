@@ -24,15 +24,26 @@
 //  - 身份 `id` 的 pid 兜底（无 bundleID 的进程）；
 //  - 夹取区间本身：`clampedLimit(1) == 3` / `(99) == 8` / `(5) == 5`。
 //
+//  T3 追加段（2026-09-30，`switcherApps` / `FrontAppSwitcher`，docs/23-home-fit.md §做法 机制三）：
+//
+//  - `FrontAppSwitcher.apps` 三组：**过滤**（非 `.regular` 的台前调度那类 / 本应用自己 /
+//    `pid <= 0` / 没名字）/ **排序**（当前应用置顶 → `recent` 的次序 → 名称；当前应用不在运行表里时
+//    不伪造一行）/ **同一个 id 只留一格**（`open -n` 起两份时 `ForEach` 的 id 不能撞）；
+//  - store 的**注入点**：`switcherApps` 走注入的条目、**每次访问现取一次**（假体记调用次数）
+//    ——用例因此不依赖跑测试这台机器上开着什么。
+//
 //  T4 段（`FrontAppModule`，§接口与数据形状 4 + §做法 机制三/机制四）：
 //
 //  - manifest 逐字段契约（只声明 `home`、默认关、零权限、`order 30`、config 一键、文案可解析）；
 //  - 内容分发（`home` → `.view`，其余 surface → `.none`）与 `deactivate()` 的幂等；
 //  - 块宽回落：模块不声明 `homeBlockWidth`，注册表对「已注册但不声明」回 nil（宿主统一值）；
-//  - `maxRecentApps` 的读 → 夹：模块显式传进 store 的值被夹一次后写进 `recentLimit`。
+//  - `maxRecentApps` 的读 → 夹：模块显式传进 store 的值被夹一次后写进 `recentLimit`
+//    （它现在管的是**排序依据 `recent` 的长度**，不再决定块里画几格）；
+//  - `FrontAppGridBudget`（T4 追加，2026-09-30）：块内排版预算 —— 宽 → 一行几格、高 → 几行，
+//    0…400pt 逐档扫"画出来的格子绝不比块更大"（"挤变形 / 被裁"的判据）。
 //
 //  视图（`FrontAppHomeBlockView`）不进单测：它只做呈现（排布、悬停、点击转发），
-//  历史口径与上限都在 T3 的纯函数与 store 里——这里只钉"模块把哪一份内容交出去"。
+//  过滤 / 排序 / 预算都在纯函数里——这里只钉"模块把哪一份内容交出去"与"预算算出几格"。
 //
 //  四条刻意写死的口径（改动前先读）：
 //
@@ -45,8 +56,10 @@
 //     `com.cmeng.gourd.module.shortcuts`（那是开发机的真实域，真 `ManifestConfigHandle` 会写它）；
 //  4. **前台应用的样本全是手造快照**（T3）：不订阅真 `NSWorkspace` 通知、不读当下真实的前台应用
 //     ——跑测试时前台是 Xcode / 终端，把任何真名字写进断言都必红，且会让用例互相污染。
+//     「所有打开的常规 App」同理：条目由**注入点**给（`RunningAppsStub`），不读本机进程表。
 //
 
+import AppKit
 import Foundation
 import SwiftUI
 import XCTest
@@ -666,6 +679,139 @@ final class ShortcutsFrontAppTests: XCTestCase {
         )
     }
 
+    // MARK: - T3 追加：switcherApps（所有打开的常规 App）
+
+    /// 过滤：三类"列出来也点不动 / 认不出"的条目一条都不进列表（docs/23-home-fit.md D-04）。
+    ///
+    /// - **非 `.regular`**：台前调度那类系统的 UI 进程（`.accessory` / `.prohibited`）——用户反馈的
+    ///   「台前调度显示了，但点击没反应」就是它们：对它们调 `activate()` 系统直接拒；
+    /// - **本应用自己**：每次点开刘海都把壶中天自己列一遍没有意义（口径 2 的既有裁定）；
+    /// - **无可激活 pid**（`pid <= 0`）与**没有名字**（nil / 空串 / 只有空白）：前者点不动，
+    ///   后者画出来是一格空白图标，用户认不出是谁。
+    ///
+    /// 名字全用 ASCII（Safari / Terminal）：**名称比较是本地化的**（`localizedStandardCompare`），
+    /// 中英混排的次序随系统语言变——这种断言不该钉在"跑测试那台机器"上。
+    func testFrontAppSwitcherDropsNonRegularSelfAndInvalidEntries() {
+        let entries = [
+            runningApp("Safari", "com.apple.Safari", pid: 101),
+            runningApp("Stage Manager", "com.apple.WindowManager", pid: 102, policy: .accessory),
+            runningApp("Input Method", "com.apple.inputmethod.Kotoeri", pid: 103, policy: .prohibited),
+            runningApp("Gourd", "com.cmeng.gourd", pid: 104),
+            runningApp("Orphan", "com.example.orphan", pid: 0),
+            runningApp("Negative", "com.example.negative", pid: -1),
+            runningApp("", "com.example.empty", pid: 107),
+            runningApp("   ", "com.example.blank", pid: 108),
+            runningApp(nil, "com.example.nil", pid: 109),
+            runningApp("Terminal", "com.apple.Terminal", pid: 110),
+        ]
+
+        let apps = FrontAppSwitcher.apps(
+            from: entries,
+            current: nil,
+            recent: [],
+            selfBundleID: "com.cmeng.gourd"
+        )
+
+        XCTAssertEqual(
+            apps.map(\.id),
+            ["com.apple.Safari", "com.apple.Terminal"],
+            "只剩「常规 + 有名字 + 不是自己 + pid 有效」的两条"
+        )
+        XCTAssertEqual(apps.first?.pid, 101, "pid 原样带过来（`activate(_:)` 点的就是它）")
+        XCTAssertEqual(apps.last?.name, "Terminal", "显示名原样（与 `snapshot(of:)` 同一条口径）")
+    }
+
+    /// 排序：**当前应用置顶 → `recent` 的次序 → 名称（本地化比较）**，三条各有优先级。
+    ///
+    /// 名称那一段用同为首字母大写的样本，于是"按名称"在任何比较口径（区分 / 不区分大小写）下都是
+    /// 同一个答案——断言不会因为跑测试那台机器的语言或比较策略而变。
+    func testFrontAppSwitcherSortsCurrentFirstThenRecentThenName() {
+        let entries = [
+            runningApp("Zeta", "com.example.zeta", pid: 1),
+            runningApp("Alpha", "com.example.alpha", pid: 2),
+            runningApp("Beta", "com.example.beta", pid: 3),
+            runningApp("Safari", "com.apple.Safari", pid: 101),
+        ]
+        let recent = [
+            FrontAppSnapshot(bundleID: "com.example.beta", name: "Beta", pid: 3),
+            FrontAppSnapshot(bundleID: "com.example.zeta", name: "Zeta", pid: 1),
+        ]
+        let current = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 101)
+
+        XCTAssertEqual(
+            FrontAppSwitcher.apps(from: entries, current: current, recent: recent, selfBundleID: nil).map(\.id),
+            ["com.apple.Safari", "com.example.beta", "com.example.zeta", "com.example.alpha"],
+            "当前应用置顶；最近切换过的按 `recent` 的次序；没有依据的按名称"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.apps(from: entries, current: nil, recent: [], selfBundleID: nil).map(\.id),
+            ["com.example.alpha", "com.example.beta", "com.apple.Safari", "com.example.zeta"],
+            "没有当前应用、也没有历史时 = 纯按名称"
+        )
+
+        // 当前应用**不在运行表里**（刚退出，或刚被记下来就退了）：列表里没有它就没有它——
+        // 不伪造一行出来（它本来就在上半那一行；伪造的那一行还会点不动）
+        let ghost = FrontAppSnapshot(bundleID: "com.example.gone", name: "已退出", pid: 999)
+        XCTAssertEqual(
+            FrontAppSwitcher.apps(from: entries, current: ghost, recent: [], selfBundleID: nil).map(\.id).count,
+            4,
+            "当前应用不在表里 → 不多一格、也不少一格"
+        )
+    }
+
+    /// 同一个 `.app` 跑了两份（`open -n`）：**只留一格**，留下的是"最近用过的那一份"。
+    ///
+    /// 两份的 `id` 相同（身份是 bundleID），两格一起画会让 `ForEach` 的 id 撞上（SwiftUI 认错格子）
+    /// 而且用户也分不清；`recent` 里的条目带着 pid，因此"哪一份是你刚用过的"分辨得出来——留下它，
+    /// `activate(_:)` 点的才是你上次用的那个实例。
+    func testFrontAppSwitcherKeepsOneCellPerIdentity() {
+        let entries = [
+            runningApp("Safari", "com.apple.Safari", pid: 201),
+            runningApp("Safari", "com.apple.Safari", pid: 202),
+        ]
+        let recentlyUsed = FrontAppSnapshot(bundleID: "com.apple.Safari", name: "Safari", pid: 202)
+
+        let apps = FrontAppSwitcher.apps(from: entries, current: nil, recent: [recentlyUsed], selfBundleID: nil)
+
+        XCTAssertEqual(apps.count, 1, "同 id 只留一格")
+        XCTAssertEqual(apps.first?.pid, 202, "留下的是最近用过的那一份")
+    }
+
+    /// store 这一层：`switcherApps` 走**注入点**取数，且**每次访问都现取**——不是通知累积、
+    /// 也不是"进模块时快照一次"。
+    ///
+    /// 注入的条目全是手造的，因此本用例**不依赖跑测试这台机器上开着什么**：真进程表里没有
+    /// `com.apple.Safari` 也不影响结论（假体说不给就不给）。
+    func testFrontAppStoreSwitcherAppsReadsInjectedProviderEveryTime() {
+        let stub = RunningAppsStub(entries: [
+            runningApp("Safari", "com.apple.Safari", pid: 101),
+            runningApp("台前调度", "com.apple.WindowManager", pid: 102, policy: .accessory),
+            runningApp("壶中天", "com.cmeng.gourd.test", pid: 103),
+            runningApp("孤儿进程", "com.example.orphan", pid: 0),
+        ])
+        let store = FrontAppStore(
+            config: RecordingConfigHandle(schema: ["maxRecentApps"]),
+            logger: frontAppLogger(),
+            runningApps: stub.provide
+        )
+        // `selfBundleID` 是 `start` 里落的（「自身」的判据在 store 上只有这一处）：起订阅再摘掉，
+        // 与 `testFrontAppStoreClampsTheValueTheModulePassesIn` 同一个形态。
+        store.start(selfBundleID: "com.cmeng.gourd.test", maxRecentApps: 5)
+
+        XCTAssertEqual(
+            store.switcherApps.map(\.id),
+            ["com.apple.Safari"],
+            "注入的条目里只留常规、有名字、非自身的"
+        )
+        XCTAssertEqual(stub.calls, 1, "访问一次 = 取一次数")
+
+        stub.entries = [runningApp("Terminal", "com.apple.Terminal", pid: 201)]
+        XCTAssertEqual(store.switcherApps.map(\.id), ["com.apple.Terminal"], "表换了，块里跟着换（现取）")
+        XCTAssertEqual(stub.calls, 2, "再访问一次就再取一次（没有缓存、没有时间窗）")
+
+        store.deactivate()
+    }
+
     // MARK: - T4：前台应用模块（manifest / 内容分发 / 块宽回落）
 
     /// manifest 逐字段对齐 docs/22 §接口与数据形状 4：**只声明 `home`**、默认关、零权限、
@@ -718,6 +864,7 @@ final class ShortcutsFrontAppTests: XCTestCase {
             "module.frontapp.name",
             "module.frontapp.summary",
             "module.frontapp.current",
+            "module.frontapp.switcher",
             "module.frontapp.recent",
             "module.frontapp.emptyRecent",
         ] {
@@ -782,6 +929,41 @@ final class ShortcutsFrontAppTests: XCTestCase {
         tight.deactivate()
     }
 
+    // MARK: - T4 追加：块内排版预算（FrontAppGridBudget）
+
+    /// 预算：**宽决定一行几格、高决定几行**，且画出来的格子**绝不比块更大**（"挤变形 / 被裁"的判据）。
+    ///
+    /// 两条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，而不是画一格
+    /// 越界）；② `strip` 的最小可用高度 152pt → 当前应用行 + **4 行**网格（= 180pt 宽下 24 格）。
+    func testFrontAppGridBudgetKeepsCellsInsideTheBlock() {
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 180), 6, "宿主最小块宽 180 → 6 格")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 240), 8, "宿主理想块宽 240 → 8 格")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 0), 0, "`.zero` 提案 → 一格都不画（不越界）")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 23), 0, "放不下一格就是 0")
+
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 152), 4, "strip 最小可用高度 → 当前行 + 4 行")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 58), 1, "刚好一行（28 + 6 + 24 = 58）")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 57), 0, "矮一点点就一行都不画（不裁半行）")
+        XCTAssertEqual(FrontAppGridBudget.capacity(forWidth: 180, forHeight: 152), 24, "6 × 4")
+
+        // 逐档扫 0…400pt：把"上限预算"反推成实际占用的宽高，任何一档都不许超过块本身
+        for width in 0...400 {
+            let cells = FrontAppGridBudget.cellsPerRow(forWidth: CGFloat(width))
+            let used = CGFloat(cells) * FrontAppGridBudget.cellSize
+                + CGFloat(max(0, cells - 1)) * FrontAppGridBudget.cellSpacing
+            XCTAssertLessThanOrEqual(used, CGFloat(width), "\(width)pt 宽：\(cells) 格要占 \(used)pt")
+        }
+        for height in 0...400 {
+            let rows = FrontAppGridBudget.rowCount(forHeight: CGFloat(height))
+            guard rows > 0 else { continue }   // 0 行 = 网格不画、占 0（上半那一行不归这份预算管）
+            let used = FrontAppGridBudget.currentIconSize
+                + FrontAppGridBudget.rowSpacing
+                + CGFloat(rows) * FrontAppGridBudget.cellSize
+                + CGFloat(rows - 1) * FrontAppGridBudget.rowSpacing
+            XCTAssertLessThanOrEqual(used, CGFloat(height), "\(height)pt 高：\(rows) 行要占 \(used)pt")
+        }
+    }
+
     // MARK: - 夹具（T2）
 
     private func logger() -> ModuleLogger {
@@ -819,6 +1001,19 @@ final class ShortcutsFrontAppTests: XCTestCase {
             ui: SilentUIHandle()
         )
     }
+
+    /// "一次 `NSWorkspace.shared.runningApplications` 的条目"的构造器（T3 追加）。
+    ///
+    /// 默认给**常规 + 有名字**的条目（列表里最常见的那种），边界（政策 / 没名字）按需传。
+    /// 名称与 bundleID 全是自造串：不读本机进程表，断言因此不随这台机器上开着什么而变。
+    private func runningApp(
+        _ name: String?,
+        _ bundleID: String?,
+        pid: pid_t,
+        policy: NSApplication.ActivationPolicy = .regular
+    ) -> FrontAppRunningApp {
+        FrontAppRunningApp(pid: pid, bundleID: bundleID, name: name, activationPolicy: policy)
+    }
 }
 
 // MARK: - 运行假体（T2 用）
@@ -851,6 +1046,28 @@ private final class SilentUIHandle: UIHandle {
     func presentTransient(view: AnyView, ttl: TimeInterval) {}
     func dismissTransient() {}
     func requestCollapse() {}
+}
+
+/// "取所有正在运行的 App"的**注入点假体**（T3 追加）：可换表 + 记调用次数。
+///
+/// 两个用途各对应一条口径：**换表**证明 `switcherApps` 是现取（不是一次性快照）；**调用次数**证明
+/// 每次访问都真的问了一次——而条目全是手造的，因此**不读本机真实进程表**（跑测试这台机器上开着
+/// Xcode 还是别的什么，都不影响断言）。
+@MainActor
+private final class RunningAppsStub {
+    /// 下一次被问时给的条目（用例可换）。
+    var entries: [FrontAppRunningApp]
+    /// 被问了几次（`provide` 的调用次数）。
+    private(set) var calls = 0
+
+    init(entries: [FrontAppRunningApp]) {
+        self.entries = entries
+    }
+
+    func provide() -> [FrontAppRunningApp] {
+        calls += 1
+        return entries
+    }
 }
 
 // MARK: - 会落盘的 ConfigHandle 假体（T2 用）

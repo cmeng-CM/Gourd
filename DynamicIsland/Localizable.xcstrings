@@ -82530,13 +82530,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Show the frontmost app and recent switches on the home strip"
+            "value" : "Show the frontmost app and the other open apps on the home strip"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在首页显示当前前台应用与最近切换"
+            "value" : "在首页显示当前应用与其它打开的 App"
           }
         }
       }
@@ -82569,6 +82569,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近切换"
+          }
+        }
+      }
+    },
+    "module.frontapp.switcher" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other open apps"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他打开的 App"
           }
         }
       }
