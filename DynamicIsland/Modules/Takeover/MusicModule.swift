@@ -165,6 +165,12 @@ final class MusicModule: GourdModule {
     /// 输入（`HomeStripView.minimumUsableHeight` 的实测来源就是 420 宽下的封面边长）。
     static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 300, ideal: 420) }
 
+    /// 首页分带批次（T7）的第四条钩子：音乐块是**大块**——封面 + 控制需要面积，因此显式答
+    /// `.large`（缺省 `.compact` 会把它挪进下方的小组件网格，封面会被压成一条）。
+    /// 形态只声明「它是什么」，摆法（主块带的丢块语义、最小可用高度 152）仍是宿主的事
+    /// （docs/26-home-widgets-and-settings.md §做法 机制六 / D-09）。
+    static var homeFormFactor: HomeFormFactor { .large }
+
     /// 音乐块的**存在性判据**（纯函数，便于单测：口径 3）。
     ///
     /// 两段是「且」：功能总开关（上游键）与**运行期条件**（选了「无会话即隐藏」时必须真有会话——

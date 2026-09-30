@@ -26,6 +26,10 @@
 //  `homeBlockWidth`，docs/20-component-page.md §接口与数据形状 1）——它们是协议要求、
 //  在文件末尾的扩展里给缺省实现，既有的四个内置模块因此一行不改。
 //
+//  P3 组件批次 / T7 增量：第四条同形钩子 `homeFormFactor`（docs/26-home-widgets-and-settings.md
+//  §做法 机制六 / D-09）——首页块的形态（`.large` 主块带 / `.compact` 小组件带，缺省 `.compact`）。
+//  同样「协议要求 + 扩展缺省」：音乐与镜子显式答 `.large`，其余模块一行不改。
+//
 
 import CoreGraphics
 import Defaults
@@ -86,6 +90,17 @@ public protocol GourdModule: AnyObject {
     /// 不是为了形状统一把老块改小。类型是内核侧的 `ModuleHomeBlockWidth`——Host 的
     /// `HomeBlockWidth` 由 `HomeStripView` 自己映射，内核不引用渲染层类型。
     static var homeBlockWidth: ModuleHomeBlockWidth? { get }
+
+    /// 首页块的**形态**（缺省 `.compact`）：它属于主块带（`.large`）还是小组件带（`.compact`）。
+    ///
+    /// **只声明「我是什么」，不声明「我在哪」**：两带的摆法（主块带沿用 strip 的丢块语义、
+    /// 小组件带网格换行）与高度取舍都属于宿主（docs/26 §做法 机制六 / D-09）。
+    /// 形态**不由宽度反推**——宽度是布局的结果，不是块形态的原因。
+    ///
+    /// 与另外两条钩子同一个理由声明为**协议要求**（缺省实现见文件末尾的扩展）：经组合根持有的
+    /// `any GourdModule.Type` 取用时才会走到具体模块的实现上；只写在扩展里的话，元类型取用
+    /// 一律静默拿到缺省值（`.compact`），大块的声明会被无声忽略。
+    static var homeFormFactor: HomeFormFactor { get }
 }
 
 /// 接管三件套的**缺省语义**（docs/20-component-page.md §接口与数据形状 1 逐字）：
@@ -106,6 +121,12 @@ public extension GourdModule {
     /// 不是为了形状统一把老块改小。类型是内核侧的 `ModuleHomeBlockWidth`（Host 的
     /// `HomeBlockWidth` 由 `HomeStripView` 自己映射，内核不引用渲染层类型）。
     static var homeBlockWidth: ModuleHomeBlockWidth? { nil }
+
+    /// 首页块的形态（缺省 `.compact` = 小组件带；`docs/26` §做法 机制六 / D-09）。
+    /// **只有需要面积的大块才重写**（音乐、镜子答 `.large`）：缺省值是「一眼看得完的小组件」，
+    /// 这是新增模块的常态（进度 / 统计 / 待办 / 通知 / 前台应用都不写这一条）。
+    /// 与宽度钩子同一条理由进协议要求而不是只放扩展里：元类型取用走的是具体模块的实现。
+    static var homeFormFactor: HomeFormFactor { .compact }
 }
 
 /// 06 §3.1 的内容请求（本批去掉事件相关字段——事件总线属 P1-3）。

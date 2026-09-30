@@ -47,13 +47,26 @@
 //  - `ModuleRegistry.home` 请求形状：`surface` / `phase` / `slot` / `sizeHint` / `reason` /
 //    `isLowPower`——**宽度不由请求传递**（`sizeHint == .zero`）。
 //
-//  **首页两排的高度取舍 `HomeVerticalFit.plan`**（T2 / docs/23-home-fit.md §做法 机制二）
-//  - 三档穷举：`.both`（582 → strip 280）/ `.stripOnly`（453 → strip 拿**全部** 453，日历行让位）/
-//    `.calendarOnly`（151.9 → 两排都不画；合成入参下日历行放得下就画）；
-//  - 阈值边界（闭区间）：454 恰好两排都在、453 日历行先消失、152 恰好 strip 仍在、151.9 strip 也让位；
-//  - 顺序反转的正面判据：850 → 140 逐 pt 扫，日历行在 453 先消失、strip 撑到 151；
-//  - 日历行关掉时（行高与间距按 0 传）strip 拿全部可用高度（与改动前同一口径）；
+//  **首页各带的高度取舍 `HomeVerticalFit.plan`**（T2 / docs/23-home-fit.md §做法 机制二；
+//    T7 起扩四档 / docs/26-home-widgets-and-settings.md §做法 机制六）
+//  - 四档穷举（含紧凑块的合成入参）：`.both`（日历行 + 两带）/ `.noCalendar`（两带，日历行让位）/
+//    `.widgetsOnly`（只留小组件带，主块带让位）/ `.none`（空）；
+//  - 阈值边界（闭区间）：三样一起的最低高度恰好放得下、差 1pt 时**先没的是日历行**；两带的最低高度
+//    恰好放得下、差 1pt 时**再没的是主块带**（不是小组件带的某一行）；连一行小组件都放不下 → 空；
+//  - 顺序的正面判据：可用高度从高到低逐 pt 扫，**让位顺序恒为 日历行 → 主块带 → 小组件带**；
+//  - **空带不进取舍**（T7）：没有紧凑块时四档**退化成旧三档**（`.both` ≡ 旧 both、`.noCalendar` ≡
+//    旧 stripOnly、`.none` ≡ 旧 calendarOnly——旧 calendarOnly 那一档本就不画日历行，见
+//    `HomeCalendarRow.rowHeight`（294）> `HomeStripView.minimumUsableHeight`（152））；
+//  - 日历行关掉时（行高按 0 传）不存在取舍：剩下的几样拿全部可用高度；
 //  - 退化输入：`available == 0` 与负值都判成什么都不画（负值按 0 处理）。
+//
+//  **首页分带 `HomeBandedLayout`**（T7 / docs/26 §做法 机制六 / D-09）
+//  - 小组件带**换行不丢块**：4 个紧凑块在 760pt 可用宽下排成两行、`＋N` 为 0；同一个名单在更宽的
+//    可用宽下只排一行（行数由宽度定）；
+//  - 主块带**仍按旧规则丢块**并计入 `＋N`（窄宽度下从尾部丢，`droppedCount` 与可见块数互补）；
+//  - 行数由**高度**定：放不下 n 行时只画前几行、被丢的格计入 `＋N`；提示位（34pt）只在真有丢弃时
+//    才在**最后一行**末尾预留，预留后这行的总宽仍不越过可用宽、且被挤掉的格也计入 `＋N`；
+//  - 「放得下几行」与「n 行要多少高度」是同一个式子的两个方向（阈值上等价，有一条用例钉住）。
 //
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
@@ -688,207 +701,538 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertTrue(registry.homeEntries.isEmpty, "deactivateAll() 之后投影应为空（现算、不缓存）")
     }
 
-    // MARK: - 首页两排的高度取舍（T2 / docs/23-home-fit.md §做法 机制二）
+    // MARK: - 首页各带的高度取舍（T2 / docs/23-home-fit.md §做法 机制二；T7 四档 / docs/26 §做法 机制六）
 
-    /// 生产档的四个入参（与 `NotchHomeView.standardHomeContent` 传的逐字同源）：日历行固定档 294、
-    /// 两排间距 8、strip 最小可用高度 152。
+    /// 生产档的入参（与 `HomeBandedHomeView` 传的逐字同源）：日历行固定档 294、接缝间距 8、
+    /// 主块带最小可用高度 152、小组件带行高 96 / 行距 8。
     private static let calendarRowHeight: CGFloat = HomeCalendarRow.rowHeight
     private static let rowSpacing: CGFloat = HomeCalendarRow.rowSpacing
     private static let stripMinimumHeight: CGFloat = HomeStripView.minimumUsableHeight
+    private static let widgetRowHeight: CGFloat = HomeStripView.widgetRowHeight
+    private static let widgetRowSpacing: CGFloat = HomeStripView.widgetRowSpacing
 
-    /// 两排一起放得下的**最低高度**（= 152 + 8 + 294 = 454）——下面的边界断言都由它派生，
-    /// 免得三处各写一个数。
-    private static let bothMinimumHeight: CGFloat = stripMinimumHeight + rowSpacing + calendarRowHeight
+    /// **三样一起**（日历行 + 两带各一行）放得下的最低高度 = `294 + 8 + 152 + 8 + 96 = 558`。
+    private static let allThreeMinimumHeight: CGFloat =
+        calendarRowHeight + rowSpacing + stripMinimumHeight + rowSpacing + widgetRowHeight
 
-    /// 阈值链的锚点：四个常量任一被改动，本用例先红——边界数值要跟着一起重新审，而不是静默漂。
+    /// **两带一起**（无日历行，各一行）放得下的最低高度 = `152 + 8 + 96 = 256`。
+    private static let bothBandsMinimumHeight: CGFloat = stripMinimumHeight + rowSpacing + widgetRowHeight
+
+    /// 一行小组件的高度（单独成档的下边界 = 96）。
+    private static let oneWidgetRowHeight: CGFloat = widgetRowHeight
+
+    /// 生产档四参数：`widgetRowsNeeded` 个紧凑块行、其余照上。
+    private static func bandedPlan(
+        available: CGFloat,
+        widgetRowsNeeded: Int,
+        calendarRowHeight: CGFloat = calendarRowHeight
+    ) -> HomeVerticalFit.Plan {
+        HomeVerticalFit.plan(
+            available: available,
+            calendarRowHeight: calendarRowHeight,
+            rowSpacing: rowSpacing,
+            mainBandMinimumHeight: stripMinimumHeight,
+            widgetRowHeight: widgetRowHeight,
+            widgetRowSpacing: widgetRowSpacing,
+            widgetRowsNeeded: widgetRowsNeeded
+        )
+    }
+
+    /// **旧三档那一档**（没有紧凑块：`widgetRowHeight = 0` / `widgetRowsNeeded = 0`）——
+    /// 空带不进取舍，四档因此退化成「主块带 + 日历行」的旧题面。
+    private static func legacystylePlan(available: CGFloat, calendarRowHeight: CGFloat = calendarRowHeight) -> HomeVerticalFit.Plan {
+        HomeVerticalFit.plan(
+            available: available,
+            calendarRowHeight: calendarRowHeight,
+            rowSpacing: rowSpacing,
+            mainBandMinimumHeight: stripMinimumHeight,
+            widgetRowHeight: 0,
+            widgetRowSpacing: widgetRowSpacing,
+            widgetRowsNeeded: 0
+        )
+    }
+
+    /// 阈值链的锚点：五个常量任一被改动，本用例先红——边界数值要跟着一起重新审，而不是静默漂。
     func testVerticalFitThresholdsArePinned() {
         XCTAssertEqual(Self.calendarRowHeight, 294, "日历行固定档（HomeCalendarRow.rowHeight 的算式见那边注释）")
         XCTAssertEqual(Self.rowSpacing, 8)
         XCTAssertEqual(Self.stripMinimumHeight, 152)
-        XCTAssertEqual(Self.bothMinimumHeight, 454, "152 + 8 + 294：两排一起放得下的最低高度")
+        XCTAssertEqual(Self.widgetRowHeight, 96, "小组件带行高（T7 的高度预算见 HomeStripView 的属性注释）")
+        XCTAssertEqual(Self.widgetRowSpacing, 8)
+        XCTAssertEqual(Self.allThreeMinimumHeight, 558, "294 + 8 + 152 + 8 + 96：三样一起放得下的最低高度")
+        XCTAssertEqual(Self.bothBandsMinimumHeight, 256, "152 + 8 + 96：两带一起放得下的最低高度")
     }
 
-    /// `.both` 档（默认面板高度）：日历行在，strip 拿剩下的（= 改动前的算式，逐字未变）。
-    func testBothLayoutKeepsCalendarRowAndShrinksStrip() {
-        let plan = HomeVerticalFit.plan(
-            available: 582,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+    /// `.both` 档：三样都在——日历行在、小组件带拿它要的一行、主块带拿剩下的。
+    func testBothLayoutKeepsCalendarRowAndShrinksMainBand() {
+        let plan = Self.bandedPlan(available: 582, widgetRowsNeeded: 1)
 
         XCTAssertEqual(plan.layout, .both)
-        XCTAssertTrue(plan.showsStrip)
+        XCTAssertTrue(plan.showsMainBand)
+        XCTAssertTrue(plan.showsWidgetBand)
         XCTAssertTrue(plan.showsCalendarRow)
-        XCTAssertEqual(plan.stripHeight, 582 - 294 - 8, "strip 拿扣掉日历行与间距的剩余（280）")
+        XCTAssertEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight, "小组件带拿它要的高度（一行）")
+        XCTAssertEqual(
+            plan.mainBandHeight, 582 - 294 - 8 - 8 - Self.oneWidgetRowHeight,
+            "主块带拿扣掉日历行、小组件带与两个间距的剩余（172）"
+        )
     }
 
-    /// `.both` 的**下边界**：`available` 恰好等于 454 时两排仍都在，strip 恰好拿到它的最小可用高度
-    ///（闭区间：恰好放得下算放得下）。
+    /// `.both` 的**下边界**：`available` 恰好等于 566 时三样仍都在，主块带恰好拿到它的最小可用高度。
     func testBothLayoutBoundaryAtExactCombinedMinimum() {
-        let plan = HomeVerticalFit.plan(
-            available: Self.bothMinimumHeight,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+        let plan = Self.bandedPlan(available: Self.allThreeMinimumHeight, widgetRowsNeeded: 1)
 
         XCTAssertEqual(plan.layout, .both, "恰好等于阈值算放得下（不留一条只有 0.0001pt 宽的缝）")
-        XCTAssertEqual(plan.stripHeight, Self.stripMinimumHeight, "恰好放满：strip 拿到 152")
+        XCTAssertEqual(plan.mainBandHeight, Self.stripMinimumHeight, "恰好放满：主块带拿到 152")
+        XCTAssertEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight)
         XCTAssertTrue(plan.showsCalendarRow)
     }
 
-    /// `.both` 下一点（454 − 1 = 453）：**让位的是日历行**，strip 拿全部可用高度
-    /// ——这是本次改动的核心判据（D-02），也是改动前会画反的那一档。
+    /// `.both` 下一点（557）：**让位的是日历行**（D-02，第一条让位规则），两带都还在。
     func testCalendarRowGivesWayJustBelowCombinedMinimum() {
-        let plan = HomeVerticalFit.plan(
-            available: Self.bothMinimumHeight - 1,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+        let available = Self.allThreeMinimumHeight - 1
+        let plan = Self.bandedPlan(available: available, widgetRowsNeeded: 1)
 
-        XCTAssertEqual(plan.layout, .stripOnly)
-        XCTAssertFalse(plan.showsCalendarRow, "两排一起放不下 → 收起日历行（D-02）")
-        XCTAssertTrue(plan.showsStrip, "strip 仍在（改动前这一档整条不画）")
-        XCTAssertEqual(plan.stripHeight, 453, "stripOnly 档 strip 拿**全部**可用高度，不是扣掉日历行的剩余")
+        XCTAssertEqual(plan.layout, .noCalendar, "三样一起放不下 → 收起日历行（D-02）")
+        XCTAssertFalse(plan.showsCalendarRow)
+        XCTAssertTrue(plan.showsMainBand, "主块带仍在")
+        XCTAssertTrue(plan.showsWidgetBand, "小组件带仍在")
+        XCTAssertEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight)
+        XCTAssertEqual(
+            plan.mainBandHeight, available - Self.rowSpacing - Self.oneWidgetRowHeight,
+            "主块带拿剩下的（453）"
+        )
     }
 
-    /// `.stripOnly` 的**整个高度带**（152…453）：日历行全程不在、strip 全程都在且拿全部高度。
-    /// 逐个高度过一遍，是为了钉住「这一档里的任何一个高度都不会把 strip 也收掉」。
-    func testStripOnlyBandKeepsStripAndDropsCalendarRow() {
-        for available in [CGFloat(453), 400, 300, 200, 152] {
-            let plan = HomeVerticalFit.plan(
-                available: available,
-                calendarRowHeight: Self.calendarRowHeight,
-                rowSpacing: Self.rowSpacing,
-                stripMinimumHeight: Self.stripMinimumHeight
-            )
+    /// `.noCalendar` 的整个高度带（256…557）：日历行全程不在、两带全程都在、小组件带恒拿它要的一行。
+    func testNoCalendarBandKeepsBothBandsAndDropsCalendarRow() {
+        for available in [Self.allThreeMinimumHeight - 1, 500, 400, 300, 256] {
+            let plan = Self.bandedPlan(available: available, widgetRowsNeeded: 1)
 
-            XCTAssertEqual(plan.layout, .stripOnly, "可用高度 \(available) 应落在 stripOnly 档")
-            XCTAssertTrue(plan.showsStrip, "strip 在 \(available) 应仍在")
+            XCTAssertEqual(plan.layout, .noCalendar, "可用高度 \(available) 应落在 noCalendar 档")
+            XCTAssertTrue(plan.showsMainBand, "主块带在 \(available) 应仍在")
+            XCTAssertTrue(plan.showsWidgetBand, "小组件带在 \(available) 应仍在")
             XCTAssertFalse(plan.showsCalendarRow, "日历行在 \(available) 应已让位")
-            XCTAssertEqual(plan.stripHeight, available, "strip 在 \(available) 应拿全部可用高度")
-            XCTAssertGreaterThanOrEqual(plan.stripHeight, Self.stripMinimumHeight, "strip 的高度不低于它的最小可用高度")
+            XCTAssertEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight, "小组件带在 \(available) 恒拿一行")
+            XCTAssertEqual(plan.mainBandHeight, available - 8 - Self.oneWidgetRowHeight, "主块带拿剩下的")
+            XCTAssertGreaterThanOrEqual(plan.mainBandHeight, Self.stripMinimumHeight, "主块带不低于它的最小可用高度")
         }
     }
 
-    /// `.stripOnly` 的**下边界**：`available` 恰好等于 strip 最小可用高度（152）时 strip 仍画
-    ///（闭区间），它在这一档拿到的高度就等于阈值本身。
-    func testStripOnlyBoundaryAtExactStripMinimum() {
-        let plan = HomeVerticalFit.plan(
-            available: Self.stripMinimumHeight,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+    /// `.noCalendar` 的**下边界**（256）与下一点（255）：恰好放得下时两带都在（主块带恰好 152）；
+    /// 差 1pt 时**让位的是主块带**（不是小组件带的某一行）——D-09 的顺序。
+    func testMainBandGivesWayJustBelowBothBandsMinimum() {
+        let exact = Self.bandedPlan(available: Self.bothBandsMinimumHeight, widgetRowsNeeded: 1)
+        XCTAssertEqual(exact.layout, .noCalendar, "恰好等于两带阈值算放得下")
+        XCTAssertEqual(exact.mainBandHeight, Self.stripMinimumHeight, "恰好放满：主块带拿到 152")
 
-        XCTAssertEqual(plan.layout, .stripOnly, "恰好等于 strip 最小可用高度算放得下")
-        XCTAssertTrue(plan.showsStrip)
-        XCTAssertEqual(plan.stripHeight, Self.stripMinimumHeight)
-        XCTAssertFalse(plan.showsCalendarRow)
+        let below = Self.bandedPlan(available: Self.bothBandsMinimumHeight - 1, widgetRowsNeeded: 1)
+        XCTAssertEqual(below.layout, .widgetsOnly, "两带一起放不下 → 主块带让位（D-09）")
+        XCTAssertFalse(below.showsMainBand)
+        XCTAssertTrue(below.showsWidgetBand, "小组件带是最后让位的")
+        XCTAssertEqual(below.widgetBandHeight, Self.bothBandsMinimumHeight - 1, "它拿**全部**可用高度")
+        XCTAssertFalse(below.showsCalendarRow)
     }
 
-    /// `.calendarOnly` 档（152 以下）：strip 整条不画；生产档下日历行（294）也放不下 → 两排都不画。
-    func testCalendarOnlyBelowStripMinimumDrawsNothingAtProductionHeights() {
-        let plan = HomeVerticalFit.plan(
-            available: Self.stripMinimumHeight - 0.1,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+    /// `.widgetsOnly` 档的整个高度带（96…255）：主块带全程不在、小组件带拿全部可用高度。
+    func testWidgetsOnlyBandKeepsWidgetBandAndDropsMainBand() {
+        for available in [CGFloat(255), 200, 150, 96] {
+            let plan = Self.bandedPlan(available: available, widgetRowsNeeded: 1)
 
-        XCTAssertEqual(plan.layout, .calendarOnly)
-        XCTAssertFalse(plan.showsStrip, "strip 连最小可用高度都放不下 → 整条不画（「画不满就不画」的既有裁决）")
-        XCTAssertEqual(plan.stripHeight, 0, "不画时不占高度（不是负值、不是残高）")
-        XCTAssertFalse(plan.showsCalendarRow, "生产档日历行要 294，151.9 放不下 → 这一档什么都不画")
+            XCTAssertEqual(plan.layout, .widgetsOnly, "可用高度 \(available) 应落在 widgetsOnly 档")
+            XCTAssertFalse(plan.showsMainBand)
+            XCTAssertTrue(plan.showsWidgetBand)
+            XCTAssertEqual(plan.widgetBandHeight, available, "小组件带拿全部可用高度")
+            XCTAssertGreaterThanOrEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight)
+        }
     }
 
-    /// `.calendarOnly` 档**画日历行**的那半边判据：日历年行比 strip 阈值矮时（用合成入参——生产档
-    /// 294 > 152，这一支在真机上到不了），strip 仍不画、日历行画。
-    func testCalendarOnlyDrawsCalendarRowWhenItsHeightFits() {
-        let plan = HomeVerticalFit.plan(
-            available: 120,
-            calendarRowHeight: 100,
-            rowSpacing: 8,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+    /// `.widgetsOnly` 的**下边界**（96）与 `.none`（95.9）：连一行小组件都放不下 → 什么都不画
+    /// （日历行不单独存活——它是第一个让位的）。
+    func testNothingBelowOneWidgetRow() {
+        let exact = Self.bandedPlan(available: Self.oneWidgetRowHeight, widgetRowsNeeded: 1)
+        XCTAssertEqual(exact.layout, .widgetsOnly, "恰好等于一行的高度算放得下")
+        XCTAssertEqual(exact.widgetBandHeight, Self.oneWidgetRowHeight)
 
-        XCTAssertEqual(plan.layout, .calendarOnly)
-        XCTAssertFalse(plan.showsStrip)
-        XCTAssertTrue(plan.showsCalendarRow, "行高 100 在 120 里放得下 → 这一档画日历行")
+        let below = Self.bandedPlan(available: Self.oneWidgetRowHeight - 0.1, widgetRowsNeeded: 1)
+        XCTAssertEqual(below.layout, .none, "一行都放不下 → 空")
+        XCTAssertFalse(below.showsMainBand)
+        XCTAssertFalse(below.showsWidgetBand)
+        XCTAssertFalse(below.showsCalendarRow)
+        XCTAssertEqual(below.mainBandHeight, 0, "不画时不占高度（不是负值、不是残高）")
+        XCTAssertEqual(below.widgetBandHeight, 0)
+    }
+
+    /// **让位顺序的正面判据**（D-02 + D-09）：可用高度从 850 一路降到 60，**先消失的是日历行**
+    /// （558 下一点的 557）、**再是主块带**（256 下一点的 255）、小组件带一路撑到 96 以下才整条消失。
+    func testGiveWayOrderIsCalendarThenMainBandThenWidgets() {
+        var calendarRowDroppedAt: CGFloat?
+        var mainBandDroppedAt: CGFloat?
+        var widgetsDroppedAt: CGFloat?
+
+        for available in stride(from: CGFloat(850), through: 60, by: -1) {
+            let plan = Self.bandedPlan(available: available, widgetRowsNeeded: 1)
+            if !plan.showsCalendarRow, calendarRowDroppedAt == nil { calendarRowDroppedAt = available }
+            if !plan.showsMainBand, mainBandDroppedAt == nil { mainBandDroppedAt = available }
+            if !plan.showsWidgetBand, widgetsDroppedAt == nil { widgetsDroppedAt = available }
+        }
+
+        XCTAssertEqual(calendarRowDroppedAt, 557, "日历行应在 558 的下一点（557）先消失")
+        XCTAssertEqual(mainBandDroppedAt, 255, "主块带应在两带阈值（256）的下一点（255）消失")
+        XCTAssertEqual(widgetsDroppedAt, 95, "小组件带应一直撑到 96 之下（95）才整条消失")
+        XCTAssertGreaterThan(
+            calendarRowDroppedAt ?? -1,
+            mainBandDroppedAt ?? -1,
+            "日历行必须先于主块带消失（顺序反了就是 D-02 没落地）"
+        )
+        XCTAssertGreaterThan(
+            mainBandDroppedAt ?? -1,
+            widgetsDroppedAt ?? -1,
+            "主块带必须先于小组件带消失（顺序反了就是 D-09 没落地）"
+        )
+    }
+
+    /// **空带不进取舍**（T7）：没有紧凑块时四档退化成旧三档——`.both` ≡ 旧 both、
+    /// `.noCalendar` ≡ 旧 stripOnly、`.none` ≡ 旧 calendarOnly（旧 calendarOnly 那一档本就不画
+    /// 日历行：日历行 294 > 主块带阈值 152，判据 `available >= calendarRowHeight` 不可能成立）。
+    func testEmptyWidgetBandDegeneratesToLegacyThreeTiers() {
+        // 旧 both：454 = 152 + 8 + 294 —— 恰好放得下时主块带拿 152、日历行在
+        let both = Self.legacystylePlan(available: 454)
+        XCTAssertEqual(both.layout, .both)
+        XCTAssertEqual(both.mainBandHeight, 152)
+        XCTAssertFalse(both.showsWidgetBand, "没有紧凑块 → 小组件带不占高度")
+        XCTAssertTrue(both.showsCalendarRow)
+
+        // 旧 stripOnly：453 —— 日历行先让位，主块带拿全部可用高度
+        let noCalendar = Self.legacystylePlan(available: 453)
+        XCTAssertEqual(noCalendar.layout, .noCalendar)
+        XCTAssertEqual(noCalendar.mainBandHeight, 453, "主块带拿全部可用高度，不是扣掉日历行的剩余")
+        XCTAssertFalse(noCalendar.showsCalendarRow)
+        XCTAssertFalse(noCalendar.showsWidgetBand)
+
+        // 旧 calendarOnly：151.9 —— 生产档下两样都不画（日历行 294 放不下）
+        let nothing = Self.legacystylePlan(available: 151.9)
+        XCTAssertEqual(nothing.layout, .none)
+        XCTAssertFalse(nothing.showsMainBand, "主块带连最小可用高度都放不下 → 整条不画")
+        XCTAssertFalse(nothing.showsCalendarRow, "生产档日历行要 294，151.9 放不下 → 这一档什么都不画")
+        XCTAssertEqual(nothing.mainBandHeight, 0, "不画时不占高度（不是负值、不是残高）")
     }
 
     /// 退化输入：`available == 0` 与负值都判成「什么都不画」，且两者结果一致（负值按 0 处理，
     /// 不产生负高度）。
     func testZeroAndNegativeAvailableDrawNothing() {
-        let zero = HomeVerticalFit.plan(
-            available: 0,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
-        XCTAssertEqual(zero.layout, .calendarOnly)
-        XCTAssertFalse(zero.showsStrip)
+        let zero = Self.bandedPlan(available: 0, widgetRowsNeeded: 1)
+        XCTAssertEqual(zero.layout, .none)
+        XCTAssertFalse(zero.showsMainBand)
+        XCTAssertFalse(zero.showsWidgetBand)
         XCTAssertFalse(zero.showsCalendarRow)
 
-        let negative = HomeVerticalFit.plan(
-            available: -40,
-            calendarRowHeight: Self.calendarRowHeight,
-            rowSpacing: Self.rowSpacing,
-            stripMinimumHeight: Self.stripMinimumHeight
-        )
+        let negative = Self.bandedPlan(available: -40, widgetRowsNeeded: 1)
         XCTAssertEqual(negative, zero, "负的可用高度与 0 等价（布局退化时不出现负高度）")
+
+        // 没有紧凑块时也一样（退化路径不因为空带而多画一条）
+        XCTAssertEqual(Self.legacystylePlan(available: -1), Self.legacystylePlan(available: 0))
+        XCTAssertEqual(Self.legacystylePlan(available: 0).layout, .none)
     }
 
-    /// 日历行关掉时（接缝把行高与间距都按 0 传）不存在取舍：只要 strip 放得下，它就拿**全部**可用
-    /// 高度（与改动前 `showCalendar == false` 那一支逐字同口径）。
-    func testCalendarRowDisabledHandsAllHeightToStrip() {
-        for available in [CGFloat(152), 300, 453, 454, 850] {
-            let plan = HomeVerticalFit.plan(
-                available: available,
-                calendarRowHeight: 0,
-                rowSpacing: 0,
-                stripMinimumHeight: Self.stripMinimumHeight
-            )
+    /// 日历行关掉时（接缝把行高按 0 传）不存在取舍：剩下的几样拿**全部**可用高度
+    /// （与改动前 `showCalendar == false` 那一支同口径）。
+    func testCalendarRowDisabledHandsAllHeightToBands() {
+        for available in [CGFloat(256), 300, 454, 850] {
+            let plan = Self.bandedPlan(available: available, widgetRowsNeeded: 1, calendarRowHeight: 0)
 
-            XCTAssertTrue(plan.showsStrip, "关掉日历行后 \(available) 应仍画 strip")
-            XCTAssertEqual(plan.stripHeight, available, accuracy: 1e-9, "strip 应拿全部可用高度")
+            XCTAssertTrue(plan.showsMainBand, "关掉日历行后 \(available) 应仍画主块带")
+            XCTAssertTrue(plan.showsWidgetBand, "小组件带也应在")
+            XCTAssertFalse(plan.showsCalendarRow)
+            XCTAssertEqual(plan.widgetBandHeight, Self.oneWidgetRowHeight, "小组件带仍只要一行的高度")
+            XCTAssertEqual(
+                plan.mainBandHeight, available - 8 - Self.oneWidgetRowHeight, accuracy: 1e-9,
+                "主块带拿全部可用高度减去小组件带与那一个间距"
+            )
         }
 
-        let belowMinimum = HomeVerticalFit.plan(
-            available: Self.stripMinimumHeight - 1,
-            calendarRowHeight: 0,
-            rowSpacing: 0,
-            stripMinimumHeight: Self.stripMinimumHeight
+        // 只剩主块带那一档（没有紧凑块）时，它拿全部可用高度——旧题面逐字不变
+        for available in [CGFloat(152), 300, 454, 850] {
+            let plan = Self.legacystylePlan(available: available, calendarRowHeight: 0)
+            XCTAssertTrue(plan.showsMainBand, "关掉日历行后 \(available) 应仍画主块带")
+            XCTAssertEqual(plan.mainBandHeight, available, accuracy: 1e-9, "主块带应拿全部可用高度")
+        }
+        XCTAssertFalse(
+            Self.legacystylePlan(available: Self.stripMinimumHeight - 1, calendarRowHeight: 0).showsMainBand,
+            "低于阈值仍整条不画（阈值与日历行开不开无关）"
         )
-        XCTAssertFalse(belowMinimum.showsStrip, "低于阈值仍整条不画（阈值与日历行开不开无关）")
     }
 
-    /// **顺序反转的正面判据**（D-02）：可用高度从 850 一路降到 140，**先消失的是日历行**（454 下一点
-    /// 的 453），strip 一路撑到 152 以下才让位。改动前是反的（strip 先死、日历行到最后都画着）。
-    func testReversalOrderCalendarRowDisappearsBeforeStrip() {
-        var calendarRowDroppedAt: CGFloat?
-        var stripDroppedAt: CGFloat?
-
-        for available in stride(from: CGFloat(850), through: 140, by: -1) {
-            let plan = HomeVerticalFit.plan(
-                available: available,
-                calendarRowHeight: Self.calendarRowHeight,
-                rowSpacing: Self.rowSpacing,
-                stripMinimumHeight: Self.stripMinimumHeight
+    /// **两档判据的咬合**（防两个算式各自漂）：`HomeVerticalFit` 判「n 行要多少高度」与
+    /// `HomeBandedLayout` 判「这条高度放得下几行」必须互为反函数——在阈值上等价。
+    func testWidgetRowAffordabilityInvertsTheTierThreshold() {
+        for rows in 1...4 {
+            let need = CGFloat(rows) * Self.widgetRowHeight + CGFloat(rows - 1) * Self.widgetRowSpacing
+            XCTAssertEqual(
+                HomeBandedLayout.affordableRows(
+                    bandHeight: need,
+                    rowHeight: Self.widgetRowHeight,
+                    rowSpacing: Self.widgetRowSpacing
+                ),
+                rows,
+                "恰好等于 \(rows) 行的高度时应判「放得下 \(rows) 行」（闭区间）"
             )
-            if !plan.showsCalendarRow, calendarRowDroppedAt == nil { calendarRowDroppedAt = available }
-            if !plan.showsStrip, stripDroppedAt == nil { stripDroppedAt = available }
+            XCTAssertEqual(
+                HomeBandedLayout.affordableRows(
+                    bandHeight: need - 0.1,
+                    rowHeight: Self.widgetRowHeight,
+                    rowSpacing: Self.widgetRowSpacing
+                ),
+                rows - 1,
+                "差 0.1pt 时应判「放不下 \(rows) 行」"
+            )
         }
+    }
 
-        XCTAssertEqual(calendarRowDroppedAt, 453, "日历行应在 454 的下一点（453）先消失")
-        XCTAssertEqual(stripDroppedAt, 151, "strip 应一直撑到 strip 最小可用高度之下（151）才让位")
-        XCTAssertGreaterThan(
-            calendarRowDroppedAt ?? -1,
-            stripDroppedAt ?? -1,
-            "日历行必须先于 strip 消失（顺序反了就是 D-02 没落地）"
+    // MARK: - 首页分带（T7 / docs/26 §做法 机制六 / D-09）
+
+    /// 生产档四个紧凑块的宽度声明（**真实取值**）：进度 / 待办 / 通知走宿主统一值 180/240，
+    /// 统计是接管块那一档 220/300。
+    private static let compactFourItems: [HomeStripLayoutMath.Item] = [
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+        HomeStripLayoutMath.Item(min: 180, ideal: 240),
+        HomeStripLayoutMath.Item(min: 220, ideal: 300),
+    ]
+
+    /// 一条带（主块带 + 小组件带）的度量：生产常量，两带的尾部预留位都是 34（`＋N` 位）。
+    private static let bandMetrics = HomeBandedLayout.Metrics(
+        mainSpacing: HomeStripLayout.spacing,
+        mainTailReserve: HomeStripView.droppedHintWidth,
+        widgetColumnSpacing: HomeStripView.widgetColumnSpacing,
+        widgetRowSpacing: HomeStripView.widgetRowSpacing,
+        widgetRowHeight: HomeStripView.widgetRowHeight,
+        widgetTailReserve: HomeStripView.droppedHintWidth
+    )
+
+    /// ① **小组件带换行而不是丢块**（用户原话那条）：4 个紧凑块在 760pt 可用宽下排成**两行**、
+    /// `＋N` 为 0（`rowsNeeded == 2`）。
+    ///
+    /// 760 的算法：四块最小宽之和 + 3 个列间距 = `180×3 + 220 + 24 = 784 > 760`（装不下一行），
+    /// 而前三块 `180×3 + 16 = 556 ≤ 760`（第一行），统计一块（`220 ≤ 760`）落第二行。
+    /// **同一个名单在改动前是「一条 strip」**：规则 ③ 从尾部丢到只剩两块（＋2）。
+    func testWidgetBandWrapsInsteadOfDropping() {
+        let available: CGFloat = 760
+        let plan = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: Self.compactFourItems,
+            availableWidth: available,
+            widgetBandHeight: 2 * Self.widgetRowHeight + Self.widgetRowSpacing,
+            metrics: Self.bandMetrics
         )
+
+        XCTAssertEqual(plan.widgets.rowsNeeded, 2, "4 块在 760 可用宽下要两行（放不下才换行）")
+        XCTAssertEqual(plan.widgets.rowsDrawn, 2, "两行的高度给够了 → 两行都画")
+        XCTAssertEqual(plan.widgets.droppedCount, 0, "换行不丢块")
+        XCTAssertEqual(plan.widgets.visibleCount, 4)
+        XCTAssertFalse(plan.widgets.showsHint, "没有丢弃 → 不画 ＋N（也不预留提示位）")
+
+        // 行的构成：第一行前三块、第二行统计
+        XCTAssertEqual(plan.widgets.rows[0].indices, [0, 1, 2])
+        XCTAssertEqual(plan.widgets.rows[1].indices, [3])
+        for row in plan.widgets.rows {
+            XCTAssertEqual(row.height, Self.widgetRowHeight, "行高恒等于声明的行高")
+            XCTAssertEqual(row.droppedCount, 0)
+            XCTAssertFalse(row.showsHint)
+            let used = row.widths.reduce(CGFloat.zero, +)
+                + Self.widgetRowSpacing * CGFloat(max(0, row.widths.count - 1))
+            XCTAssertLessThanOrEqual(used, available + 1e-9, "行内总宽不得越过可用宽")
+            XCTAssertTrue(row.widths.allSatisfy { $0 >= 180 }, "每格不低于它的最小宽（规则 ②）")
+        }
+        // 第一行三块都拿 min 与 ideal 之间的压缩宽（不等、也不必等）；第二行单块走规则 ① 拿 ideal
+        XCTAssertEqual(plan.widgets.rows[1].widths, [300], "单块一行：富余不拉伸，用它的 ideal（300）")
+    }
+
+    /// 行数由**宽度**定：同一份名单，可用宽够大时只排一行（1020 = 1088pt 面板）。
+    func testWidgetRowsNeededFollowAvailableWidth() {
+        for (available, expected) in [(CGFloat(1020), 1), (784, 1), (783, 2), (556, 2), (368, 3)] {
+            let rows = HomeBandedLayout.rowsNeeded(
+                items: Self.compactFourItems,
+                availableWidth: available,
+                columnSpacing: Self.bandMetrics.widgetColumnSpacing
+            )
+            XCTAssertEqual(rows, expected, "可用宽 \(available) 下应排 \(expected) 行")
+        }
+    }
+
+    /// ② **主块带仍按旧规则丢块**并计入 `＋N`：四块（音乐档 + 三个模块档）在 702 可用宽下
+    /// 只放得下两块，尾部两块被丢——与改动前那条 strip 的答案逐字一致（T7 只把它限定在「大块」上，
+    /// 分配语义一字未动）。
+    func testMainBandStillDropsTrailingBlocks() {
+        let available = Self.panelWidth770StripWidth
+        let plan = HomeBandedLayout.plan(
+            mainItems: Self.productionFourBlockItems,
+            widgetItems: [],
+            availableWidth: available,
+            widgetBandHeight: 0,
+            metrics: Self.bandMetrics
+        )
+
+        XCTAssertEqual(plan.main.visibleCount, 2, "702 下四块只放得下两块（规则 ③）")
+        XCTAssertEqual(plan.main.droppedCount, 2, "剩下两块靠条尾 ＋2 提示")
+        XCTAssertTrue(plan.main.tailReserveUsed, "丢块时预留提示位")
+        XCTAssertEqual(plan.droppedCount, 2, "整条首页的丢块数 = 主块带的丢块数（小组件带没有块）")
+        XCTAssertTrue(plan.widgets.rows.isEmpty)
+        XCTAssertEqual(plan.widgets.droppedCount, 0)
+    }
+
+    /// ③ 行数由**高度**定：两行的高度只够一行 → 只画第一行、第二行的格计入 `＋N`
+    /// （**不是**把第一行压扁、也不是整条不画）。
+    func testWidgetRowsFollowBandHeight() {
+        let available: CGFloat = 760
+        // 恰好放得下两行
+        let both = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: Self.compactFourItems,
+            availableWidth: available,
+            widgetBandHeight: 2 * Self.widgetRowHeight + Self.widgetRowSpacing,
+            metrics: Self.bandMetrics
+        )
+        XCTAssertEqual(both.widgets.rowsDrawn, 2)
+        XCTAssertEqual(both.widgets.droppedCount, 0)
+
+        // 差 0.1pt：只放得下一行
+        let one = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: Self.compactFourItems,
+            availableWidth: available,
+            widgetBandHeight: 2 * Self.widgetRowHeight + Self.widgetRowSpacing - 0.1,
+            metrics: Self.bandMetrics
+        )
+        XCTAssertEqual(one.widgets.rowsDrawn, 1, "第二行的高度不够 → 整行不画")
+        XCTAssertEqual(one.widgets.visibleCount, 3, "第一行的三格仍在")
+        XCTAssertEqual(one.widgets.droppedCount, 1, "第二行那一格计入 ＋N")
+        XCTAssertTrue(one.widgets.showsHint, "有丢弃 → 画 ＋N")
+        XCTAssertTrue(one.widgets.rows[0].showsHint, "提示位在**最后一行**（也就是唯一画出来的那行）")
+
+        // 一行都放不下：高度按 0 给（接缝不会这么传——它在 `.widgetsOnly` 档才给高度，那一档保证
+        // 至少一行放得下；这里钉住纯函数的退化行为）
+        let none = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: Self.compactFourItems,
+            availableWidth: available,
+            widgetBandHeight: Self.widgetRowHeight - 0.1,
+            metrics: Self.bandMetrics
+        )
+        XCTAssertEqual(none.widgets.rowsDrawn, 0)
+        XCTAssertEqual(none.widgets.visibleCount, 0)
+        XCTAssertEqual(none.widgets.droppedCount, 4, "一行都放不下 → 全部计入 ＋N")
+    }
+
+    /// 提示位（34pt）：只在真有丢弃时预留；**预留后这行的总宽仍不越过可用宽**；
+    /// 预留把该行自己挤掉的格也如实计入 `＋N`（docs/21 §已知限制 6 的同一条口径）。
+    func testWidgetHintReserveOnlyWhenBlocksAreDropped() {
+        // 三块在 368 可用宽下排成两行（第一行两块 = 180 + 8 + 180 = 368 恰好用满）。
+        let items = Array(Self.compactFourItems.prefix(3))
+        let rowsNeeded = HomeBandedLayout.rowsNeeded(
+            items: items,
+            availableWidth: 368,
+            columnSpacing: Self.bandMetrics.widgetColumnSpacing
+        )
+        XCTAssertEqual(rowsNeeded, 2, "368 下三块排两行（前两块恰好用满一行）")
+
+        // 高度只够一行 → 第二行的第三块被丢；预留 34pt 提示位后又把第一行的第二块挤掉
+        let plan = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: items,
+            availableWidth: 368,
+            widgetBandHeight: Self.widgetRowHeight,
+            metrics: Self.bandMetrics
+        )
+        let row = plan.widgets.rows[0]
+        XCTAssertTrue(row.showsHint, "有丢弃 → 在最后一行末尾留提示位")
+        XCTAssertEqual(row.widths, [180], "预留 34pt 后第二块也放不下（该行只剩第一块）")
+        XCTAssertEqual(plan.widgets.visibleCount, 1)
+        XCTAssertEqual(plan.widgets.droppedCount, 2, "被挤掉的那块同样计入 ＋N（如实）")
+        let used = row.widths.reduce(CGFloat.zero, +) + HomeStripView.droppedHintWidth
+        XCTAssertLessThanOrEqual(used, 368 + 1e-9, "格 + 提示位的总宽不得越过可用宽")
+
+        // 对照：同样一份名单给够两行的高度 → 不丢块、不预留提示位（第一行两块都用满它的 368）
+        let enough = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: items,
+            availableWidth: 368,
+            widgetBandHeight: 2 * Self.widgetRowHeight + Self.widgetRowSpacing,
+            metrics: Self.bandMetrics
+        )
+        XCTAssertEqual(enough.widgets.rowsDrawn, 2)
+        XCTAssertEqual(enough.widgets.droppedCount, 0)
+        XCTAssertFalse(enough.widgets.showsHint)
+        XCTAssertEqual(enough.widgets.rows[0].widths, [180, 180], "没有丢弃 → 不预留提示位")
+    }
+
+    /// 空名单：两带都为空时什么都不摆（也不预留提示位）。
+    func testEmptyBandsProduceEmptyPlan() {
+        let plan = HomeBandedLayout.plan(
+            mainItems: [],
+            widgetItems: [],
+            availableWidth: 702,
+            widgetBandHeight: 200,
+            metrics: Self.bandMetrics
+        )
+        XCTAssertEqual(plan.droppedCount, 0)
+        XCTAssertTrue(plan.main.widths.isEmpty)
+        XCTAssertTrue(plan.widgets.rows.isEmpty)
+        XCTAssertEqual(plan.widgets.rowsNeeded, 0)
+        XCTAssertEqual(plan.widgets.visibleCount, 0)
+        XCTAssertFalse(plan.widgets.showsHint)
+    }
+
+    // MARK: - 形态钩子（T7 / D-09）
+
+    /// ④ **`homeFormFactor` 的缺省与声明**：
+    /// 缺省 `.compact`（什么都不声明的模块走协议扩展的缺省实现）、未注册的 id 也答缺省、
+    /// 生产档的两个大块（音乐 / 镜子）显式答 `.large`，其余模块不写这一条（缺省 `.compact`）。
+    func testHomeFormFactorDefaultsToCompactAndLargeBlocksDeclareIt() async {
+        registerProbes([HomeBareProbeModule.self])
+        await ModuleRegistry.shared.bootstrap()
+        let bareID = HomeBareProbeModule.manifest.id
+
+        XCTAssertEqual(
+            ModuleRegistry.shared.homeFormFactor(for: bareID), .compact,
+            "缺省形态 = 紧凑块（小组件带）——新增模块不写这一条时的答案"
+        )
+        XCTAssertEqual(
+            ModuleRegistry.shared.homeFormFactor(for: "com.cmeng.gourd.never-registered"), .compact,
+            "未注册的 id 答缺省（与 homeBlockWidth(for:) 答 nil 的形态对齐：宿主拿到的总是「这个 id 的形态」）"
+        )
+
+        // 生产档：只有音乐与镜子是大块（元类型直取，走的是它们自己的实现）
+        XCTAssertEqual(MusicModule.homeFormFactor, .large, "音乐块是大块：封面 + 控制需要面积")
+        XCTAssertEqual(MirrorModule.homeFormFactor, .large, "镜子块是大块：摄像头画面需要面积")
+        XCTAssertEqual(ProgressModule.homeFormFactor, .compact, "进度是紧凑块（默认）")
+        XCTAssertEqual(StatsModule.homeFormFactor, .compact, "统计是紧凑块（默认）")
+        XCTAssertEqual(TodosModule.homeFormFactor, .compact, "待办是紧凑块（默认）")
+        XCTAssertEqual(NotificationsModule.homeFormFactor, .compact, "通知是紧凑块（默认）")
+        XCTAssertEqual(FrontAppModule.homeFormFactor, .compact, "前台应用是紧凑块（默认）")
+    }
+
+    /// **接缝按形态切带**：`.large` 进主块带、`.compact` 进小组件带，两带各自保持同一条全局顺序
+    ///（覆盖值 + 默认序号 + id 字典序），宽度按各自的声明解析（大块继承 300/420、紧凑块走宿主统一值）。
+    func testCatalogSplitsBandsByFormFactor() async {
+        registerProbes([
+            HomeWideProbeModule.self,
+            HomeCompactAProbeModule.self,
+            HomeCompactDProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let catalog = HomeBandCatalog.resolve(registry: ModuleRegistry.shared, overrides: [:])
+
+        XCTAssertEqual(catalog.main.map(\.id), [HomeWideProbeModule.manifest.id], "只有 .large 进主块带")
+        XCTAssertEqual(
+            catalog.widgets.map(\.id),
+            [HomeCompactAProbeModule.manifest.id, HomeCompactDProbeModule.manifest.id],
+            "紧凑块进小组件带，且按 (order, id) 排序（a 的 10 在 d 的 40 之前）"
+        )
+        XCTAssertEqual(catalog.main.first?.width, HomeBlockWidth(min: 300, ideal: 420), "大块继承被接管块的宽度")
+        XCTAssertEqual(catalog.widgets.first?.width, HomeBlockWidth(min: 180, ideal: 240), "紧凑块走宿主统一值")
+        XCTAssertEqual(catalog.widgets.last?.width, HomeBlockWidth(min: 220, ideal: 300), "统计那一档的声明原样带回")
     }
 
     // MARK: - 面板宽度下的摆放（T4：被判为可见的块必须真的画出来）
@@ -970,6 +1314,44 @@ final class HomeStripLayoutTests: XCTestCase {
         }
     }
 
+    /// **小组件带真的换行、一块都不丢**（渲染真值，T7 / 用户原话那条）。
+    ///
+    /// 4 个紧凑块在 770pt 面板（可用 702）下**排成两行**：第一行三块各拿规则 ② 的压缩宽 228.5
+    /// （`702` 下 `180×3 + 2×8 = 556 ≤ 702 < 240×3 + 16 = 736`），第二行的统计单块走规则 ① 拿它的
+    /// ideal 300；四块都拿到尺寸（没有一块是零尺寸），行高恒为 96。**改动前它们是「一条 strip 装
+    /// 四块」**：规则 ③ 从尾部丢到只剩两块（`t2-default-width-all-blocks.png` 那一档的实测就是
+    /// 「6 块里第 6 块被丢」）——换行让第四块看得见，这正是本批的验收点。
+    func testWidgetBandRendersTwoRowsAtNarrowPanelWidth() async {
+        homeBlockSizeLog.reset()
+        registerProbes([
+            HomeCompactAProbeModule.self,
+            HomeCompactBProbeModule.self,
+            HomeCompactCProbeModule.self,
+            HomeCompactDProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let available = Self.panelWidth770StripWidth
+        // 两行要 2 × 96 + 8 = 200，给 400（接缝在这组入参下把 200 分给小组件带，见
+        // `HomeVerticalFit` 的 `.both` / `.noCalendar` 两档——有没有日历行都是这个数）
+        renderBandedWidgets(available: available, height: 400)
+
+        let ids = HomeCompactProbeModule.ids
+        let compressedRowWidth: CGFloat = 228.5
+        let expected: [CGFloat] = [compressedRowWidth, compressedRowWidth, compressedRowWidth, 300]
+        for (index, id) in ids.enumerated() {
+            let size = homeBlockSizeLog.size(of: id)
+            XCTAssertEqual(
+                size.width, expected[index], accuracy: 0.5,
+                "第 \(index) 块（\(id)）应拿到行内分配宽 \(expected[index])（换行后不丢块），实到 \(size.width)"
+            )
+            XCTAssertEqual(
+                size.height, HomeStripView.widgetRowHeight, accuracy: 0.5,
+                "小组件带的行高恒为 \(HomeStripView.widgetRowHeight)，实到 \(size.height)"
+            )
+        }
+    }
+
     /// 渲染真值与 plan 的逐块对照：可见块 = 分配宽 + 满高；被丢的块 = 零尺寸；空白块数 == `droppedCount`。
     private func assertRenderedSizesMatchPlan(
         _ plan: HomeStripLayoutMath.Plan,
@@ -1006,21 +1388,31 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
-    /// 把**真的 `HomeStripView`** 放进 `NSHostingView` 跑一趟布局：尺寸反馈只在真布局里发生
-    /// （纯函数测不到，探针脚本已验证），因此这里必须挂真视图而不是复刻一份结构——复刻的话，
-    /// 被测的就成了复刻件，`HomeStripView` 里那句修复反而是「测外之物」。
+    /// 把**真的接缝**（`HomeBandedHomeView`）放进 `NSHostingView` 跑一趟布局：尺寸反馈只在真布局里
+    /// 发生（纯函数测不到，探针脚本已验证），因此这里必须挂真视图而不是复刻一份结构——复刻的话，
+    /// 被测的就成了复刻件，接缝里那句「提案宽钉在可用宽上」反而是「测外之物」。
+    ///
+    /// **T7 起挂的是接缝而不是单条带**：块名单、切带、高度取舍都在接缝里，只挂 `HomeStripView`
+    /// 就测不到「紧凑块到底进了哪条带」（那正是本批的验收点）。夹具全部声明 `.large`（见
+    /// `HomeSizedProbeModule`），因此这一条路径等价于改动前的「一条 strip」；小组件带走
+    /// `renderBandedWidgets`（夹具是 `.compact`）。
     private func renderRealHomeStrip(available: CGFloat, height: CGFloat) {
-        let host = NSHostingView(rootView: HomeStripHost().frame(width: available, height: height))
+        let host = NSHostingView(rootView: HomeBandedHost().frame(width: available, height: height))
         host.frame = CGRect(x: 0, y: 0, width: available, height: height)
         host.layoutSubtreeIfNeeded()
     }
 
-    /// 挂载壳：`HomeStripView` 要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的）。
-    private struct HomeStripHost: View {
+    /// 把**真的接缝**放进 `NSHostingView`，夹具是**紧凑块**（走小组件带）——换行那条渲染真值用它。
+    private func renderBandedWidgets(available: CGFloat, height: CGFloat) {
+        renderRealHomeStrip(available: available, height: height)
+    }
+
+    /// 挂载壳：接缝要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的）。
+    private struct HomeBandedHost: View {
         @Namespace private var albumArtNamespace
 
         var body: some View {
-            HomeStripView(albumArtNamespace: albumArtNamespace)
+            HomeBandedHomeView(albumArtNamespace: albumArtNamespace)
         }
     }
 
@@ -1185,8 +1577,13 @@ private final class HomeBlockSizeLog {
 /// 假首页块：只声明 `.home`，块宽按参数声明（对齐生产档：接管块 300/420、新增模块 180/240）。
 ///
 /// **根 conformer**（与 `TakeoverEnablementTests` 的 `TakeoverProbeBase` 同形）：`homeBlockWidth`
-/// 写在**类体**里而不是留给协议扩展的默认实现——只有类体里的成员才会进 vtable，注册表的元类型
-/// 查询（`registry.homeBlockWidth(for:)`）才会走到子类的 `override`。
+/// 与 `homeFormFactor` 写在**类体**里而不是留给协议扩展的默认实现——只有类体里的成员才会进
+/// vtable，注册表的元类型查询（`registry.homeBlockWidth(for:)` / `homeFormFactor(for:)`）才会走到
+/// 子类的 `override`。
+///
+/// **形态答 `.large`**（T7 起）：这一族夹具要测的是**主块带**的摆放语义（旧 strip 的丢块规则与
+/// 「被判可见就必须真画出来」），因此四块都声明成大块——真实产品里音乐才是 `.large`，这里保住
+/// 的是「一条带在同一组宽度声明下的行为」这条被测性质。
 private class HomeSizedProbeModule: GourdModule {
     class var manifest: ModuleManifest {
         HomeStripFixture.manifest(shortID: "probe-sized", surfaces: [.home])
@@ -1195,7 +1592,10 @@ private class HomeSizedProbeModule: GourdModule {
     /// 本模块声明的块宽（nil = 走宿主统一值 180/240，与新增模块同口径）。
     class var homeBlockWidth: ModuleHomeBlockWidth? { nil }
 
-    /// 夹具四块的 id（**按 `order` 升序**，与 `HomeStripView.resolvedHomeBlocks()` 的排序同序）。
+    /// 本模块声明的**形态**（`.large` = 主块带；小组件带的夹具见 `HomeCompactProbeModule`）。
+    class var homeFormFactor: HomeFormFactor { .large }
+
+    /// 夹具四块的 id（**按 `order` 升序**，与 `HomeBandCatalog.resolve` 的排序同序）。
     static let ids = [
         "com.cmeng.gourd.probe-wide",
         "com.cmeng.gourd.probe-narrow-a",
@@ -1248,5 +1648,105 @@ private final class HomeNarrowBProbeModule: HomeSizedProbeModule {
 private final class HomeNarrowCProbeModule: HomeSizedProbeModule {
     override class var manifest: ModuleManifest {
         HomeStripFixture.manifest(shortID: "probe-narrow-c", surfaces: [.home], order: 40)
+    }
+}
+
+// MARK: - 假模块 / 小组件带（T7 分带）
+
+/// 紧凑块的尺寸探针根 conformer（T7 / docs/26 §做法 机制六）：四块都声明 `.compact`，
+/// 因此走**小组件带**（网格换行）。宽度对齐生产档：前三块走宿主统一值 180/240
+///（进度 / 待办 / 通知），第四块 220/300（统计那一档）。
+///
+/// 与 `HomeSizedProbeModule` 同形（形态同样写在**类体**里，见那边的注释）。
+private class HomeCompactProbeModule: GourdModule {
+    class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-compact", surfaces: [.home])
+    }
+
+    /// nil = 走宿主统一值 180/240。
+    class var homeBlockWidth: ModuleHomeBlockWidth? { nil }
+
+    /// **`.compact`**（小组件带）。
+    class var homeFormFactor: HomeFormFactor { .compact }
+
+    /// 夹具四块的 id（**按 `order` 升序**，与 `HomeBandCatalog.resolve` 的排序同序）。
+    static let ids = [
+        "com.cmeng.gourd.probe-compact-a",
+        "com.cmeng.gourd.probe-compact-b",
+        "com.cmeng.gourd.probe-compact-c",
+        "com.cmeng.gourd.probe-compact-d",
+    ]
+
+    let context: ModuleContext
+
+    required init(context: ModuleContext) {
+        self.context = context
+    }
+
+    func activate() async throws {}
+
+    func deactivate() async {}
+
+    func content(for request: ContentRequest) -> ModuleContent {
+        guard request.surface == .home else { return .none }
+        return .view(AnyView(HomeBlockSizeProbe(id: Self.manifest.id)))
+    }
+}
+
+/// 紧凑块一（order 10，宿主统一档 180/240）。
+private final class HomeCompactAProbeModule: HomeCompactProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-compact-a", surfaces: [.home], order: 10)
+    }
+}
+
+/// 紧凑块二（order 20，宿主统一档 180/240）。
+private final class HomeCompactBProbeModule: HomeCompactProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-compact-b", surfaces: [.home], order: 20)
+    }
+}
+
+/// 紧凑块三（order 30，宿主统一档 180/240）。
+private final class HomeCompactCProbeModule: HomeCompactProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-compact-c", surfaces: [.home], order: 30)
+    }
+}
+
+/// 紧凑块四（order 40，**接管块那一档 220/300**——统计）：702 可用宽下它落第二行。
+private final class HomeCompactDProbeModule: HomeCompactProbeModule {
+    override class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-compact-d", surfaces: [.home], order: 40)
+    }
+
+    override class var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(min: 220, ideal: 300)
+    }
+}
+
+/// **形态什么都不声明**的探针：`homeFormFactor` 由协议扩展的缺省实现回答（`.compact`）——
+/// 钉住「缺省 = 紧凑块」这条，避免将来把缺省改成 `.large` 时没人发现（那会让所有新增模块
+/// 都挤进主块带）。宽度声明照旧（只测形态那一维）。
+private final class HomeBareProbeModule: GourdModule {
+    class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-bare", surfaces: [.home], order: 10)
+    }
+
+    class var homeBlockWidth: ModuleHomeBlockWidth? { nil }
+
+    let context: ModuleContext
+
+    required init(context: ModuleContext) {
+        self.context = context
+    }
+
+    func activate() async throws {}
+
+    func deactivate() async {}
+
+    func content(for request: ContentRequest) -> ModuleContent {
+        guard request.surface == .home else { return .none }
+        return .view(AnyView(HomeBlockSizeProbe(id: Self.manifest.id)))
     }
 }

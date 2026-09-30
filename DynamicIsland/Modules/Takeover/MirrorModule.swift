@@ -135,6 +135,11 @@ final class MirrorModule: GourdModule {
     /// 不是顺手把镜子块从 140/160 改成宿主统一值 180/240。
     static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 140, ideal: 160) }
 
+    /// 首页分带批次（T7）的第四条钩子：镜子块是**大块**——摄像头画面需要面积（140/160 是宽度
+    /// 声明，不是高度），因此显式答 `.large`；在小组件网格里它会被压成一条 96pt 高的窄条。
+    /// 形态只声明「它是什么」，摆法仍是宿主的事（docs/26-home-widgets-and-settings.md §做法 机制六 / D-09）。
+    static var homeFormFactor: HomeFormFactor { .large }
+
     /// 镜子块的**存在性判据**（纯函数，便于单测：口径 3）。
     ///
     /// 两段是「且」：功能开关（上游键）与**运行期条件**（有没有可用摄像头——摄像头拔掉时

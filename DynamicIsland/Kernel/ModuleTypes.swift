@@ -22,11 +22,30 @@
 //  取值词汇表逐字沿用 docs/06-module-protocol.md（§3.1 / §6.1 / §6.2），
 //  唯一增量是 P2 批次加的 `Surface.home`（docs/17-nookx-adoption.md §接口与数据形状 1）；
 //  P2 接管批次 / T1 再加 `ModuleHomeBlockWidth`（docs/20-component-page.md §接口与数据形状 1）；
+//  P3 组件批次 / T7 再加 `HomeFormFactor`（docs/26-home-widgets-and-settings.md §做法 机制六）；
 //  本文件不含任何行为，只有共享的枚举与值类型。
 //
 
 import CoreGraphics
 import Foundation
+
+/// 一个首页块的**形态**：它属于哪条带（docs/26 §做法 机制六 / D-09）。
+///
+/// 首页自 T7 起分**两条带**：上面是主块带（沿用旧的 strip 语义——宽度不足时按序丢尾巴），
+/// 下面是小组件带（网格换行、**放不下换行而不是丢块**）。归属哪条带由本取值**声明**，
+/// **不由宽度反推**：宽度是布局的结果，不是块形态的原因。
+///
+/// - `.large`：需要面积的内容（音乐的封面 + 控制、镜子的摄像头画面）——主块带；
+/// - `.compact`：一眼看得完的小组件（进度、统计、待办、通知、前台应用）——小组件带；**缺省值**。
+///
+/// 谁用：`GourdModule.homeFormFactor` 钩子（缺省 `.compact`）声明它；`ModuleRegistry.homeFormFactor(for:)`
+/// 原样取给宿主，宿主按它把块名单切成两带（映射点只有 `HomeBandCatalog.resolve` 一处）。
+public enum HomeFormFactor: String, Sendable, CaseIterable {
+    /// 大块：主块带（上）。理想宽不拉伸、不足按最小宽压缩、仍不足按序丢块（旧 strip 语义）。
+    case large
+    /// 紧凑块：小组件带（下）。网格换行，**只有连一行都放不下时才丢块**。
+    case compact
+}
 
 /// 首页块宽度的**内核侧**取值形态（`min` = 低于它不如不显示，`ideal` = 富余时用它）。
 ///

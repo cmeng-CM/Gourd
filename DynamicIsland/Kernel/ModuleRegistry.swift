@@ -30,6 +30,9 @@
 //  两个**接管查询**（`takeoverEnableKey(for:)` / `homeBlockWidth(for:)`，都读 `moduleTypes`）
 //  与 `tabEntries` 过滤条件里的 `isTabVisible()`。三者一律**每次读现问一次、不缓存**。
 //
+//  P3 组件批次 / T7 增量：第三条同形查询 `homeFormFactor(for:)`（docs/26 §做法 机制六 / D-09）
+//  ——首页块属于主块带还是小组件带，宿主按它切两条带。同样不缓存。
+//
 
 import Combine
 import Defaults
@@ -352,6 +355,14 @@ public final class ModuleRegistry: ObservableObject {
     /// 180/240（`HomeStripLayoutMath` 的 `moduleBlockWidth`）。同样是每次读现问一次。
     public func homeBlockWidth(for id: String) -> ModuleHomeBlockWidth? {
         moduleTypes[id]?.homeBlockWidth
+    }
+
+    /// 该模块声明的**首页块形态**（docs/26 §做法 机制六 / D-09）：`.large` = 主块带、
+    /// `.compact` = 小组件带。**未注册的 id 一律答缺省 `.compact`**（钩子的缺省值，与
+    /// `homeBlockWidth(for:)` 答 nil 的形态对齐：宿主拿到的都是「这个 id 的形态」这一个答案）。
+    /// 同样是每次读现问一次（不缓存，与三条投影同一口径）。
+    public func homeFormFactor(for id: String) -> HomeFormFactor {
+        moduleTypes[id]?.homeFormFactor ?? .compact
     }
 
     // MARK: - UI 投影
