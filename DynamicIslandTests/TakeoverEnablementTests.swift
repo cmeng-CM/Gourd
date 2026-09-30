@@ -90,7 +90,8 @@
 //    截图 `.workflow/p2-home-fit/evidence/t5-ui-*.png`）。
 //
 //  P2 接管批次 / T6 追加（组件页的文案解析——功能卡段 + 接管卡的效果行）：
-//  - **七张功能卡的键解析**：数据源是生产表本身（`ModuleSettingsSection.featureCards`，为了这条
+//  - **功能卡的键解析**（P2 时七张；T6 收尾摘掉 `enableNotes` 那张后是**六张**）：数据源是生产表
+//    本身（`ModuleSettingsSection.featureCards`，为了这条
 //    用例它没写成 `private`）——`id` / `effectKey` / `nameKey` 写错或文案没进 catalog 都会红；
 //  - **三个接管模块的名称 / 效果行 key 解析**：名称 key 取自真模块的 manifest（与 `label(for:)`
 //    同源）；
@@ -1652,14 +1653,17 @@ final class TakeoverEnablementTests: XCTestCase {
 
     // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
 
-    /// 七张功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
-    /// 七条效果行 key + 七条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
+    /// **六张**功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
+    /// 六条效果行 key + 六条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
+    /// （原七张里的 `enableNotes` 一张在 T6 收尾时摘掉——笔记页与 Notes tab 分支都已摘除、
+    /// 键惰性，卡片留着就是「拨了没反应」的那类；键与文案保留未删，判据见 `docs/09` §5.9 的
+    /// 判定表与 `docs/26` §已知限制 5。）
     ///
     /// **数据源是生产表本身**（`ModuleSettingsSection.featureCards`——为了这条用例它没有写成
     /// `private`）：表里把 `id` / `effectKey` / `nameKey` 写错、或文案没写进 catalog，这条都会红。
     /// 测试另抄一份键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
     ///
-    /// **语言无关**（T6 修复）：七条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
+    /// **语言无关**（T6 修复）：六条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
     /// ——`XCTAssertResolves` 因此查的是宿主 bundle 的 **zh-Hans 那一份**，本机语言环境不再参与
     /// （原先的 `Bundle.main.localizedString(...) != key` 在英语环境下会红）。
     func testFeatureCardKeysResolve() {
@@ -1669,9 +1673,9 @@ final class TakeoverEnablementTests: XCTestCase {
             cards.map(\.id),
             [
                 "enableClipboardManager", "showCalendar", "enableLockScreenWeatherWidget",
-                "enableStatsFeature", "dynamicShelf", "enableTerminalFeature", "enableNotes",
+                "enableStatsFeature", "dynamicShelf", "enableTerminalFeature",
             ],
-            "七行 = docs/20 §接口与数据形状 7 的七个上游键名，顺序与取值都不改"
+            "六行 = docs/20 §接口与数据形状 7 的七个上游键名去掉 `enableNotes` 后的六个，顺序与取值都不改"
         )
 
         for card in cards {

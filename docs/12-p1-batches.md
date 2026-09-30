@@ -240,6 +240,32 @@ T4 的两条宿主级用例；`TakeoverEnablementTests` 27 → **30**；`Shortcu
 `docs/guide` 的图与手册靠纪律保持一致（[24](24-release-freeze.md) §已知限制 4）；日历 tab 下方留白见 §已知限制 7；
 配置控件的 `list` / `enum` 型仍只能改配置文件（§已知限制 1·2）。
 
+### 已交付 · `p3-widgets`（2026-09-30）
+
+把「只展示、没有控件」的功能搬上首页并重构设置：**进度（纯展示）与统计（无控件）改成首页小组件**（统计带开关、形态是**三环**）、**组件设置分「首页组件 / 面板组件」两节且各自可排序**（面板顺序新键 `panelOrder`）、**首页日历与日历面板都去掉两条遮罩并接上系统数据**（公历 + 农历 + 节假日）、**设置侧栏按使用频率重排并去掉笔记设置页**；同日按用户两条追加指示把首页从「一条 strip」改成**两条带**（主块带 + 小组件带，紧凑块换行不丢块）并给两带加了**带级容器 + 块级 hover** 的分界。设计 [26](26-home-widgets-and-settings.md)（D-01…D-25，含 14 条执行期判断）。
+
+提交范围 `982b80cc..997d3b35`（**9 个提交**：T1+T2 `9aefb92e` · T7 `4ec823d0` · 设计文档先行 `6bb9e2ae` · T4 `892b9ae5` · T9 `6ed06309` · T3 `7434bd02` · T5 `e8ea83a3` · 收尾修复 `ad1c55b1` · T8 `997d3b35`；本批的文档回写提交在其后）。
+
+| # | 任务 | 一句话结果 |
+|---|---|---|
+| T1+T2 | 进度与统计改首页小组件 | 进度 `surfaces [.home]` + 紧凑清单（180/240、放置后宽 ≥ 220 画两行；展开清单视图保留不挂 surface）；新建 `StatsModule`（接管键仍是 `enableStatsFeature`、块宽 220/300、`order 50`；内容先是三行迷你条、后由 T9 改环状）；`TabSelectionView` 的 Stats 分支与 `enabledStandardTabCount()` 的 `+1` 同批删除 |
+| T7 | 首页分带 | 主块带（大块：音乐 / 镜子，沿用旧 strip 的三条规则与尾部丢块）+ 小组件带（紧凑块：进度 / 统计 / 待办 / 通知 / 前台应用，**贪心换行、只有连一行都放不下才丢块**，行高常量 96）；形态由 manifest 新钩子 `homeFormFactor`（`.large` / `.compact`，缺省 `.compact`）声明；`HomeVerticalFit` 三档扩四档（`both` → `noCalendar` → `widgetsOnly` → `none`，先收日历行 → 再主块带 → 最后小组件带） |
+| T4 | 日历去遮罩 + 接系统数据 | 面板那份 `MonthGridView` 也传 `showsScrollFades: false`（两处都无渐变）；新增纯函数 `LunarDayLabel` / `HolidayLookup` / `MonthCellSubtitle` + 月历日格第二行（节假日名优先、否则农历日名，9pt、放不下整行不画、日格仍 30pt） |
+| T9 | 统计块改环状 | `StatsRingMetrics`（直径 46 / 宽 < 200 退 40、间距 10、主环 5 + 亮描边 2、环心 11pt 等宽百分比、环下 9pt 标签）+ 按指标分色（CPU 青 / 内存 紫 / GPU 琥珀）；删横条视图；实测块内容 74.5 → 59pt |
+| T3 | 组件设置两节 + 面板排序 | 组件页分「首页组件 / 面板组件」两节（每行 = 图标 + 名称 + 开关 + ↑↓）；`tabEntries` 排序键改走纯函数 `panelRank`（`panelOrder[id] ?? defaultPlacement?.order ?? Int.max`）；两节的「关」用面级摘除名单 `hiddenHomeModules` / `hiddenPanelModules`（单面模块写既有启用真源，不新增第二份状态） |
+| T5 | 设置重排与逐页意义判定 | 侧栏 8 组 → **6 组**（通用 / 外观 → 媒体与显示 → 效率 → 系统 → 集成 → 关于；**不设「上游功能」组**）；逐页判定表（有读点 + 有可观察效果 + 有入口 三条齐才保留）落 [09](09-features-and-mechanisms.md) §5.9；删页留码：笔记设置页、统计页 LLM 用量段 + 5 条搜索项、日历页与锁屏页重复的 12 个控件 |
+| 收尾修复 | 笔记 tab 分支摘除 | T5 摘页后 `enableNotes = 1` 的机器上面板仍有一个 Notes tab 且再无关闭入口 → `TabSelectionView` 的合并分支改成只看剪贴板（`clipboardDisplayMode == .separateTab` 仍保留 Clipboard tab）、`enabledStandardTabCount()` 同步；笔记代码与键一个字没删，该键从此惰性 |
+| T8 | 分界视觉 | 带级容器（`HomeBandChrome`：0.05 / 圆角 12 / **横向**内边距 8）+ 块级 hover 收敛成一条规则（前台应用格 / 通知条目 / 待办条目；通知首页块的行是本次新加）；不做每块永久卡片 |
+| T6 | 文档回写 | [26](26-home-widgets-and-settings.md) 终稿（状态 / 接口与数据形状按落地签名校正 / 已知限制 6–14 / 实际交付 9 个提交与 15 条偏离 / D-12…D-25）+ [09](09-features-and-mechanisms.md) §2B/§2C/§5.2/§5.3/§5.8/§5.9/§8.1 + [14](14-module-manifests.md) 两行与计数口径 + 本段 + [21](21-strip-honesty.md) 已知限制 15 + [25](25-release-smoke.md) 冒烟项 + `docs/guide/README.md`；**收尾另按事实收敛两处产品文案**（[26](26-home-widgets-and-settings.md) §实际交付 偏离 15）：摘掉组件页「功能」段的 `Enable Notes` 卡（笔记三处入口全无、键惰性），统计 / 日历两条效果行按实现改写（便签那条保留为不可达文案） |
+
+**本批边界（零新增权限、零新增 capability、零新出站）**：农历用 Foundation、节假日读用户已订阅的系统日历，都不新增 TCC；没有新 capability、没有新的出站请求、没有新子进程、不引第三方库。**摘入口不删上游代码**：笔记设置页与 Notes tab 分支、统计 tab、进度的展开清单视图、统计页 LLM 段都是「摘入口、留代码」（可逆，恢复路径逐条写在 [26](26-home-widgets-and-settings.md) §已知限制 5/8）。
+
+**本批没做**（[26](26-home-widgets-and-settings.md) §明确不做）：两组排序的拖拽、自算中国节假日、农历的完整形态（生肖 / 节气表 / 折叠槽位）、统计独立展开 tab、上游「图表可见性」子项的语义、给每块加永久卡片；**也没做**：统计 40pt 环档与窄面板下「月历只剩公历数字」的上屏取证、镜子那一档（主块带两块）的实拍。
+
+**测试**：`DynamicIslandTests` 367 → **415 条 0 失败**（本批新增 `LunarTests` **16 条**；`HomeStripLayoutTests` **34 → 45**（T7 的 +11）；`TakeoverEnablementTests` **52 条**、`ModuleToggleTests` **+2**（T3 的两节与排序）；`ModuleKernelTests` 同步内置清单 10 → 11）。改动文件新增编译告警 0；逐条上屏证据与变异日志见 [26](26-home-widgets-and-settings.md) §实际交付。
+
+**遗留**（人工验收或后续批次）：统计的采样驱动改在模块侧（依赖块真的走 `onDisappear`）；两行小组件带 + 日历行不能共存（面板高 < ≈626 时日历行先让位）；容器填充浓度与侧栏/组件页改动没有回归用例（靠截图 + 冒烟）；`module.stats.summary` 的「mini bars / 迷你条」文案与环状形态不符（本批的效果行只动了统计 / 日历 / 便签三条，这条摘要行未改）；[20](20-component-page.md) 与 [16](16-nookx-reference.md) 里「功能七张卡（含便签行）」的旧计数未同步（不在本批文件清单里）。逐条见 [26](26-home-widgets-and-settings.md) §实际交付 遗留项 1–10。
+
 ### 下一批 · 登记（2026-09-29）
 
 > **2026-09-29 增补**：下一批的完整优先级清单（含本批暴露的缺口）已收在 [16](16-nookx-reference.md) **§4.4**，按 P0 / P1 / P2 分档并给了成本、依赖与判据。**P0 四项**：~~① 通知组件在首页有块~~、~~② 组件卡片说清"开了会看到什么、在哪看"~~、~~③ 待办块窄宽度下也显示清单~~（**三项已在 `p2-p0-visible` 批次落地，2026-09-29**）；**④ 月历入口回归仍待做**（需要先定形态：点日期头进月历 vs 加一个 calendar tab——这是产品选择，等用户拍板）。下面四项属 **P1**。

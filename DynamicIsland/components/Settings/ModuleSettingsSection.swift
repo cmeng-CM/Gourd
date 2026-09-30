@@ -49,9 +49,13 @@
 //    读改写字典）；activate 失败的回弹值由 `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)`
 //    给出：返回 `nil`（接管模块）**什么都不写**——它的偏好就是上游总开关，回弹等于「因为模块
 //    激活失败，把用户的功能关了」；返回 `false`（非接管）才把用户的开关拨回去（D-13）。
-//  - **新增「功能」段**：七个**尚未模块化**的上游功能各一行（图标 + 名称 + 一行效果 + 开关），
+//  - **新增「功能」段**：**尚未模块化**的上游功能各一行（图标 + 名称 + 一行效果 + 开关），
 //    开关直接读写那一个 `Defaults` 键——纯登记，不改渲染归属；详细设置仍在上游那一页，
 //    卡面文案（段脚注）写明这一点（docs/20 §做法 机制三 / D-07）。
+//    **T6 收尾**：原七行里的**笔记**那一张（`Enable Notes`）**摘掉**——笔记页与
+//    `TabSelectionView` 的 Notes tab 分支都已摘除、键惰性，卡片留着就是「拨了没反应」的那类
+//    （键名与判定见 docs/09 §5.9 的判定表）；段内今天是**六行**，键与文案（名称 / 效果行）
+//    都保留未删，恢复笔记入口时把那一行加回本表即复活。
 //  - **顺序节收敛**：接管后首页块只认模块 id，内置块里只剩首页日历行且它**不在 strip 里**
 //    （全宽日历行，不进顺序表），因此不再生成 `builtin.music` / `builtin.mirror` 两行。
 //
@@ -157,7 +161,9 @@ struct ModuleSettingsSection: View {
 
     // MARK: 功能（上游总开关的登记表）
 
-    /// 七张功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
+    /// **六张**功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
+    /// （T6 收尾摘掉了**笔记**那一张（`Enable Notes`）——它是原七行里唯一「拨了看不到任何变化」
+    /// 的一行，判据见 docs/09 §5.9 的判定表与 docs/26 §已知限制 5；键与文案保留未删。）
     ///
     /// `nameKey` **逐字沿用上游设置页那一项的名称字面量**（在 `SettingsView.swift` 里那一项
     /// 旁边取证）——用户在别处认识的词与这里看到的必须是同一个 key，不另起说法
@@ -208,13 +214,6 @@ struct ModuleSettingsSection: View {
             symbolName: "apple.terminal",
             key: .enableTerminalFeature,
             effectKey: "settings.features.effect.enableTerminalFeature"
-        ),
-        FeatureCard(
-            id: "enableNotes",
-            nameKey: "Enable Notes",
-            symbolName: "note.text",
-            key: .enableNotes,
-            effectKey: "settings.features.effect.enableNotes"
         ),
     ]
 
@@ -651,7 +650,7 @@ struct FeatureCard: Identifiable {
     /// 上游设置页里的同一个名称（`String(localized:)` 同源）；**本段不另起说法**。
     let nameKey: String
     /// SF Symbol 名（与上游那一项所在设置页的图标同一套：剪贴板 / 日历 / 天气 / 统计 / 架子 /
-    /// 终端 / 便签）。
+    /// 终端）。
     let symbolName: String
     /// 这个功能的总开关——裸 `Binding` 直读写它（动态键无法用 `@Default`，§已知限制 8）。
     let key: Defaults.Key<Bool>
@@ -844,7 +843,7 @@ private struct ModuleConfigControlRow: View {
         }
         .toggleStyle(.switch)
         .controlSize(.small)
-        // 开关自己带得出名字（辅助功能口径与卡片主开关 / 功能卡那七行一致：AX 里那个 checkbox
+        // 开关自己带得出名字（辅助功能口径与卡片主开关 / 功能卡那几行一致：AX 里那个 checkbox
         // 的 description 就是这一行的文案，而不是一个没有名字的开关）。
         .accessibilityLabel(Text(LocalizedStringKey(control.titleKey)))
     }
@@ -1001,7 +1000,7 @@ private struct FeatureCardRow: View {
             Spacer(minLength: 12)
 
             // **裸 `Binding`，不是 `@Default`**：`Defaults.Key` 是运行期取值，`@Default` 装不上；
-            // 为七行各挂一个订阅不值当。代价见 docs/20 §已知限制 8：本页开着时从上游设置页改同键，
+            // 为六行各挂一个订阅不值当。代价见 docs/20 §已知限制 8：本页开着时从上游设置页改同键，
             // 这张卡不即时刷新（关掉重开本页即可）。
             Toggle(isOn: Binding(
                 get: { Defaults[card.key] },

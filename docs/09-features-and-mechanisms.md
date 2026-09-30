@@ -29,8 +29,8 @@
 
 | 面 | 用户看到什么 | 交互 |
 |---|---|---|
-| **折叠态** `compact` | 刘海两侧图标槽（网速/电量/CPU/农历/进度…）+ 中央主区域（正在播放/歌词/计时器/通知浮层） | 悬停预览、点击展开、上下滑动手势 |
-| **展开面板** `expanded` | 一排 tab：主页 / Shelf / 计时器 / 状态 / 日历 / 笔记 / 剪贴板 / 启动台 / 终端 / 通知 … | 点击 tab 切换，点外部或再点收起 |
+| **折叠态** `compact` | 刘海两侧图标槽（网速/电量/CPU/农历…）+ 中央主区域（正在播放/歌词/计时器/通知浮层） | 悬停预览、点击展开、上下滑动手势 |
+| **展开面板** `expanded` | 一排 tab：主页 / Shelf / 终端 / 剪贴板（按显示方式）… + **模块自己的 tab**（待办 / 通知 / 日历 / 启动台 / 计时器…） | 点击 tab 切换，点外部或再点收起 |
 | **锁屏** `lockscreen` | 锁屏 widget：音乐面板、天气、日历、提醒、计时器、第三方扩展 widget | 锁屏时自动出现 |
 | **瞬时浮层** HUD | 音量/亮度条、Caps Lock、电量、下载完成、媒体键反馈、**新通知到达** | 短暂显示后自动消失 |
 
@@ -54,6 +54,8 @@
 
 ### B. 系统状态与时间进度
 
+> **2026-09-30 增补（P3 批次 `p3-widgets`）**：**统计的表在展开面板没有了**——统计改成**首页小组件**（三环，见 §5.8 末段的改判），采样驱动随之从「展开面板停在统计 tab」改成「**块可见期间**」（`StatsModule` 的块 `.task` 1s 看门狗 + `onDisappear` 停，与上游同一个功率档）；`enableStatsFeature` 仍是同一个真源键（它今天管的是首页块的上/下，不再管 tab）。**进度**也从展开 tab 改成**首页小组件**（§5.3）。
+
 | 功能 | 动作 | 机制 |
 |---|---|---|
 | CPU（总量/每核/负载均值） | ✅ | `host_statistics` / `host_processor_info` / `getloadavg` |
@@ -66,10 +68,10 @@
 | 电量/充电/健康 | ✅ | IOKit `IOPSCopyPowerSourcesInfo` + `IOPSNotificationCreateRunLoopSource` |
 | 蓝牙设备电量 | ⬜️ | `system_profiler` + `pmset` + `ioreg` 三子进程（属蓝牙管理功能，不投入） |
 | 进程列表 | ✅ | `proc_pidinfo` |
-| **日/周/月/季/年进度** | 🆕 **默认关** | **零私有 API、零依赖**：`Calendar.current.dateInterval(of:for:)` 取区间算 elapsed/total。细节见 §5.3。**2026-09-28 用户判定「时间进度」无行动价值 → `defaultEnabled` 改 `false`**（代码保留、可手动开回；中央槽位的默认内容改由待办 `todos` 承担，见 §5.7） |
+| **日/周/月/季/年进度** | 🆕 **默认关** | **零私有 API、零依赖**：`Calendar.current.dateInterval(of:for:)` 取区间算 elapsed/total。细节见 §5.3。**2026-09-28 用户判定「时间进度」无行动价值 → `defaultEnabled` 改 `false`**（代码保留、可手动开回；中央槽位的默认内容改由待办 `todos` 承担，见 §5.7）。**2026-09-30 改判（`p3-widgets`）**：它今天是**首页小组件**（紧凑清单：图标 + 标签 + 细条 + 百分比；块宽 180/240、≥ 220 画两行），展开 tab 已摘——见 §5.3 的回写 |
 | **待办（今日/本周/所有）** | 🆕 | **零私有 API**：EventKit 取提醒（未完成 + 最近 7 天已完成）+ 写回 `EKReminder.isCompleted`，**并可新增 / 删除（写的是系统提醒）**；环心是 `已办/总量`。细节见 §5.7 |
 
-**采样策略（上游已符合性能基线，沿用）**：默认 1s，clamp [1,60]；只在刘海展开且停在 stats tab 时采样，关闭后延迟 3s 停；进程列表独立节流 2s。
+**采样策略（上游已符合性能基线，沿用）**：默认 1s，clamp [1,60]；~~只在刘海展开且停在 stats tab 时采样，关闭后延迟 3s 停~~（**2026-09-30 改判**：统计 tab 已摘，采样改由**首页统计块的可见性**驱动——块出现就把采样拉起来、块消失就停，见本节开头的增补）；进程列表独立节流 2s。
 
 ### C. 时间：日历 / 提醒 / 农历 / 计时器
 
@@ -77,10 +79,11 @@
 |---|---|---|
 | 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce）。**首页日历为竖向紧凑多行（最多 5 行 + 溢出提示 `+N`），不横向滚动**；块按内容高度收缩、顶部与音乐块对齐（2026-09-29：原先是横向芯片条 + 写死 120pt，导致今日内容只有一行还要横滑、且留白很大）。**2026-09-29 晚 `p2-calendar-row` 改判**：今日清单本身仍是"竖向紧凑多行（最多 5 行 + `+N`）、不滚动"，但它已从 strip 里的一块搬到**首页下排全宽日历行的右栏**（左栏是整月网格；行高固定 294，行数由 294 − 26 = 268 算准）——"顶部与音乐块对齐"的旧形态随之作废，见 §5.8 |
 | 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数、左侧三环视图与增删**（写入 / 删除系统提醒） |
+| 月历格的第二行（农历 / 节假日） | 🆕 | **2026-09-30 落地（`p3-widgets` / T4）**：月历每天在公历数字下方多一行 9pt 次要色——**有节假日显示节假日名、否则显示农历日名**（初一显示月名如「八月初一」，闰月带「闰」前缀）；同一套数据同时供给首页日历行与日历面板（两者共用 `MonthGridView`），两个宿主都传 `showsScrollFades: false`（上下两条渐变遮罩两处都没有了）。纯函数 `LunarDayLabel` / `HolidayLookup` / `MonthCellSubtitle`（放不下就不画），细节见 §5.8 末段、设计与已知限制见 [26](26-home-widgets-and-settings.md) |
 | 日程提前提醒 | ✅ | `reminderLeadTime` + 独立 Live Activity 管理器 |
 | 本地计时器 | 🔧 | `Timer.scheduledTimer` 1s tick → 上游**退出即丢状态、无 UserNotifications** → 补持久化 + 到点通知 |
 | 锁屏计时器面板 | ✅ | 用 `TimerManager.shared` |
-| **农历** | 🆕 | **零私有 API、零依赖**：Foundation 的 `Calendar(identifier: .chinese)` 拿农历月/日/闰月/干支；节气用预置表。细节见 §5.2 |
+| **农历** | 🆕 | **零私有 API、零依赖**：Foundation 的 `Calendar(identifier: .chinese)` 拿农历月/日/闰月/干支；节气用预置表。细节见 §5.2。**2026-09-30 落地的那一小块（`p3-widgets` / T4）**：月历日格第二行的农历日名（初一显示月名）走的就是这条 `Calendar(identifier: .chinese)`；**节假日**另行取系统日历里订阅的节假日日历（`HolidayLookup`，取不到就只显示农历）——**只做了「日格里一行字」这一档**，§5.2 的完整形态（生肖 / 节气表 / 配置项 / 折叠槽位）仍未做 |
 | 系统 Clock 计时器镜像 | ⬜️ | 私有 `com.apple.mobiletimerd` plist + `log stream` + AXUIElement（1288 行，三重不稳定）→ 不投入 |
 
 ### D. 文件与内容
@@ -252,6 +255,8 @@
 
 ### 5.2 农历 `lunar`
 
+> **2026-09-30 落地的那一小块（`p3-widgets` / T4，不是本模块）**：月历日格第二行的农历日名（初一显示月名「八月初一」、闰月带「闰」前缀）已落地，走的是同一条 `Calendar(identifier: .chinese)`（`DynamicIsland/components/Calendar/LunarDayLabel.swift` 的纯函数）；**节假日**另行取系统日历里订阅的节假日日历（`HolidayLookup`，取不到降级为只显示农历）。**本节下面的 `lunar` 模块（生肖 / 节气表 / 配置项 / 折叠槽位）仍未做**——上面那块是日历模块的呈现增强，两者不要混读（见 §5.8 末段）。
+
 | 项 | 设计 |
 |---|---|
 | 主算法 | **Foundation 的 `Calendar(identifier: .chinese)`**——系统内置、零依赖、Apple 负责维护。可拿农历月/日、**闰月**（`component(.isLeapMonth)`）、干支年（era/year 映射 60 甲子） |
@@ -270,11 +275,13 @@
 >
 > **2026-09-30 回写（批次 `p3-freeze`，折叠态撤销）**：**本模块不再声明 `compact`**——那枚「尺度图标 + 百分比」（默认 `sun.max` + `53%`）在关闭态与**亮度 HUD 同形**：用户 2026-09-30 报「收起态长期挂着一枚亮度 HUD」，取证落在本模块的折叠槽位视图（本机 `moduleEnableOverrides` 里把本模块开回后，关闭态中央槽位就常驻这枚 pill；关掉 `inlineHUD` / `enableBrightnessHUD` 都不影响它，因此原判「亮度 HUD」是误判）。撤销的只是折叠态那一半：`surfaces: [.expanded]`、`defaultPlacement.slot = nil`（`order 30` 保留，仍供展开 tab 排序），折叠槽位视图已删除；**展开态的剩余量清单不受影响**。口径与 launcher / shortcuts / frontapp / calendar 一致（都只声明 `expanded`）。
 
+> **2026-09-30 回写（批次 `p3-widgets`：本模块改判为首页小组件）**：用户 2026-09-30 追问「进度这个控制面板是用来做什么的，只显示时间吗…如果只是显示，就改为首页小组件」——取证确认本模块里**没有任何** `Button` / `Toggle` / `Picker`（纯展示），因此 `surfaces` 由 `[.expanded]` 改 **`[.home]`**：首页块 = **紧凑清单**（图标 + 标签 + 细进度条 + 百分比；`ProgressHomeBlockLayout` 按放置后的宽度分档——**≥ 220pt 画两行**、否则一行），块宽声明 `180 / 240`；展开 tab 随之摘除（`content(.expanded)` 答 `.none`），那份展开清单视图（`ProgressModuleView` / `ProgressScopeRow`）**保留在文件里但不挂 surface**（可逆，见 [26](26-home-widgets-and-settings.md) §已知限制 8）。**启用真源不变**（`moduleEnableOverrides` → `manifest.defaultEnabled = false`）：它没有上游总开关、不是接管模块。设计与决策见 [26](26-home-widgets-and-settings.md) §做法 机制一 / D-01。
+
 | 项 | 设计 |
 |---|---|
 | 算法 | `Calendar.current.dateInterval(of:for:)` 取区间（`.day` / `.weekOfYear` / `.month` / `.year`），`elapsed / total` 得比例；季度自定义（Q1 = 1–3 月）。**不手算天数**，交给 `Calendar` 处理闰年/跨年/时区 |
 | 刷新 | 不需要定时器：按当前粒度的自然推进节奏刷新（日进度 1 分钟、周/月/季/年 1 小时），且只在槽位可见时刷新 |
-| 呈现 | ~~**折叠态 = 中央槽位**常驻「最关心的一个尺度」的百分比（尺度图标 + 数值；取 `visibleScopes` 首项，默认「今天」）~~（**2026-09-30 撤销**：与亮度 HUD 同形，见上方回写）；**展开态 = 剩余量清单**（一行一个尺度：图标 + 标签 + 细进度条 + **剩余量** + 百分比，行悬停补该尺度的起止时刻）。默认只显示 **日 + 年**，可配 `visibleScopes`（2026-09-27 定稿，取代原稿的「折叠态环形进度或百分比文本 / 展开面板多环 + 数字」） |
+| 呈现 | ~~**折叠态 = 中央槽位**常驻「最关心的一个尺度」的百分比（尺度图标 + 数值；取 `visibleScopes` 首项，默认「今天」）~~（**2026-09-30 撤销**：与亮度 HUD 同形，见上方回写）；~~**展开态 = 剩余量清单**（行悬停补该尺度的起止时刻）~~（**2026-09-30 改判**：随本批改成首页块，清单视图保留但不挂 surface）；**今天 = 首页块里的紧凑清单**（一行一个尺度：图标 + 标签 + 细进度条 + 百分比；不挂任何控件）。默认只显示 **日 + 年**，可配 `visibleScopes`（2026-09-27 定稿，取代原稿的「折叠态环形进度或百分比文本 / 展开面板多环 + 数字」） |
 | 边界 | 用户改系统时间 / 时区切换 → 用 `Calendar.autoupdatingCurrent` + 监听 `NSSystemClockDidChange` |
 | 配置 | `visibleScopes`（多选：day/week/month/quarter/year）、`style`（ring/bar/text）、`baseCalendar`（公历/农历周？默认公历） |
 | 权限 | **无** |
@@ -382,6 +389,9 @@
 
 **2026-09-30 增补（P2 批次 `p2-shortcuts-frontapp`）：strip 多一块「前台应用」、展开面板多一个「快捷指令」tab**——两个都是**新增模块**（`com.cmeng.gourd.frontapp` / `com.cmeng.gourd.shortcuts`，都默认关、都只声明一个既有 surface、零新增 capability）。前台应用块是**模块块**（走 `homeEntries` 那条既有名单，宿主统一块宽 180/240、`order 30` 夹在待办 20 与通知 40 之间）：上半 = 当前前台应用的图标 28 + 名称，下半 = 最近切换过的一排 20pt 小图标（点一下 `activate` 切回去；点开刘海让壶中天自己成为前台时整条忽略，`current` 留上一次的真前台）；事件源 = `NSWorkspace.shared.notificationCenter` 的 `didActivateApplicationNotification`（公开 API，**零 TCC、零私有 API**），历史口径 = 去重 + 移到最前 + 截到 `maxRecentApps`（默认 5、夹取 3…8）+ 排除自身，全在纯函数里。快捷指令 tab 只声明 `expanded`（不进 strip）。**这一批的"块"没有新机制**：块名单、宽度声明、丢块规则、`＋N` 提示都逐字沿用本节（[22](22-shortcuts-and-frontapp.md) / [14](14-module-manifests.md) §1 两行）。**本批暴露的两条 strip 边界**：前台应用块**窄块里会少画格子**（180pt 最多 6 个、240pt 8 个，配 7/8 时超出部分静默不画且没有提示——丢的是块内格子、不是整块）与该块在"音乐会话 + 镜子"同开时按规则③ 被丢（[22](22-shortcuts-and-frontapp.md) §已知限制 13 / 7）。全量测试 **341 条 0 失败**（+26）。
 
+**2026-09-30 增补（P3 批次 `p3-widgets`）：首页从「一条 strip」改成「两条带」，紧凑块换行不丢块**——用户 2026-09-30：把进度 / 统计也搬上首页后一条 strip 要装 6–8 个块，面板收窄时规则 ③ 从尾部丢块，结果是「全被隐藏」，而"扫一眼"的价值恰恰在窄面板下最高。改法：
+① **主块带**（上）只放**大块**——`formFactor == .large` 的块（音乐 / 镜子），沿用旧 strip 的三条规则与尾部丢块语义；② **小组件带**（下）放**紧凑块**（进度 / 统计 / 待办 / 通知 / 前台应用），按可用宽铺网格（每格 180–300pt，一行 1–4 格），**放不下就换行**、**只有连一行都放不下时才丢块**（行高常量 96pt）；③ 块的形态由 manifest 侧的新钩子 **`homeFormFactor`**（`.large` / `.compact`，**缺省 `.compact`**）**声明**，不由宽度反推；④ 高度取舍由 `HomeVerticalFit` 三档扩成**四档**：`both` → `noCalendar` → `widgetsOnly` → `none`（**先收日历行，再收主块带，最后才动小组件带**）。同日两处形态改判：**进度**改首页块（见 §5.3）、**统计**改**首页小组件 + 三环**（CPU / 内存 / GPU 并排、环心百分比、环下 9pt 标签；`StatsRingMetrics` 钉住「220pt 最小块宽下三环 158pt 不裁」）；两带各包一层**极淡圆角容器**（`HomeBandChrome`：0.05 / 圆角 12 / 横向内边距 8），可交互块 hover 给淡底（0.06 / 圆角 8）——**不做每块永久卡片**（调研：Atoll 与 Nook X 都没有 per-block 卡片）。**本节正文与表里的「一条 strip」「块宽分配三条规则」「组件开关三段结构」仍是对**主块带 / T3 之前**的描述**：分带后紧凑块走「行内同一个分配器 + 换行」，组件页变成**首页组件 / 面板组件两节 + 功能段**（§5.9）。设计与逐条数字见 [26](26-home-widgets-and-settings.md) §做法 机制六/七/八、§实际交付与 §已知限制 6–14。
+
 展开面板首页从「音乐 + 日历两栏写死」改成**一条横向 strip**（用户定稿的结构，来源 [16](16-nookx-reference.md) §5.1 要点 5「首页 = 已开启组件的横向拼装」）。模块系统由此第一次变成用户可见的产品面：**开关即拼装**。**2026-09-29 晚 `p2-calendar-row` 改判**：首页的结构描述由"一条 strip"改为「strip 一排 + 全宽日历行」两排（上段），strip 自身的块机制（来源 / 宽度分配 / 开关）与本节其余内容逐字不变。
 
 | 项 | 设计 |
@@ -393,7 +403,7 @@
 | 渲染 | `DynamicIsland/Host/HomeStripView.swift`（按分配结果摆放 + 每块画什么）+ `HomeStripLayoutMath.swift`（纯几何、无 SwiftUI，故可被单测穷举）。`sizeThatFits` 与 `placeSubviews` **共用缓存里同一份 plan**（规则② 不幂等，各算一次会得到两组宽度）；被丢弃的块必须**显式 `.zero` 提案**，否则 SwiftUI 会把没被 `place` 的子视图按容器中心叠画到已摆放块之上 |
 | 日历块 | **自建**（不是 `StandaloneCalendarView`）：一行日期头 + hover 展开的 `WheelPicker` 日期轮 + `EventListView` 竖向紧凑多行。理由：`StandaloneCalendarView` 是"双栏月历 + 可滚动事件面板"，塞进 200～260pt 的块里不可用；但**翻日期的能力保留**（日期轮照 `CalendarView` 的收起 / 展开做法），否则"首页日历"只能看今天。**月历 `StandaloneCalendarView` 在展开面板没有入口**——改前它也只在"未开音乐"时作为首页右栏出现，本批之后**彻底没有调用点**（该文件的 `#Preview` 用的是 `CalendarView()`，也没有实例化它）（本次唯一的能力收缩，见 [17](17-nookx-adoption.md) 已知限制 8）。**2026-09-29 晚 `p2-calendar-row` 改判（整行作废）**：该日历块**已整体移除**，日历改为首页下排的**全宽独立一排**（左 `MonthGridView` 整月网格 / 右今日清单多行，行高 294）；月历入口因此**补回**（[17](17-nookx-adoption.md) 已知限制 8 标为已解决，"唯一的能力收缩"口径作废），`StandaloneCalendarView` **未删除**（左栏被抽成 `MonthGridView` 复用、行为不变），"翻日期"改由点月历格子完成 |
 | 待办块 | `todos` 与 `notifications` 声明 `home`（2026-09-29 起；`progress` 不声明）：三环横排（复用展开 tab 的同一个 `TodoScopeRing`）+ 今日清单**分三档**（≥220pt 完整行最多 5 行 / ≥160pt 紧凑行只标题最多 3 行 / <160pt 只画三环，判据取放置后的实测宽度）。宽度预算与可用宽的口径推导见 [17](17-nookx-adoption.md) §已知限制 16 |
-| 组件开关 | 设置页新增第 21 个 tab「组件」（`SettingsTab.modules`；`SettingsTab` 共 22 个 case，第 22 个是 `about`）：一张卡 = 一个已注册模块（**数据源是 `ModuleRegistry.manifests` 全量**，含未启用——用 `tabEntries` 会让关掉的组件从列表里消失、再也开不回来）。卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关；宿主内置三块**不在此页**（它们由上游 `Defaults` 键门控，卡片页顶部有一行说明作缓解）。**2026-09-30 `p2-takeover` 改判**：接管后的音乐 / 镜子（以及计时器）**有卡**了——它们的开关就是上游键，卡与上游设置页拨的是同一个布尔量；页面结构变为「组件（七张卡）→ 功能（七张上游开关卡）→ 首页块顺序」三段（[20](20-component-page.md)） |
+| 组件开关 | 设置页新增第 21 个 tab「组件」（`SettingsTab.modules`；`SettingsTab` 共 22 个 case，第 22 个是 `about`）：一张卡 = 一个已注册模块（**数据源是 `ModuleRegistry.manifests` 全量**，含未启用——用 `tabEntries` 会让关掉的组件从列表里消失、再也开不回来）。卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关；宿主内置三块**不在此页**（它们由上游 `Defaults` 键门控，卡片页顶部有一行说明作缓解）。**2026-09-30 `p2-takeover` 改判**：接管后的音乐 / 镜子（以及计时器）**有卡**了——它们的开关就是上游键，卡与上游设置页拨的是同一个布尔量；页面结构变为「组件（七张卡）→ 功能（七张上游开关卡）→ 首页块顺序」三段（[20](20-component-page.md)）——**此后同日又改过两轮**：T3 把组件段拆成**首页组件 / 面板组件两节**（顺序节被两节吸收，每行自带 ↑↓）、T6 收尾把功能段摘到**六张**（`enableNotes` 那张随笔记入口一并摘除、键惰性）；**今天的结构 = 两节 + 功能段（六张）**，见 §5.9 |
 | 开关的写路径 | **先落盘再改内存**：先写 `Defaults[.moduleEnableOverrides]`（`[String: Bool]`，**缺键 = 用户未表达**，回落 `manifest.defaultEnabled`），再 `await ModuleRegistry.setEnabled(_:for:)`。置开走与启动同一条实例化 + `activate()` 路径；置关 `deactivate()` 后摘实例。activate 失败 → 开关回弹，回弹**只把偏好写回 `false`**、绝不再调 `setEnabled(false)`（`failed` 不可逃逸，见 [13](13-runtime-kernel.md) 本批小节）。**2026-09-30 `p2-takeover` 改判**：写路径收在 `ModuleEnablementWrite.write(_:for:takeoverKey:)`——**接管模块写上游键**（`enableTimerFeature` / `showMirror` / `showStandardMediaControls`），非接管模块才写 `moduleEnableOverrides`；回弹分档由 `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)` 给出，接管模块返回 `nil`（**什么都不写**——回弹等于替用户把关掉的功能关掉，[20](20-component-page.md) D-13） |
 | 边界 | **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 与 `shouldShowSideLyrics` 两条路径逐字未动，因此"首页 = strip"只在标准路径成立 |
 | 权限与出站 | **本批零新增权限**：没有新 capability、没有新 TCC 授权、没有新出站请求。首页块都是进程内视图，组件开关只写本机偏好（与 [06](06-module-protocol.md) §7.1 的边界一致） |
@@ -441,7 +451,7 @@
 | 计时器 | `enableTimerFeature` 22、`timerPresets` 20、`timerDisplayMode` 12 | 290 | 有 | 面板 tab + 热键 | 保留 |
 | 剪贴板 | `enableClipboardManager` 17、`clipboardDisplayMode` 13 | 34 | 有 | 面板 tab / 刘海图标 / 热键 | 保留 |
 | 日历 | `hideAllDayEvents` 18、`hideCompletedReminders` 18、`showCalendar` 16 | 128 | 有 | 首页日历行 + 面板 tab | 保留，**精简**（见下） |
-| 统计 | `enableStatsFeature` 19、`showCpuGraph` 8 | 63 | 有 | 首页块（统计） | 保留，**LLM 用量段删**（见下） |
+| 统计 | `enableStatsFeature` 19、`showCpuGraph` 8 | 63 | 有 | **首页小组件**（三环，CPU / 内存 / GPU；开关 `enableStatsFeature` 拨上/拨下首页块——组件页「功能」段与统计页各有一个入口） | 保留，**LLM 用量段删**（见下）；展开 tab 已摘（`p3-widgets` / T2：统计改首页块，键仍是同一个真源） |
 | 终端 | `enableTerminalFeature` 9、`terminalStickyMode` 4 | 34 | 有 | 面板 tab + 热键 | 保留 |
 | 暂存器 | `quickShareProvider` 10、`dynamicShelf` 4 | 22 | 有 | 面板 tab（Shelf） | 保留 |
 | 取色器 | `enableColorPickerFeature` 11、`showColorFormats` 3 | 18 | 有 | 刘海图标 + 热键 | 保留 |
@@ -453,7 +463,7 @@
 | 扩展 | `enableThirdPartyExtensions` 12、`enableExtensionNotchExperiences` 9（页内另外三个键的读点在扩展服务里） | 21（`ExtensionsSettings` 直接引用的两个键） | 有 | 扩展 tab / 扩展动态岛体验 | 保留 |
 | 组件 | 模块 manifest（`ModuleRegistry.manifests` 全量；键是各模块自己的启用真源，见 [14](14-module-manifests.md)） | 见各模块 | 有（开关 / 排序即时改首页块与面板 tab，T3） | 组件页即模块入口 | 保留 |
 | 关于 | `releaseName` / `updateChannel`（读点在设置目录内的 `SoftwareUpdater`） | 0 | 有（版本与更新通道） | 应用菜单 / 更新器 | 保留 |
-| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | 有（`enableNotes` 打开后展开面板多一个 Notes tab） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口是**本页自己** | **删页留码**（D-06）；**tab 分支已摘，键惰性**（收尾修复：`TabSelectionView` 那条合并分支改成只看剪贴板，`enabledStandardTabCount()` 同步，键从此不再产生任何入口） |
+| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | **无**（收尾修复摘掉 tab 分支后，拨 `enableNotes` 不再改变任何界面——键惰性；**T6 收尾又把组件页「功能」段那张卡摘了**，该键在本产品里从此没有任何可拨的入口；catalog 里那条效果行保留未删、值已改成「本版无效果」） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口曾是**本页自己** | **删页留码**（D-06）；**tab 分支已摘，键惰性**（收尾修复：`TabSelectionView` 那条合并分支改成只看剪贴板，`enabledStandardTabCount()` 同步，键从此不再产生任何入口） |
 | **LLM 用量**（统计页里的一段，不是独立页） | `enableLLMUsageFeature` 1（`TabSelectionView` 的 Usage tab）、四个 `enable*Provider` 各 1（`UsageProvider`） | 5 | 有（同上：打开后多一个 Usage tab） | 同上（唯一入口是本页这一段自己） | **删段留码**（D-08） |
 
 **「无实际设置意义 → 删」的两处落点**（都**只摘入口**，上游代码与偏好键一个字没删）：

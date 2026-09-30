@@ -68359,13 +68359,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Notes page in the expanded panel (shares that tab with Clipboard)"
+            "value" : "No effect in this version (the Notes page and its tab entry have both been removed; the key is inert)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "展开面板的便签页（与剪贴板共用那一个页签）"
+            "value" : "本版无效果（笔记页与它的 tab 入口都已移除，键惰性——卡片已摘，此文案暂不可达）"
           }
         }
       }
@@ -68375,13 +68375,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stats page in the expanded panel (CPU / memory usage monitoring)"
+            "value" : "Stats rings on the home strip (CPU / memory / GPU, one ring each)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "展开面板的统计页（CPU / 内存等系统占用）"
+            "value" : "首页小组件带里的统计环（CPU / 内存 / GPU 三环，环心是百分比）"
           }
         }
       }
@@ -68407,13 +68407,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Full-width calendar row below the home strip"
+            "value" : "Full-width calendar row below the home strip, plus the Calendar page in the expanded panel (one switch for both)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首页 strip 下方的全宽日历行"
+            "value" : "首页下方的全宽日历行 + 展开面板的「日历」页（同一个开关管两处）"
           }
         }
       }

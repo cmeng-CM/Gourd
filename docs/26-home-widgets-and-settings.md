@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 草稿（实现完成后回写） |
+| 状态 | **已实现（2026-09-30，批次 `p3-widgets`，提交范围 `982b80cc..997d3b35`，9 个提交；逐条见 §实际交付）** |
 | 最后更新 | 2026-09-30 |
 | 关联来源 | 用户 2026-09-30 六条反馈（含三张截图）；[09](09-features-and-mechanisms.md) §5.3/§5.8、[14](14-module-manifests.md)、[20](20-component-page.md)（组件页与接管）、[23](23-home-fit.md)（首页五条修正） |
 
@@ -121,30 +121,112 @@
 
 ## 接口与数据形状
 
+> **本节是执行者契约**：下面每一条都按**落地后的实际签名**写（回写时逐条对着代码核过，不是计划稿）。
+
 ```swift
 // 进度与统计：从 expanded 改 home
-// ProgressModule.manifest: surfaces [.home]，homeBlockWidth = ModuleHomeBlockWidth(min: 180, ideal: 240)
-// StatsModule（新接管模块）: surfaces [.home]，takeoverEnableKey = Defaults.Keys.enableStatsFeature，
-//   homeBlockWidth = ModuleHomeBlockWidth(min: 220, ideal: 300)，content(.home) = 迷你条视图
+// ProgressModule.manifest: surfaces [.home]，defaultPlacement = Placement(slot: nil, order: 30)，
+//   defaultEnabled = false（2026-09-28 的口径不变），homeBlockWidth = ModuleHomeBlockWidth(min: 180, ideal: 240)
+//   content(.home) = ProgressHomeBlockView（紧凑清单：图标 + 标签 + 细条 + 百分比）
+//   content(.expanded) = .none——展开清单视图（ProgressModuleView / ProgressScopeRow）保留在
+//   文件里但不挂 surface（可逆，见 §已知限制 8）
+//   进度**不是接管模块**（没有上游总开关）：启用真源仍走 moduleEnableOverrides → manifest.defaultEnabled
+// StatsModule（新接管模块，id = com.cmeng.gourd.stats）: surfaces [.home]，
+//   takeoverEnableKey = Defaults.Keys.enableStatsFeature（= 它唯一的启用真源），
+//   homeBlockWidth = ModuleHomeBlockWidth(min: 220, ideal: 300)，
+//   defaultPlacement = Placement(slot: nil, order: 50)（落在既有模块序号最大值 notifications 40 之后），
+//   defaultEnabled = Defaults.Keys.enableStatsFeature.defaultValue（false），permissions []
+//   content(.home) = StatsHomeBlockView（三环：CPU / 内存 / GPU，环心百分比、环下 9pt 标签）
+
+// 首页分带（Host 层新纯函数 + 内核第四条钩子）
+// Kernel/ModuleTypes.swift
+public enum HomeFormFactor: String, Sendable, CaseIterable { case large, compact }
+// Kernel/GourdModule.swift：第四条同形钩子（**协议要求 + 协议扩展缺省**，与
+//   takeoverEnableKey / isTabVisible / homeBlockWidth 同形）
+static var homeFormFactor: HomeFormFactor { .compact }      // 缺省语义写在扩展里
+// Kernel/ModuleRegistry.swift：宿主访问器（照 homeBlockWidth(for:) 的写法）
+func homeFormFactor(for id: String) -> HomeFormFactor       // 每次现问一次、不缓存；未注册 id 答 .compact
+//   显式声明 .large 的只有两个：MusicModule、MirrorModule（进度 / 统计 / 待办 / 通知 / 前台应用 = 缺省 .compact）
+
+// Host/HomeBandedLayout.swift（纯几何、无 SwiftUI，可单测）
+enum HomeBandedLayout {
+    static func rowsNeeded(items:available:columnSpacing:) -> Int
+    static func wrappedRows(items:available:columnSpacing:) -> [[Int]]      // 贪心换行，**不丢块**
+    static func affordableRows(bandHeight:rowHeight:rowSpacing:) -> Int
+    static func plan(...) -> Plan            // Plan.mainBand（沿用 HomeStripLayoutMath.plan）+ Plan.widgets
+}
+// Host/HomeVerticalFit.swift：三档 → 四档
+enum HomeVerticalFit.Layout { case both, noCalendar, widgetsOnly, none }    // 让位链：先日历行 → 再主块带 → 最后小组件带
+// Host/HomeStripView.swift（带级容器 / 悬停的唯一取值处）
+enum HomeBandChrome {
+    static let containerOpacity: Double = 0.05      // 机制七的 0.04~0.06 取中
+    static let containerCornerRadius: CGFloat = 12
+    static let containerInset: CGFloat = 8          // **只做横向**：纵向 0（见 §已知限制 6）
+    static let hoverOpacity: Double = 0.06
+    static let hoverCornerRadius: CGFloat = 8
+}
+// HomeStripView.widgetRowHeight = 96（小组件带行高的**宿主常量**，不是统计块的高度，见 §已知限制 9）
 
 // 面板顺序（新键）
-Defaults.Keys.panelOrder: [String: Int]      // 键 = 模块 id，值 = 面板组的序号
-// ModuleRegistry.tabEntries 的排序键改为：(panelOrder[id] ?? defaultPlacement?.order ?? Int.max, id)
+Defaults.Keys.panelOrder: [String: Int]      // 键 = 模块 id，值 = 面板组的序号；缺键 = 用户未表达
+// ModuleRegistry.tabEntries 的排序键改由纯函数给出：
+//   static func panelRank(_ id: String, defaultOrder: Int, panelOrder: [String: Int]) -> Int
+//     = panelOrder[id] ?? defaultOrder        （defaultOrder = defaultPlacement?.order ?? Int.max）
+// 比较器其余部分（同值按 id 字典序）一字未动。设置页显示顺序读同一份算式。
+// 面级摘除名单（"两节开关各管自己的 surface"的载体；只有"还有另一个面"的模块才写这两键）
+Defaults.Keys.hiddenHomeModules: [String]    // 首页面上被单独摘掉的模块 id
+Defaults.Keys.hiddenPanelModules: [String]   // 面板面上被单独摘掉的模块 id
+// 单面模块不进名单：关掉 = 关模块，写既有启用真源（moduleEnableOverrides / 接管键），不新增第二份状态
 
 // 农历与节假日（日历）
 enum LunarDayLabel {                          // 纯函数，可单测
     static func label(for date: Date, calendar: Calendar = Calendar(identifier: .chinese)) -> String?
+    static func monthName(for month: Int) -> String?     // 初一显示它
+    static func dayName(for day: Int) -> String?         // 其余显示它
 }
-enum HolidayLookup {                          // 从 EventKit 的日历里挑"节假日"日历
-    static func holidayCalendar(in calendars: [EKCalendar]) -> EKCalendar?
-    static func name(for date: Date, events: [EventModel]) -> String?
+enum HolidayLookup {                          // 落地签名取本产品的日历模型，不是 EventKit 的 [EKCalendar]
+    static func isHolidayCalendar(titled title: String) -> Bool      // 唯一的判定字符串
+    static func holidayCalendar(in calendars: [CalendarModel]) -> CalendarModel?
+    static func name(for date: Date, events: [EventModel], calendar: Calendar = .current) -> String?
+}
+enum MonthCellSubtitle {                      // 「放不下就不画」的判据（9pt 文字实测宽 + 余量 + 事件点让位）
+    static func fits(_ label: String, cellWidth: CGFloat, fontSize: CGFloat = 9) -> Bool
+}
+// 月历日格 = 数字（+ 选中圆）一行 + 第二行（节假日名优先，否则农历日名，9pt 次要色、lineLimit 1）；
+// 两个宿主（首页日历行 HomeCalendarRow / 面板 StandaloneCalendarView）都传 showsScrollFades: false。
+
+// 统计环的尺寸与取舍（纯函数，可单测）
+enum StatsRingMetrics {
+    static func ringDiameter(forWidth:) -> CGFloat        // 46；宽 < 200 退 40（非有限数也退小档）
+    static let compactThreshold / regularRingDiameter / compactRingDiameter
+    static let ringSpacing 10 / mainLineWidth 5 / highlightLineWidth 2
+    static let mainRingOpacity 0.45 / trackOpacity 0.12 / glowRadius 2.5
+    static func counterFontSize(forDiameter:) -> CGFloat  // 46 → 11；退档 → 10
+    static func counterMaxWidth(forDiameter:) -> CGFloat  // 环心文字可用宽（= 内径 − 两侧各 2）
+    static func rowWidth(forWidth:spacing:) -> CGFloat    // **「不裁」的判据**：220 → 158 ≤ 220
+}
+
+// 进度块的取舍（纯函数，可单测）
+enum ProgressHomeBlockLayout {
+    static let twoRowWidth: CGFloat = 220
+    static func rowLimit(forWidth:) -> Int                // ≥ 220 → 2；更窄 / 非有限数 → 1
+    static func listedScopes(_:forWidth:) -> [Scope]      // 按 visibleScopes 声明顺序取前 N 个
 }
 ```
 
-**文件**：`DynamicIsland/Modules/ProgressModule.swift`、`create DynamicIsland/Modules/Takeover/StatsModule.swift`、
-`DynamicIsland/components/Settings/ModuleSettingsSection.swift`（两组 + 两套排序）、`DynamicIsland/Kernel/ModuleRegistry.swift`（`tabEntries` 排序键）、
-`DynamicIsland/models/Constants.swift`（`panelOrder`）、`DynamicIsland/components/Calendar/DynamicIslandCalendar.swift`（遮罩线 + 农历/节假日）、
-`DynamicIsland/components/Settings/SettingsView.swift`（tab 清单与重排、摘笔记入口）、`docs/09`/`docs/14`/`docs/20`/`docs/25`。
+**文件**（实际改动到的；新增文件带 Gourd 版权头）：
+`DynamicIsland/Modules/ProgressModule.swift`、`create DynamicIsland/Modules/Takeover/StatsModule.swift`、
+`create DynamicIsland/Host/HomeBandedLayout.swift`、`DynamicIsland/Host/{HomeStripView,HomeVerticalFit}.swift`、
+`DynamicIsland/Kernel/{ModuleTypes,GourdModule,ModuleRegistry,KernelBootstrap}.swift`、
+`DynamicIsland/Modules/Takeover/{MusicModule,MirrorModule}.swift`（只各加一行 `homeFormFactor { .large }`）、
+`DynamicIsland/components/Notch/NotchHomeView.swift`（接缝换成 `HomeBandedHomeView`）、
+`DynamicIsland/components/Settings/{ModuleSettingsSection,SettingsView}.swift`（两节 + 两套排序 / 侧栏重排与摘笔记入口）、
+`DynamicIsland/models/Constants.swift`（`panelOrder` + 两张面级摘除名单）、
+`create DynamicIsland/components/Calendar/LunarDayLabel.swift`、`DynamicIsland/components/Calendar/DynamicIslandCalendar.swift`（两处遮罩 + 日格第二行）、
+`DynamicIsland/Modules/{FrontApp/FrontAppModule,NotificationsModule,TodosModule}.swift`（hover 收敛，行为未变）、
+`DynamicIsland/components/Tabs/TabSelectionView.swift` + `DynamicIsland/sizing/matters.swift`（统计 / 笔记两条 tab 分支摘除）、
+`DynamicIsland/Localizable.xcstrings`、
+`DynamicIslandTests/{ModuleKernelTests,TakeoverEnablementTests,ModuleToggleTests,HomeStripLayoutTests}.swift` + `create DynamicIslandTests/LunarTests.swift`。
 
 ## 明确不做
 
@@ -159,24 +241,83 @@ enum HolidayLookup {                          // 从 EventKit 的日历里挑"�
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）
+**提交范围**：`982b80cc..997d3b35`（**9 个提交**，全部本地、未 push；`982b80cc` 是本批基线，也是功能实现的第一个提交）。
+逐条证据落在 `.workflow/p3-widgets/evidence/`（**收尾后随 `.workflow/` 一起消失**，结论已在 §已知限制 与本节记下）。
+`DynamicIslandTests` 逐批增量：367（批前）→ 371（T1+T2）→ 382（T7）→ 398（T4）→ 401（T9）→ 415（T3/T5 与收尾修复）→ **415 条 0 失败**（全批终态）；改动文件新增编译告警 0。
+
+| # | 提交 | 一句话 | 关键证据（`evidence/`） |
+|---|---|---|---|
+| 1 | `9aefb92e` T1+T2 | 进度与统计改首页小组件：进度 `surfaces [.home]` + 紧凑清单（180/240、≥220 两行）；新建 `StatsModule`（接管键 `enableStatsFeature`、220/300、`order 50`、三行迷你条）；删 `TabSelectionView` 的 Stats 分支并同步 `enabledStandardTabCount()` | `t1-progress-home.png`、`t1-progress-home-two-rows.png`、`t2-stats-on.png`、`t2-stats-off.png`、`t2-no-stats-tab.png`、`t2-stats-live-a/b.png`、`t2-stats-at-min-width.png`、`t2-default-width-all-blocks.png`；变异 `t1-mutation-progress-surfaces-red.log`（红 5）/ `t2-mutation-stats-key-red.log`（红 5） |
+| 2 | `4ec823d0` T7 | 首页分带：`HomeBandedLayout`（主块带沿用旧 strip 规则 / 小组件带贪心换行不丢块）+ `HomeFormFactor` 第四条钩子（协议要求 + 扩展缺省 `.compact`，音乐 / 镜子显式 `.large`）+ `HomeVerticalFit` 四档 + 接缝 `HomeBandedHomeView` | `t7-banded-1154/1088/900/770.png`、`t7-short-height.png`、`t7-shorter-widgets-only.png`、`t7-test-restored-green.log`；变异 `t7-mutation1-no-wrap-red.log`（红 26、第 4 块实到 0.0）/ `t7-mutation2-formfactor-default-red.log`（红 6） |
+| 3 | `6bb9e2ae` docs(26) | 设计文档先行（机制六/七/八与 D-09/D-10/D-11 的追加写入） | 本文件自身 |
+| 4 | `892b9ae5` T4 | 日历两处去遮罩（面板那份也传 `showsScrollFades: false`）+ 月历接系统数据：`LunarDayLabel` / `HolidayLookup` / `MonthCellSubtitle` + 日格第二行；新增 `LunarTests` 16 条（pbxproj 四处登记） | `t4-calendar-panel-no-fade(-crop).png`、`t4-calendar-lunar(-crop).png`、`t4-calendar-fade-before-after.png`、`t4-test-green.log`；变异 `t4-mutation1-holidayCalendar-nil-red.log`（红 3）/ `t4-mutation2-extra-holidayJudge-false-red.log`（红 9） |
+| 5 | `6ed06309` T9 | 统计块改环状：`StatsRingMetrics`（46 / <200 退 40）+ `Row.ringColor`（青 / 紫 / 琥珀）+ `StatsRingView`（5pt 主环 + 2pt 亮描边 + 淡发光 + 环心等宽百分比 + 环下 9pt 标签），删横条视图 | `t9-stats-rings(-min220).png`、`t9-stats-before-after.png`、`t9-restored-default.png`、`t9-test-restored-green.log`；变异 `t9-mutation1-ringDiameter-always46-red.log`（红 8） |
+| 6 | `7434bd02` T3 | 组件页分两节（**首页组件** / **面板组件**）各带 ↑↓ 与开关；`panelRank` 排序键 + 新键 `panelOrder` + 两张面级摘除名单 | `t3-home-group.png`、`t3-panel-group.png`、`t3-panel-reorder-live.png`、`t3-panelorder-tabbar-compare.png`、`t3-panel-order-after-restart.png`；变异 `t3-mutation-panelorder-oldkey-red.log` |
+| 7 | `e8ea83a3` T5 | 设置侧栏重排（6 组、不设「上游功能」组）+ 逐页意义判定（判定表落 `docs/09` §5.9）+ 删页留码：笔记设置页、统计页 LLM 用量段 + 5 条搜索项、日历页与锁屏页重复的 12 个控件 | `t5-settings-sidebar.png`、`t5-no-notes-tab.png`、`t5-stats-no-llm-section.png`、`t5-test-green.log`；变异 `t5-mutation-notes-back-green.log`（**如实记：侧栏无用例覆盖**） |
+| 8 | `ad1c55b1` 收尾修复 | 笔记 tab 分支摘除（`TabSelectionView` 合并分支只看剪贴板 + `enabledStandardTabCount()` 同步）——摘页后 `enableNotes=1` 的机器上 Notes tab 再无处可关；键从此惰性 | `fix-notes-tab-gone(-tabs).png`、`fix-clipboard-tab-kept(-tabs).png`、`notes-fix-test-green.log` |
+| 9 | `997d3b35` T8 | 分界视觉：带级容器（`HomeBandChrome` 0.05 / r12 / 横向内边距 8）+ 块级 hover 收敛成一条规则（前台应用格 / 通知条目 / 待办条目，通知首页块的行是本次新加） | `t8-bands-1154(-contrast).png`、`t8-hover.png`、`t8-hover-cell(-contrast).png`、`t8-bands-770(-contrast).png`；变异 `t8-mutation2-container-inset-zero-red.log`（红 3）/ `t8-mutation1-container-opacity-zero.log`（**如实记：容器浓度无断言**） |
+
+**与计划的偏离**（逐条给理由；计划的文件清单与派发片段在本批里有几处写窄了）：
+
+1. **`HomeStripLayoutMath.swift` 一行未动**（计划文件清单里写了 `modify`）：分带把丢弃**限制在主块带**，主块带仍原样调用 `plan(items:available:spacing:tailReserve:)`，小组件带的行内宽度走同一个分配器——分配语义一字未改。
+2. **多改了三个内核文件与两个接管模块**（T7）：`ModuleTypes.swift` / `GourdModule.swift` / `ModuleRegistry.swift`（钩子与访问器）与 `MusicModule` / `MirrorModule`（各一行 `.large`）——派发点名了它们，计划的文件清单没列全。
+3. **接缝落在 `HomeBandedHomeView`（写在 `HomeStripView.swift` 里）而不是 `NotchHomeView`**：高度取舍要知道「小组件要几行」，而那是**宽度**的函数——名单与宽度都在块解析那一层。`NotchHomeView` 保留更外面那层接缝（`standardHomeContent` 一行），三条支路（极简 UI / 侧歌词 / 首发）不动。同一批把 `HomeStripView` 的块名单解析搬进 `HomeBandCatalog`（两带共用一份），并删掉它那条从未被读过的 `vm` 观测。
+4. **T8 多改了三个模块文件**（`FrontAppModule` / `NotificationsModule` / `TodosModule`）：块级 hover 要「一条规则」就得把原来各写一套的底色（0.18+r5 / 0.08+r6 / 0.06+r6）收敛到 `homeBlockHoverBackground(isHovered:)`；通知**首页块的行**原来根本没有 hover（可点却无反馈），按同一条规则补上（按 id 记悬停态，不加内边距以免把三行推出 96pt 带高）。`LauncherGridCell`（启动台那一格，0.09）**未收敛**——它属展开面板的另一个 surface。
+5. **T9 的「矮 25–30pt」与实测不符**（机制八 第 3 条）：实测**块内容**是 74.5 → **59pt**（布局高）/ 64.8 → **58pt**（墨迹高）；机制八 里那个 **96 是小组件带的行高**（宿主常量），不是统计块的高度。环心字号取 **11pt**（不是 11–12 的上沿）：12pt 的 `22.8%` 实测宽 38.5 > 46 环的内径 36，会压到 5pt 环带。
+6. **`HolidayLookup` 的落地签名取本产品日历模型**（`[CalendarModel]` / `[EventModel]`），不是计划稿里的 `[EKCalendar]`：展示路径手上只有已加载的事件（`CalendarManager.monthEvents`），拉 EventKit 要多一层依赖且单测要造 `EKEventStore`；`isHolidayCalendar(titled:)` 是唯一的判定字符串。
+7. **双行档的选中圆缩到 19pt**（计划未写）：日格恒 30pt（`HomeCalendarRow` 的 `36 × 周数 + 78` 依赖它），30pt 里「28pt 圆 + 一行 9pt 字」几何上必然重叠——`19 + 11 = 30` 是唯一不溢出、不被 ScrollView 裁顶边的解；单行档仍是 28pt。
+8. **进度的展开清单视图保留不挂 surface**（计划只写 `.expanded` 改 `.none`）：删掉等于丢一份可用呈现，留着则「把 `.expanded` 加回 `surfaces` 与 `content(for:)` 两处」即可复原。
+9. **收尾把笔记的 tab 分支也摘了**（派发原话是「只摘设置入口、上游代码保留」）：T5 报告实测本机 `enableNotes = 1` 时面板上真有一个 Notes tab，而摘掉设置页后它**再没有关闭入口**——这是 T3+T5 报告里那条 concern，控制器裁定按统计的先例（T1+T2 删 Stats 分支）一并摘掉；笔记代码与偏好键一个字没删，该键从此惰性（见 §已知限制 5）。
+10. **「首页组件节 = 内置块 + 声明 home 的模块」在实现里是「只有模块」**（机制三 的那句描述）：宿主内置块今天为空（音乐 / 镜子已是模块块），唯一的内置面是**首页日历行**——它是 strip 之外的全宽行，不在 `homeBlockOrder` 的语义里、给不了排序，其开关在组件页的「功能」段。首页节实际只有 7 个模块行（音乐 / 镜子 / 待办 / 前台应用 / 进度 / 通知 / 统计）。
+11. **机制六 的第三档在文档里有两个名字**（`stripWidgetsOnly` / `widgetsOnly`）——实现取 **`widgetsOnly`**，让位链是 `both → noCalendar → widgetsOnly → none`；`HomeVerticalFit` 的旧 `.calendarOnly` 档**删除**（四档链里日历行是第一个让位的，没有「只剩日历行」这一档）。
+12. **`settings.modules.effect.progress` 的文案在 T1+T2 一并改了**（派发未点名）：原文写「折叠态中央槽位 + 展开面板进度页——暂不出现在首页」，三个分句全错，改为「首页块里的紧凑进度条：日 / 周 / 月 / 季 / 年（默认今天 + 今年）」。
+13. **派发要的「统计块 min220 上屏档」取不到正好 220**：面板有强制最小宽（本机 770 → 可用 702），最紧的一档是「三块一行被压缩」下的统计块 ≈261pt（> 200，仍是 46 档）——220 那一档由用例钉住（`rowWidth(forWidth: 220) == 158 ≤ 220`，即 T9 变异的靶子）。
+14. **`showsScrollFades` 的默认 `true` 今天没有生产调用方**（计划/派发都以为「仅 `#Preview` 用」）：实际两个宿主都传 `false`，`#Preview` 里也没有 `MonthGridView`。默认值保留、参数在，注释已按事实写。
+15. **T6 收尾按事实再收敛两处产品文案**（派发只点名统计一条，其余是**同表审计**的结果）：① `settings.features.effect.enableStatsFeature` 改「首页小组件带里的统计环（CPU / 内存 / GPU 三环，环心是百分比）」——原文写「展开面板的统计页」，统计早在本批 T2 就改成首页块；② `settings.features.effect.showCalendar` 补上「展开面板的「日历」页」——原文只有首页那一行，而日历接管（`p3-freeze` / T6）后这一个开关同时管两处；③ `settings.features.effect.enableNotes` 改成「本版无效果（…）」并**摘掉组件页那一张卡**（键惰性，卡片留着就是「拨了没反应」的那类；表与 catalog 的键都保留）。同表其余四张卡（剪贴板 / 锁屏天气 / 文件架 / 终端）的效果行逐条核过、与实现一致，未动。
+
+**遗留项**（人工验收或后续批次；凡是「没有现场证据」的都如实写）：
+
+1. **统计的采样驱动改在模块侧**（机制一/机制二 未提，但不做就是「环心永远 0.0%」）：上游 `StatsManager.startMonitoring()` 原先只由「展开面板停在统计 tab」触发，tab 摘掉后该路径不可达——落法是块的 `.task` 里一个 1s 看门狗 + `onDisappear` 停采样。**隐含依赖**：块必须真的走 `onDisappear`（本工程既有块都依赖 `.task` 生命周期，但本批没有专门取证「块不消失」这一档）。
+2. **两行小组件带 + 日历行不能共存**：`294 + 8 + 152 + 8 + 2×96 + 8 = 662`，行高 96 是「不挤掉日历行」约束下的最高一档（见 §已知限制 7）；面板高 < ≈626 时日历行先让位（`t7-short-height.png` 实测）。
+3. **镜子那一档（主块带两块）没有实拍**：`showMirror` 默认关 + 本机无摄像头可用性判据，丢块行为由纯函数用例覆盖。
+4. **窄面板下「月历格只剩公历数字」的降级档没有实拍**：`MonthCellSubtitle` 的判据由用例钉住（12 / 50pt 不放行、70 / 78pt 放行、单调性），但面板 770 下首页日历行已被高度取舍让位，看不到网格。
+5. **统计 40pt 环档与 `100.0%` 极小字号没有上屏证据**：在面板最小宽与块声明最小宽之间没有可达的版面，只有用例覆盖。
+6. **容器的填充浓度（0.05 / 0.06）没有自动化断言**（视觉项，靠人工看图；实拍只有 +5/255 的台阶，`-contrast.png` 是放大给人看的）。纵向内边距为 0 的理由见 §已知限制 6。
+7. **设置侧栏与组件页的改动没有回归用例**（`SettingsTab` / 组顺序是 `SettingsView.swift` 里的 `private` 视图枚举，单测碰不到）：变异实测「把 `.notes` 加回侧栏」仍全绿，删除与重排的证据 = 截图 + `grep` + `docs/09` §5.9；发布冒烟按 `docs/25` 的 S3 / S14 / S30 / S31 人工过。
+8. **`module.stats.summary` 的文案仍写「mini bars / 迷你条」**（形态已改环状）：本批（T6）动的是**效果行**（统计 / 日历两条按事实改写，便签那条随卡片摘除改成「本版无效果」并从此不可达），这条摘要行**未改**，留给下一批或控制器（改法是中英各一句，key 不动）。
+9. **组件页两节都列全量 manifest（含未启用）**：刻意的（关掉的组件必须还能开回来），代价是列表比实际内容长（默认关的模块也在名单里占一行）。
+10. **组件页「功能」段的 `Enable Notes` 卡已在 T6 收尾摘除**（原先的第七行）：笔记页与 Notes tab 分支都已摘除、`enableNotes` 键惰性，卡片留着就是「拨了没反应」的那一类（判据同 §已知限制 5）。`featureCards` 表里那一行与 catalog 里的名称 / 效果行 key 都**保留未删**（效果行值已改成「本版无效果（…键惰性——卡片已摘，此文案暂不可达）」），恢复笔记入口时把那一行加回表即复活。**仍按七张写的旧计数**（不在本批文件清单里，未动）：[20](20-component-page.md)（§接口与数据形状 7 的表格、§改动点 3、§验收标准 3）与 [16](16-nookx-reference.md) §4「组件七张卡 + 功能七张卡」——留待下一批一并改。
 
 ## 已知限制
 
 1. **节假日依赖系统日历**：用户没订阅"中国大陆节假日"日历就没有节假日名（降级为只显示农历 + 事件点），界面上不提示订阅方法（写在用户手册里）。
 2. **农历只在月历格里显示一行**：9pt 一行放不下时（格子过窄）不显示，避免挤压公历数字。
-3. **统计首页块是迷你版**：只显示当前值与一行条，看不出历史趋势——完整图在设置页预览。
+3. **统计首页块只显示当前值**：三环给的是「此刻的 CPU / 内存 / GPU 占用」，看不出历史趋势——完整图在**设置页的统计页**里预览（那里本来就有图表可见性开关）。
 4. **两组排序是两套键**：`homeBlockOrder` 与 `panelOrder` 互不影响；同一个模块在两组里的名次可以不同。
-5. **摘掉笔记入口后，笔记功能对用户不可达**：若将来要恢复，入口在 `SettingsTab` 里加回一行即可（代码未动）。
+5. **摘掉笔记入口后，笔记功能对用户不可达**：设置侧栏的笔记页（T5）与 `TabSelectionView` 的笔记 tab 分支（收尾修复）都已摘除，`enableNotes` 键从此**惰性**（拨它不再改变任何界面——今天**三处入口全无**：设置页、tab 分支、组件页卡片都已摘；偏好键、笔记代码与 `featureCards` / catalog 里那两行文案保留未删）。恢复路径是三处：把 `.notes` 加回 `availableTabs`、把笔记那一半条件加回 `TabSelectionView` 的合并分支（`enabledStandardTabCount()` 同步）、把 `enableNotes` 那一行加回 `ModuleSettingsSection.featureCards`——代码与键一个字没删。
+
+**实现期补充（2026-09-30 回写，按代码与实测落）**：
+
+6. **带级容器的内边距纵向为 0**（横向真 8）：默认档（1154×630）的高度预算 `日历行 294 + 缝 8 + 主块带最小 152 + 缝 8 + 小组件带 96 = 558`，可用高 ≈562——只剩 **4pt**；纵向真 padding 要 32pt，只能从「默认档先丢日历行」或「主块带掉到最小可用高之下（音乐封面被切）」里出。实现取「**横向真 8、纵向 0**」，纵向呼吸靠带内自然余量；容器高度 = 带高度，因此四档取值、`.clipped()` 与零提案三条硬约束一字未动。
+7. **小组件带的行高是宿主常量 96pt**（`HomeStripView.widgetRowHeight`），**不是统计块的高度**：统计块实测内容 74.5 → 59pt（布局高）/ 64.8 → 58pt（墨迹高）。用户看到的「一块占 96pt」是**行高等高定值**；`.widgetsOnly` 档的富余高度留在带尾（不摊到行上、不拉伸）。
+8. **进度的展开清单视图保留但不挂 surface**：文件里多约 70 行不被任何 surface 渲染的代码（外加热度为它服务的两个私有出口）——这是**有意留的**（可逆：把 `.expanded` 加回 `surfaces` 与 `content(for:)` 两处即复原），将来清理时要知道它不是遗漏。
+9. **枚举型 config 键的写入格式有两套，写错会静默回落默认值**（实现期为此烧掉约 20 分钟）：`Defaults` 库对**声明了 `Codable` 的枚举**走 `CodableBridge`——序列化成 **JSON 字符串（带引号）**、读时走 `Value(jsonString:)`；对**没有 `Codable` 的枚举**（如 `TimerDisplayMode`）走 `RawRepresentableBridge`——**裸串**即可。同一个应用里两种格式并存：`clipboardDisplayMode` 要写 `'"separateTab"'`，`timerDisplayMode` 写 `popover`。写错格式时**解不出来 → 静默回落默认**，屏上表现就是「改了没反应」；取证时按枚举的声明面挑格式。
+10. **月历格第二行在 `hideAllDayEvents` 打开时一并消失**（含节假日名）：月历快照按该偏好过滤，全天条目不进快照——节假日名与它的事件点同进同出（与事件清单同一口径，但这是一条连锁，值得先知道）。
+11. **`hiddenHomeModules` / `hiddenPanelModules` 是两张面级摘除名单**（不在原接口清单里，T3 落地时新增）：同时有 `home + expanded` 两面的模块在一节里被关，写的是名单（另一个面照旧）；单面模块才写既有启用真源。因此两节的「关」**不是一个语义**（关面 ≠ 关模块），读代码要连着 `ModuleSurfaceSwitch` / `ModuleSurfaceToggleWriter` 一起看。
+12. **容器与悬停的浓度只在「首页两条带」这一个语境里是一条规则**：`LauncherGridCell`（启动台那一格，0.09）仍是例外——它属展开面板的另一个 surface；要统一只需把那一行的 `.background(...)` 换成 `homeBlockHoverBackground(isHovered:)`。
+13. **节假日名的多候选取「更长标题」**：真实订阅日历里同一天常有节假日名与「休 / 班」单字标记（本机实测同日有 `国庆节（休）` 与节气名 `秋分`），取更长的那条更有信息量、且结论与事件顺序无关——这是**我们替用户定的呈现口径**，不是数据本身的顺序（若要改看「休 / 班」标记，改排序键即可）。
+14. **`.noCalendar` 档的主块带容器会很高、内容只占顶部**（770pt 档实测 ≈495pt）：该档把剩余高度全给主块带（T7 的设计），容器只是把它显形了；要更好看需要给主块带设高度上限（属高度分配话题，不在本批）。
 
 ## 验收标准
 
-1. `xcodebuild test`（`DynamicIslandTests`）全绿；新增用例覆盖：`LunarDayLabel.label` 的五组（初一 / 十五 / 月末 / 闰月 / 普通日）、`HolidayLookup.holidayCalendar` 的三组（命中 / 无 / 多个候选）、`tabEntries` 按 `panelOrder` 排序、进度与统计的 manifest 取值。
+> **回写注（2026-09-30）**：判据以**最终实现**为准——第 3 条的统计形态是环状（T9 改判，机制八 / D-11），第 6 条的两节即「首页组件 / 面板组件」+「功能」段。逐条结果见 §实际交付（哪条有截图、哪条只有用例、哪条留人工验收，都在那里写明）。
+
+1. `xcodebuild test`（`DynamicIslandTests`）全绿；新增用例覆盖：`LunarDayLabel.label` 的五组（初一 / 十五 / 月末 / 闰月 / 普通日）、`HolidayLookup.holidayCalendar` 的三组（命中 / 无 / 多个候选）、`tabEntries` 按 `panelOrder` 排序、进度与统计的 manifest 取值、`HomeBandedLayout` 的换行与四档取舍、`StatsRingMetrics` 的三环不裁。
 2. 进度不再有展开 tab，作为首页块出现；关掉后在首页组件里把它打开即回来（截图）。
-3. 统计有开关，开着时首页出现迷你条、关掉即消失；设置页统计页有完整图预览（截图）。
+3. 统计有开关（`enableStatsFeature`），开着时首页出现**三环**（CPU 青 / 内存 紫 / GPU 琥珀，环心百分比）、关掉即消失；设置页统计页仍有完整图预览（截图）。
 4. 组件页分两节，各节都能上移/下移并即时重排（截图两张：首页组件、面板组件）。
 5. 首页日历行与日历面板**都没有**那两条渐变；月历格里有农历（初一显示月名），订阅了节假日日历时当天显示节假日名（截图）。
-6. 设置侧栏已重排、笔记设置页不再出现（截图对比）。
+6. 设置侧栏已重排、笔记设置页不再出现（截图对比）；笔记 tab 分支已摘（`enableNotes = 1` 的机器上也没有那张 tab）。
 
 ## 决策摘要
 
@@ -193,3 +334,22 @@ enum HolidayLookup {                          // 从 EventKit 的日历里挑"�
 | D-09 | 首页分**两条带**（主块带 + 小组件带，小组件换行不丢块）；块的形态由 `homeFormFactor` 声明 | 用户 | 用户：不要把所有小组件都放在第一排，窄宽度下会被全部隐藏（机制六） |
 | D-10 | 分界视觉：带级容器 + 可交互块 hover 底，不做每块永久卡片 | 用户 | 用户问区域块样式；调研：两家都没有 per-block 卡片（机制七） |
 | D-11 | 统计块改环状（三环并排、环心百分比、按指标分色 + 细描边发光 + 等宽数字） | 用户 | 用户：横条太占空间，改环状或合理的科技风（机制八） |
+
+**执行期判断（2026-09-30 回写，D-12 起续号；来源都是「agent（执行期）」，逐条对着报告里的候选决策落）**：
+
+| ID | 决策 | 来源 | 理由 / 代价（代价写在这，别去报告里找） |
+|---|---|---|---|
+| D-12 | 小组件带行高取 **96pt 定值** | agent（执行期） | 默认档 `294 + 8 + 152 + 8 + 96 = 558 ≤ 562` 才留得住日历行；96 是「不挤掉日历行」约束下的最高一档。代价：面板高 < ≈626 时两行小组件带把日历行挤掉；`.widgetsOnly` 档富余高度留在带尾（§已知限制 7）。改这个数就是改跨任务常量与阈值用例 |
+| D-13 | 四档定名 `both` / `noCalendar` / `widgetsOnly` / `none`；**删掉旧 `.calendarOnly` 档** | agent（执行期） | 机制六 里 `stripWidgetsOnly` 与 `widgetsOnly` 两个名字描述同一档，按语义取后者；四档链里日历行是第一个让位的，没有「只剩日历行」这一档（旧档在生产高度下从来不画日历行，行为等价）。代价：合成分支（可用高 < 152 却画日历行）没了，将来面板能更矮时要重新加档 |
+| D-14 | **空带不进取舍**：没有大块 / 没有紧凑块时，四档退化成旧三档 | agent（执行期） | 这是「只有音乐的旧配置逐字不变」的保证——调用方按「有没有块」传 `mainBandMinimumHeight = 0` / `widgetRowHeight = 0`。代价：纯函数多一层「0 表示不存在」的约定，传错 0 会让一条带静默消失 |
+| D-15 | 带级容器**只做横向内边距 8，纵向 0** | agent（执行期） | 默认档高度预算只剩 4pt，纵向真 padding 会先丢日历行或把音乐块压到最小可用高之下（§已知限制 6）。代价：容器与内容在纵向可能贴边；要「四周都是 8」得先动行高 / 让位顺序 |
+| D-16 | 块级 hover **收敛成一条规则**（`HomeBandChrome` 是唯一取值处），通知首页块的行补 hover、启动台那一格留作唯一例外 | agent（执行期） | 三处原来各写一套浓度（0.18+r5 / 0.08+r6 / 0.06+r6），不收敛就没有「一条规则」；通知首页块的行可点却无反馈，与同一带内的前台应用格不一致。代价：严格讲「一条规则」有一处例外（启动台 0.09，属另一个 surface）——要统一只需换那一行的 `.background(...)` |
+| D-17 | 统计的**采样驱动放模块侧**：块 `.task` 里 1s 看门狗 + `onDisappear` 停 | agent（执行期） | 上游 `startMonitoring()` 原挂在「展开面板停在统计 tab」，tab 摘掉后该路径不可达；不改上游就只能由模块自己拉（与上游同一功率档）。代价：块可见期间每 1s 读一次布尔量；隐含依赖「块真的会消失」（§实际交付 遗留项 1） |
+| D-18 | 统计的 `defaultPlacement.order` 取 **50**、`config` 登记**四键**（真源键 + 三个图表可见性登记键）、环心字号取 **11pt** | agent（执行期） | order 50 = 现有模块序号最大值（notifications 40）+ 10，老用户那条 strip 的前几块一位不动；三个图表键仍是上游设置页里活的键（完整图的可见性来源），登记后卡片会如实出现「由上游设置管理」；11pt 是「读数即焦点又不压环带」的那一档（12pt 会压到 5pt 环带）。代价：order 50 是本批最可能被改的数字；登记键在 tab 摘掉后与面板无关，若认为该删，从 manifest 的 `config` 删三条即可（用例键集合断言同步一行） |
+| D-19 | 环状**按指标分色取面板既有 accent 家族**（CPU 青 / 内存 紫 / GPU 琥珀），与展开图不同族 | agent（执行期） | 机制八 给了三个色相且要求「从既有 accent 家族里挑」——取的是本产品里已在用的系统色（`.cyan` 磁盘图 / `.purple` GPU 详情 / `.orange` 待办与网络），未新造 hex。代价：首页环与设置页那张展开图不同色（改 `Row.ringColor` 三行即同色，用例会跟着红） |
+| D-20 | `HolidayLookup` 落地签名取 `[CalendarModel]` / `[EventModel]`（不是计划稿的 `[EKCalendar]`）；多候选取更长标题 | agent（执行期） | 展示路径手上只有已加载的事件（`CalendarManager.monthEvents`），拉 EventKit 要多一层依赖且单测要造 `EKEventStore`；同一天常有节假日名与「休 / 班」标记，取更长的更有信息量且与事件顺序无关。代价：签名与计划稿不同（已在 §接口与数据形状 校正）；呈现口径是我们替用户定的 |
+| D-21 | 双行档的选中圆缩到 **19pt**（单行档仍 28pt） | agent（执行期） | 日格必须恒 30pt（`HomeCalendarRow` 的 `36 × 周数 + 78` 依赖它），30pt 里「28pt 圆 + 11pt 第二行」几何上必然重叠；`19 + 11 = 30` 是唯一不溢出、不被裁的解。代价：选中视觉在能显示第二行的档位比上一批小一圈（另一条路要加高日格 → 把小组件带挤出默认高度，更贵） |
+| D-22 | 进度的展开清单视图**保留不挂 surface**（可逆） | agent（执行期） | 删掉等于丢一份可用呈现；把 `.expanded` 加回两处即复原。代价：约 70 行静态看是死代码（§已知限制 8） |
+| D-23 | 组件页两节的「关」用**两张面级摘除名单**（`hiddenHomeModules` / `hiddenPanelModules`），单面模块写既有启用真源 | agent（执行期） | 同时有两面的模块在一节里被关，直接写启用真源会把另一个面一起摘掉；单面模块不进名单 = 关掉就是关模块，不新增第二份状态。代价：多两个偏好键，两节的「关」不是一条语义（§已知限制 11） |
+| D-24 | 收尾把**笔记的 tab 分支也摘掉**（`TabSelectionView` 只看剪贴板），键从此惰性 | agent（执行期，控制器裁定） | T5 摘掉设置页后，`enableNotes = 1` 的机器上面板仍有一个 Notes tab 且**再无关闭入口**（T3+T5 报告的 concern）；按统计的先例（T1+T2 删 Stats 分支）一并摘。代价：`enableNotes` 键不再产生任何入口（当时组件页那张卡还在但已写「本版无效果」；**T6 收尾连卡也摘了**——今天连可拨的开关都没有）；恢复要改三处（§已知限制 5） |
+| D-25 | 首页「两节 + 全量 manifest」的列表**保留全量**（含未启用） | agent（执行期） | 关掉的组件必须还能开回来（用投影会让它从列表消失）。代价：列表比实际内容长（默认关的模块也占一行） |
