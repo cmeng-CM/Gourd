@@ -426,6 +426,87 @@ struct HomeBandDroppedHint: View {
     }
 }
 
+// MARK: - 带级容器与块级 hover（T8 / docs/26 §做法 机制七 / D-10）
+
+/// 首页两条带的**视觉常量**：带级容器与块级 hover 的**唯一取值处**（T8 / D-10）。
+///
+/// 调研结论（机制七）是**不做每块的永久卡片**（Atoll 与 Nook X 都没有 per-block 容器；每块卡片
+/// 要吃 8–16pt 内边距，而宽度预算正是最紧的），分界交给**带级容器**：两带各一个极淡圆角底。
+/// 「可交互的条目」在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有这一处**
+/// （三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
+enum HomeBandChrome {
+    /// 带级容器的填充浓度：`white.opacity(0.05)`（机制七给的档是 0.04~0.06，取中）。
+    ///
+    /// **不加描边**（机制七）：分界只靠这一层极淡的底 + 带间留白；描边会把两条带读成卡片。
+    static let containerOpacity: Double = 0.05
+
+    /// 带级容器的圆角（机制七：12）。
+    static let containerCornerRadius: CGFloat = 12
+
+    /// 容器给内容的**横向**内边距（机制七：8）。
+    ///
+    /// **纵向刻意不做**（T8 的边界裁定，代价写在报告里）：带的高度预算在默认档只剩 4pt
+    ///（`HomeVerticalFit` 的算式：日历行 294 + 缝 8 + 主块带最小 152 + 缝 8 + 小组件带 96 = 558，
+    /// 可用高 ≈562）。纵向真内边距两条带要 32pt——只能从「默认档先丢日历行」或「主块带掉到
+    /// `minimumUsableHeight` 之下」里出，两者都是 T7 明令不能动的既有取值。因此纵向的呼吸感
+    /// 取**带内自然余量**（主块带默认档 156 − 音乐块 ≈152 = 4pt；小组件带的行高即内容高），
+    /// 容器的高度 = 带的高度（零布局成本），横向这 8pt 是实打实的（内容宽度因此少 16pt）。
+    static let containerInset: CGFloat = 8
+
+    /// 可交互条目的 hover 底浓度（机制七：0.06）。
+    static let hoverOpacity: Double = 0.06
+
+    /// 可交互条目的 hover 底圆角（机制七：与既有 `LauncherGridCell` 同形 = 8）。
+    static let hoverCornerRadius: CGFloat = 8
+}
+
+/// 一条带的**带级容器**（T8）：极淡圆角底 + 横向内边距 8；高度不变（见 `containerInset` 的算式）。
+///
+/// 用法只有两处（`HomeBandedHomeView` 的两条带）。容器画在带自己的 frame 上，因此**带的可用宽
+/// 必须先扣掉两侧的 `containerInset`**（调用方传给两条带的宽度就是扣完的）——否则内容会压到
+/// 圆角上、并在右缘溢出一截。
+private struct HomeBandContainerChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, HomeBandChrome.containerInset)
+            .background(
+                RoundedRectangle(cornerRadius: HomeBandChrome.containerCornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(HomeBandChrome.containerOpacity))
+            )
+    }
+}
+
+/// 可交互条目的 **hover 底**（T8 的唯一一条 hover 规则，机制七）。
+///
+/// `isHovered` 由调用方给（它自己的 hover 状态；前台应用按 **id** 记，一格里悬停不能点亮整排）——
+/// 本修饰符只定**形状与浓度**，不持有状态：模块侧的 `@State` 因此一行不用改，只把原来那两笔
+/// 各自为政的 `.background(RoundedRectangle(cornerRadius: N).fill(.white.opacity(x)))` 换成本调用。
+///
+/// **纯展示块不套它**（机制七）：音乐封面 / 进度 / 统计环**不加永久边框**，也不给 hover 底——
+/// 它们没有可点的东西，亮起来只会骗人。
+struct HomeBlockHoverBackground: ViewModifier {
+    let isHovered: Bool
+
+    func body(content: Content) -> some View {
+        content.background(
+            RoundedRectangle(cornerRadius: HomeBandChrome.hoverCornerRadius, style: .continuous)
+                .fill(Color.white.opacity(isHovered ? HomeBandChrome.hoverOpacity : 0))
+        )
+    }
+}
+
+extension View {
+    /// 把这条带包进带级容器（T8）。两带各一次，别用在日历行上。
+    func homeBandContainer() -> some View {
+        modifier(HomeBandContainerChrome())
+    }
+
+    /// 可交互条目的 hover 底（T8 的唯一一条规则）。调用方传自己的 hover 状态。
+    func homeBlockHoverBackground(isHovered: Bool) -> some View {
+        modifier(HomeBlockHoverBackground(isHovered: isHovered))
+    }
+}
+
 // MARK: - 主块带
 
 /// 首页的**主块带**（大块：音乐、镜子）：一条横向 strip，规格逐字沿用 P2 批次
@@ -661,14 +742,18 @@ struct HomeBandedHomeView: View {
         let metrics = Self.metrics
 
         GeometryReader { geometry in
-            let availableWidth = max(0, geometry.size.width)
+            // **两带的可用宽 = 容器内边距扣完之后的那一份**（T8）：容器底画在带的 frame 上，
+            // 内容在它里面两侧各缩 `containerInset`，所以喂给两条带（以及喂给两个纯函数）的宽度
+            // 必须先扣掉 16pt——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会压在
+            // 圆角上并溢出容器（机制七的失败信号「容器吃掉内容宽度导致裁切」）。
+            let bandWidth = max(0, geometry.size.width - HomeBandChrome.containerInset * 2)
             let mainItems = catalog.main.map { HomeStripLayoutMath.Item(min: $0.width.min, ideal: $0.width.ideal) }
             let widgetItems = catalog.widgets.map { HomeStripLayoutMath.Item(min: $0.width.min, ideal: $0.width.ideal) }
             // 空带**不进取舍**：没有大块 / 没有紧凑块时传 0，那一条带既不占高度也不占带间间距
             // （`HomeVerticalFit` 因此没有「半条带」这种状态）。
             let rowsNeeded = catalog.widgets.isEmpty ? 0 : HomeBandedLayout.rowsNeeded(
                 items: widgetItems,
-                availableWidth: availableWidth,
+                availableWidth: bandWidth,
                 columnSpacing: metrics.widgetColumnSpacing
             )
             let plan = HomeVerticalFit.plan(
@@ -683,27 +768,31 @@ struct HomeBandedHomeView: View {
             let bands = HomeBandedLayout.plan(
                 mainItems: mainItems,
                 widgetItems: widgetItems,
-                availableWidth: availableWidth,
+                availableWidth: bandWidth,
                 widgetBandHeight: plan.widgetBandHeight,
                 metrics: metrics
             )
 
             // 三样自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（高度取舍算的就是这个数）。
             // `if` 与 plan 的档位一一对应：档位不给高度的带不进 VStack（不占间距、不占位置）。
+            // **两带各包一层带级容器**（T8：`homeBandContainer()`，极淡圆角底 + 横向 8pt 内边距，
+            // 高度零成本——见 `HomeBandChrome.containerInset`）；日历行不包（它不是「带」，机制七只点名两带）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if plan.showsMainBand, !catalog.main.isEmpty {
                     HomeStripView(blocks: catalog.main, albumArtNamespace: albumArtNamespace)
                         .frame(height: plan.mainBandHeight, alignment: .topLeading)
+                        .homeBandContainer()
                 }
 
                 if plan.showsWidgetBand, !catalog.widgets.isEmpty {
                     HomeWidgetBandView(
                         blocks: catalog.widgets,
                         plan: bands.widgets,
-                        availableWidth: availableWidth,
+                        availableWidth: bandWidth,
                         albumArtNamespace: albumArtNamespace
                     )
                     .frame(height: plan.widgetBandHeight, alignment: .topLeading)
+                    .homeBandContainer()
                 }
 
                 if showCalendar, plan.showsCalendarRow {

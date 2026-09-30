@@ -259,15 +259,17 @@ private struct FrontAppHomeBlockView: View {
     /// 一格（20pt 图标 + 2pt 内边距）：悬停底色 + 整格可点。
     ///
     /// 悬停态按 **id** 记（不是 `Bool`）：一排格子共用一个视图状态，`Bool` 会让悬停一个时整排都亮。
+    ///
+    /// **底色走首页那条唯一的 hover 规则**（T8 / docs/26 §做法 机制七，`homeBlockHoverBackground`）：
+    /// 本格原先自己写的是 `cornerRadius: 5` + `opacity 0.18`，与通知 / 待办两处各写一套——
+    /// 三处现已收敛成 `HomeBandChrome` 里那一组常量（r8 / 0.06）。`contentShape` 用同一条规则的
+    /// 圆角，热区与亮起的形状因此是同一个（图标只有 20pt，没有底色看不出哪一格是热区）。
     private func cell(_ snapshot: FrontAppSnapshot) -> some View {
         appIcon(snapshot, size: FrontAppGridBudget.cellIconSize)
             .padding(FrontAppGridBudget.cellPadding)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(.white.opacity(hoveredID == snapshot.id ? 0.18 : 0))
-            )
+            .homeBlockHoverBackground(isHovered: hoveredID == snapshot.id)
             // 整格（图标 + 2pt 内边距）都能点到，而不是只有图形的非透明像素。
-            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: HomeBandChrome.hoverCornerRadius))
             .onHover { hoveredID = $0 ? snapshot.id : (hoveredID == snapshot.id ? nil : hoveredID) }
             .onTapGesture { store.activate(snapshot) }
             .help(snapshot.name)   // 只有图标时，悬停给应用名（同 `ShortcutsRow` 的 `.help` 口径）

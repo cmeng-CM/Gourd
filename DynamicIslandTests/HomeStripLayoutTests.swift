@@ -95,6 +95,15 @@ final class HomeStripLayoutTests: XCTestCase {
     /// 像素反推 ≈703，两个口径都在同一档——这里取常量链的口径）。
     private static let panelWidth770StripWidth: CGFloat = 702
 
+    /// 一条带在**带级容器内边距扣完之后**的可用宽（T8 / docs/26 §做法 机制七）。
+    ///
+    /// T8 起两带各包一层带级容器：容器底画在带的 frame 上，内容左右各缩
+    /// `HomeBandChrome.containerInset`（8）——因此**渲染真值用例挂在托管视图上的宽度**（= 面板可用宽）
+    /// 与**接缝真正喂给两条带的那个宽度**差 16pt。plan 必须按后者算，否则比的是两份不同输入的答案。
+    private static func bandContentWidth(forHostingWidth width: CGFloat) -> CGFloat {
+        max(0, width - HomeBandChrome.containerInset * 2)
+    }
+
     /// **生产档四块**（T4 复现的输入）：音乐那一档 300/420 + 三个模块档 180/240
     /// （`HomeStripView.moduleBlockWidth` 的统一值）。770/900/1088 三档面板都拿这一组算。
     private static let productionFourBlockItems: [HomeStripLayoutMath.Item] = [
@@ -1260,17 +1269,23 @@ final class HomeStripLayoutTests: XCTestCase {
 
         let items = Self.productionFourBlockItems
         let available = Self.panelWidth770StripWidth
+        // 接缝真正喂给主块带的宽度 = 托管宽 − 两侧容器内边距（T8）；渲染挂的是托管宽那份。
+        let bandWidth = Self.bandContentWidth(forHostingWidth: available)
         let height: CGFloat = 212
         let plan = HomeStripLayoutMath.plan(
             items: items,
-            available: available,
+            available: bandWidth,
             spacing: HomeStripLayout.spacing,
             tailReserve: HomeStripView.droppedHintWidth
         )
 
         // 锚：先把「这道题该是什么答案」钉住（数值变了要有人复核，而不是被断言静默吸收）
         XCTAssertEqual(available, 702, "770pt 面板的 strip 可用宽 = 770 − 两侧各 34（docs/17 §接口与数据形状 6）")
-        XCTAssertEqual(plan.visibleCount, 2, "四块（音乐档 300/420 + 三个模块档 180/240）在 702 下只放得下两块")
+        XCTAssertEqual(
+            bandWidth, 702 - HomeBandChrome.containerInset * 2,
+            "T8：带级容器两侧各吃 8pt——带内可用宽 = 可用宽 − 16"
+        )
+        XCTAssertEqual(plan.visibleCount, 2, "四块（音乐档 300/420 + 三个模块档 180/240）在带内可用宽 686 下只放得下两块")
         XCTAssertEqual(plan.droppedCount, 2, "剩下两块靠条尾 ＋2 提示（docs/21）")
         XCTAssertTrue(plan.tailReserveUsed)
 
@@ -1298,14 +1313,16 @@ final class HomeStripLayoutTests: XCTestCase {
         for (panelWidth, expectedVisible) in [(CGFloat(770), 2), (900, 3), (1088, 4)] {
             homeBlockSizeLog.reset()
             let available = panelWidth - 68
+            // T8：plan 按「带内可用宽」（= 托管宽 − 两侧容器内边距）算；渲染仍挂托管宽。
+            let bandWidth = Self.bandContentWidth(forHostingWidth: available)
             let plan = HomeStripLayoutMath.plan(
                 items: items,
-                available: available,
+                available: bandWidth,
                 spacing: HomeStripLayout.spacing,
                 tailReserve: HomeStripView.droppedHintWidth
             )
 
-            XCTAssertEqual(plan.visibleCount, expectedVisible, "面板 \(panelWidth)pt（可用 \(available)）的可见块数")
+            XCTAssertEqual(plan.visibleCount, expectedVisible, "面板 \(panelWidth)pt（带内可用 \(bandWidth)）的可见块数")
             XCTAssertEqual(plan.droppedCount, items.count - expectedVisible)
             XCTAssertEqual(plan.tailReserveUsed, plan.droppedCount > 0, "丢块才用预留位")
 
@@ -1316,11 +1333,15 @@ final class HomeStripLayoutTests: XCTestCase {
 
     /// **小组件带真的换行、一块都不丢**（渲染真值，T7 / 用户原话那条）。
     ///
-    /// 4 个紧凑块在 770pt 面板（可用 702）下**排成两行**：第一行三块各拿规则 ② 的压缩宽 228.5
-    /// （`702` 下 `180×3 + 2×8 = 556 ≤ 702 < 240×3 + 16 = 736`），第二行的统计单块走规则 ① 拿它的
+    /// 4 个紧凑块在 770pt 面板（可用 702，**带内可用 686**）下**排成两行**：第一行三块各拿规则 ② 的
+    /// 压缩宽 223（`686` 下 `180×3 + 2×8 = 556 ≤ 686 < 240×3 + 16 = 736`，可压缩量 180、缺口 50 →
+    /// `180 + 60 × (1 − 50/180) = 223.33` → 落 0.5pt 网格 = 223），第二行的统计单块走规则 ① 拿它的
     /// ideal 300；四块都拿到尺寸（没有一块是零尺寸），行高恒为 96。**改动前它们是「一条 strip 装
     /// 四块」**：规则 ③ 从尾部丢到只剩两块（`t2-default-width-all-blocks.png` 那一档的实测就是
     /// 「6 块里第 6 块被丢」）——换行让第四块看得见，这正是本批的验收点。
+    ///
+    /// **T8 的数字变了**（228.5 → 223）：带级容器两侧各吃 8pt，行内可用宽 702 → 686，压缩解随之变。
+    /// 断言仍是「渲染 == 规则」，不是「等于某个历史数」——变的只有代入的那一份宽度。
     func testWidgetBandRendersTwoRowsAtNarrowPanelWidth() async {
         homeBlockSizeLog.reset()
         registerProbes([
@@ -1337,7 +1358,7 @@ final class HomeStripLayoutTests: XCTestCase {
         renderBandedWidgets(available: available, height: 400)
 
         let ids = HomeCompactProbeModule.ids
-        let compressedRowWidth: CGFloat = 228.5
+        let compressedRowWidth: CGFloat = 223
         let expected: [CGFloat] = [compressedRowWidth, compressedRowWidth, compressedRowWidth, 300]
         for (index, id) in ids.enumerated() {
             let size = homeBlockSizeLog.size(of: id)

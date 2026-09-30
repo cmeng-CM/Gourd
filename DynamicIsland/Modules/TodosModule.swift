@@ -1530,10 +1530,9 @@ private struct TodoRow: View {
         }
         .padding(.vertical, 3)
         .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(isHovered ? 0.06 : 0))
-        )
+        // 整行底色走首页那条唯一的 hover 规则（T8 / docs/26 §做法 机制七）——本行原先自己写的是
+        // `cornerRadius: 6` + `opacity 0.06`（浓度本来就对，形状与取值现统一由 `HomeBandChrome` 给）。
+        .homeBlockHoverBackground(isHovered: isHovered)
         .onHover { isHovered = $0 }
     }
 

@@ -1202,10 +1202,9 @@ private struct NotificationRow: View {
         .padding(.vertical, 3)
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(isHovered ? 0.08 : 0))
-        )
+        // 整行底色走首页那条唯一的 hover 规则（T8 / docs/26 §做法 机制七）——本行原先自己写的是
+        // `cornerRadius: 6` + `opacity 0.08`；形状与浓度现由 `HomeBandChrome` 一处给（r8 / 0.06）。
+        .homeBlockHoverBackground(isHovered: isHovered)
         .onHover { isHovered = $0 }
     }
 
@@ -1362,6 +1361,9 @@ private struct NotificationsHomeBlockView: View {
     @ObservedObject var store: NotificationStore
     /// 行点击出口（模块注入：打开对应 App + 收起刘海）。
     let onOpen: (NotificationItem) -> Void
+    /// 当前悬停的那一行（`nil` = 没有；按 **id**（`NotificationItem.id` = `Int64` 记录号）记——
+    /// 与前台应用格子同款，`Bool` 会让三行一起亮）。
+    @State private var hoveredID: Int64?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1397,6 +1399,15 @@ private struct NotificationsHomeBlockView: View {
     }
 
     /// 一行 = 「App 名 · 标题」，单行尾部截断；整行是「打开 App + 收起刘海」的点击区。
+    ///
+    /// **T8 起整行有 hover 底**（首页那条唯一的规则 `homeBlockHoverBackground`，docs/26 §做法 机制七）：
+    /// 本行原来只有 `.contentShape` + 点击——首页块里它是**可交互的**（点一下打开 App），
+    /// 悬停却没有任何反馈，与带内其它可交互格（前台应用格子）不一致。悬停态按 **id** 记
+    /// （行视图共用一个 `@State`，`Bool` 会让三行一起亮；与前台应用格子同款）。
+    ///
+    /// 底色**就是这一行的 frame**（不额外加内边距）：行高 = 一行文字高，加竖向内边距会把
+    /// 三行推出 96pt 的带高（块壳 `.clipped()` 会裁掉最后一行），因此这里只借现成的行距
+    ///（`VStack(spacing: 4)`）做呼吸。
     private func row(_ item: NotificationItem) -> some View {
         Text(NotificationsHomeBlockLayout.rowLabel(appName: item.displayName, title: item.title))
             .font(.system(size: 11))
@@ -1406,6 +1417,8 @@ private struct NotificationsHomeBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             // `.contentShape` 让整行（含文字右侧的空白）都能点到，而不是只有字形落在的地方
             .contentShape(Rectangle())
+            .homeBlockHoverBackground(isHovered: hoveredID == item.id)
+            .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
             .onTapGesture { onOpen(item) }
     }
 }
