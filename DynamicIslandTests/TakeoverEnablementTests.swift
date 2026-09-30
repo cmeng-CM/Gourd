@@ -1653,17 +1653,19 @@ final class TakeoverEnablementTests: XCTestCase {
 
     // MARK: - 组件页文案解析（T6：功能卡段 + 接管卡的效果行）
 
-    /// **六张**功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
-    /// 六条效果行 key + 六条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
+    /// **五张**功能卡的键在宿主 bundle 里全部能解析（docs/20 §接口与数据形状 7）：
+    /// 五条效果行 key + 五条名称 key（上游设置页那一个字面量）+ 段头 / 段脚注。
     /// （原七张里的 `enableNotes` 一张在 T6 收尾时摘掉——笔记页与 Notes tab 分支都已摘除、
     /// 键惰性，卡片留着就是「拨了没反应」的那类；键与文案保留未删，判据见 `docs/09` §5.9 的
-    /// 判定表与 `docs/26` §已知限制 5。）
+    /// 判定表与 `docs/26` §已知限制 5。**2026-09-30 又摘掉 `showCalendar` 一张**：它是首页上的
+    /// 一个块，用户要求「日历也要在首页组件里开关」，于是搬进「首页组件」节成为 `HomeCalendarSettingsRow`
+    /// ——同一个键、只换了位置，见 `docs/28` §5 与紧随本条之后的那条用例。）
     ///
     /// **数据源是生产表本身**（`ModuleSettingsSection.featureCards`——为了这条用例它没有写成
     /// `private`）：表里把 `id` / `effectKey` / `nameKey` 写错、或文案没写进 catalog，这条都会红。
     /// 测试另抄一份键表的话，「表写错、文案对」这条谁都发现不了（见 T6 报告 §候选决策）。
     ///
-    /// **语言无关**（T6 修复）：六条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
+    /// **语言无关**（T6 修复）：五条名称 key 是上游那几个字面量，只有 zh-Hans 等译文、**没有 `en` 值**
     /// ——`XCTAssertResolves` 因此查的是宿主 bundle 的 **zh-Hans 那一份**，本机语言环境不再参与
     /// （原先的 `Bundle.main.localizedString(...) != key` 在英语环境下会红）。
     func testFeatureCardKeysResolve() {
@@ -1672,10 +1674,10 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(
             cards.map(\.id),
             [
-                "enableClipboardManager", "showCalendar", "enableLockScreenWeatherWidget",
+                "enableClipboardManager", "enableLockScreenWeatherWidget",
                 "enableStatsFeature", "dynamicShelf", "enableTerminalFeature",
             ],
-            "六行 = docs/20 §接口与数据形状 7 的七个上游键名去掉 `enableNotes` 后的六个，顺序与取值都不改"
+            "五行 = docs/20 §接口与数据形状 7 的七个上游键名去掉 `enableNotes` 与 `showCalendar` 后的五个，顺序与取值都不改"
         )
 
         for card in cards {
@@ -1690,6 +1692,26 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertResolves("settings.features.title")
         XCTAssertResolves("settings.features.footer")
+    }
+
+    /// **首页日历行**（`HomeCalendarSettingsRow`）的两个 key 能解析，且它**不在** `featureCards` 里。
+    ///
+    /// 用户 2026-09-30：「首页的日历组件也要在首页组件控制区域进行开关控制」——它从「功能」段那张
+    /// 卡搬进「首页组件」节，**键仍是同一个 `showCalendar`**（没有第二份状态）。这条用例钉两件事：
+    /// ① 文案 key 能解析；② 它**没有**留在功能卡表里（两边都挂 = 同一页两个开关管一件事）。
+    func testHomeCalendarSettingsRowKeysResolveAndLeftFeatureCards() {
+        XCTAssertResolves(HomeCalendarSettingsRow.effectKey)
+        XCTAssertResolves(HomeCalendarSettingsRow.nameKey)
+
+        XCTAssertFalse(
+            ModuleSettingsSection.featureCards.contains { $0.id == "showCalendar" },
+            "首页日历行搬进「首页组件」节之后，功能卡表里不应再有 showCalendar 那一张"
+        )
+        XCTAssertEqual(
+            HomeCalendarSettingsRow.effectKey,
+            "settings.modules.calendarRow.effect",
+            "效果行 key 的形态与本页其余组件文案一致（settings.modules.*）"
+        )
     }
 
     /// 三个接管模块的卡片文案也能解析：名称 key 取**真模块的 manifest**（卡片上那行名称走

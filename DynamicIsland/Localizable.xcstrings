@@ -68450,18 +68450,35 @@
         }
       }
     },
-    "settings.modules.builtinHint" : {
+    "settings.modules.calendarRow.effect" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The only host built-in without a card now is the home calendar row (Music and Mirror are component cards); its switch is in the Features section below."
+            "value" : "The full-width calendar row at the bottom of the home screen (month grid on the left, today list on the right). The same switch also controls the Calendar page in the expanded panel."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "宿主内置块只剩首页日历行没有卡片（音乐 / 镜子已是组件卡），它的开关在下面「功能」段"
+            "value" : "首页下方的全宽日历行（左整月网格 + 右当日清单）；展开面板的「日历」页同受这一个开关控制（同一个开关管两处）"
+          }
+        }
+      }
+    },
+    "settings.modules.builtinHint" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The host built-in is the home calendar row: it is the last row of the Home widgets section below, with a switch but no arrows — it is one full-width row under the blocks, not part of their order."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "宿主内置块是首页日历行：它在下面「首页组件」节的最后一行，有开关、没有上下箭头——它是块下方的一整条全宽行，不参与块与块之间的排序"
           }
         }
       }
@@ -68639,7 +68656,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这一段管的是「首页上有没有它」：开关关掉，这个块就不在首页出现；上下箭头改它在首页里的先后。同一个模块也可能出现在「面板组件」那一节（例如待办、通知）——**两节互不影响：这里的开关只管首页这一面，那一节的开关只管它单不单独出面板 tab**。"
+            "value" : "这一段管的是「首页上有没有它」：开关关掉，这个块就不在首页出现；上下箭头改它在首页里的先后。同一个模块也可能出现在「面板组件」那一节（例如待办、通知）——**两节互不影响：这里的开关只管首页这一面，那一节的开关只管它单不单独出面板 tab**。节末的**首页日历行**是内置块（不是模块）：它是一个开关，但没有上下箭头——它不在块与块之间的顺序表里。"
           }
         }
       }

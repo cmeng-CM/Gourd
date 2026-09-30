@@ -161,9 +161,12 @@ struct ModuleSettingsSection: View {
 
     // MARK: 功能（上游总开关的登记表）
 
-    /// **六张**功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
+    /// **五张**功能卡：一行一个**尚未模块化**的上游功能，开关直接读写那一个 `Defaults` 键。
     /// （T6 收尾摘掉了**笔记**那一张（`Enable Notes`）——它是原七行里唯一「拨了看不到任何变化」
-    /// 的一行，判据见 docs/09 §5.9 的判定表与 docs/26 §已知限制 5；键与文案保留未删。）
+    /// 的一行，判据见 docs/09 §5.9 的判定表与 docs/26 §已知限制 5；键与文案保留未删。
+    /// **2026-09-30 又摘掉 `showCalendar` 一张**：它是首页上的一个块（全宽日历行），用户要求
+    /// 「日历也要在首页组件里开关」，于是搬进「首页组件」节成为 `HomeCalendarSettingsRow`——同一个键，
+    /// 换了位置，见 docs/28 §5。）
     ///
     /// `nameKey` **逐字沿用上游设置页那一项的名称字面量**（在 `SettingsView.swift` 里那一项
     /// 旁边取证）——用户在别处认识的词与这里看到的必须是同一个 key，不另起说法
@@ -179,13 +182,6 @@ struct ModuleSettingsSection: View {
             symbolName: "clipboard",
             key: .enableClipboardManager,
             effectKey: "settings.features.effect.enableClipboardManager"
-        ),
-        FeatureCard(
-            id: "showCalendar",
-            nameKey: "Show calendar",
-            symbolName: "calendar",
-            key: .showCalendar,
-            effectKey: "settings.features.effect.showCalendar"
         ),
         FeatureCard(
             id: "enableLockScreenWeatherWidget",
@@ -401,7 +397,7 @@ struct ModuleSettingsSection: View {
     ///
     /// **内置块今天为空**（「内置块 + 声明 `home` 的模块」这句话在今天的产品里只剩后半句）：
     /// strip 上的音乐 / 镜子已是模块块，唯一的内置块是**首页日历行**——它是 strip 之外的全宽行
-    /// （`HomeCalendarRow`），顺序固定在最下、不在 `homeBlockOrder` 的语义里（给它两个点不动的
+    /// （`HomeCalendarSettingsRow`），顺序固定在最下、不在 `homeBlockOrder` 的语义里（给它两个点不动的
     /// 上移 / 下移比不列它更坏），它的开关仍在下面「功能」段（`showCalendar` 那张卡）。
     /// 将来若有内置块真的进 strip，在 `homeRows` 里补一行、并让 `HomeBlockOrdering` 认它即可。
     private var homeRows: [SurfaceRow] {
@@ -441,6 +437,12 @@ struct ModuleSettingsSection: View {
                     moveUp: { move(row, in: group, direction: .up) },
                     moveDown: { move(row, in: group, direction: .down) }
                 )
+            }
+            // 首页的**内置块**（不是模块）：全宽日历行。列在本节末尾——它是流下方那一条全宽行，
+            // 与"块与块之间"的顺序表（`homeBlockOrder`）不是一回事，因此**只有开关、没有 ↑↓**
+            // （docs/28 §5；用户 2026-09-30：「首页的日历组件也要在首页组件控制区域进行开关控制」）。
+            if group == .home {
+                HomeCalendarSettingsRow()
             }
         } header: {
             Text(LocalizedStringKey(group.titleKey))
@@ -1035,6 +1037,56 @@ private struct ModuleSymbolChip: View {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color.accentColor.opacity(0.12))
                 )
+        }
+    }
+}
+
+// MARK: - 首页的内置块：全宽日历行
+
+/// 首页的**内置块**（它不是模块）：整月网格 + 当日清单的那条**全宽行**。
+///
+/// **在本节里的行形态与模块卡一致**（图标 + 名称 + 效果行 + 开关），但**没有上移 / 下移**：
+/// `homeBlockOrder` 是「块与块之间」的顺序表，而日历行是首页下方那一整条全宽行，不在那份名单里
+/// ——给它两个点不动的箭头比不给更坏（docs/26 §实际交付 10、docs/28 §5）。等首页改成单条流
+/// （docs/28 §4）它进了流，再补排序。
+///
+/// 开关读写上游那一个 `showCalendar`：**同一个键同时管首页这条行与展开面板的「日历」页**
+/// （docs/26 §做法 机制四），效果行因此必须把两处都写出来。
+///
+/// 本行原先只是「功能」段里的一张卡（`featureCards` 的 `showCalendar`），用户 2026-09-30 要求
+/// 「首页的日历组件也要在首页组件控制区域进行开关控制」之后搬到这里——**键没有变、也没有第二份状态**。
+///
+/// **两个 key 是 `static let`（不是内联字面量）**：解析用例直接读它们，与本文件其余两张表的
+/// 口径一致（表侧写错字才会红）。
+struct HomeCalendarSettingsRow: View {
+    /// 名称 key：**逐字沿用上游设置页那一项的字面量**（与其余组件卡的取名口径一致）。
+    static let nameKey = "Show calendar"
+    /// 效果行 key（随本行从「功能」段搬进「首页组件」段）。
+    static let effectKey = "settings.modules.calendarRow.effect"
+
+    @Default(.showCalendar) private var showCalendar
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ModuleSymbolChip(symbolName: "calendar")
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey(Self.nameKey))
+                    .fontWeight(.medium)
+
+                Text(LocalizedStringKey(Self.effectKey))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            Toggle(isOn: $showCalendar) {
+                Text(LocalizedStringKey(Self.nameKey))
+            }
+            .labelsHidden()
+            .toggleStyle(.switch)
         }
     }
 }
