@@ -314,10 +314,15 @@ struct HomeBandBlock: Identifiable {
 /// 同一条算式；切带在**排序之后**做——两带各自保持同一条全局顺序（主块带里 `order` 小的在前，
 /// 小组件带同理），用户改顺序时看到的相对次序因此与组件页一致。
 struct HomeBandCatalog {
-    /// 主块带（`.large`，按同一条顺序）。
-    let main: [HomeBandBlock]
-    /// 小组件带（`.compact`，按同一条顺序）。
-    let widgets: [HomeBandBlock]
+    /// **单条流的名单**（P4 / docs/28 §4）：全部块按**同一条全局顺序**排——大块与紧凑块
+    /// **不再分开**，分开就回不到用户排的那条顺序里了（流的行内可以同时有大块与紧凑块）。
+    let blocks: [HomeBandBlock]
+
+    /// 旧两条带的两份投影（T7 起的分带口径）。**生产路径已不再读它们**（接缝改走 `blocks` +
+    /// `HomeFlowLayout`），保留是因为用例还在钉"形态声明把块分得对"这条不变式；
+    /// 等分带那批用例整体迁到流口径后一并删除。
+    var main: [HomeBandBlock] { blocks.filter { $0.formFactor == .large } }
+    var widgets: [HomeBandBlock] { blocks.filter { $0.formFactor == .compact } }
 
     /// 模块块的**缺省**宽度由宿主统一声明（模块不参与「我在首页占多宽」的决策，D-11）：
     /// 声明值必须存在——模块块内容多为 `GeometryReader`，测量回退会把它们算成约 6pt。
@@ -353,10 +358,7 @@ struct HomeBandCatalog {
             id: { $0.id },
             overrides: overrides
         )
-        return HomeBandCatalog(
-            main: sorted.filter { $0.formFactor == .large },
-            widgets: sorted.filter { $0.formFactor == .compact }
-        )
+        return HomeBandCatalog(blocks: sorted)
     }
 }
 
@@ -702,6 +704,67 @@ struct HomeWidgetBandView: View {
     }
 }
 
+// MARK: - 单条流（P4 / docs/28 §4）
+
+/// 首页的**单条流**：把 `HomeFlowLayout` 算出来的行摆出来。
+///
+/// 每条行 = 一个 `HStack`（格宽由 `plan` 定，**不是**由 Layout 反推）；行高 = 该行最高块，
+/// 格子在行内**顶对齐、不拉伸**（P4 之前大块会把整条带撑高，其余块被迫挤在另一条带里）。
+///
+/// **为什么不用自定义 `Layout`**：旧主块带那条路上有一个尺寸反馈环（`sizeThatFits` 上报的宽度
+/// 被下一趟当成提案宽 → plan 重算缩水，见 `HomeStripLayoutMath` 的注释与 docs/23 的 770pt 复现）。
+/// 这里每个格子都带**显式 `.frame(width:)`**，`HStack` 的总宽就是"各格宽 + 间隙"，不存在
+/// "上报宽度再被拿来当输入"的那条回路——环因此不存在，不需要再钉提案宽。
+struct HomeFlowView: View {
+    /// 流的名单（**未切带**的全局顺序；`plan.rows[].indices` 是它在 `items` 里的下标）。
+    let blocks: [HomeBandBlock]
+    let plan: HomeFlowLayout.Plan
+    let albumArtNamespace: Namespace.ID
+    let columnSpacing: CGFloat
+
+    /// 大块/紧凑块**各自的高度档**：块的形态声明（`homeFormFactor`）→ 高度。
+    ///
+    /// `large` 取 **152**：那是音乐块（今天最高的大块）"封面下沿 + 角标 + 控制三键"都画得下的
+    /// 实测下界（`HomeStripView.minimumUsableHeight` 的来源，见那边的注释）；
+    /// `compact` 取 **96**：与旧小组件带的行高同值，紧凑块们本来就按这一档画的。
+    static func blockHeight(for formFactor: HomeFormFactor) -> CGFloat {
+        switch formFactor {
+        case .large: return largeBlockHeight
+        case .compact: return compactBlockHeight
+        }
+    }
+
+    static let largeBlockHeight: CGFloat = 152
+    static let compactBlockHeight: CGFloat = 96
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: plan.rowSpacing) {
+            ForEach(Array(plan.rows.enumerated()), id: \.offset) { _, row in
+                HStack(alignment: .top, spacing: columnSpacing) {
+                    ForEach(Array(row.indices.enumerated()), id: \.offset) { position, blockIndex in
+                        HomeBandCell(block: blocks[blockIndex], albumArtNamespace: albumArtNamespace)
+                            .frame(width: row.widths[position], height: row.height, alignment: .topLeading)
+                    }
+
+                    if row.showsHint {
+                        HomeBandDroppedHint(count: plan.droppedCount, names: droppedNames)
+                            .frame(maxHeight: row.height, alignment: .top)
+                    }
+                }
+                .frame(height: row.height, alignment: .topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 被丢掉的块名（`＋N` 的悬停文案）：名单里没进任何一行 `indices` 的那些——
+    /// 名单与 plan 同一份输入，所以提示列的块与真正没显示的块必然是同一批（D-03「名单同源」）。
+    private var droppedNames: [String] {
+        let visible = Set(plan.rows.flatMap(\.indices))
+        return blocks.enumerated().filter { !visible.contains($0.offset) }.map(\.element.name)
+    }
+}
+
 // MARK: - 标准路径首页（接缝）
 
 /// 展开面板**标准路径**的首页：主块带（上）+ 小组件带（下）+ 全宽日历行（`showCalendar` 开时）。
@@ -739,59 +802,40 @@ struct HomeBandedHomeView: View {
         // 名单在本轮渲染里**只取一次**：块的 `content(for:request:)`（它同时决定「有没有块」——
         // 答 `.none` 的不生成格、不留空壳）与排序都在 `HomeBandCatalog.resolve` 里算完。
         let catalog = HomeBandCatalog.resolve(registry: registry, overrides: homeBlockOrder)
-        let metrics = Self.metrics
+        let blocks = catalog.blocks
 
         GeometryReader { geometry in
-            // **两带的可用宽 = 容器内边距扣完之后的那一份**（T8）：容器底画在带的 frame 上，
-            // 内容在它里面两侧各缩 `containerInset`，所以喂给两条带（以及喂给两个纯函数）的宽度
-            // 必须先扣掉 16pt——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会压在
-            // 圆角上并溢出容器（机制七的失败信号「容器吃掉内容宽度导致裁切」）。
+            // **流的可用宽 = 容器内边距扣完之后的那一份**（T8）：容器底画在流的 frame 上，
+            // 内容在它里面两侧各缩 `containerInset`，所以喂给纯函数的宽度必须先扣掉 16pt
+            // ——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会压在圆角上并溢出。
             let bandWidth = max(0, geometry.size.width - HomeBandChrome.containerInset * 2)
-            let mainItems = catalog.main.map { HomeStripLayoutMath.Item(min: $0.width.min, ideal: $0.width.ideal) }
-            let widgetItems = catalog.widgets.map { HomeStripLayoutMath.Item(min: $0.width.min, ideal: $0.width.ideal) }
-            // 空带**不进取舍**：没有大块 / 没有紧凑块时传 0，那一条带既不占高度也不占带间间距
-            // （`HomeVerticalFit` 因此没有「半条带」这种状态）。
-            let rowsNeeded = catalog.widgets.isEmpty ? 0 : HomeBandedLayout.rowsNeeded(
-                items: widgetItems,
+            let items = blocks.map {
+                HomeFlowLayout.Item(
+                    min: $0.width.min,
+                    ideal: $0.width.ideal,
+                    height: HomeFlowView.blockHeight(for: $0.formFactor)
+                )
+            }
+            let plan = HomeFlowLayout.plan(
+                items: items,
                 availableWidth: bandWidth,
-                columnSpacing: metrics.widgetColumnSpacing
-            )
-            let plan = HomeVerticalFit.plan(
-                available: geometry.size.height,
-                calendarRowHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
-                rowSpacing: HomeCalendarRow.rowSpacing,
-                mainBandMinimumHeight: catalog.main.isEmpty ? 0 : HomeStripView.minimumUsableHeight,
-                widgetRowHeight: catalog.widgets.isEmpty ? 0 : metrics.widgetRowHeight,
-                widgetRowSpacing: metrics.widgetRowSpacing,
-                widgetRowsNeeded: rowsNeeded
-            )
-            let bands = HomeBandedLayout.plan(
-                mainItems: mainItems,
-                widgetItems: widgetItems,
-                availableWidth: bandWidth,
-                widgetBandHeight: plan.widgetBandHeight,
-                metrics: metrics
+                availableHeight: geometry.size.height,
+                calendarHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
+                metrics: Self.flowMetrics
             )
 
-            // 三样自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（高度取舍算的就是这个数）。
-            // `if` 与 plan 的档位一一对应：档位不给高度的带不进 VStack（不占间距、不占位置）。
-            // **两带各包一层带级容器**（T8：`homeBandContainer()`，极淡圆角底 + 横向 8pt 内边距，
-            // 高度零成本——见 `HomeBandChrome.containerInset`）；日历行不包（它不是「带」，机制七只点名两带）。
+            // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
+            // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`：极淡圆角底 + 横向 8pt 内边距，
+            // 高度零成本）——分带没了，但"内容成组"的那层底留着；日历行不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
-                if plan.showsMainBand, !catalog.main.isEmpty {
-                    HomeStripView(blocks: catalog.main, albumArtNamespace: albumArtNamespace)
-                        .frame(height: plan.mainBandHeight, alignment: .topLeading)
-                        .homeBandContainer()
-                }
-
-                if plan.showsWidgetBand, !catalog.widgets.isEmpty {
-                    HomeWidgetBandView(
-                        blocks: catalog.widgets,
-                        plan: bands.widgets,
-                        availableWidth: bandWidth,
-                        albumArtNamespace: albumArtNamespace
+                if !plan.rows.isEmpty {
+                    HomeFlowView(
+                        blocks: blocks,
+                        plan: plan,
+                        albumArtNamespace: albumArtNamespace,
+                        columnSpacing: Self.flowMetrics.columnSpacing
                     )
-                    .frame(height: plan.widgetBandHeight, alignment: .topLeading)
+                    .frame(height: plan.heightUsed, alignment: .topLeading)
                     .homeBandContainer()
                 }
 
@@ -803,15 +847,12 @@ struct HomeBandedHomeView: View {
         }
     }
 
-    /// 两带的度量（宿主常量的唯一装配点，传给 `HomeBandedLayout`）。
-    private static var metrics: HomeBandedLayout.Metrics {
-        HomeBandedLayout.Metrics(
-            mainSpacing: HomeStripLayout.spacing,
-            mainTailReserve: HomeStripView.droppedHintWidth,
-            widgetColumnSpacing: HomeStripView.widgetColumnSpacing,
-            widgetRowSpacing: HomeStripView.widgetRowSpacing,
-            widgetRowHeight: HomeStripView.widgetRowHeight,
-            widgetTailReserve: HomeStripView.droppedHintWidth
+    /// 流的度量（宿主常量的唯一装配点，传给 `HomeFlowLayout`）。
+    private static var flowMetrics: HomeFlowLayout.Metrics {
+        HomeFlowLayout.Metrics(
+            columnSpacing: HomeStripLayout.spacing,
+            rowSpacing: HomeStripView.widgetRowSpacing,
+            tailReserve: HomeStripView.droppedHintWidth
         )
     }
 }

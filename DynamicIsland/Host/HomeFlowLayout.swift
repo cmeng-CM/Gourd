@@ -101,6 +101,9 @@ public enum HomeFlowLayout {
     public struct Plan: Equatable {
         /// 真正画出来的行（从第一行起连续；高度不够时**尾部整行不画**）。
         public let rows: [Row]
+        /// 行与行之间的间距（渲染侧把它交给 `VStack(spacing:)`——`heightUsed` 也用它算，
+        /// 两边因此不可能出现两个数）。
+        public let rowSpacing: CGFloat
         /// 日历行画不画。**调用方仍需自己与"用户有没有开日历行"相与**（本类型不认偏好）。
         public let showsCalendarRow: Bool
         /// 画出来的格数。
@@ -114,6 +117,13 @@ public enum HomeFlowLayout {
 
         /// 画出来的行数。
         public var rowsDrawn: Int { rows.count }
+
+        /// 这些行一共要占的高度（含行间距）：渲染侧用它给流钉 frame——**不要再自己加一遍**，
+        /// 否则「画出来的高度」与「取舍时算的高度」会漂成两个数。
+        public var heightUsed: CGFloat {
+            guard !rows.isEmpty else { return 0 }
+            return rows.reduce(0) { $0 + $1.height } + CGFloat(rows.count - 1) * rowSpacing
+        }
     }
 
     // MARK: - 第一步：按宽度换行
@@ -260,6 +270,7 @@ public enum HomeFlowLayout {
         let visibleCount = rows.reduce(0) { $0 + $1.visibleCount }
         return Plan(
             rows: rows,
+            rowSpacing: rowSpacing,
             showsCalendarRow: showsCalendarRow,
             visibleCount: visibleCount,
             droppedCount: items.count - visibleCount,

@@ -1272,11 +1272,18 @@ final class HomeStripLayoutTests: XCTestCase {
         // 接缝真正喂给主块带的宽度 = 托管宽 − 两侧容器内边距（T8）；渲染挂的是托管宽那份。
         let bandWidth = Self.bandContentWidth(forHostingWidth: available)
         let height: CGFloat = 212
-        let plan = HomeStripLayoutMath.plan(
-            items: items,
-            available: bandWidth,
-            spacing: HomeStripLayout.spacing,
-            tailReserve: HomeStripView.droppedHintWidth
+        // **P4 起改走单条流**：这一档的预期不再是"一条 strip 里挤得下几块"，而是"流铺几行、
+        // 高度放得下几行"——下面锚的数字是实测值，变了要有人复核。
+        let plan = HomeFlowLayout.plan(
+            items: Self.flowItems(items),
+            availableWidth: bandWidth,
+            availableHeight: height,
+            calendarHeight: 0,
+            metrics: HomeFlowLayout.Metrics(
+                columnSpacing: HomeStripLayout.spacing,
+                rowSpacing: HomeStripView.widgetRowSpacing,
+                tailReserve: HomeStripView.droppedHintWidth
+            )
         )
 
         // 锚：先把「这道题该是什么答案」钉住（数值变了要有人复核，而不是被断言静默吸收）
@@ -1285,13 +1292,14 @@ final class HomeStripLayoutTests: XCTestCase {
             bandWidth, 702 - HomeBandChrome.containerInset * 2,
             "T8：带级容器两侧各吃 8pt——带内可用宽 = 可用宽 − 16"
         )
-        XCTAssertEqual(plan.visibleCount, 2, "四块（音乐档 300/420 + 三个模块档 180/240）在带内可用宽 686 下只放得下两块")
+        XCTAssertEqual(plan.rowsNeeded, 2, "四块（音乐档 300/420 + 三个 180/240）在 686 下铺两行")
+        XCTAssertEqual(plan.visibleCount, 2, "高度 212 只放得下第一行那两块（行高 152 + 缝 8 + 152 > 212）")
         XCTAssertEqual(plan.droppedCount, 2, "剩下两块靠条尾 ＋2 提示（docs/21）")
-        XCTAssertTrue(plan.tailReserveUsed)
+        XCTAssertTrue(plan.showsHint)
 
         renderRealHomeStrip(available: available, height: height)
 
-        assertRenderedSizesMatchPlan(plan, height: height)
+        assertRenderedSizesMatchFlowPlan(plan)
     }
 
     /// 三个面板宽度各过一遍（770 / 900 / 1088 → strip 可用宽 702 / 832 / 1020）：**任何宽度下
@@ -1310,24 +1318,31 @@ final class HomeStripLayoutTests: XCTestCase {
 
         let items = Self.productionFourBlockItems
         let height: CGFloat = 212
+        // **P4 起改走单条流**：三档宽度下的可见块数不再是"一条 strip 挤得下几块"，而是"流铺几行 ×
+        // 高度放得下几行"。锚值（实到）：770 → 2、900 → 3、1088 → 4。
         for (panelWidth, expectedVisible) in [(CGFloat(770), 2), (900, 3), (1088, 4)] {
             homeBlockSizeLog.reset()
             let available = panelWidth - 68
             // T8：plan 按「带内可用宽」（= 托管宽 − 两侧容器内边距）算；渲染仍挂托管宽。
             let bandWidth = Self.bandContentWidth(forHostingWidth: available)
-            let plan = HomeStripLayoutMath.plan(
-                items: items,
-                available: bandWidth,
-                spacing: HomeStripLayout.spacing,
-                tailReserve: HomeStripView.droppedHintWidth
+            let plan = HomeFlowLayout.plan(
+                items: Self.flowItems(items),
+                availableWidth: bandWidth,
+                availableHeight: height,
+                calendarHeight: 0,
+                metrics: HomeFlowLayout.Metrics(
+                    columnSpacing: HomeStripLayout.spacing,
+                    rowSpacing: HomeStripView.widgetRowSpacing,
+                    tailReserve: HomeStripView.droppedHintWidth
+                )
             )
 
             XCTAssertEqual(plan.visibleCount, expectedVisible, "面板 \(panelWidth)pt（带内可用 \(bandWidth)）的可见块数")
             XCTAssertEqual(plan.droppedCount, items.count - expectedVisible)
-            XCTAssertEqual(plan.tailReserveUsed, plan.droppedCount > 0, "丢块才用预留位")
+            XCTAssertEqual(plan.showsHint, plan.droppedCount > 0, "丢块才画 ＋N")
 
             renderRealHomeStrip(available: available, height: height)
-            assertRenderedSizesMatchPlan(plan, height: height)
+            assertRenderedSizesMatchFlowPlan(plan)
         }
     }
 
@@ -1374,6 +1389,57 @@ final class HomeStripLayoutTests: XCTestCase {
     }
 
     /// 渲染真值与 plan 的逐块对照：可见块 = 分配宽 + 满高；被丢的块 = 零尺寸；空白块数 == `droppedCount`。
+    private func assertRenderedSizesMatchFlowPlan(
+        _ plan: HomeFlowLayout.Plan,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let ids = HomeSizedProbeModule.ids
+        // 每块的期望 = 它所在行给它的宽 + **那一行的高**（行高随行内最高块变，不再是全带一个数）。
+        var expected: [Int: (width: CGFloat, height: CGFloat)] = [:]
+        for row in plan.rows {
+            for (position, blockIndex) in row.indices.enumerated() where position < row.widths.count {
+                expected[blockIndex] = (row.widths[position], row.height)
+            }
+        }
+        XCTAssertEqual(ids.count, plan.visibleCount + plan.droppedCount, "夹具块数应与 plan 的输入块数一致", file: file, line: line)
+
+        for (index, id) in ids.enumerated() {
+            let size = homeBlockSizeLog.size(of: id)
+            if let want = expected[index] {
+                XCTAssertEqual(
+                    size.width, want.width, accuracy: 0.5,
+                    "第 \(index) 块（\(id)）应拿到它那一行分配的宽 \(want.width)，实到 \(size.width)",
+                    file: file, line: line
+                )
+                XCTAssertEqual(
+                    size.height, want.height, accuracy: 0.5,
+                    "第 \(index) 块（\(id)）应拿它那一行的高 \(want.height)（行高 = 行内最高块）",
+                    file: file, line: line
+                )
+            } else {
+                XCTAssertEqual(
+                    size, .zero,
+                    "第 \(index) 块（\(id)）没进任何一行（被丢）→ 必须是零尺寸，实到 \(size)",
+                    file: file, line: line
+                )
+            }
+        }
+
+        let blanks = ids.filter { homeBlockSizeLog.size(of: $0) == .zero }
+        XCTAssertEqual(
+            blanks.count, plan.droppedCount,
+            "＋\(plan.droppedCount) 与实际空白块数必须一致（实到空白 \(blanks.count) 块：\(blanks)）",
+            file: file, line: line
+        )
+    }
+
+    /// 探针夹具的流输入：`productionFourBlockItems` 加**行高 152**（那一族探针都答 `.large`，
+    /// 见 `HomeSizedProbeModule` 的注释）。
+    private static func flowItems(_ items: [HomeStripLayoutMath.Item]) -> [HomeFlowLayout.Item] {
+        items.map { HomeFlowLayout.Item(min: $0.min, ideal: $0.ideal, height: HomeFlowView.largeBlockHeight) }
+    }
+
     private func assertRenderedSizesMatchPlan(
         _ plan: HomeStripLayoutMath.Plan,
         height: CGFloat,
