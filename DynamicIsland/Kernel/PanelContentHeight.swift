@@ -44,12 +44,19 @@
 //  **不上报**的四页：日历（`.frame(height: maxTabContentHeight)`，自己的高是面板高的函数，量它
 //  等于把面板高喂回自己 → 每接受一次缩 12pt，一路缩到 130 的下限）、计时器（同形 + 250 的
 //  per-tab 下限）、暂存器（拖放区整块填满，没有「内容高」）、终端（终端仿真块按屏高比例，本来就
-//  没有自然高）。这四页照 T6 的回落走 = 账本没有值 → `panelHeight(...)` 回落**手动值**
-//  （= 今天的行为，docs/29 §已知限制 2 的「首帧一拍」）。
+//  没有自然高）。
+//
+//  **切页时谁说了算**（`selectTab(_:)`，T7 复核 P1）：换页**不只是换「值从哪来」**——名单外的页
+//  必须**没有值**（`current` = nil → 尺寸层回落**手动值** = 今天的行为，宽松够用），否则会继承
+//  上一页量出来的高度（首页 → 待办 ~200 → 日历：日历拿 200 画两栏月历，`max(130, 200 − 28 − 36)`
+//  = 136pt）。名单**内**的页保留上一页量出来的那一个数，直到新页量完——**且新页的第一份上报
+//  无条件接受**（`awaitsFirstReport`：留着的那个数与新页无关，拿它比出来的差不是「同一页的微动」，
+//  光标还压在面板上时也不该拦），因此是**一次**跳动而不是两次（若切页就清值会先跳手动值再跳量值）。
 //
 //  触发链（派发片段裁决 5）：接受一个新值时 `objectWillChange` 响一次，`DynamicIslandApp` 收到后
 //  走**既有的** `debouncedUpdateWindowSize()`（0.15s 防抖那条，T6 接好的）——**不新开第二条 resize
-//  链**；切 tab 那一刻的尺寸由既有 `updateWindowSizeForTabSwitch()` 经 `openNotchSize` 读本账本。
+//  链**；切 tab 那一刻的尺寸由既有 `updateWindowSizeForTabSwitch()` 经 `openNotchSize` 读本账本
+//  （读到的就是 `selectTab` 刚定下来的那一份）。
 //
 
 import CoreGraphics
@@ -78,7 +85,7 @@ final class PanelContentHeight: ObservableObject {
     /// - `shortcuts`：表头 + 清单 + 结果行。
     ///
     /// 另外四页（`calendar` / `timer` / 暂存器 / 终端）**刻意不在名单里**，理由逐条写在文件头。
-    /// 名单外的 tab 不上报 → 账本没有它的值 → 尺寸层回落手动值（今天的行为）。
+    /// 名单外的 tab 不产生值：切到它们时 `selectTab(_:)` 把量出来的那份清掉 → 尺寸层回落手动值。
     static let measuredTabs: Set<String> = [
         "com.cmeng.gourd.todos",
         "com.cmeng.gourd.notifications",
@@ -98,22 +105,34 @@ final class PanelContentHeight: ObservableObject {
     /// 永远只增不减）。
     var pointerInsidePanel: @MainActor () -> Bool = { false }
 
-    /// 上一次**被接受**的页（`report` 的 tab，或首页写入时的 `homeTab`）。`current` 靠它二选一。
+    /// 上一次**被接受**的页（`report` 的 tab、或 `selectTab(_:)` 定下来的页）。`current` 靠它二选一。
     private(set) var activeTab: String?
 
-    /// 量出来的那一份（`activeTab` 不是首页时的 `current`）。`private(set)`：写入口只有 `report`，
-    /// 读出来是给用例与排查看的（生产读者一律走 `current`）。
+    /// 量出来的那一份（`activeTab` 是名单内某一页时的 `current`）。`private(set)`：写入口只有
+    /// `report` / `selectTab`，读出来是给用例与排查看的（生产读者一律走 `current`）。
     private(set) var measuredHeight: CGFloat?
+
+    /// 刚切到一个**会上报**的页（`selectTab` 置位）：它的**第一份**上报要**无条件**接受
+    /// （派发片段条款 ③ 的「换 tab 无条件接受」），滞回与光标规则都不参与。
+    ///
+    /// 为什么需要这个位：切页时特意**保留**上一页的量值（一次跳动而不是两次），于是新页的第一份
+    /// 上报与旧值之间「看起来像同一 tab 的微动」——少了这个位，光标停在面板里时新页连变矮都做不到
+    /// （条款 ④ 拦下），滞回也会把小于 8pt 的差整个吃掉。位是**瞬时**的（消费一次即清）。
+    private var awaitsFirstReport = false
 
     /// 首页**算**出来的那一份（含表头，口径见 `PanelAutoHeight.contentHeight(from:...)`）。
     ///
     /// **权威**：只有首页那一页写它，量出来的值一律碰不到它（派发片段裁决 4）。**刻意不发通知**：
     /// 首页的内容一变，T6 那五条 publisher 与「打开面板后一拍」已经会把窗口尺寸重算一次，
     /// 这里再响一次就是第二条 resize 链（裁决 5）。
+    ///
+    /// **也不碰 `activeTab`**（T7 复核 P2）：写入方是视图 body，切 tab 的过渡里旧首页还可能再跑一次
+    /// body——若它顺手把「当前页」改回首页，刚量完的模块页就被顶掉了（面板跳回上一页的高度）。
+    /// 「当前是哪一页」只由 `selectTab(_:)`（宿主按选中页声明）说了算。
     private(set) var homeContentHeight: CGFloat?
 
-    /// 尺寸层读的那个值：首页 → `homeContentHeight`；别的页 → 量出来的那一份；
-    /// 还没有人写过 / 量过 → `nil`（尺寸层回落手动值，§已知限制 2）。
+    /// 尺寸层读的那个值：首页 → `homeContentHeight`；名单内的页 → 量出来的那一份；
+    /// 还没人写过 / 量过、或**当班的是名单外的页** → `nil`（尺寸层回落手动值，§已知限制 2）。
     var current: CGFloat? {
         guard let activeTab else { return nil }
         return activeTab == Self.homeTab ? homeContentHeight : measuredHeight
@@ -123,11 +142,36 @@ final class PanelContentHeight: ObservableObject {
 
     // MARK: - 写入口
 
+    /// **切页**（宿主在选中页变化时声明；`tab` = 选中那一页的键，`""` = 还没选中任何页 → 不声明）。
+    /// `ContentView` 的展开分支每帧调一次（幂等：同键直接返回）。
+    ///
+    /// 三档（口径见文件头「切页时谁说了算」）：
+    /// - 首页键 → `current` 读 `homeContentHeight`（首页自己在 body 里写）；
+    /// - 名单内的页 → **保留**上一页量出来的值（新页量完那一拍无条件覆盖它，一次跳动）；
+    /// - 名单外的页 → **清掉**量出来的值 → `current` = nil → 尺寸层回落手动值。
+    func selectTab(_ tab: String) {
+        guard !tab.isEmpty, tab != activeTab else { return }
+        let isHome = tab == Self.homeTab
+        let isMeasured = Self.isMeasuredTab(tab)
+        let newCurrent: CGFloat? = isHome ? homeContentHeight : (isMeasured ? measuredHeight : nil)
+        if newCurrent != current {
+            objectWillChange.send()
+        }
+        activeTab = tab
+        // 名单内：留着上一页的量值（一次跳动）——但它的第一份上报无条件接受（`awaitsFirstReport`）。
+        // 名单外：清值 → `current` = nil → 尺寸层回落手动值。
+        awaitsFirstReport = isMeasured
+        if !isHome, !isMeasured {
+            measuredHeight = nil
+        }
+    }
+
     /// 首页那一份（`HomeBandedHomeView` 的接缝写）。T6 的持有者升级成这个槽：
     /// `nil` = 还没算过（首帧）→ 尺寸层回落手动值。
+    ///
+    /// **只写槽、不改 `activeTab`**：当班与否由 `selectTab(_:)` 声明（见 `homeContentHeight` 的注释）。
     func setHomeContentHeight(_ height: CGFloat?) {
         homeContentHeight = height
-        activeTab = Self.homeTab
     }
 
     /// 非首页 tab 的上报（四条款见文件头）。`height` 是**内容高口径**（含表头）——调用方按
@@ -141,6 +185,15 @@ final class PanelContentHeight: ObservableObject {
         // 条款 ③：换 tab 无条件接受——**在光标规则之前**判，否则「点 tab 那只手」停在面板里，
         // 面板就永远等不到变矮那一拍。
         if tab != activeTab {
+            accept(height, for: tab)
+            awaitsFirstReport = false
+            return
+        }
+
+        // 刚切到这一页的第一份上报：同样**无条件**（切页时留着的是上一页的量值，与它比出来的差
+        // 不是「同一页的微动」，见 `awaitsFirstReport`）。
+        if awaitsFirstReport {
+            awaitsFirstReport = false
             accept(height, for: tab)
             return
         }
@@ -165,6 +218,7 @@ final class PanelContentHeight: ObservableObject {
         activeTab = nil
         measuredHeight = nil
         homeContentHeight = nil
+        awaitsFirstReport = false
         pointerInsidePanel = { false }
     }
 
@@ -251,7 +305,8 @@ private struct PanelContentHeightProbe: ViewModifier {
 }
 
 /// 单子视图的测量容器：`sizeThatFits` 逐字收下提案（渲染与不加这一层时同形）、
-/// `placeSubviews` 顺手把子视图的**理想高**交给回调。
+/// `placeSubviews` 顺手把子视图的**理想高**交给回调——提案是「面板给的宽 + 高度留空」，
+/// 宽度自适应的那几页因此按真实布面量（T7 复核 P2，见 `placeSubviews` 的注释）。
 ///
 /// `placeSubviews` 里回调属**观察**：账本的 `report` 只写自己的字段并在值变化时发一次
 /// `objectWillChange`，读者是 `DynamicIslandApp` 的 Combine 订阅（0.15s 防抖后异步重算窗口），
@@ -269,7 +324,13 @@ private struct PanelNaturalHeightLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         for subview in subviews {
-            onNaturalHeight(subview.sizeThatFits(.unspecified).height)
+            // **宽度按面板给的那个格子量**（`bounds.width` = 内容区的实际宽，T7 复核 P2）：自适应
+            // 布面的页（启动台的 `GridItem(.adaptive(minimum:))`）在**没有宽度**的提案下会按最窄的
+            // 那一档算（单列）→ 量出来的自然高是单列的高（几百行的量级），面板被顶到上界；
+            // 高度仍留 `.unspecified`——那才是「这一页要多高」，给个值就变成量容器了。
+            onNaturalHeight(
+                subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height
+            )
             // 摆放用**上一步报出去的那个尺寸**（就是子视图自己接受的尺寸），左上角对齐——
             // 与不加这一层时逐字相同（居中会让内容在页面里飘）。
             subview.place(

@@ -1500,6 +1500,45 @@ struct ContentView: View {
             }
     }
 
+    /// 高度账本用的**页键**（p5-home-blocks / T7）：模块页 = 模块 id（与账本 `measuredTabs` 里那四个
+    /// 键同一批），宿主页各给一个稳定串，首页 = `PanelContentHeight.homeTab`。
+    ///
+    /// 名单外的键（`shelf` / `terminal` / `timer` / `stats` / `notes` / `clipboard` / `llmUsage` /
+    /// `colorPicker` / `extension`）**也要声明**——账本据此把量出来的值清掉，让这些页回落**手动值**
+    /// （今天的行为），而不是继承上一页量出来的高度。
+    private var selectedPanelTabKey: String {
+        switch coordinator.currentView {
+        case .home:
+            return PanelContentHeight.homeTab
+        case .module:
+            return coordinator.selectedModuleID ?? ""
+        case .shelf:
+            return "shelf"
+        case .terminal:
+            return "terminal"
+        case .timer:
+            return "timer"
+        case .stats:
+            return "stats"
+        case .notes:
+            return "notes"
+        case .clipboard:
+            return "clipboard"
+        case .llmUsage:
+            return "llmUsage"
+        case .colorPicker:
+            return "colorPicker"
+        case .extensionExperience:
+            return "extension"
+        }
+    }
+
+    /// 声明当前页（`ViewBuilder` 里放不下裸语句，包一层函数——与首页接缝的
+    /// `writeHomeContentHeight` 同一条语法桥）。只在**展开态**调用（折叠态没有「哪一页」这回事）。
+    private func declareSelectedPanelTab() {
+        PanelContentHeight.shared.selectTab(selectedPanelTabKey)
+    }
+
     @ViewBuilder
       func NotchLayout() -> some View {
           VStack(alignment: .leading) {
@@ -1727,6 +1766,12 @@ struct ContentView: View {
               
               ZStack {
                   if vm.notchState == .open {
+                      // **把「当前选中的是哪一页」告诉高度账本**（p5-home-blocks / T7 复核 P1）：
+                      // 名单外的页（日历 / 计时器 / 暂存器 / 终端）借此把量出来的值清掉，高度回落
+                      // **手动值**（今天的行为、宽松够用）——不清的话它会继承上一页量出来的高度
+                      // （首页 → 待办 ~200 → 日历：日历按 200 画两栏月历，只有 136pt 可用）。
+                      // 每帧一次、同键直接返回（幂等）；键的映射见 `selectedPanelTabKey`。
+                      let _ = declareSelectedPanelTab()
                       Group {
                           switch coordinator.currentView {
                               case .home:

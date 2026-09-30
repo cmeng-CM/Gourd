@@ -74,6 +74,7 @@
 //
 
 import AppKit
+import Combine
 import Defaults
 import SwiftUI
 import XCTest
@@ -476,6 +477,7 @@ final class PanelAutoHeightTests: XCTestCase {
         // 账本写什么与它无关（auto → manual 切档时不会残留内容高）。
         Defaults[.panelHeightMode] = PanelAutoHeight.modeManual
         Defaults[.openNotchHeight] = 333
+        ledger.selectTab(PanelContentHeight.homeTab)
         ledger.setHomeContentHeight(999)
         XCTAssertEqual(
             openNotchSize.height, 333,
@@ -484,6 +486,7 @@ final class PanelAutoHeightTests: XCTestCase {
 
         // auto：读账本（首页那一份）→ `内容 + 宿主内边距` → 夹取。
         Defaults[.panelHeightMode] = PanelAutoHeight.modeAuto
+        ledger.selectTab(PanelContentHeight.homeTab)
         ledger.setHomeContentHeight(400)
         XCTAssertEqual(openNotchSize.height, 440, "auto 档 = 内容高 400 + 宿主内边距 40")
 
@@ -495,12 +498,21 @@ final class PanelAutoHeightTests: XCTestCase {
         let upper = effectiveOpenNotchHeightUpperBound(
             screenVisibleHeight: NSScreen.main?.visibleFrame.height
         )
+        ledger.selectTab(PanelContentHeight.homeTab)
         ledger.setHomeContentHeight(5000)
         XCTAssertEqual(openNotchSize.height, upper, "内容高再大也不越过有效上界")
 
         // auto + 面板停在别的 tab 上（T7）：尺寸出口读的是**量出来的那一份**（同一个出口、同一口径）。
+        ledger.selectTab("com.cmeng.gourd.todos")
         ledger.report(300, for: "com.cmeng.gourd.todos")
         XCTAssertEqual(openNotchSize.height, 340, "量出来的 300 与算出来的走同一个出口（300 + 40）")
+
+        // auto + 切到**名单外**的页（日历 / 计时器 / 暂存器 / 终端）：回落手动值（今天的行为）。
+        ledger.selectTab("com.cmeng.gourd.calendar")
+        XCTAssertEqual(
+            openNotchSize.height, 333,
+            "名单外的页没有值 → 手动值（不是继承上一页量出来的 300）"
+        )
     }
 
 
@@ -570,34 +582,138 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.current, 320, "换回旧页同样无条件接受")
     }
 
-    /// 首页那一份**权威**（派发片段裁决 4）：量出来的值碰不到它，`home` 键也不接上报。
+    /// 首页那一份**权威**（派发片段裁决 4 + T7 复核 P2）：量出来的值碰不到它，`home` 键不接上报，
+    /// 而且**首页的写入不碰「当前页」**——切 tab 过渡里旧首页再跑一次 body，也不能把刚量完的模块页
+    /// 顶掉（`activeTab` 只由 `selectTab(_:)` 定）。
     func testHomeHeightStaysAuthoritativeAndMeasuredValuesCannotOverwriteIt() {
         let ledger = PanelContentHeight.shared
         ledger.reset()
         defer { ledger.reset() }
 
-        // 首页那份是接缝**算**出来的（T6 那条路），写进自己的槽。
+        // 首页那份是接缝**算**出来的（T6 那条路），写进自己的槽；当班与否由 `selectTab` 声明。
+        ledger.selectTab(PanelContentHeight.homeTab)
         ledger.setHomeContentHeight(400)
         XCTAssertEqual(ledger.current, 400)
         XCTAssertEqual(ledger.activeTab, PanelContentHeight.homeTab)
 
         // 别的页上报：当前页换人，但首页那一份原样保留（量出来的值碰不到它）。
+        ledger.selectTab("com.cmeng.gourd.todos")
         ledger.report(250, for: "com.cmeng.gourd.todos")
         XCTAssertEqual(ledger.current, 250, "别人当班 → 读别人量出来的那一份")
         XCTAssertEqual(ledger.homeContentHeight, 400, "首页那一份原样保留（权威）")
 
-        // 回到首页：接缝在 body 里再写一次（每帧都写）→ 当前值立刻回到首页那一份。
-        ledger.setHomeContentHeight(400)
-        XCTAssertEqual(ledger.current, 400, "首页当班 → 读算出来的那一份")
+        // **旧首页再写一次也不能把当前页抢回去**（切 tab 的 0.3s 里旧页还活着）：
+        // 槽被更新（那是首页自己的数），但 `current` 仍是模块页量出来的值。
+        ledger.setHomeContentHeight(380)
+        XCTAssertEqual(ledger.current, 250, "首页的写入不碰当前页（不给模块页的结论翻盘）")
+        XCTAssertEqual(ledger.activeTab, "com.cmeng.gourd.todos", "当前页只由 `selectTab` 改")
+        XCTAssertEqual(ledger.homeContentHeight, 380, "首页的槽照常更新（它自己的数）")
+
+        // 回到首页：`selectTab` 声明 + 接缝在 body 里再写一次 → 当前值回到首页那一份。
+        ledger.selectTab(PanelContentHeight.homeTab)
+        XCTAssertEqual(ledger.current, 380, "首页当班 → 读算出来的那一份")
 
         // `home` 键的上报被忽略（首页有自己的槽，不许两条路写同一个值）。
         ledger.report(999, for: PanelContentHeight.homeTab)
-        XCTAssertEqual(ledger.current, 400, "`home` 键的上报不进门")
+        XCTAssertEqual(ledger.current, 380, "`home` 键的上报不进门")
         XCTAssertEqual(ledger.measuredHeight, 250, "`home` 键的上报没写脏量出来的那一槽")
 
         // 空串（还没选中模块 / 没选中扩展）= 不是一页，同样不进门。
         ledger.report(123, for: "")
+        XCTAssertEqual(ledger.current, 380)
+    }
+
+    /// **切页**（T7 复核 P1）：名单外的页必须**没有值**（回落手动值），名单内的页保留到新页量完，
+    /// 首页读算出来的那一份。为什么这条是硬要求：不清值就会继承上一页的高度——首页 → 待办 ~200
+    /// → 日历，日历按 200 画两栏月历（`max(130, 200 − 28 − 36)` = 136pt），挤得不能用。
+    func testSelectTabClearsValueForUnlistedPagesAndKeepsItForMeasuredOnes() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let todos = "com.cmeng.gourd.todos"
+        let notifications = "com.cmeng.gourd.notifications"
+
+        // 首页 → 待办：量出来 200。
+        ledger.selectTab(PanelContentHeight.homeTab)
+        ledger.setHomeContentHeight(400)
+        ledger.selectTab(todos)
+        ledger.report(200, for: todos)
+        XCTAssertEqual(ledger.current, 200)
+
+        // 名单内的另一页：**保留**上一页的量值（新页量完那一拍无条件覆盖它——一次跳动，
+        // §已知限制 2 的形态；切页就清会变成「先跳手动值再跳量值」两次跳动）。
+        ledger.selectTab(notifications)
+        XCTAssertEqual(ledger.current, 200, "名单内的页：先拿上一页的数，等新页量完覆盖")
+        ledger.report(150, for: notifications)
+        XCTAssertEqual(ledger.current, 150, "新页量完 → 无条件接受")
+
+        // **新页的第一份上报无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
+        // 新页比旧值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。
+        ledger.selectTab(todos)
+        XCTAssertEqual(ledger.current, 150, "切到待办：先留着上一次量出来的 150（一次跳动的起点）")
+        ledger.pointerInsidePanel = { true }
+        ledger.report(90, for: todos)
+        XCTAssertEqual(ledger.current, 90, "切页后的第一份上报：无条件接受（变矮、光标在面板里都接受）")
+
+        // 第二份起回到正常条款：光标在面板里 → 变矮被拦、变大照常。
+        ledger.report(60, for: todos)
+        XCTAssertEqual(ledger.current, 90, "第二份起回条款 ④（光标在面板内不缩）")
+        ledger.report(140, for: todos)
+        XCTAssertEqual(ledger.current, 140, "变大照常接受")
+        ledger.pointerInsidePanel = { false }
+
+        // 名单外的页（日历）：**清掉** → `current` = nil → 尺寸层回落手动值。
+        ledger.selectTab("com.cmeng.gourd.calendar")
+        XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 150）")
+        XCTAssertNil(ledger.measuredHeight, "量出来的那一槽被清掉")
+        XCTAssertEqual(ledger.activeTab, "com.cmeng.gourd.calendar")
+
+        // 再切回名单内的页：值已被清 → 新页量出来之前是 nil（回落手动值），量完就位。
+        ledger.selectTab(todos)
+        XCTAssertNil(ledger.current, "上一页是名单外 → 回来时也没有存量值")
+        ledger.report(180, for: todos)
+        XCTAssertEqual(ledger.current, 180)
+
+        // 首页：读 `homeContentHeight`（不是量出来的那一份）。
+        ledger.selectTab(PanelContentHeight.homeTab)
+        XCTAssertEqual(ledger.current, 400, "首页当班 → 算出来的那一份")
+
+        // 声明是幂等的（每帧都调）；空键（还没选中模块）不声明、也不清任何东西。
+        ledger.selectTab(PanelContentHeight.homeTab)
         XCTAssertEqual(ledger.current, 400)
+        ledger.selectTab("")
+        XCTAssertEqual(ledger.activeTab, PanelContentHeight.homeTab, "空键不进门（不改当前页）")
+        XCTAssertEqual(ledger.current, 400)
+    }
+
+    /// `selectTab` 只在 `current` **真的变了**时才响 `objectWillChange`（尺寸层据此走那条既有的
+    /// 0.15s 防抖链）：同键再声明一次、以及「切到同值的页」都不该触发多余的重算。
+    func testSelectTabNotifiesOnlyWhenTheEffectiveValueChanges() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let todos = "com.cmeng.gourd.todos"
+        var notifications = 0
+        let cancellable = ledger.objectWillChange.sink { _ in notifications += 1 }
+
+        ledger.selectTab(todos)
+        XCTAssertEqual(notifications, 0, "第一次声明（`current` 还是 nil）→ 不响")
+        ledger.report(200, for: todos)
+        XCTAssertEqual(notifications, 1, "值从 nil 变成 200 → 响一次")
+
+        ledger.selectTab(todos)
+        XCTAssertEqual(notifications, 1, "同键重复声明（每帧都调）→ 不响")
+        ledger.selectTab("com.cmeng.gourd.notifications")
+        XCTAssertEqual(notifications, 1, "名单内的页且量值没变化（还是 200）→ 不响")
+        ledger.report(200, for: "com.cmeng.gourd.notifications")
+        XCTAssertEqual(notifications, 1, "同一个数（换页的第一拍）→ 滞回之外也不响")
+
+        ledger.selectTab("com.cmeng.gourd.calendar")
+        XCTAssertEqual(notifications, 2, "名单外的页把值清掉 → current 变 nil → 响一次")
+
+        withExtendedLifetime(cancellable) {}
     }
 
     /// **谁上报**的名单（派发片段裁决 6）：内容随条数变的那四页；另外四页刻意不在里面，
@@ -753,6 +869,85 @@ final class PanelAutoHeightTests: XCTestCase {
         host.frame = CGRect(x: 0, y: 0, width: 700, height: 600)
         host.layoutSubtreeIfNeeded()
         return host
+    }
+
+    /// 把任一页挂进 `NSHostingView` 跑一趟真布局（探针只在布局里发生）。
+    @discardableResult
+    private func mountPanelPage<Content: View>(
+        _ content: Content, width: CGFloat, height: CGFloat
+    ) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: content.frame(width: width, height: height))
+        host.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// 宽度自适应的页（启动台那一类的形状）：`GridItem(.adaptive(minimum: 100))` —— 列数随宽度变，
+    /// **行数**（因此自然高）也就随宽度变。
+    private struct AdaptiveGridPageFixture: View {
+        let itemCount: Int
+
+        var body: some View {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
+                    ForEach(0..<itemCount, id: \.self) { _ in
+                        Color.clear.frame(height: 40)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// **探针按面板的实际宽量**（T7 复核 P2）：宽度自适应的页在**没有宽提案**时会按最窄那一档算
+    /// （单列）——启动台那样几百个 App 的页因此量出「几百行」的自然高，把面板顶到 850 上界；
+    /// 而它本来只该要「6 列 × 若干行」那么高。
+    ///
+    /// 判据用**同一页在两个宽度上的差**（不钉具体行高）：700 宽 → 6 列 → 2 行；300 宽 → 2 列 →
+    /// 4 行；两个值必须**不同**。若探针传的是「宽度也 unspecified」，两次量到的会是同一个数
+    /// （同为单列的 8 行）→ 差为 0 → 这条用例红。
+    func testProbeMeasuresAtThePanelsContentWidthNotAnUnspecifiedWidth() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let tab = "com.cmeng.gourd.launcher"
+        let header: CGFloat = 24
+
+        let wide = mountPanelPage(
+            AdaptiveGridPageFixture(itemCount: 8)
+                .panelContentHeightReport(tab: tab, headerHeight: header, isCurrent: { true }),
+            width: 700, height: 600
+        )
+        let wideValue = ledger.current
+
+        let narrow = mountPanelPage(
+            AdaptiveGridPageFixture(itemCount: 8)
+                .panelContentHeightReport(tab: tab, headerHeight: header, isCurrent: { true }),
+            width: 300, height: 600
+        )
+        let narrowValue = ledger.current
+
+        guard let wideValue, let narrowValue else {
+            return XCTFail("探针没有上报（`current` 为 nil）")
+        }
+
+        // 700 宽：6 列 → 2 行（40 + 8 + 40 = 88）；300 宽：2 列 → 4 行（4×40 + 3×8 = 184）。
+        // 两个值都要再加这一页自己的内边距 10 + 10 与账本口径的「+ 表头 24 − 16」。
+        XCTAssertEqual(wideValue, 88 + 20 + 8, accuracy: 2, "6 列 2 行 + 页面内边距 + 表头 − 16")
+        XCTAssertEqual(narrowValue, 184 + 20 + 8, accuracy: 2, "2 列 4 行 + 页面内边距 + 表头 − 16")
+        XCTAssertGreaterThan(
+            narrowValue - wideValue, 50,
+            "同一页在窄布面上自然高更高（列数变少、行数变多）——宽度没有被当成 unspecified"
+        )
+        // 反证：若按单列量（8 行 = 8×40 + 7×8 = 376 → 账本值 376 + 20 + 8 = 404），两个宽度会给出
+        // 同一个数。实测 116 / 212（差 96 = 少 2 行 + 少 2 个行距）：量的是**真实布面**上的高。
+        XCTAssertLessThan(wideValue, 200, "不是单列那 404（按真实布面 6 列量）")
+        withExtendedLifetime(wide) {}
+        withExtendedLifetime(narrow) {}
     }
 
     /// **探针对渲染透明**（`sizeThatFits` 逐字转发提案）：整页在这一层里面仍然把这个 700×600 的
