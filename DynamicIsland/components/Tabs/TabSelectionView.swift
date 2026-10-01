@@ -49,9 +49,10 @@ struct TabModel: Identifiable {
 /// 直接门控、**不经模块注册表**的三条 tab。`取色器` 刻意不在此列：它渲染在标题栏图标行、
 /// 不是面板 tab，因此不进排序名单（docs/30 §明确不做 3 / 备选⑧；它的设置行保持开关-only）。
 ///
-/// **`id` 就是 `panelOrder` 的键**（与模块 tab 的键 = 模块 id 共用同一张表）。三个 id 取
-/// `shelf` / `clipboard` / `terminal`——与 `ContentView.selectedPanelTabKey` 给这三个宿主页的
-/// 稳定串**同一批词**（`PanelContentHeight` 账本侧也认这三个串），不是新造的名字。
+/// **`id` 就是 `panelOrder` 的键**（与模块 tab 的键 = 模块 id 共用同一张表）。三个 id 取现有
+/// 词汇、不新造名字：`shelf` / `terminal` 与 `ContentView.selectedPanelTabKey` 给这两个宿主页的
+/// 稳定串**同词**（`PanelContentHeight` 账本侧也认）；`clipboard` 是**排序专用键**——它在面板条
+/// 上的那条 tab 渲染 `.notes`，账本键因此是 `"notes"`（`"clipboard"` 只对应标题栏图标那条路径）。
 ///
 /// **`defaultOrder` 取负值**：改动前的实际渲染顺序里（`TabSelectionView.tabs` 的拼装），宿主三
 /// tab 恒排在一切模块 tab 之前（shelf → clipboard → terminal → 模块段），缺键回落时它们因此必须

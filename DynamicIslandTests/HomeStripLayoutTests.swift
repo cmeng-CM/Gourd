@@ -2166,6 +2166,38 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertLessThan(HomeBlockFloatMetrics.duration, 0.3, "再慢就滞后于指针")
     }
 
+    /// **柔光池半径恒在最近边之前归零**（终审修复）：钉的不是系数本身，而是**有效半径**这条
+    /// 不变量——`poolEndRadius(w, h) ≤ 0.5 × min(w, h)`。改回带下界的写法（曾为
+    /// `max(48, min(w, h) × 0.45)`）时，块高 40 档立刻变红：`0.5 × 40 = 20 < 48`，下界把半径顶过
+    /// 最近边，渐变在边缘残留亮度、形成直角台阶 = **变相底板**（正是本用例防的回归）。
+    ///
+    /// 三档块高取生产里的高度档（`HomeStripView.blockHeight(for:)` 的 140 / 96 与矮块 40 档），
+    /// 每档配「宽 ≥ 高」与「宽 < 高」两侧的代表宽度：两条边都当过一次短边，`min` 的取法
+    /// （别写死 height）一并钉住。零尺寸一档钉非负 guard（给 0，不给负半径）。
+    func testHomeBlockPoolRadiusNeverCrossesTheNearestEdge() {
+        let heights: [CGFloat] = [40, 96, 140]
+        let widths: [CGFloat] = [60, 140, 180, 250, 400]
+        for height in heights {
+            for width in widths {
+                let radius = HomeBlockFloatMetrics.poolEndRadius(width: width, height: height)
+                let nearestEdge = 0.5 * min(width, height)
+                XCTAssertLessThanOrEqual(
+                    radius, nearestEdge,
+                    "块 \(width)×\(height)：有效半径 \(radius) 必须 ≤ 最近边 \(nearestEdge)"
+                        + "（渐变在最近边之前归零，否则边缘残留直角台阶 = 变相底板）"
+                )
+            }
+        }
+        XCTAssertEqual(
+            HomeBlockFloatMetrics.poolEndRadius(width: 0, height: 140), 0,
+            "0 宽给 0（非负 guard），不给负半径"
+        )
+        XCTAssertEqual(
+            HomeBlockFloatMetrics.poolEndRadius(width: 140, height: 0), 0,
+            "0 高给 0（非负 guard），不给负半径"
+        )
+    }
+
     // MARK: - 音乐块再缩宽（p6-ui-polish / docs/30 §做法 机制二 / D-03 · D-04）
 
     /// **T2 的三条钉**（docs/30 §接口与数据形状·机制二）：① min/ideal 取值；② **封面档装宽度**

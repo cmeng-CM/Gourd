@@ -546,13 +546,27 @@ enum HomeBlockFloatMetrics {
     static let poolOpacity: Double = 0.06
     /// hover 的柔光池中心不透明度（比常驻大 = 池变亮）。
     static let hoverPoolOpacity: Double = 0.12
-    /// 柔光池的半径系数：`endRadius = max(48, min(w, h) × factor)`。
+    /// 柔光池的半径系数：`endRadius = min(w, h) × factor`——唯一算式在 `poolEndRadius(width:height:)`。
     ///
     /// **系数必须 ≤ 0.5**：格子的**最近边**在 `0.5 × min(w, h)` 处，系数过大会让渐变在边缘还没走完
     /// ——0.7 时边缘仍残留 28.6% 强度（idle ≈4.4/255、hover ≈8.7/255），在格子边缘形成**直角台阶**
     /// = 变相底板（T1 三轮独立重审实测；且与「渐变到全透明、无边界」的口径不符）。取 **0.45**：
     /// 到最近边之前就归零，留一点余量。
+    ///
+    /// **不设最小半径下界**（终审修复）：曾写成 `max(48, …)`，`min(w, h) < 96` 的格子（如矮块
+    /// 40pt 档）会被下界顶过最近边（`48 > 0.5 × 40 = 20`）——渐变在边缘还没归零，又变回直角台阶
+    /// = 变相底板。下界就此删掉，短边再小也按同一系数走。
     static let poolEndRadiusFactor: CGFloat = 0.45
+
+    /// 柔光池的**有效** endRadius（唯一算式；`HomeBlockFloatModifier` 只消费它）。
+    ///
+    /// `min(w, h) × factor` + **非负 guard**（GeometryReader 的尺寸理论上非负，但 0 也不该产生
+    /// 负半径）——**无下界**：任何尺寸下都 ≤ `0.5 × min(w, h)`，渐变**必然在最近边之前归零**
+    /// （终审修复；这条不变量由 `testHomeBlockPoolRadiusNeverCrossesTheNearestEdge` 按块高
+    /// 40 / 96 / 140 三档钉住，不只钉系数）。
+    static func poolEndRadius(width: CGFloat, height: CGFloat) -> CGFloat {
+        max(0, min(width, height) * poolEndRadiusFactor)
+    }
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
@@ -621,9 +635,9 @@ struct HomeBlockFloatModifier: ViewModifier {
                         colors: [.white.opacity(effects.poolOpacity), .clear],
                         center: .center,
                         startRadius: 0,
-                        endRadius: max(
-                            48,
-                            min(geo.size.width, geo.size.height) * HomeBlockFloatMetrics.poolEndRadiusFactor
+                        endRadius: HomeBlockFloatMetrics.poolEndRadius(
+                            width: geo.size.width,
+                            height: geo.size.height
                         )
                     )
                 }

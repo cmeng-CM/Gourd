@@ -1569,7 +1569,7 @@ struct ContentView: View {
     /// 键同一批），宿主页各给一个稳定串，首页 = `PanelContentHeight.homeTab`（**标准路径**那一支；
     /// 侧歌词档是 `sideLyricsHomeTab`，见 `.home` 分支——终审 T-final / D-57）。
     ///
-    /// 名单外的键（`shelf` / `terminal` / `timer` / `stats` / `notes` / `clipboard` / `llmUsage` /
+    /// 名单外的键（`terminal` / `timer` / `stats` / `notes` / `clipboard` / `llmUsage` /
     /// `colorPicker` / `extension`）**也要声明**——账本据此把量出来的值清掉，让这些页回落**手动值**
     /// （今天的行为），而不是继承上一页量出来的高度。
     private var selectedPanelTabKey: String {
