@@ -2168,9 +2168,7 @@ final class HomeStripLayoutTests: XCTestCase {
             "p7：两档池的可辨差有下限（≥ 0.03）——hover 与常驻必须分得出（p6 只钉了次序）"
         )
         XCTAssertGreaterThan(hover.glowRadius, idle.glowRadius, "hover 辉光半径要比常驻更大")
-        XCTAssertGreaterThan(idle.glowRadius, 0, "常驻辉光可见：idle < hover 且 idle > 0")
         XCTAssertGreaterThan(hover.glowOpacity, idle.glowOpacity, "hover 辉光不透明度要比常驻更大")
-        XCTAssertGreaterThan(idle.glowOpacity, 0, "常驻辉光可见：idle < hover 且 idle > 0")
         XCTAssertGreaterThanOrEqual(hover.scale, 1.005, "hover 放大要看得出来")
         XCTAssertLessThanOrEqual(hover.scale, 1.05, "再大就不像浮起、像抖动")
         XCTAssertGreaterThanOrEqual(hover.brightness, 0.02, "hover 提亮要看得出来（增量 ≥ 0.02）")

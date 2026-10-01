@@ -110,7 +110,7 @@
 | 池渐变 | 两停 `[poolOpacity, .clear]` | **三停** `[(0, poolOpacity), (0.6, poolOpacity×0.35), (1, .clear)]` | 三停 |
 | 上屏实测（纯黑底，判据：缝 ≤3、块内 ≥10、扫描无台阶） | — | 缝 0.00 / 块内 27.9（峰 33）/ 扫描单调归零、相邻差 ≤4 | 三条全过 → 起点值即定稿（证据 `.workflow/p7-workday-launcher/evidence/t1-static-blocks.txt`） |
 
-其余不变：`hoverScale 1.02`、`hoverBrightness 1.06`（组装时 −1）、`duration 0.2`、`poolEndRadius = max(0, min(w,h) × factor)`（无下界）。上屏调参若微调 `poolOpacity`（0.13→至多 0.18）与 `hoverPoolOpacity`，以回写后的本表为准；`hoverPoolOpacity > poolOpacity` 与「系数 ≤ 0.5」两条不变量不得破。
+其余不变：`hoverScale 1.02`、`hoverBrightness 1.06`（组装时 −1）、`duration 0.2`、`poolEndRadius = max(0, min(w,h) × factor)`（无下界）。上屏调参**已完成**（2026-10-01）：首轮实测即达标（缝 **0.00**、块内 **27.9/255**、峰 **33**、跨格扫描单调归零无台阶），`poolOpacity` 停在 **0.13**（未上调到 0.18 档）——最终值即起点值；`hoverPoolOpacity > poolOpacity` 与「系数 ≤ 0.5」两条不变量未破。
 
 ### 2. 启动台分区与拖放纯函数（`LauncherRanking.swift` 追加）
 
