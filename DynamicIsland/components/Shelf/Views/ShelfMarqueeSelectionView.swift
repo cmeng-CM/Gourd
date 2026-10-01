@@ -48,17 +48,25 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
     let onBackgroundClick: () -> Void
     /// Marquee started/finished; used to hold the notch open while dragging.
     let onActiveChange: (Bool) -> Void
+    /// Rects (this view's own coordinate space, top-left origin) that the
+    /// overlay must not claim even though no item is registered there. The
+    /// share-target tile is the one such region: it is a grid cell inside the
+    /// scrolling content, so this overlay sits above it and would otherwise
+    /// swallow its tap (the tile draws its own click gesture).
+    var passThroughRects: [CGRect] = []
 
     func makeNSView(context: Context) -> MarqueeView {
         let view = MarqueeView()
         view.onBackgroundClick = onBackgroundClick
         view.onActiveChange = onActiveChange
+        view.passThroughRects = passThroughRects
         return view
     }
 
     func updateNSView(_ nsView: MarqueeView, context: Context) {
         nsView.onBackgroundClick = onBackgroundClick
         nsView.onActiveChange = onActiveChange
+        nsView.passThroughRects = passThroughRects
     }
 
     static func dismantleNSView(_ nsView: MarqueeView, coordinator: ()) {
@@ -68,6 +76,9 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
     final class MarqueeView: NSView {
         var onBackgroundClick: (() -> Void)?
         var onActiveChange: ((Bool) -> Void)?
+        /// Regions that yield hit testing even though they hold no shelf item
+        /// (the share-target tile). See `ShelfMarqueeSelectionView.passThroughRects`.
+        var passThroughRects: [CGRect] = []
 
         private var anchorPoint: NSPoint?
         private var currentRect: NSRect?
@@ -89,6 +100,7 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
         /// "drag this file out" and belongs to `DraggableClickView`. The marquee
         /// only starts from empty space. Once it's running we claim everything,
         /// so the band doesn't lose events when it sweeps across a cell.
+        /// The share-target tile yields the same way (it draws its own tap).
         override func hitTest(_ point: NSPoint) -> NSView? {
             if isActive { return self }
 
@@ -99,7 +111,9 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
             let overItem = ShelfItemHitRegistry.shared
                 .frames(in: self)
                 .contains { $0.frame.contains(local) }
-            return overItem ? nil : self
+            if overItem { return nil }
+            if passThroughRects.contains(where: { $0.contains(local) }) { return nil }
+            return self
         }
 
         // MARK: - Mouse
@@ -248,8 +262,9 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
 
         // MARK: - Auto-scroll
 
-        /// The shelf is a single horizontal row, so the band routinely needs to
-        /// reach items that are scrolled out of view.
+        /// The shelf is a vertically scrolling grid (it used to be a single
+        /// horizontal row), so the band routinely needs to reach rows that are
+        /// scrolled out of view — the edge snap follows the Y axis now.
         private func updateAutoScroll(windowPoint: NSPoint) {
             lastDragPointInWindow = windowPoint
             guard autoScrollTimer == nil else { return }
@@ -277,20 +292,23 @@ struct ShelfMarqueeSelectionView: NSViewRepresentable {
             let clip = scrollView.contentView
             let pointInClip = clip.convert(lastDragPointInWindow, from: nil)
 
+            // The document view is SwiftUI's flipped hosting view (top = small
+            // y), so "near the top edge" is `minY` and "near the bottom edge"
+            // is `maxY` — same shape as the old horizontal-row version.
             var delta: CGFloat = 0
-            if pointInClip.x < clip.bounds.minX + autoScrollEdge {
-                delta = -min(autoScrollMaxStep, autoScrollEdge - (pointInClip.x - clip.bounds.minX))
-            } else if pointInClip.x > clip.bounds.maxX - autoScrollEdge {
-                delta = min(autoScrollMaxStep, autoScrollEdge - (clip.bounds.maxX - pointInClip.x))
+            if pointInClip.y < clip.bounds.minY + autoScrollEdge {
+                delta = -min(autoScrollMaxStep, autoScrollEdge - (pointInClip.y - clip.bounds.minY))
+            } else if pointInClip.y > clip.bounds.maxY - autoScrollEdge {
+                delta = min(autoScrollMaxStep, autoScrollEdge - (clip.bounds.maxY - pointInClip.y))
             }
             guard delta != 0 else { return }
 
-            let documentWidth = scrollView.documentView?.frame.width ?? 0
-            let maxX = max(0, documentWidth - clip.bounds.width)
-            let newX = min(max(0, clip.bounds.origin.x + delta), maxX)
-            guard newX != clip.bounds.origin.x else { return }
+            let documentHeight = scrollView.documentView?.frame.height ?? 0
+            let maxY = max(0, documentHeight - clip.bounds.height)
+            let newY = min(max(0, clip.bounds.origin.y + delta), maxY)
+            guard newY != clip.bounds.origin.y else { return }
 
-            clip.scroll(to: NSPoint(x: newX, y: clip.bounds.origin.y))
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: newY))
             scrollView.reflectScrolledClipView(clip)
 
             // The cursor now sits over different content, so recompute the band

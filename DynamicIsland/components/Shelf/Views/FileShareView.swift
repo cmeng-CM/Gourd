@@ -25,17 +25,86 @@ import Defaults
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// 投放格（网格首格，docs/30 §做法 机制三）：与文件格同尺寸的一枚虚线格。
+///
+/// 供应商图标 + 名称；点按开供应商选择（切换投送服务）——「选文件去投送」那条路
+/// 由拖文件进来 / 文件格右键菜单承担，这一格不再是半屏大的按钮。尺寸由调用方给
+/// （网格列宽 = `ShelfCellMetrics.size.width`）。
+struct ShareTargetTile: View {
+    /// 当前选中的投送供应商（名走本地化，`System Share Menu` 有 zh 回落）。
+    let provider: QuickShareProvider
+    /// 拖拽悬停在这格上（虚线描边与轻微放大跟着它走）。
+    let isTargeted: Bool
+
+    private let cornerRadius: CGFloat = 12
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.35), Color.black.opacity(0.20)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(
+                            isTargeted
+                                ? Color.accentColor.opacity(0.9)
+                                : Color.white.opacity(0.1),
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.6), radius: 6, x: 0, y: 2)
+
+            VStack(spacing: 6) {
+                icon
+
+                Text(provider.displayName)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .scaleEffect(isTargeted ? 1.03 : 1.0)
+        .animation(.spring(response: 0.36, dampingFraction: 0.7), value: isTargeted)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if let imgData = provider.imageData, let nsImg = NSImage(data: imgData) {
+            Image(nsImage: nsImg)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            Image(systemName: "square.and.arrow.up")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 34, height: 34)
+                .foregroundStyle(isTargeted ? Color.accentColor : Color.gray)
+        }
+    }
+}
+
 struct FileShareView: View {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @StateObject private var quickShare = QuickShareService.shared
     @StateObject private var localSend = LocalSendService.shared
     @Default(.quickShareProvider) var quickShareProvider: String
     @State private var showQuickSharePopover = false
-    @State private var isSwitchHover = false
     @State private var autoCloseToken = UUID()
 
     @State private var hostView: NSView?
-    @State private var interactionNonce: UUID = .init()
     @State private var isProcessing = false
     @State private var pendingDropProviders: [NSItemProvider]?
     @State private var showLocalSendPicker = false
@@ -49,14 +118,19 @@ struct FileShareView: View {
     }
 
     var body: some View {
-        dropArea
+        ShareTargetTile(provider: selectedProvider, isTargeted: vm.dropZoneTargeting)
             .background(NSViewHost(view: $hostView))
+            // 点按 = 打开供应商选择（原来是小角落的 switch 按钮；格子里放不下，挪到整格）。
+            .onTapGesture {
+                vm.setAutoCloseSuppression(true, token: autoCloseToken)
+                quickShare.ensureDiscovered()
+                showQuickSharePopover.toggle()
+            }
             .onAppear {
                 quickShare.ensureDiscovered()
                 localSend.startDiscovery()
             }
             .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data, .image], isTargeted: $vm.dropZoneTargeting) { providers in
-                interactionNonce = .init()
                 vm.dropEvent = true
                 if selectedProvider.id == "LocalSend" {
                     pendingDropProviders = providers
@@ -66,246 +140,153 @@ struct FileShareView: View {
                 }
                 return true
             }
-            .onTapGesture {
-                guard quickShare.availableProviders.first(where: { $0.id == quickShareProvider }) != nil else { return }
-                // Only open picker on taps when AirDrop or LocalSend is selected
-                if quickShareProvider == "AirDrop" || quickShareProvider == "LocalSend" {
-                    Task { await handleClick() }
+            .popover(isPresented: $showQuickSharePopover, arrowEdge: .bottom) {
+                quickSharePicker
+            }
+            .overlay {
+                // Loading overlay
+                if isProcessing || quickShare.isPickerOpen {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.black.opacity(0.3))
+                        .overlay(
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        )
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if selectedProvider.id == "LocalSend" && localSend.isSending {
+                    localSendProgressRing
+                        .padding(.top, 10)
+                        .padding(.trailing, 10)
+                        .transition(.opacity)
+                }
+            }
+            .onChange(of: showLocalSendPicker) { _, show in
+                if show {
+                    LocalSendDevicePickerWindowManager.shared.show(
+                        onDeviceSelected: { device in
+                            localSend.selectedDeviceID = device.id
+                            if let providers = pendingDropProviders {
+                                // Close the picker first since handleDrop will use quickShare properly
+                                showLocalSendPicker = false
+                                Task {
+                                    await handleDrop(providers)
+                                    pendingDropProviders = nil
+                                }
+                            }
+                        },
+                        onDismiss: {
+                            showLocalSendPicker = false
+                            pendingDropProviders = nil
+                        }
+                    )
+                } else {
+                    LocalSendDevicePickerWindowManager.shared.hide()
                 }
             }
     }
 
-    private var dropArea: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(colors: [Color.black.opacity(0.35), Color.black.opacity(0.20)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(
-                            vm.dropZoneTargeting
-                                ? Color.accentColor.opacity(0.9)
-                                : Color.white.opacity(0.1),
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
-                        )
-                )
-                .shadow(color: Color.black.opacity(0.6), radius: 6, x: 0, y: 2)
+    /// 供应商选择（原来挂在角上的 switch 按钮，内容逐条不动）。
+    private var quickSharePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quick Share")
+                .font(.headline)
 
-            // Content
-            VStack(spacing: 5) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(
-                            vm.dropZoneTargeting ? 0.11 : 0.09
-                        ))
-                        .frame(width: 55, height: 55)
-                    Image(systemName: "square.and.arrow.up")
+            Picker("Quick Share Service", selection: $quickShareProvider) {
+                ForEach(quickShare.availableProviders, id: \.id) { provider in
+                    HStack(spacing: 8) {
+                        Group {
+                            if let imgData = provider.imageData, let nsImg = NSImage(data: imgData) {
+                                Image(nsImage: nsImg)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 16, height: 16)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            } else {
+                                Image(systemName: "square.and.arrow.up")
+                                    .frame(width: 16, height: 16)
+                            }
+                        }
+                        .foregroundColor(.accentColor)
+
+                        Text(provider.displayName)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .tag(provider.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(minWidth: 260)
+
+            if let selected = quickShare.availableProviders.first(where: { $0.id == quickShareProvider }) {
+                HStack(alignment: .top, spacing: 8) {
                     Group {
-                        if let imgData = selectedProvider.imageData, let nsImg = NSImage(data: imgData) {
+                        if let imgData = selected.imageData, let nsImg = NSImage(data: imgData) {
                             Image(nsImage: nsImg)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 34, height: 34)
-                                .clipped()
+                                .frame(width: 20, height: 20)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
                         } else {
                             Image(systemName: "square.and.arrow.up")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 34, height: 34)
+                                .frame(width: 20, height: 20)
                         }
                     }
-                        .foregroundStyle(
-                            vm.dropZoneTargeting ? Color.accentColor : Color.gray
-                        )
-                        .scaleEffect(
-                            vm.dropZoneTargeting ? 1.06 : 1.0
-                        )
-                        .animation(.spring(response: 0.36, dampingFraction: 0.7), value: vm.dropZoneTargeting)
+                    .foregroundColor(.accentColor)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Currently: \(selected.displayName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        Text("Files shared from the shelf will use this service")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-
-                Text(selectedProvider.displayName)
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundColor(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity)
-
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity)
-
-            // Switch button pinned to top-right corner
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        vm.setAutoCloseSuppression(true, token: autoCloseToken)
-                        quickShare.ensureDiscovered()
-                        showQuickSharePopover.toggle()
-                    } label: {
-                        Image(systemName: "switch.2")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 14, height: 14)
-                            .padding(8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(isSwitchHover ? Color(.windowBackgroundColor).opacity(0.12) : Color.clear))
-                            .foregroundColor(isSwitchHover ? .accentColor : .gray)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .onHover { hovering in
-                        isSwitchHover = hovering
-                        vm.setAutoCloseSuppression(hovering, token: autoCloseToken)
-                    }
-                    .popover(isPresented: $showQuickSharePopover, arrowEdge: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Quick Share")
-                                .font(.headline)
-
-                            Picker("Quick Share Service", selection: $quickShareProvider) {
-                                ForEach(quickShare.availableProviders, id: \.id) { provider in
-                                    HStack(spacing: 8) {
-                                        Group {
-                                            if let imgData = provider.imageData, let nsImg = NSImage(data: imgData) {
-                                                Image(nsImage: nsImg)
-                                                    .resizable()
-                                                    .scaledToFit()
-                                                    .frame(width: 16, height: 16)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                                            } else {
-                                                Image(systemName: "square.and.arrow.up")
-                                                    .frame(width: 16, height: 16)
-                                            }
-                                        }
-                                        .foregroundColor(.accentColor)
-
-                                        Text(provider.displayName)
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                            .layoutPriority(1)
-                                            .fixedSize(horizontal: true, vertical: false)
-                                    }
-                                    .tag(provider.id)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .frame(minWidth: 260)
-
-                            if let selected = quickShare.availableProviders.first(where: { $0.id == quickShareProvider }) {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Group {
-                                        if let imgData = selected.imageData, let nsImg = NSImage(data: imgData) {
-                                            Image(nsImage: nsImg)
-                                                .resizable()
-                                                .scaledToFit()
-                                                .frame(width: 20, height: 20)
-                                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        } else {
-                                            Image(systemName: "square.and.arrow.up")
-                                                .frame(width: 20, height: 20)
-                                        }
-                                    }
-                                    .foregroundColor(.accentColor)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Currently: \(selected.displayName)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                            .layoutPriority(1)
-                                            .fixedSize(horizontal: true, vertical: false)
-                                        Text("Files shared from the shelf will use this service")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                        .padding()
-                        .onAppear { vm.setAutoCloseSuppression(true, token: autoCloseToken) }
-                        .onDisappear {
-                            // Delay clearing suppression slightly so the close click doesn't immediately close the notch
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                vm.setAutoCloseSuppression(false, token: autoCloseToken)
-                            }
-                        }
-                        .onHover { hovering in vm.setAutoCloseSuppression(hovering, token: autoCloseToken) }
-                    }
-                    .padding(.trailing, 8)
-                    .padding(.top, 8)
-                }
-                Spacer()
-            }
-            
-            // Loading overlay
-            if isProcessing || quickShare.isPickerOpen {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(.black.opacity(0.3))
-                    .overlay(
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
-                    )
-            }
-
-            if selectedProvider.id == "LocalSend" && localSend.isSending {
-                VStack {
-                    HStack {
-                        Spacer()
-                        ZStack {
-                            Circle()
-                                .stroke(Color.white.opacity(0.16), lineWidth: 3)
-
-                            Circle()
-                                .trim(from: 0, to: min(max(localSend.sendProgress, 0), 1))
-                                .stroke(
-                                    Color.white,
-                                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                                )
-                                .rotationEffect(.degrees(-90))
-                                .animation(.easeInOut(duration: 0.2), value: localSend.sendProgress)
-
-                            if localSend.sendProgress > 0.99 {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundColor(.white)
-                            }
-                        }
-                        .frame(width: 24, height: 24)
-                        .padding(.top, 10)
-                        .padding(.trailing, 10)
-                    }
-                    Spacer()
-                }
-                .transition(.opacity)
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onChange(of: showLocalSendPicker) { _, show in
-            if show {
-                LocalSendDevicePickerWindowManager.shared.show(
-                    onDeviceSelected: { device in
-                        localSend.selectedDeviceID = device.id
-                        if let providers = pendingDropProviders {
-                            // Close the picker first since handleDrop will use quickShare properly
-                            showLocalSendPicker = false
-                            Task {
-                                await handleDrop(providers)
-                                pendingDropProviders = nil
-                            }
-                        }
-                    },
-                    onDismiss: {
-                        showLocalSendPicker = false
-                        pendingDropProviders = nil
-                    }
+        .padding()
+        .onAppear { vm.setAutoCloseSuppression(true, token: autoCloseToken) }
+        .onDisappear {
+            // Delay clearing suppression slightly so the close click doesn't immediately close the notch
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                vm.setAutoCloseSuppression(false, token: autoCloseToken)
+            }
+        }
+        .onHover { hovering in vm.setAutoCloseSuppression(hovering, token: autoCloseToken) }
+    }
+
+    /// LocalSend 发送进度（原来钉在角落，格子同样大小、内容不动）。
+    private var localSendProgressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 3)
+
+            Circle()
+                .trim(from: 0, to: min(max(localSend.sendProgress, 0), 1))
+                .stroke(
+                    Color.white,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
                 )
-            } else {
-                LocalSendDevicePickerWindowManager.shared.hide()
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.2), value: localSend.sendProgress)
+
+            if localSend.sendProgress > 0.99 {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white)
             }
         }
+        .frame(width: 24, height: 24)
     }
 
     // MARK: - Actions
@@ -314,10 +295,6 @@ struct FileShareView: View {
         isProcessing = true
         defer { isProcessing = false }
         await quickShare.shareDroppedFiles(providers, using: selectedProvider, from: hostView)
-    }
-    
-    private func handleClick() async {
-        await quickShare.showFilePicker(for: selectedProvider, from: hostView)
     }
 }
 

@@ -721,9 +721,10 @@ final class PanelAutoHeightTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
-    /// **谁上报**的名单（派发片段裁决 6）：内容随条数变的那四页；另外四页刻意不在里面，
+    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6）：内容随条数 / 格子数变的那几页
+    /// ——四个模块页 + **架子**（宿主页，T6 进名单）；另外三页刻意不在里面，
     /// 逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
-    func testMeasuredTabListIsTheFourCountDrivenPages() {
+    func testMeasuredTabListIsTheCountDrivenPages() {
         XCTAssertEqual(
             PanelContentHeight.measuredTabs,
             [
@@ -731,8 +732,10 @@ final class PanelAutoHeightTests: XCTestCase {
                 "com.cmeng.gourd.notifications",
                 "com.cmeng.gourd.launcher",
                 "com.cmeng.gourd.shortcuts",
+                // p6-ui-polish / T6：投放格 + 文件格网格 —— 高是格子数的函数。
+                PanelContentHeight.shelfTab,
             ],
-            "名单 = 内容随条数变的那四页（多一个 / 少一个都要连理由一起改）"
+            "名单 = 内容随条数 / 格子数变的那几页（多一个 / 少一个都要连理由一起改）"
         )
         XCTAssertEqual(PanelContentHeight.hysteresis, 8, "滞回阈值 = 8pt（docs/29 §做法 机制六）")
 
@@ -742,14 +745,95 @@ final class PanelAutoHeightTests: XCTestCase {
             PanelContentHeight.isMeasuredTab(PanelContentHeight.homeTab),
             "首页有算出来的那一份，不走测量"
         )
-        // 未覆盖的四页：日历 / 计时器（自然高是面板高的函数）、暂存器 / 终端（整块填满，没有自然高）。
+        // 未覆盖的三页：日历 / 计时器（自然高是面板高的函数）、终端（整块填满，没有自然高）。
         XCTAssertFalse(
             PanelContentHeight.isMeasuredTab("com.cmeng.gourd.calendar"),
             "日历的 `.frame(height: maxTabContentHeight)` 是面板高的函数——量它每接受一次就缩 12pt"
         )
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("com.cmeng.gourd.timer"))
-        XCTAssertFalse(PanelContentHeight.isMeasuredTab("shelf"))
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("terminal"))
+    }
+
+    /// **架子进测量名单**（p6-ui-polish / T6，docs/30 §做法 机制三 / D-08）。
+    ///
+    /// 新版面（投放格 + 多行网格、纵向滚动）下这一页的高是**格子数**的函数：
+    /// 纵向 `ScrollView` 的理想高 = 网格自然高，与面板当前多高无关——因此与模块页同一口径上报。
+    /// 判据分三层：① 键与宿主声明同字面量；② 名单含它（探针据此进门）；③ 账本行为——切到架子页
+    /// 不再回落手动值（682 那种空半屏），量到的就是它。
+    func testShelfIsAMeasuredTab() {
+        // ① 键：`ContentView.selectedPanelTabKey` 对 `.shelf` 传的就是 `PanelContentHeight.shelfTab`
+        //    （探针在 `NotchShelfView` 里用同一个常量挂上，两边不各写一份字符串）。
+        XCTAssertEqual(
+            PanelContentHeight.shelfTab, "shelf",
+            "架子页的键 = 宿主 `selectedPanelTabKey` 对 `.shelf` 传的那个字面量"
+        )
+
+        // ② 名单：探针的进门判据（名单外的页静默不上报）。
+        XCTAssertTrue(
+            PanelContentHeight.measuredTabs.contains(PanelContentHeight.shelfTab),
+            "架子页在测量名单里（T6 前不在：旧版面「拖放区整块填满」没有自然高）"
+        )
+        XCTAssertTrue(
+            PanelContentHeight.isMeasuredTab(PanelContentHeight.shelfTab),
+            "`isMeasuredTab` 对架子键为真——探针据此上报"
+        )
+
+        // ③ 账本行为：切到架子页 + 上报 → `current` 就是量出来的那一份。
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        ledger.selectTab(PanelContentHeight.shelfTab)
+        XCTAssertEqual(ledger.activeTab, PanelContentHeight.shelfTab)
+        XCTAssertNil(ledger.current, "还没量到 → 回落手动值（首帧那一拍）")
+
+        ledger.report(200, for: PanelContentHeight.shelfTab)
+        XCTAssertEqual(ledger.current, 200, "架子页的量值进门（名单外的页写不进这个槽）")
+        XCTAssertEqual(
+            PanelAutoHeight.panelHeight(
+                contentHeight: 200, mode: PanelAutoHeight.modeAuto,
+                manualHeight: 682, screenVisibleHeight: nil
+            ),
+            240,
+            "auto 档：面板高 = 量值 + 宿主内边距（不是盘上残留的 682 手动值）"
+        )
+    }
+
+    /// **网格布局常量**（p6-ui-polish / T6，docs/30 §做法 机制三「列宽 115、项距 8、行距 8」）。
+    ///
+    /// 格子尺寸不在这一层重钉（`ShelfCellMetrics.size` 由 `ShelfInteractionTests` 钉住），
+    /// 这里只钉「网格怎么把它们摆开」：列宽 = 格子宽、项距 / 行距、按宽度分列（自动换行），
+    /// 以及投放格 = 首格那条不变量（marquee 的 pass-through 矩形直接吃它）。
+    func testShelfGridMetricsMatchTheDesignConstants() {
+        XCTAssertEqual(
+            ShelfGridMetrics.columnWidth, ShelfCellMetrics.size.width,
+            "列宽 = 文件格宽（115，T5 钉的尺寸——不是字面量，跟它同源）"
+        )
+        XCTAssertEqual(
+            ShelfGridMetrics.itemHeight, ShelfCellMetrics.size.height,
+            "行高 = 文件格高（108）"
+        )
+        XCTAssertEqual(ShelfGridMetrics.itemSpacing, 8, "项距 8")
+        XCTAssertEqual(ShelfGridMetrics.rowSpacing, 8, "行距 8")
+
+        // 投放格 = 网格首格 = 内容的左上角那一格（marquee 让位用的矩形）。
+        XCTAssertEqual(
+            ShelfGridMetrics.shareTileFrame,
+            CGRect(x: 0, y: 0, width: ShelfCellMetrics.size.width, height: ShelfCellMetrics.size.height),
+            "投放格的位置 = 内容原点 + 一格大小（布局不变量：网格贴内容左上角、首格贴网格原点）"
+        )
+
+        // 自动换行：列数按可用宽算（至少 1 列；量不到宽 / 非有限 → 1 列）。
+        // 这是**对 `.adaptive` 布局的预测**（视图用自适应列，不拿这个值分列）——
+        // 与下面 `testShelfGridWrapsWithTheDeclaredColumnWidthAndSpacing` 的实测同值。
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 0), 1, "还没量到宽 → 1 列")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: .nan), 1, "非有限 → 1 列")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 114), 1, "塞不下一格")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 115), 1, "正好一格")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 237), 1, "还差 1pt 才放得下两列")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 238), 2, "2×115 + 8 = 238 起两列")
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 887), 7, "887 宽面板：7 列（7×115 + 6×8 = 853 ≤ 887）")
+        XCTAssertEqual(ShelfGridMetrics.columns.count, 1, "一条自适应列定义（列数由布局按可用宽定）")
     }
 
     // MARK: - 测量值 → 内容高（T7 的换算与不动点）
@@ -1026,6 +1110,170 @@ final class PanelAutoHeightTests: XCTestCase {
         )
         withExtendedLifetime(threeRows) {}
         withExtendedLifetime(eightRows) {}
+    }
+
+    /// 架子新版面的形状（p6-ui-polish / T6）：纵向 `ScrollView` + `LazyVGrid`（首格投放格 +
+    /// `fileCount` 个文件格）。格子尺寸与列定义都吃 `ShelfGridMetrics`（与生产同源），
+    /// 但**不挂** `ShelfView` 本身——那一支带 `QuickShareService` / `LocalSendService`
+    /// 的副作用（发现与组播），不适合进单测。
+    ///
+    /// `recorder` 收每个格子在网格坐标空间里的位置（排序前的原始表）——用来钉
+    /// 「列宽 115、项距 8、行距 8、自动换行」在实际布局里的样子（断言侧排序后再比）。
+    private struct ShelfGridPageFixture: View {
+        let fileCount: Int
+        let width: CGFloat
+        var recorder: LaidOutRectsBox?
+
+        var body: some View {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: ShelfGridMetrics.rowSpacing) {
+                    LazyVGrid(
+                        columns: ShelfGridMetrics.columns,
+                        alignment: .leading,
+                        spacing: ShelfGridMetrics.rowSpacing
+                    ) {
+                        // 首格 = 投放格。
+                        cell
+                        ForEach(0..<fileCount, id: \.self) { _ in
+                            cell
+                        }
+                    }
+                    .coordinateSpace(name: Self.gridSpace)
+                }
+                .frame(minWidth: width, alignment: .topLeading)
+            }
+            .scrollIndicators(.never)
+        }
+
+        private static let gridSpace = "shelfGridFixture"
+
+        private var cell: some View {
+            Color.clear
+                .frame(width: ShelfGridMetrics.columnWidth, height: ShelfGridMetrics.itemHeight)
+                .background(
+                    GeometryReader { proxy in
+                        let _ = recorder?.record(proxy.frame(in: .named(Self.gridSpace)))
+                        Color.clear
+                    }
+                )
+        }
+    }
+
+    /// 收一组矩形的小盒子（引用类型：布局期的回调闭包只能捕获它）。
+    private final class LaidOutRectsBox {
+        private(set) var rects: [CGRect] = []
+        func record(_ rect: CGRect) { rects.append(rect) }
+    }
+
+    /// **网格的常量在真布局里的样子**（p6-ui-polish / T6，docs/30 §做法 机制三）：
+    /// 887 宽（实机面板宽）下 7 列、列宽 115、项距 8、左对齐，第 8 格换行到 y = 116（108 + 行距 8）。
+    /// 与 `columnCount(forWidth:)` 的预测同值——`.adaptive` 的实测行为就是那条算式。
+    func testShelfGridWrapsWithTheDeclaredColumnWidthAndSpacing() {
+        let box = LaidOutRectsBox()
+        let host = NSHostingView(
+            rootView: ShelfGridPageFixture(fileCount: 7, width: 887, recorder: box)
+        )
+        host.frame = CGRect(x: 0, y: 0, width: 887, height: 600)
+        host.layoutSubtreeIfNeeded()
+
+        let rects = box.rects.sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) }
+        guard rects.count == 8 else { return XCTFail("只记到 \(rects.count) 格（期望 8）") }
+
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 887), 7, "预测：7 列")
+        XCTAssertEqual(
+            rects.map(\.minX), [0, 123, 246, 369, 492, 615, 738, 0],
+            "列宽 115 + 项距 8 = 步长 123，左对齐；第 8 格回到行首"
+        )
+        XCTAssertEqual(
+            rects.map(\.minY), [0, 0, 0, 0, 0, 0, 0, 116],
+            "首行 7 格；换行 = 一格高 108 + 行距 8 = 116"
+        )
+        XCTAssertEqual(rects[0].size, CGSize(width: 115, height: 108), "格子尺寸不变（T5 的 cell 尺寸）")
+        withExtendedLifetime(host) {}
+    }
+
+    /// **架子页的理想高能被量到、且是格子数的函数**（p6-ui-polish / T6，docs/30 §做法 机制三）。
+    ///
+    /// 同一页在同一个 600 高的容器里，文件数一多（行数变多）上报值就必须跟着长——量「摆放后的高」
+    /// 的话两次都是容器给的那个数。这是在单测里对「架子进测量名单」的行为覆盖：探针走的是与
+    /// `NotchShelfView` 同一支 `panelContentHeightReport`、同一个键（`PanelContentHeight.shelfTab`）。
+    /// 单文件时量到的是「一格网格」的高（不占半屏），不是面板高、也不是手动回落值。
+    func testShelfPageIdealHeightFollowsTheItemCountNotThePanelHeight() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let header: CGFloat = 24
+        // 700 宽容器 → 5 列（(700 + 8) / 123 = 5.75）；格子 115×108 → 行高 108、行距 8。
+        XCTAssertEqual(ShelfGridMetrics.columnCount(forWidth: 700), 5, "夹具的列数前提")
+
+        // 1 个文件 + 投放格 = 2 格 = 1 行。
+        let oneFile = mountPanelPage(
+            ShelfGridPageFixture(fileCount: 1, width: 700)
+                .panelContentHeightReport(
+                    tab: PanelContentHeight.shelfTab, headerHeight: header, isCurrent: { true }
+                ),
+            width: 700, height: 600
+        )
+        let emptyish = ledger.current
+
+        // 5 个文件 + 投放格 = 6 格 = 2 行。
+        let fiveFiles = mountPanelPage(
+            ShelfGridPageFixture(fileCount: 5, width: 700)
+                .panelContentHeightReport(
+                    tab: PanelContentHeight.shelfTab, headerHeight: header, isCurrent: { true }
+                ),
+            width: 700, height: 600
+        )
+        let twoRows = ledger.current
+
+        guard let emptyish, let twoRows else {
+            return XCTFail("架子页的探针没有上报（`current` 为 nil）——键或名单没对上")
+        }
+
+        // 1 行：自然高 108 → 账本值 = 108 + 表头 24 − 16（`measuredContentHeight` 的换算）。
+        XCTAssertEqual(emptyish, 108 + header - 16, accuracy: 1, "单文件：一格网格的高（不占半屏）")
+        // 2 行：自然高 108×2 + 8 = 224。
+        XCTAssertEqual(twoRows, 224 + header - 16, accuracy: 1, "两行网格的高")
+        XCTAssertEqual(twoRows - emptyish, 116, accuracy: 1, "多一行就多一格高 + 一道行距（1:1）")
+
+        // 量的是理想高，不是容器给的 600（放「摆放后的高」= 量容器 = 反馈环）。
+        XCTAssertLessThan(twoRows, 300, "量的是网格自然高，不是容器的 600")
+        withExtendedLifetime(oneFile) {}
+        withExtendedLifetime(fiveFiles) {}
+    }
+
+    /// **面板壳量的是内容，不是虚线环**（p6-ui-polish / T6 实现期实测踩到的那条）。
+    ///
+    /// 架子页的壳（`ShelfPanel`）T6 前是「环当根 + 内容放 overlay」——`Shape` 在没有高提案时
+    /// 答 10pt，而 `.overlay` 不参与布局，于是**整页的理想高**成了 10：探针把 18 报进账本，
+    /// 面板被压到下界（内容反而被裁）。现在内容当根，量到的就是「网格 + 内边距」。
+    /// 这条挂在**真组合**上（`ShelfPanel` + 真夹具），挂了环、背景点击层与填满提案的那一层
+    /// ——任何一层把理想高吃掉都会在这里报红。
+    func testShelfPanelMeasuresTheContentNotTheRing() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let host = mountPanelPage(
+            ShelfPanel(isDropTargeted: false, animation: nil, onBackgroundClick: {}) {
+                ShelfGridPageFixture(fileCount: 1, width: 700)
+            }
+            .panelContentHeightReport(
+                tab: PanelContentHeight.shelfTab, headerHeight: 24, isCurrent: { true }
+            ),
+            width: 700, height: 600
+        )
+
+        // 1 行网格 108 + 面板内边距 32 = 自然高 140 → 账本值 = 140 + 表头 24 − 16 = 148。
+        guard let measured = ledger.current else {
+            return XCTFail("架子页的探针没有上报（`current` 为 nil）")
+        }
+        XCTAssertEqual(
+            measured, 148, accuracy: 1,
+            "量的是「网格 + 内边距」（环的 10pt 回落 / 容器的 600 都不许混进来）"
+        )
+        withExtendedLifetime(host) {}
     }
 
     /// **不是当班的那一页不报**（`isCurrent` 闸门）：切 tab 的 0.3s 里旧页还活着、还会被重新布局，

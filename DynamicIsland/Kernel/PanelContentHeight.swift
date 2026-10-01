@@ -40,11 +40,13 @@
 //  ④ 同一 tab 且**光标在面板 frame 内**时只接受变大的值（不把面板从光标底下抽走，§已知限制 1）。
 //
 //  **谁上报**（`measuredTabs`，逐条写理由）：
-//  待办 / 通知 / 启动台 / 快捷指令——这四页的内容是**行数 / 格子数**的函数（自然高与面板无关）；
-//  **不上报**的四页：日历（`.frame(height: maxTabContentHeight)`，自己的高是面板高的函数，量它
+//  待办 / 通知 / 启动台 / 快捷指令 / 架子——前四页的内容是**行数 / 格子数**的函数（自然高与面板
+//  无关）；架子（`shelfTab`，p6-ui-polish / T6 进名单）是「投放格 + 文件格网格」，格数决定行数、
+//  行数决定高，纵向 `ScrollView` 的理想高就是网格自然高——**不再是**旧版面那个「拖放区整块填满」
+//  的形状（旧判断见 `measuredTabs` 的注释）。
+//  **不上报的三页**：日历（`.frame(height: maxTabContentHeight)`，自己的高是面板高的函数，量它
 //  等于把面板高喂回自己 → 每接受一次缩 12pt，一路缩到 130 的下限）、计时器（同形 + 250 的
-//  per-tab 下限）、暂存器（拖放区整块填满，没有「内容高」）、终端（终端仿真块按屏高比例，本来就
-//  没有自然高）。
+//  per-tab 下限）、终端（终端仿真块按屏高比例，本来就没有自然高）。
 //
 //  **切页时谁说了算**（`selectTab(_:)`，T7 复核 P1）：换页**不只是换「值从哪来」**——名单外的页
 //  必须**没有值**（`current` = nil → 尺寸层回落**手动值** = 今天的行为，宽松够用），否则会继承
@@ -78,7 +80,7 @@ final class PanelContentHeight: ObservableObject {
     /// （`HomeBandedHomeView`）不在屏幕上。落在首页键上，`current` 就会拿「上一次标准首页算出来的
     /// 值」当内容高（auto 档下面板高度 = 那个值 + 40，与侧歌词无关；且把手隐藏、滑块禁用，用户
     /// 没得改）。因此给它一个**没人上报**的键：`selectTab(_:)` 走到「名单外」那一档 →
-    /// `current` = nil → 尺寸层回落**手动值**（D-45 对日历 / 计时器 / 暂存器 / 终端同一条口径）。
+    /// `current` = nil → 尺寸层回落**手动值**（D-45 对日历 / 计时器 / 终端同一条口径）。
     /// 判据（哪一支在屏幕上）由 `showsSideLyricsHomeLayout(...)` 给，标准路径的首页键逐字不变。
     static let sideLyricsHomeTab = "sideLyricsHome"
 
@@ -86,21 +88,32 @@ final class PanelContentHeight: ObservableObject {
     /// 秒数跳动这类「同一 tick 里十几分之一 pt」的微动因此不会碰窗口。
     static let hysteresis: CGFloat = 8
 
-    /// **有自然高、因此上报**的模块页（`ModuleHostView` 渲染的那几个 tab 的键 = 模块 id）。
+    /// 架子页的键（p6-ui-polish / T6。`ContentView.selectedPanelTabKey` 对 `.shelf` 传的
+    /// 就是这个字面量，探针在 `NotchShelfView` 里用同一个常量挂上——两边不各写一份字符串）。
+    static let shelfTab = "shelf"
+
+    /// **有自然高、因此上报**的模块页（`ModuleHostView` 渲染的那几个 tab 的键 = 模块 id）
+    /// 与**宿主页**（架子）。
     ///
     /// 判据是「这一页的自然高是不是**内容**的函数，而不是**面板**的函数」：
     /// - `todos`：表头 + 清单行（行数决定高）；
     /// - `notifications`：表头 + 通知行 + 脚注（条数决定高）；
     /// - `launcher`：搜索框 + 应用网格（App 数决定高，最高到上界后网格自己滚）；
-    /// - `shortcuts`：表头 + 清单 + 结果行。
+    /// - `shortcuts`：表头 + 清单 + 结果行；
+    /// - `shelf`（宿主页，键 `shelfTab`）：投放格 + 文件格网格（格数决定行数、行数决定高；
+    ///   纵向 `ScrollView` 的理想高 = 网格自然高）。T6 前的「暂存器没有自然高」是**旧版面**
+    ///   的判断（左投送块按容器高撑成正方形、文件区一行横滚）——投放格缩成一枚格子、
+    ///   文件区改多行网格后，这一页的高就是内容高（docs/30 §做法 机制三）。
     ///
-    /// 另外四页（`calendar` / `timer` / 暂存器 / 终端）**刻意不在名单里**，理由逐条写在文件头。
-    /// 名单外的 tab 不产生值：切到它们时 `selectTab(_:)` 把量出来的那份清掉 → 尺寸层回落手动值。
+    /// 另外三页（`calendar` / `timer` / 终端）**刻意不在名单里**，理由逐条写在文件头。
+    /// 名单外的 tab 不产生值：切到它们时 `selectTab(_:)` 把量出来的那份清掉 →
+    /// 尺寸层回落手动值。
     static let measuredTabs: Set<String> = [
         "com.cmeng.gourd.todos",
         "com.cmeng.gourd.notifications",
         "com.cmeng.gourd.launcher",
         "com.cmeng.gourd.shortcuts",
+        shelfTab,
     ]
 
     /// 这一页要不要上报（`nil` / 空串 = 还没选中模块 → 不上报）。
