@@ -1048,9 +1048,10 @@ final class NotificationsModule: GourdModule {
 
 /// 展开面板（`NotificationsModuleView` 一族）的**字号档位表**（T3 / D-09）。
 ///
-/// 11 处字号字面量 + 行内垂直内边距收在这一处（原来散在视图里），单测按表逐项钉死
+/// 17 处字号字面量 + 行内垂直内边距收在这一处（原来散在视图里），单测按表逐项钉死
 /// （`testNotificationRowMetricsMatchTheBumpedSizes`）——用户反馈「消息面板字体太小」，
-/// 本批主行 +2pt、次要 +1pt；以后调档只动这里。
+/// 本批主行 +2pt、次要 +1pt；失败态 / 空态 / 权限引导（同属展开页，留旧值会与放大后的
+/// 列表行明显不一致）随后并表，按语义就近取档；以后调档只动这里。
 ///
 /// **只服务展开面板**：首页通知块（`NotificationsHomeBlockView`，定高 96 内画 3 行）
 /// 与 HUD 浮层卡片（`NotificationHUDCardLayout`，按用户倍率缩放）各自有自己的字号口径，
@@ -1080,6 +1081,23 @@ struct NotificationRowMetrics {
     static let footnote: CGFloat = 10
     /// 行内垂直内边距（3 → 4：字号变大后行距跟着松一点，行高随之变高）。
     static let rowVerticalPadding: CGFloat = 4
+
+    // MARK: 状态块（失败态 / 空态 / 权限引导——与列表行同属展开页，T3 修复轮并表）
+
+    /// 失败态图标（`exclamationmark.triangle`）——状态块的视觉主元素，取**标题档 13**
+    /// （旧 16：本次上限是主行档位 13，取大者既守住上限、又保住「图标 > 说明文字」的层级）。
+    static let failureIconFontSize: CGFloat = 13
+    /// 失败原因文案（截断显示）——状态/提示类，取 12（旧 11）。
+    static let failureReasonFontSize: CGFloat = 12
+    /// 可读但 0 条时的空态文案——状态/提示类，取 12（旧值 12，仅收进表、值不变）。
+    static let emptyStateFontSize: CGFloat = 12
+    /// 权限引导图标（`bell.badge`）——同失败态图标，取标题档 13（旧 18，理由同上）。
+    static let permissionIconFontSize: CGFloat = 13
+    /// 权限引导说明文案——状态/提示类，取 12（旧 11）。
+    static let permissionHintFontSize: CGFloat = 12
+    /// 权限引导的动作按钮文案——提示块的组成部分，取 12（旧 11；不按列表行的「清除」11 档，
+    /// 因为它是整个空块里唯一的动作，是引导的主入口而不是角落里的次级按钮）。
+    static let permissionActionFontSize: CGFloat = 12
 }
 
 /// 展开面板：标题行（模块名 + 状态 + 刷新）+ 通知列表（点击整行打开对应 App **并收起刘海**）+ 能力边界说明。
@@ -1160,10 +1178,10 @@ private struct NotificationsModuleView: View {
             // 失败原因**截断显示**（完整串在日志与探针报告里，面板上留两三行足够定位）
             VStack(alignment: .leading, spacing: 4) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: NotificationRowMetrics.failureIconFontSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.7))
                 Text(reason)
-                    .font(.system(size: 11))
+                    .font(.system(size: NotificationRowMetrics.failureReasonFontSize))
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(3)
                     .truncationMode(.middle)
@@ -1173,7 +1191,7 @@ private struct NotificationsModuleView: View {
         case .ok:
             if store.items.isEmpty {
                 Text(LocalizedStringKey("module.notifications.empty"))
-                    .font(.system(size: 12))
+                    .font(.system(size: NotificationRowMetrics.emptyStateFontSize))
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -1792,11 +1810,11 @@ private struct NotificationPermissionPrompt: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "bell.badge")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: NotificationRowMetrics.permissionIconFontSize, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
 
             Text(LocalizedStringKey("module.notifications.needsFullDiskAccess"))
-                .font(.system(size: 11))
+                .font(.system(size: NotificationRowMetrics.permissionHintFontSize))
                 .foregroundStyle(.white.opacity(0.75))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1805,7 +1823,7 @@ private struct NotificationPermissionPrompt: View {
                 NotificationPermissionPrompt.openFullDiskAccessSettings()
             } label: {
                 Text(LocalizedStringKey("module.notifications.openSettings"))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: NotificationRowMetrics.permissionActionFontSize, weight: .medium))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)

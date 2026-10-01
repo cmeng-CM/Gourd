@@ -4103,8 +4103,10 @@ final class ModuleKernelTests: XCTestCase {
 
     // MARK: - 展开面板通知页的字号档位（T3 / D-09）
 
-    /// **展开面板的 11 处字号 + 行内垂直内边距逐项钉表**（docs/30 §接口与数据形状 机制四）：
-    /// 用户反馈「消息（通知）面板字体太小」——主行 +2pt、次要 +1pt，行内边距 3 → 4。
+    /// **展开面板的 17 处字号 + 行内垂直内边距逐项钉表**（docs/30 §接口与数据形状 机制四，
+    /// 修复轮并入失败态 / 空态 / 权限引导 6 处）：
+    /// 用户反馈「消息（通知）面板字体太小」——主行 +2pt、次要 +1pt，行内边距 3 → 4；
+    /// 状态块按语义就近取档（提示/正文类 12、状态块图标取标题档 13），**任何一项不超过主行档位 13**。
     ///
     /// 视图里不许再出现裸字号字面量（都读 `NotificationRowMetrics`），本用例是这张档位表的
     /// **唯一执行依据**：改档只动常量表，改了却忘了对表在这里红。
@@ -4134,6 +4136,27 @@ final class ModuleKernelTests: XCTestCase {
 
         // 行内垂直内边距 3 → 4：字号变大后行距跟着松一档（行高随之变高，列表更长、照常滚动）。
         XCTAssertEqual(NotificationRowMetrics.rowVerticalPadding, 4, "行内 padding 3 → 4")
+
+        // T3 修复轮：失败态 / 空态 / 权限引导 6 处并表（同属展开页，留旧值会与放大后的列表行
+        // 明显不一致）。取档：状态块图标取标题档 13（旧 16 / 18，上限即主行档位），文字取
+        // 状态/提示档 12（旧 11 三处、12 一处）。
+        let stateTable: [(name: String, actual: CGFloat, expected: CGFloat)] = [
+            ("失败态图标", NotificationRowMetrics.failureIconFontSize, 13),
+            ("失败原因", NotificationRowMetrics.failureReasonFontSize, 12),
+            ("空态文案", NotificationRowMetrics.emptyStateFontSize, 12),
+            ("权限引导图标", NotificationRowMetrics.permissionIconFontSize, 13),
+            ("权限引导文案", NotificationRowMetrics.permissionHintFontSize, 12),
+            ("权限引导按钮", NotificationRowMetrics.permissionActionFontSize, 12),
+        ]
+        XCTAssertEqual(stateTable.count, 6, "修复轮追加的就是 6 项（多了少了都说明表被改动过）")
+        for row in stateTable {
+            XCTAssertEqual(row.actual, row.expected, "\(row.name) 应为 \(row.expected)pt（状态/提示类档位）")
+        }
+
+        // 档位表的语义上限：**任何一项都不超过主行档位 13**（修复轮的硬约束，逐项兜住）。
+        for row in table + stateTable {
+            XCTAssertLessThanOrEqual(row.actual, 13, "\(row.name) 不得超过主行档位 13")
+        }
     }
 
     // MARK: - 主面板背景（D-26）
