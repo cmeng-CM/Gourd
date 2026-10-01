@@ -496,18 +496,17 @@ struct ModuleSettingsSection: View {
         )
     }
 
-    /// **面板组件**那节的名单：全量 manifest 里声明 `.expanded` 的，按 `ModuleRegistry.panelRank`
-    /// 与 id 字典序排——与 `ModuleRegistry.tabEntries` **同一算式**（那个投影还多一条
+    /// **面板组件**那节的模块行名单：全量 manifest 里声明 `.expanded` 的（那个投影还多一条
     /// `isTabVisible()` 与启用过滤，见 `SurfaceRow` 的注释）。
+    ///
+    /// **这里只出名单、不出顺序**（T9 修复轮清理）：本属性曾是唯一消费点，自带一段 `panelRank`
+    /// 排序；合并渲染后**渲染序以 `panelSectionRows` 为准**（它把模块行与宿主三 tab 一起过
+    /// `panelMovableIDs` —— 与面板条同一算式），那段排序已无消费者，删除以免出现「两份排序」的
+    /// 错觉（消费者只有 `panelSectionRows`：字典建表 + 取 `Entry`，两处都不看输入顺序）。
     private var panelRows: [SurfaceRow] {
         manifests
             .filter { $0.surfaces.contains(.expanded) }
             .map(surfaceRow)
-            .sorted {
-                let lhs = ModuleRegistry.panelRank($0.id, defaultOrder: $0.defaultOrder, panelOrder: panelOrder)
-                let rhs = ModuleRegistry.panelRank($1.id, defaultOrder: $1.defaultOrder, panelOrder: panelOrder)
-                return (lhs, $0.id) < (rhs, $1.id)
-            }
     }
 
     /// 「面板组件」节**可排名单**里的一行（p6-ui-polish / T9）：**模块行 + 宿主三 tab 行**
