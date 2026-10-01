@@ -68,6 +68,10 @@
 //  排序 / 过滤（`LauncherRanking`：固定优先 → 最近使用 → 使用次数 → 名称、无使用数据回落名称、
 //  未知固定 id 忽略、大小写不敏感地匹配显示名或文件名）。
 //  **扫描用例一律用临时目录树 fixture**——不扫真实 `/Applications`（机器状态会让断言抖动）。
+//  p7 / T2 工作日统计——`WorkdayCalendar` 的 2026 国务院节假日与调休表逐日期抽查（放假日恒休息、
+//  调休日恒上班、表外年份退化纯星期）、今天行四态与 `todayFraction` 边界、
+//  周 / 月 `spanStats` 的**手算值**（工作日占比 + 剩余工作日数，含「区间内一个工作日都没有」的
+//  除零边界）、坏配置回落默认（工作星期集合与上下班小时）。
 //
 
 import AppKit
@@ -1883,6 +1887,185 @@ final class ModuleKernelTests: XCTestCase {
             return XCTFail("槽位内容应转发给第一个候选模块")
         }
         XCTAssertTrue(reason.contains("probe-dual"), "转发到的应是 compactEntries 的第一个，实到 \(reason)")
+    }
+
+    // MARK: - 工作日统计（p7）
+
+    /// 2026 年表逐日期抽查（国办发明电〔2025〕7号，docs/31 §接口与数据形状 3）：
+    /// 放假日**恒休息**（哪怕落在周一至周五）、调休上班日**恒上班**（哪怕落在周六周日）、
+    /// 查不到才按 ISO 星期判定（`Calendar.component(.weekday)` 1=周日 与 ISO 1=周一 的换算
+    /// 若错一天，下面 9/20（周日）与 10/10（周六）两族的调休断言会立刻红）。
+    ///
+    /// 期望值只来自「表 + 星期」两条规则，日历自 2026 年真实历推演：10/1 周四、10/8 周四、
+    /// 10/10 周六、10/11 周日、2/14 周六、2/23 周一、2/24 周二、5/4 周一、9/20 周日。
+    func testWorkdayCalendarMatchesThe2026StateCouncilTable() throws {
+        let calendar = try fixedGregorian()
+        let workdays = WorkdayCalendar.defaultWorkdays
+
+        func isWorkday(_ year: Int, _ month: Int, _ day: Int) throws -> Bool {
+            WorkdayCalendar.isWorkday(
+                try instant(year, month, day, 12, calendar: calendar),
+                workdays: workdays,
+                calendar: calendar
+            )
+        }
+
+        // 国庆：10/1（周四，放假）休息；10/8（周四）上班；10/10（周六，调休）上班；10/11（周日）休息
+        XCTAssertFalse(try isWorkday(2026, 10, 1), "10/1 放假日（周四）→ 休息：星期判定不得盖过表")
+        XCTAssertTrue(try isWorkday(2026, 10, 8), "10/8 普通工作日（周四）→ 上班")
+        XCTAssertTrue(try isWorkday(2026, 10, 10), "10/10 调休上班（周六）→ 上班：周末不得盖过调休")
+        XCTAssertFalse(try isWorkday(2026, 10, 11), "10/11 周末（周日）→ 休息")
+
+        // 春节：2/14（周六，调休）上班；2/23（周一，放假）休息；2/24（周二）上班
+        XCTAssertTrue(try isWorkday(2026, 2, 14), "2/14 调休上班（周六）→ 上班")
+        XCTAssertFalse(try isWorkday(2026, 2, 23), "2/23 春节放假日（周一）→ 休息：星期判定不得盖过表")
+        XCTAssertTrue(try isWorkday(2026, 2, 24), "2/24 普通工作日（周二）→ 上班")
+
+        // 劳动节 5/4（周一，放假）休息；中秋调休 9/20（周日）上班
+        XCTAssertFalse(try isWorkday(2026, 5, 4), "5/4 劳动节放假日（周一）→ 休息")
+        XCTAssertTrue(try isWorkday(2026, 9, 20), "9/20 中秋调休上班（周日）→ 上班")
+
+        // 表外年份（2027 无表）：退化纯星期且不崩——2027-01-04 是周一 → 上班
+        XCTAssertNil(WorkdayCalendar.holidayTables[2027], "2027 没有表（退化口径的前提）")
+        XCTAssertTrue(try isWorkday(2027, 1, 4), "表外年份按星期判定（周一 → 上班）")
+    }
+
+    /// 今天行四态（`todayState`）与 `todayFraction` 的边界：8:59 上班前（差 1 分钟）/
+    /// 9:00 与 12:00 班中（距下班 540 / 360 分）/ 18:00 与 18:01 已下班；休息日恒 `restDay`。
+    /// 比例：休息日 = 0、上班前 = 0、正午 = (12−9)/(18−9) = 1/3、下班及以后 = 1。
+    ///
+    /// 样例日 2026-10-12 是周一（普通工作日，不在 2026 表的两张名单里）；
+    /// 2026-10-11 是周日（休息日）。当班 9:00–18:00 = 540 分钟。
+    func testWorkdayTodayStateBoundaries() throws {
+        let calendar = try fixedGregorian()
+        let workdays = WorkdayCalendar.defaultWorkdays
+
+        func state(_ hour: Int, _ minute: Int, day: Int) throws -> WorkdayCalendar.TodayState {
+            WorkdayCalendar.todayState(
+                now: try instant(2026, 10, day, hour, minute, calendar: calendar),
+                workdays: workdays, workStartHour: 9, workEndHour: 18, calendar: calendar
+            )
+        }
+        func fraction(_ hour: Int, _ minute: Int, day: Int) throws -> Double {
+            WorkdayCalendar.todayFraction(
+                now: try instant(2026, 10, day, hour, minute, calendar: calendar),
+                workdays: workdays, workStartHour: 9, workEndHour: 18, calendar: calendar
+            )
+        }
+
+        // 10/12（周一，工作日）
+        XCTAssertEqual(try state(8, 59, day: 12), .beforeStart(minutes: 1), "8:59 → 距上班 1 分钟")
+        XCTAssertEqual(try state(9, 0, day: 12), .working(minutesToEnd: 540), "9:00 → 上班，距下班 540 分")
+        XCTAssertEqual(try state(12, 0, day: 12), .working(minutesToEnd: 360), "12:00 → 距下班 360 分")
+        XCTAssertEqual(try state(18, 0, day: 12), .afterEnd, "18:00 → 恰在下班点，已下班")
+        XCTAssertEqual(try state(18, 1, day: 12), .afterEnd, "18:01 → 已下班")
+
+        // 10/11（周日）：休息日
+        XCTAssertEqual(try state(12, 0, day: 11), .restDay)
+        XCTAssertEqual(try fraction(12, 0, day: 11), 0, accuracy: 1e-9, "休息日 → 比例 0")
+
+        // todayFraction：上班前 0、班内按整分钟推进（正午 180/540 = 1/3）、下班及以后 1
+        XCTAssertEqual(try fraction(8, 59, day: 12), 0, accuracy: 1e-9, "上班前 → 0")
+        XCTAssertEqual(try fraction(9, 0, day: 12), 0, accuracy: 1e-9, "恰在上班点 → 0（尚未开始）")
+        XCTAssertEqual(try fraction(12, 0, day: 12), 1.0 / 3, accuracy: 1e-9, "正午 = 3 小时 / 9 小时")
+        XCTAssertEqual(try fraction(18, 0, day: 12), 1, accuracy: 1e-9, "下班点 → 1")
+        XCTAssertEqual(try fraction(18, 1, day: 12), 1, accuracy: 1e-9, "下班以后 → 1")
+    }
+
+    /// `spanStats` 的手算值（docs/31 §验收标准 A3）：2026-10-12 12:00（周一，普通工作日）。
+    ///
+    /// **手算过程**（10 月表 + 星期）：10 月区间 [10/1, 11/1) 的 18 个工作日 =
+    /// 10/8、10/9、10/10（调休）＋ 10/12–10/16 ＋ 10/19–10/23 ＋ 10/26–10/30
+    /// （10/1–10/7 全部放假日；10/11、10/17、10/18、10/24、10/25、10/31 周末）。
+    /// - 月：今天之前 = 8、9、10 号共 3 个；今天按工作时长比例 180/540 = 1/3；
+    ///   progress = (3 + 1/3) / 18 = 5/27；今天之后 = 4 + 5 + 5 = 14。
+    /// - 周（周一为首日 = [10/12, 10/19)）：工作日 = 10/12–10/16 共 5 个；今天之前 0；
+    ///   progress = (1/3) / 5 = 1/15；今天之后 = 4。
+    func testWorkdaySpanStatsCountCompletedAndRemaining() throws {
+        let calendar = try fixedGregorian()   // firstWeekday = 2（周一为首日）
+        let workdays = WorkdayCalendar.defaultWorkdays
+        let noon = try instant(2026, 10, 12, 12, calendar: calendar)
+
+        let month = WorkdayCalendar.spanStats(
+            scope: .month, now: noon, workdays: workdays,
+            workStartHour: 9, workEndHour: 18, calendar: calendar
+        )
+        XCTAssertEqual(month.progress, (3 + 1.0 / 3) / 18, accuracy: 1e-9, "月 = (3 + 1/3)/18 = 5/27")
+        XCTAssertEqual(month.remainingWorkdays, 14, "10/13–10/16、10/19–10/23、10/26–10/30")
+
+        let week = WorkdayCalendar.spanStats(
+            scope: .week, now: noon, workdays: workdays,
+            workStartHour: 9, workEndHour: 18, calendar: calendar
+        )
+        XCTAssertEqual(week.progress, (1.0 / 3) / 5, accuracy: 1e-9, "周 = (1/3)/5 = 1/15")
+        XCTAssertEqual(week.remainingWorkdays, 4, "今天之后 10/13–10/16 四天")
+
+        // 今天非工作日（10/11 周日）的月统计：分子只剩「今天之前」的 3 个（8、9、10 号），
+        // 今天不折算任何比例；remaining 从 10/12 起算 = 5 + 5 + 5 = 15
+        let restDayMonth = WorkdayCalendar.spanStats(
+            scope: .month, now: try instant(2026, 10, 11, 12, calendar: calendar), workdays: workdays,
+            workStartHour: 9, workEndHour: 18, calendar: calendar
+        )
+        XCTAssertEqual(restDayMonth.progress, 3.0 / 18, accuracy: 1e-9, "今天休息 → 分子 = 3 个整天")
+        XCTAssertEqual(restDayMonth.remainingWorkdays, 15)
+
+        // **区间内一个工作日都没有**：2026-02-18（周三）所在周 [2/16, 2/23) —— 2/15–2/23 九天
+        // 全部放假日，整周 0 个工作日 → progress 0（不除零、不 NaN）、remaining 0
+        let holidayWeek = WorkdayCalendar.spanStats(
+            scope: .week, now: try instant(2026, 2, 18, 12, calendar: calendar), workdays: workdays,
+            workStartHour: 9, workEndHour: 18, calendar: calendar
+        )
+        XCTAssertEqual(holidayWeek.progress, 0, accuracy: 1e-9, "0 个工作日 → 0（不是 NaN）")
+        XCTAssertEqual(holidayWeek.remainingWorkdays, 0)
+    }
+
+    /// 坏配置回落（docs/31 §接口 3 的 `resolveWorkdays` / `resolveWorkHours` 口径）：
+    /// 空表 / 全坏值 → 默认工作日一~五；workdays 坏值逐项忽略；上下班小时先夹取到
+    /// `workHourRange`、再判 `end ≤ start`，非法一律回落 (9, 18)。
+    func testWorkdayResolveFallsBackOnInvalidConfig() throws {
+        let calendar = try fixedGregorian()
+
+        // workdays：空 / 全坏（非整数、空串、越界 0 与 8、小数）→ 默认一~五；坏值逐项忽略
+        XCTAssertEqual(WorkdayCalendar.defaultWorkdays, [1, 2, 3, 4, 5])
+        XCTAssertEqual(WorkdayCalendar.resolveWorkdays(from: []), [1, 2, 3, 4, 5], "空表 → 默认")
+        XCTAssertEqual(
+            WorkdayCalendar.resolveWorkdays(from: ["bogus", "", "0", "8", "1.5"]),
+            [1, 2, 3, 4, 5],
+            "全坏值 → 默认（0 / 8 越界，1.5 不是整数）"
+        )
+        XCTAssertEqual(WorkdayCalendar.resolveWorkdays(from: ["6", "7"]), [6, 7], "合法子集原样（周末班）")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkdays(from: ["1", "bogus", "5", "5"]), [1, 5], "坏值逐项忽略、重复合并")
+
+        // workHourRange：0...23 的单一来源（T3 的整数滑块与读侧夹取共用这一个常量）
+        XCTAssertEqual(WorkdayCalendar.workHourRange, 0...23)
+
+        // workStart 30（夹到 23 后与默认下班 18 倒挂）→ 默认
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 30, end: nil).start, 9)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 30, end: nil).end, 18)
+        // workEnd 0（早于默认上班 9）→ 默认
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: 0).start, 9)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: 0).end, 18)
+        // end ≤ start（18 → 9 倒挂；12 = 12 相等）→ 默认
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 18, end: 9).start, 9)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 12, end: 12).end, 18)
+        // nil / nil → 默认；合法值原样；越界值夹到端点后仍合法就保留
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: nil).start, 9)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: nil).end, 18)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 8, end: 17).start, 8)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 8, end: 17).end, 17)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: -5, end: nil).start, 0, "−5 夹到 0（0 < 18 仍合法）")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 22, end: 24).end, 23, "24 夹到 23")
+
+        // 读侧归一：判定入口对坏配置也回落默认——9–18 的班，10/12 正午 → 距下班 360 分
+        XCTAssertEqual(
+            WorkdayCalendar.todayState(
+                now: try instant(2026, 10, 12, 12, calendar: calendar),
+                workdays: WorkdayCalendar.defaultWorkdays,
+                workStartHour: 30, workEndHour: 0, calendar: calendar
+            ),
+            .working(minutesToEnd: 360),
+            "坏配置在 todayState 里也回落 (9, 18)"
+        )
     }
 
     // MARK: - 瞬时浮层 HUD（D-22）
