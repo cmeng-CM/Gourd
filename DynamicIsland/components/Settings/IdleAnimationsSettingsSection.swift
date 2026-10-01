@@ -373,22 +373,31 @@ struct AnimationPreview: View {
     let animation: CustomIdleAnimation
     
     var body: some View {
-        switch animation.source {
-        case .lottieFile(let url):
-            LottieView(state: LUStateData(
-                type: .loadedFrom(url),
-                speed: animation.speed,
-                loopMode: .loop
-            ))
-            .frame(width: 60, height: 40)
-            
-        case .lottieURL(let url):
-            LottieView(state: LUStateData(
-                type: .loadedFrom(url),
-                speed: animation.speed,
-                loopMode: .loop
-            ))
-            .frame(width: 60, height: 40)
+        // p6-ui-polish / T10 fix：与面动画视图（`IdleAnimationView`）走**同一解析**——内置动画的存储
+        // 路径可能是写入时刻的绝对路径（换安装位置 / 卸载 DMG 卷后失效 → 卡片空白）；自定义动画
+        // `resolvedAnimation` 原样返回，行为不变。解析不出（内置样式在当前 bundle 里已不存在）→ 不画。
+        let resolved = IdleAnimationManager.shared.resolvedAnimation(for: animation)
+        
+        if let resolved {
+            switch resolved.source {
+            case .lottieFile(let url):
+                LottieView(state: LUStateData(
+                    type: .loadedFrom(url),
+                    speed: resolved.speed,
+                    loopMode: .loop
+                ))
+                .frame(width: 60, height: 40)
+                
+            case .lottieURL(let url):
+                LottieView(state: LUStateData(
+                    type: .loadedFrom(url),
+                    speed: resolved.speed,
+                    loopMode: .loop
+                ))
+                .frame(width: 60, height: 40)
+            }
+        } else {
+            Color.clear.frame(width: 60, height: 40)
         }
     }
 }
