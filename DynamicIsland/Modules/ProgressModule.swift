@@ -431,7 +431,9 @@ private struct ProgressHomeRow: View {
     let workEndHour: Int
 
     var body: some View {
-        // 一行只算一次：条的取值与右侧文案来自**同一次**判定（分别算会出现同一次重绘里的两个真相）。
+        // 一行只算一次：条的取值与右侧文案是**入参同源的两个纯函数调用**（`todayFraction` 与
+        // `todayState`、或同一个 `spanStats` 的两个字段），传的是同一个 `now` / 日历 / 工作日配置，
+        // 结果必然一致——分别取两份不同来源才会出现同一次重绘里的两个真相。
         let calendar = Calendar.autoupdatingCurrent
         let progressValue: Double
         let trailingText: String
