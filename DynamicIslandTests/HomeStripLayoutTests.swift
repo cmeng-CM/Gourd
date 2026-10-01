@@ -69,9 +69,10 @@
 //  - 「放得下几行」与「n 行要多少高度」是同一个式子的两个方向（阈值上等价，有一条用例钉住）。
 //
 //  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1）
-//  - `HomeBlockFloatMetrics` 待在可读区间：hover 放大 1.005…1.05、提亮 1.02…1.12、
-//    hover 阴影半径 > 常驻半径 > 0（常量是起点值，上屏调参在 Checkpoint；hover 本身驱动不出，
-//    见 docs/30 §已知限制 1）。
+//  - 钉**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**（不是常量本身）：常驻档
+//    中性（scale 1 / brightness 增量 0）+ 辉光常驻可见，hover 档辉光半径与不透明度都更大、
+//    放大 1.005…1.05、提亮增量 0.02…0.12（常量是起点值，上屏调参在 Checkpoint；hover 本身
+//    驱动不出，见 docs/30 §已知限制 1）。
 //
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
@@ -1918,29 +1919,41 @@ final class HomeStripLayoutTests: XCTestCase {
 
     // MARK: - 首页块浮起（p6-ui-polish / docs/30 §做法 机制一 / D-02）
 
-    /// **每块的「浮起」常量待在可读区间**（p6 / docs/30 §验收标准 A1）。
+    /// **修饰符真正消费的效果值待在可读区间**（p6 / docs/30 §验收标准 A1）。
     ///
-    /// 断言的是**区间**而不是常数（上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30
-    /// §接口与数据形状）：hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像
-    /// 抖）；提亮要能分辨但不得把字冲白（> 1.12 浅色元素会糊）；柔影必须**常驻可见**
-    /// （半径 > 0——否则块与背景无区分）且 **hover 更深**（半径更大——否则 hover 与常驻没差别，
-    /// 机制一的 hover 半条腿没落地）。
+    /// 钉的是**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**，不是常量本身
+    /// （T1 首轮审查意见 2）：常量到应用的算式（含 brightness 的 `- 1`、两档映射的方向）改错
+    /// 就会变红——例如去掉 brightness 的 `- 1`，hover 档的增量会变成 1.06 > 0.12 上界。
+    ///
+    /// 区间而不是定值（上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状）：
+    /// hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像抖）；提亮要能分辨但
+    /// 不得把字冲白（增量 > 0.12 浅色元素会糊）；辉光必须**常驻可见**（半径与不透明度 > 0，
+    /// 否则块与背景无区分）且 **hover 更深**（两项都更大——否则 hover 与常驻没差别，机制一的
+    /// hover 半条腿没落地）。
     ///
     /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
-    /// §已知限制 1 / D-20），这里钉的是常量；上屏的 hover 观感列入「需真人鼠标复核」清单
+    /// §已知限制 1 / D-20），这里钉的是效果算式；上屏的 hover 观感列入「需真人鼠标复核」清单
     /// （报告 T1 §待人工验收）。
     func testHomeBlockFloatMetricsStayInTheLegibleRange() {
-        XCTAssertGreaterThanOrEqual(HomeBlockFloatMetrics.hoverScale, 1.005, "hover 放大要看得出来")
-        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.hoverScale, 1.05, "再大就不像浮起、像抖动")
-        XCTAssertGreaterThanOrEqual(HomeBlockFloatMetrics.hoverBrightness, 1.02, "hover 提亮要看得出来")
-        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.hoverBrightness, 1.12, "再亮字就冲白了")
-        XCTAssertGreaterThan(HomeBlockFloatMetrics.idleShadowRadius, 0, "常驻柔影必须可见（半径 > 0）")
-        XCTAssertGreaterThan(
-            HomeBlockFloatMetrics.hoverShadowRadius, HomeBlockFloatMetrics.idleShadowRadius,
-            "hover 的阴影要比常驻更深（半径更大）"
-        )
-        XCTAssertGreaterThan(HomeBlockFloatMetrics.idleShadowOpacity, 0, "常驻柔影的不透明度为正")
-        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.idleShadowOpacity, 1, "不透明度是 0…1 的口径（`.black.opacity` 的入参）")
+        let idle = HomeBlockFloatMetrics.effects(hovered: false)
+        let hover = HomeBlockFloatMetrics.effects(hovered: true)
+
+        // 常驻档必须是中性：静止的块不被缩放、不被提亮，只有辉光可见。
+        XCTAssertEqual(idle.scale, 1, "常驻不放大")
+        XCTAssertEqual(idle.brightness, 0, "常驻不提亮（`.brightness` 的增量档是 0）")
+        XCTAssertGreaterThan(idle.glowRadius, 0, "常驻辉光必须可见（半径 > 0）")
+        XCTAssertGreaterThan(idle.glowOpacity, 0, "常驻辉光的不透明度为正")
+        XCTAssertLessThanOrEqual(idle.glowOpacity, 0.5, "辉光是低透明度的一层，不该成「底」（不透明度 0…0.5）")
+
+        // hover 档：两项辉光都更深，放大与提亮待在可读区间。
+        XCTAssertGreaterThan(hover.glowRadius, idle.glowRadius, "hover 辉光半径要比常驻更大")
+        XCTAssertGreaterThan(hover.glowOpacity, idle.glowOpacity, "hover 辉光不透明度要比常驻更大")
+        XCTAssertGreaterThanOrEqual(hover.scale, 1.005, "hover 放大要看得出来")
+        XCTAssertLessThanOrEqual(hover.scale, 1.05, "再大就不像浮起、像抖动")
+        XCTAssertGreaterThanOrEqual(hover.brightness, 0.02, "hover 提亮要看得出来（增量 ≥ 0.02）")
+        XCTAssertLessThanOrEqual(hover.brightness, 0.12, "再亮字就冲白了（增量 ≤ 0.12）")
+
+        // 动画时长：太快看不见、再慢就滞后于指针。
         XCTAssertGreaterThan(HomeBlockFloatMetrics.duration, 0.1, "太快看不见动画")
         XCTAssertLessThan(HomeBlockFloatMetrics.duration, 0.3, "再慢就滞后于指针")
     }

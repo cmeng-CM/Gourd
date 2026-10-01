@@ -437,7 +437,7 @@ struct HomeBandDroppedHint: View {
 /// 调研结论（机制七）是**不做每块的永久卡片**（Atoll 与 Nook X 都没有 per-block 容器；每块卡片
 /// 要吃 8–16pt 内边距，而宽度预算正是最紧的）。分带时期那层「整条带共用一个极淡圆角底」的
 /// 大底已撤（p6-ui-polish / docs/30 §做法 机制一 / D-02）：底把内容糊在一个大盒子里、块与块
-/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起柔影**（`homeBlockFloat()`）做。
+/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起辉光**（`homeBlockFloat()`）做。
 /// 「可交互的条目」仍在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有
 /// 这一处**（三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
 enum HomeBandChrome {
@@ -447,12 +447,6 @@ enum HomeBandChrome {
     /// 只能从「先丢一行块」里出；横向上这 8pt 是实打实的（内容宽度因此少 16pt），容器高度
     /// = 流的高度（零布局成本）。
     static let containerInset: CGFloat = 8
-
-    /// 带级容器的圆角（机制七：12）。
-    ///
-    /// **大底撤掉后已无消费方**（p6-ui-polish：`HomeBandContainerChrome` 只剩横向内边距）——
-    /// 按文档点名范围（docs/30 §接口与数据形状 机制一只删 `containerOpacity`）保留，等回写裁决。
-    static let containerCornerRadius: CGFloat = 12
 
     /// 可交互条目的 hover 底浓度（机制七：0.06）。
     static let hoverOpacity: Double = 0.06
@@ -465,7 +459,7 @@ enum HomeBandChrome {
 ///
 /// **不再画底**（p6-ui-polish / docs/30 §做法 机制一 / D-02）：分带时期那层 `white.opacity(0.05)`
 /// 的整条大底已撤——「所有内容糊在一个大盒子里」正是用户第 1 条反馈；块与块之间的区分改由每块
-/// 的浮起柔影（`homeBlockFloat()`）做（用户本轮明说：不加区域块与边线）。
+/// 的浮起辉光（`homeBlockFloat()`）做（用户本轮明说：不加区域块与边线）。
 ///
 /// 用法只有一处（`HomeBandedHomeView` 的单条流）。容器仍画在带自己的 frame 上，因此**带的可用宽
 /// 必须先扣掉两侧的 `containerInset`**（调用方传给这条流的宽度就是扣完的）——否则 plan 按整宽
@@ -511,60 +505,89 @@ extension View {
 
 // MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02）
 
-/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻柔和阴影 + hover 轻微
-/// 放大 / 提亮 / 阴影加深，**不加卡片底与边线**（用户本轮明确）。
+/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover 轻微
+/// 放大 / 提亮 / 辉光加深，**不加卡片底与边线**（用户本轮明确）。
 ///
 /// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
 /// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
 /// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块常驻
-/// 柔影」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` 都不参与布局
+/// **浅色辉光**」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` 都不参与布局
 /// （邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
 ///
+/// **为什么是白辉光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
+/// `Color.black`），黑 `.shadow` 在黑底上恒为零效果——静态区分与 hover「加深」都看不见。白色低
+/// 透明度的 `.shadow` 无填充、无边界（不是卡片底），在黑底上给出深度感。**无黑影项**。
+///
 /// **brightness 的口径**：`hoverBrightness` 是「1.0 = 不改」的乘性口径（与 `hoverScale` 同形），
-/// 传给 SwiftUI 时要**减 1**——`.brightness(_:)` 的入参是**增量**（0 = 不改），把 1.06 直接传进去
-/// 会白到看不清（A1 的「块的可读性不降」）。
+/// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:)` 里
+/// `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
 ///
 /// 常量是**起点值**：上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状；
-/// 本文件不再有第二份。测试钉「待在可读区间」（1.005…1.05 / 1.02…1.12 / hover 半径 > 常驻 > 0）。
+/// 本文件不再有第二份。测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 /
+/// 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
 enum HomeBlockFloatMetrics {
-    /// 常驻柔影的不透明度（黑）——**两态共用**：hover 的「加深」由半径给出（`hoverShadowRadius`），
-    /// 不透明度不设第二份，免得两个数要手动同步。
-    static let idleShadowOpacity: Double = 0.35
-    /// 常驻柔影的半径。
-    static let idleShadowRadius: CGFloat = 5
-    /// 常驻柔影的 y 偏移（**正数 = 往下方**：光从上来，块才像浮起）。
-    static let idleShadowY: CGFloat = 2
+    /// 常驻辉光的不透明度（白，低透明度 = 无填充的深度感）。
+    static let idleGlowOpacity: Double = 0.05
+    /// 常驻辉光的半径。
+    static let idleGlowRadius: CGFloat = 4
+    /// hover 的辉光不透明度（比常驻大 = 「加深」的一半）。
+    static let hoverGlowOpacity: Double = 0.10
+    /// hover 的辉光半径（比常驻大 = 「加深」的另一半）。
+    static let hoverGlowRadius: CGFloat = 10
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
-    /// hover 的提亮（乘性口径，1.0 = 不改；实现里减 1 传给 `.brightness`）。
+    /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
     static let hoverBrightness: Double = 1.06
-    /// hover 的柔影半径（比常驻值大 = 「阴影加深」）。
-    static let hoverShadowRadius: CGFloat = 9
     /// hover 进出的动画时长（`.smooth`）。
     static let duration: Double = 0.2
+
+    /// 修饰符**真正消费**的那份效果值（`homeBlockFloat()` 只读它，不自己碰常量——常量到应用的
+    /// 算式因此可被纯函数测试钉住：改错映射（如去掉 brightness 的 `- 1`、把两档接反）会让
+    /// `testHomeBlockFloatMetricsStayInTheLegibleRange` 变红）。
+    ///
+    /// 四项与 SwiftUI 一一对应：`scale` → `.scaleEffect`、`brightness` → `.brightness`（**增量**）、
+    /// `glowRadius`/`glowOpacity` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`
+    /// （`y` 恒 0——不做 y 位移）。
+    struct FloatEffects: Equatable {
+        let scale: CGFloat
+        let brightness: Double
+        let glowRadius: CGFloat
+        let glowOpacity: Double
+    }
+
+    /// 两档（常驻 / hover）的效果值：常驻档是**中性**（scale = 1、brightness = 0），
+    /// 只有辉光常驻可见。
+    static func effects(hovered: Bool) -> FloatEffects {
+        FloatEffects(
+            scale: hovered ? hoverScale : 1,
+            brightness: hovered ? hoverBrightness - 1 : 0,
+            glowRadius: hovered ? hoverGlowRadius : idleGlowRadius,
+            glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity
+        )
+    }
 }
 
-/// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔影 + hover 轻微放大 / 提亮 / 阴影加深。
+/// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover 轻微放大 / 提亮 /
+/// 辉光加深（半径与不透明度都换 hover 档）。
 ///
 /// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
 /// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
 ///
-/// **`compositingGroup()` 在阴影之前**：不合成的话 `.shadow` 会逐个子视图各画一道（块内的字与
-/// 图标各自带影，正是 docs/30 §失败信号里「块内容被阴影糊住」的样子）；合成后整格只有一道轮廓
-/// 影（面板级阴影在 `ContentView` 里也是这么用的）。它只改绘制、不改布局。
+/// 效果值一律走 `HomeBlockFloatMetrics.effects(hovered:)`——本修饰符不碰常量、不写算式。
+///
+/// **`compositingGroup()` 在辉光之前**：不合成的话 `.shadow` 会逐个子视图各画一道（块内的字与
+/// 图标各自带影，正是 docs/30 §失败信号里「块内容被辉光糊住」的样子）；合成后整格只有一道轮廓
+/// 光（面板级阴影在 `ContentView` 里也是这么用的）。它只改绘制、不改布局。
 struct HomeBlockFloatModifier: ViewModifier {
     @State private var hovered = false
 
     func body(content: Content) -> some View {
+        let effects = HomeBlockFloatMetrics.effects(hovered: hovered)
         content
-            .scaleEffect(hovered ? HomeBlockFloatMetrics.hoverScale : 1)
-            .brightness(hovered ? HomeBlockFloatMetrics.hoverBrightness - 1 : 0)
+            .scaleEffect(effects.scale)
+            .brightness(effects.brightness)
             .compositingGroup()
-            .shadow(
-                color: .black.opacity(HomeBlockFloatMetrics.idleShadowOpacity),
-                radius: hovered ? HomeBlockFloatMetrics.hoverShadowRadius : HomeBlockFloatMetrics.idleShadowRadius,
-                y: HomeBlockFloatMetrics.idleShadowY
-            )
+            .shadow(color: .white.opacity(effects.glowOpacity), radius: effects.glowRadius)
             .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
             .onHover { hovered = $0 }
     }
@@ -820,8 +843,8 @@ struct HomeFlowView: View {
                     ForEach(Array(row.indices.enumerated()), id: \.offset) { position, blockIndex in
                         HomeBandCell(block: blocks[blockIndex], albumArtNamespace: albumArtNamespace)
                             .frame(width: row.widths[position], height: row.height, alignment: .topLeading)
-                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻柔影 + hover 轻微
-                            // 放大 / 提亮 / 阴影加深。套在 `.frame` **之后**——判据（`hovered`）
+                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover
+                            // 轻微放大 / 提亮 / 辉光加深。套在 `.frame` **之后**——判据（`hovered`）
                             // 与视觉效果都只作用在格子的最终形状上，`scaleEffect` / `shadow`
                             // 都不改布局尺寸，邻居的位置仍由上面的 plan 定死。
                             .homeBlockFloat()
@@ -984,7 +1007,7 @@ struct HomeBandedHomeView: View {
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
             // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`；p6 起只剩横向 8pt 内边距、
-            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起柔影做；
+            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起辉光做；
             // 日历行不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if !plan.rows.isEmpty {
