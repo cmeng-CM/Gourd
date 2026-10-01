@@ -7112,8 +7112,22 @@ final class LauncherScannerRankingTests: XCTestCase {
         XCTAssertEqual(LauncherRanking.filter(apps, query: " 备忘录 ").map(\.id), ["notes"])
         XCTAssertEqual(LauncherRanking.filter(apps, query: "照片").map(\.id), ["photos"])
     }
+}
 
-    // MARK: 分区（p7：上区「快捷启动」/ 下区网格）
+// MARK: - 启动台：分区与拖放（p7：上区「快捷启动」/ 下区网格）
+
+/// `LauncherPartition` 与 `LauncherQuickDrop` 的口径（docs/31-home-workday-launcher.md
+/// §接口与数据形状 2）：上区顺序 = 固定先后、下区剔除固定项且保序、拖放四象限与未知/外来输入的 no-op。
+///
+/// 两个类型都是**纯函数**：不读 `Defaults`、不碰文件系统、不查 Spotlight——夹具是构造的
+/// `LauncherApp` 值，没有临时目录、没有盘上状态。扫描 / 排序 / 过滤的用例在同文件的
+/// `LauncherScannerRankingTests`，模块接线与固定项读写接缝在 `LauncherModuleTests`。
+final class LauncherPartitionDropTests: XCTestCase {
+
+    /// 构造一个 `LauncherApp` 值（`url` 只是个值，不碰文件系统）。
+    private func app(_ id: String, _ name: String, file: String? = nil) -> LauncherApp {
+        LauncherApp(id: id, name: name, url: URL(fileURLWithPath: "/fixture-apps/\(file ?? name).app"))
+    }
 
     /// 分区：上区顺序 = **固定先后**（`pinnedIDs` 表序，不吃 rank 序）、下区 = `ranked` 剔除固定项
     /// 且**保序**；未知 id 忽略、重复 id 保留首次；空表 / 全固定两边界。
