@@ -131,7 +131,7 @@
 
 ## 实际交付
 
-**批线与结构**：2026-10-01 一天内完成；**12 个任务（11 实现 + 1 回写）、5 阶段**，实现提交范围 `b4b1034e..a8e811c4`（**30 个提交**，全部本地、未 push），全量单测 **468 → 489 条 0 失败**，改动文件新增编译告警 0。收尾核对（控制器）：`defaults read com.cmeng.gourd panelHeightMode` → 键不存在（manual 残留已清、出厂 auto 生效）；`defaults read com.cmeng.gourd panelOrder` → 键不存在（排序复位）；`showNotHumanFace = 1`（用户原值，已还原）。
+**批线与结构**：2026-10-01 一天内完成；**12 个任务（11 实现 + 1 回写）、5 阶段**，实现提交范围 `b4b1034e..` 批末 HEAD（**30 个提交**，全部本地、未 push），全量单测 **468 → 490 条 0 失败**，改动文件新增编译告警 0。收尾核对（控制器）：`defaults read com.cmeng.gourd panelHeightMode` → 键不存在（manual 残留已清、出厂 auto 生效）；`defaults read com.cmeng.gourd panelOrder` → 键不存在（排序复位）；`showNotHumanFace = 1`（用户原值，已还原）。
 
 **交付物清单**（按任务；逐条对着报告与代码核过）：
 
@@ -151,7 +151,7 @@
 | 回归修复 | `ContentView.swift`、`PanelAutoHeightTests.swift` | `shouldHonorHoverExit` 纯函数 + `finishHoverExit` 早退 + 轮询接入 + 接触位置观测（切日历页不再塌回关闭态） |
 | T12 回写 | 本文档、`docs/29`、`docs/26`、`CHANGELOG.md` + 注释清扫 | 本节与各节按实现校正；改判留痕就地；过期注释清理（不改行为） |
 
-**证据目录**：`.workflow/p6-ui-polish/evidence/` 已拍 **16 件**（15 张截图 + 1 份像素实测文本）——`t1-blocks-float.png`、`t2-music-narrow.png`、`t3-notifications-font.png`、`t5-shelf-remove.png`、`t6-shelf-grid.png`、`t7-launcher-cap.png`、`t8-calendar-tab.png`、`t8-home-bottom.png` + `t8-home-bottom.txt`（`panel_bottom=559 last_ink=531 visible_blank=28px`，auto）、`t9-host-row-arrows.png`、`t9-order-changed.png`、`t10-idle-on/-off(-zoom).png` 4 张、`t11-sidebar.png`。**证据随 `.workflow/` 消失**。
+**证据目录**：`.workflow/p6-ui-polish/evidence/` 已拍 **20 件**（17 张截图 + 3 份文本）——`t1-blocks-float.png`、`t2-music-narrow.png`、`t3-notifications-font.png`、`t4-shelf-strings.txt`（AX 文本，见图内说明）、`t5-shelf-remove.png`（点选→✕→删除前后对比）、`t6-shelf-grid.png`、`t7-launcher-cap.png`、`t7-switch-single-step.png` + `.txt`（四页高度汇总）、`t8-calendar-tab.png`、`t8-home-bottom.png` + `t8-home-bottom.txt`（`panel_bottom=559 last_ink=531 visible_blank=28px`，auto）、`t9-host-row-arrows.png`、`t9-order-changed.png`、`t10-idle-on/-off(-zoom).png` 4 张、`t11-sidebar.png`。**证据随 `.workflow/` 消失**。
 
 **与计划的偏离**（逐条给理由；「文档写的是预期，代码是真的」）：
 
@@ -163,7 +163,7 @@
 
 **遗留项**（本批明确未做；逐条有出处）：
 
-1. **`.workflow/p6-ui-polish/` 报告台账**（`ledger.md` + 12 份任务报告 + 16 件证据）**随 `.workflow/` 消失**——结论已收进本节、§已知限制与 §决策摘要，过程记录不另存。
+1. **`.workflow/p6-ui-polish/` 报告台账**（`ledger.md` + 14 份任务报告 + 20 件证据）**随 `.workflow/` 消失**——结论已收进本节、§已知限制与 §决策摘要，过程记录不另存。
 2. **`AirDropView` 死代码的 2 行显示改动仍在**（`:98` / `:125` 改成 `displayName`）：全仓无任何实例化点，改动不可达 UI（T4 裁决「目录级显示点清零」，保留只为一致性；要回到「死代码不动」口径回退这 2 行即可）。
 3. **`NSOpenPanel` 两条整句 key**（`Select Files for %@` / `Choose files to share via %@`）：zh 的 title 取「选择共享服务」、不含供应商名（en 保留 `%@`）；message 带 `%@`。若希望标题也带供应商名，改一处 catalog 值即可。
 4. **扩展 tab 不在排序名单**（不可排槽位，与用量 tab / Home 同档）：`PanelTabSequence.sequence` 只重排可排槽位，扩展 tab 停在原槽位索引上（D-16 的「位置不动」口径）。
