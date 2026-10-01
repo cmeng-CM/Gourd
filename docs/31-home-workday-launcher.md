@@ -95,11 +95,11 @@
 | 启动台两区视图与拖放接线 | `DynamicIsland/Modules/Launcher/LauncherModule.swift` | `LauncherStore.quickApps` / `gridApps`（同一私有 `partition` 现算）/ `pin(_:)` / `unpin(_:)`（走 `LauncherPins`，先落盘再刷新、幂等）；两区视图（小标题 + 上区网格 / 虚线提示格 + 0.08 白分隔线 + 下区网格）；两处 `onDrop` + `handleDrop` / `applyDrop` 收口；图钉角标删除；`adaptiveColumns` 两区共用 |
 | 拖拽自动收起抑制（计划外） | 同上 | `@EnvironmentObject vm` + 每拖拽一枚 `UUID` 令牌（`vm.setAutoCloseSuppression(_:token:)`）；起拖置位 + 30 秒有界看门狗（代数 + 令牌双判据）；两处 `onDrop` 第一行 `defer` 释放 + 顶部同步 `vm.dropEvent = true`；三道护栏（面板关闭 / 视图消失 / 看门狗） |
 | 文案 | `DynamicIsland/Localizable.xcstrings`（进包那份；根那份一个字未动） | 改值 3 条 + 新增 17 条（progress 15 + launcher 2），逐条见 §接口与数据形状 5；根 catalog 对这 20 键 grep 计数全 0 |
-| 测试 | `DynamicIslandTests/{ModuleKernelTests,TakeoverEnablementTests,HomeStripLayoutTests}.swift` | 全量 490 → 501（+11）：T2 四枚（`testWorkdayCalendarMatchesThe2026StateCouncilTable` / `…TodayStateBoundaries` / `…SpanStatsCountCompletedAndRemaining` / `…ResolveFallsBackOnInvalidConfig`）、T3 三枚（`testWorkdayRowTrailingTextMatrix` / `testProgressModuleWorkdayConfigReadsThroughTheRealHandle` / `testProgressWorkdayControlsMatchManifestAndCatalog`）、T4 两条（`testLauncherPartitionSplitsQuickAndGridStably` / `testLauncherQuickDropResolveMatrix`）、T5 两条（`testLauncherStorePinUnpinUpdatesPartitions` / `testLauncherQuickLaunchKeysLiveOnlyInTheInPackageCatalog`） |
+| 测试 | `DynamicIslandTests/ModuleKernelTests.swift`（9 枚）、`DynamicIslandTests/TakeoverEnablementTests.swift`（2 枚）；`HomeStripLayoutTests.swift` 只扩展既有用例、无新增 | 全量 490 → 501（**+11**）：T2 四枚（`testWorkdayCalendarMatchesThe2026StateCouncilTable` / `testWorkdayTodayStateBoundaries` / `testWorkdaySpanStatsCountCompletedAndRemaining` / `testWorkdayResolveFallsBackOnInvalidConfig`）、T3 三枚（`testWorkdayRowTrailingTextMatrix` / `testProgressModuleWorkdayConfigReadsThroughTheRealHandle` / `testProgressWorkdayControlsMatchManifestAndCatalog`）、T4 两条（`testLauncherPartitionSplitsQuickAndGridStably` / `testLauncherQuickDropResolveMatrix`）、T5 两条（`testLauncherStorePinUnpinUpdatesPartitions` / `testLauncherQuickLaunchKeysLiveOnlyInTheInPackageCatalog`）；`HomeStripLayoutTests` 的 `testHomeBlockFloatMetricsStayInTheLegibleRange` 只扩展档位（无新增用例） |
 
 **与计划的偏离及原因**（逐条给理由；「文档写的是预期，代码是真的」）：
 
-1. **`resolveWorkHours` 越界口径：夹取 → 一律整体回落默认**（§接口 3 原稿写「夹取」）：T2 审查裁定驱动——夹取会产出「有效但荒谬」的班次（如 9–23 班），坏值一律回落 `(9, 18)`；测试与 §接口 3 已同步（回写提交 `1c03e210`）。
+1. **`resolveWorkHours` 越界口径：夹取 → 一律整体回落默认**（§接口 3 原稿写「先夹取到 workHourRange」）：T2 审查裁定驱动——夹取会产出「有效但荒谬」的班次（如 9–23 班），坏值一律回落 `(9, 18)`；测试与 §接口 3 已按同一口径改写（回写提交 `1c03e210`）。
 2. **分区 / 拖放用例归置独立测试类 `LauncherPartitionDropTests`**（计划未指定落点）：审查 Minor——类名与承载内容必须相符；`LauncherScannerRankingTests` 回到「扫描 / 排序 / 过滤」名义（T4 fix `bc4f04d1`）。
 3. **计划外新增「面板内拖拽自动收起抑制」修复**（计划与 §接口 6 原稿均未写）：T5 首轮上屏发现面板级 `dragDetector` 把面板内拖拽的 targeted 进出当收起信号（拖拽穿非投放区即收起、`onDrop` 收不到抬手）→ `T5 fix` 挂抑制令牌；独立审查 1 Important（释放面三泄漏）+ 3 Minor → `T5 fix2` 收口（`defer` 第一行、`dropEvent` 同步置位、30 秒看门狗 + 两道护栏、`adaptiveColumns` 去重）。复测：拖上固定 / 拖下取消两向送达并落盘。
 4. **T3 顺带修正 `ModuleSettingsSection` 一处陈旧注释**（在点名文件内、但是注释非功能）：描述 `progress` surfaces 的注释自 p3-widgets 起与实现不符（`[.compact,.expanded]` → 实际 `[.home]`），就地更正，避免本批读者以为旧口径还在。
@@ -172,7 +172,7 @@ enum WorkdayCalendar {
     static let defaultWorkdays: Set<Int>        // ISO：1=周一 … 7=周日，默认 [1,2,3,4,5]
     static let defaultWorkStartHour: Int        // 9
     static let defaultWorkEndHour: Int          // 18
-    static let workHourRange: ClosedRange<Int>  // 0...23 —— 区间**单一来源**：设置控件与读侧夹取共用（照 LauncherGridMetrics.iconSizeRange 先例，禁第二份字面量）
+    static let workHourRange: ClosedRange<Int>  // 0...23 —— 区间**单一来源**：设置控件与该常量的越界判定共用（读侧只判越界、不夹取；照 LauncherGridMetrics.iconSizeRange 先例，禁第二份字面量）
 
     struct HolidayTable { let holidays: Set<String>; let makeupWorkdays: Set<String> }  // "M/d"
     static let holidayTables: [Int: HolidayTable]      // 2026 表见下；表外年份走纯星期
