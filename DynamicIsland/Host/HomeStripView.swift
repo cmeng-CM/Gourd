@@ -432,34 +432,27 @@ struct HomeBandDroppedHint: View {
 
 // MARK: - 带级容器与块级 hover（T8 / docs/26 §做法 机制七 / D-10）
 
-/// 首页两条带的**视觉常量**：带级容器与块级 hover 的**唯一取值处**（T8 / D-10）。
+/// 首页的**视觉常量**：带级容器的横向内边距与块级 hover 的**唯一取值处**（T8 / D-10）。
 ///
 /// 调研结论（机制七）是**不做每块的永久卡片**（Atoll 与 Nook X 都没有 per-block 容器；每块卡片
-/// 要吃 8–16pt 内边距，而宽度预算正是最紧的），分界交给**带级容器**：两带各一个极淡圆角底。
-/// 「可交互的条目」在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有这一处**
-/// （三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
+/// 要吃 8–16pt 内边距，而宽度预算正是最紧的）。分带时期那层「整条带共用一个极淡圆角底」的
+/// 大底已撤（p6-ui-polish / docs/30 §做法 机制一 / D-02）：底把内容糊在一个大盒子里、块与块
+/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起柔影**（`homeBlockFloat()`）做。
+/// 「可交互的条目」仍在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有
+/// 这一处**（三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
 enum HomeBandChrome {
-    /// 带级容器的填充浓度：`white.opacity(0.05)`（机制七给的档是 0.04~0.06，取中）。
+    /// 带级容器给内容的**横向**内边距（机制七：8）。
     ///
-    /// **不加描边**（机制七）：分界只靠这一层极淡的底 + 带间留白；描边会把两条带读成卡片。
-    static let containerOpacity: Double = 0.05
+    /// **纵向刻意不做**（T8 的边界裁定，p6 起仍然成立）：单条流的可用高本来就紧，纵向真内边距
+    /// 只能从「先丢一行块」里出；横向上这 8pt 是实打实的（内容宽度因此少 16pt），容器高度
+    /// = 流的高度（零布局成本）。
+    static let containerInset: CGFloat = 8
 
     /// 带级容器的圆角（机制七：12）。
+    ///
+    /// **大底撤掉后已无消费方**（p6-ui-polish：`HomeBandContainerChrome` 只剩横向内边距）——
+    /// 按文档点名范围（docs/30 §接口与数据形状 机制一只删 `containerOpacity`）保留，等回写裁决。
     static let containerCornerRadius: CGFloat = 12
-
-    /// 容器给内容的**横向**内边距（机制七：8）。
-    ///
-    /// **纵向刻意不做**（T8 的边界裁定，代价写在报告里）：带的高度预算在默认档只剩 4pt
-    ///（`HomeVerticalFit` 的算式：日历行 294 + 缝 8 + 主块带最小 152 + 缝 8 + 小组件带 96 = 558，
-    /// 可用高 ≈562）。纵向真内边距两条带要 32pt——只能从「默认档先丢日历行」或「主块带掉到
-    /// `minimumUsableHeight` 之下」里出，两者都是 T7 明令不能动的既有取值。因此纵向的呼吸感
-    /// 取**带内自然余量**（主块带默认档 156 − 音乐块 ≈152 = 4pt；小组件带的行高即内容高），
-    /// 容器的高度 = 带的高度（零布局成本），横向这 8pt 是实打实的（内容宽度因此少 16pt）。
-    ///
-    /// **上面几个数是 T8 分带时期的预算**（`HomeVerticalFit` 那条带；主块带最小 152、合计 558）：
-    /// p5-home-blocks / T3 起主块带最小高 = 大块档 = 140、音乐降为紧凑档，算式里的数会跟着变，
-    /// 但结论——**纵向不做内边距**——与「余量取带内自然空间」这条口径不变。
-    static let containerInset: CGFloat = 8
 
     /// 可交互条目的 hover 底浓度（机制七：0.06）。
     static let hoverOpacity: Double = 0.06
@@ -468,19 +461,19 @@ enum HomeBandChrome {
     static let hoverCornerRadius: CGFloat = 8
 }
 
-/// 一条带的**带级容器**（T8）：极淡圆角底 + 横向内边距 8；高度不变（见 `containerInset` 的算式）。
+/// 一条带的**带级容器**（T8；p6 起**不画底**，只剩横向内边距）：高度不变（见 `containerInset`）。
 ///
-/// 用法只有两处（`HomeBandedHomeView` 的两条带）。容器画在带自己的 frame 上，因此**带的可用宽
-/// 必须先扣掉两侧的 `containerInset`**（调用方传给两条带的宽度就是扣完的）——否则内容会压到
-/// 圆角上、并在右缘溢出一截。
+/// **不再画底**（p6-ui-polish / docs/30 §做法 机制一 / D-02）：分带时期那层 `white.opacity(0.05)`
+/// 的整条大底已撤——「所有内容糊在一个大盒子里」正是用户第 1 条反馈；块与块之间的区分改由每块
+/// 的浮起柔影（`homeBlockFloat()`）做（用户本轮明说：不加区域块与边线）。
+///
+/// 用法只有一处（`HomeBandedHomeView` 的单条流）。容器仍画在带自己的 frame 上，因此**带的可用宽
+/// 必须先扣掉两侧的 `containerInset`**（调用方传给这条流的宽度就是扣完的）——否则 plan 按整宽
+/// 分配、内容却画在窄了 16pt 的区域里，右缘会溢出一截。
 private struct HomeBandContainerChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, HomeBandChrome.containerInset)
-            .background(
-                RoundedRectangle(cornerRadius: HomeBandChrome.containerCornerRadius, style: .continuous)
-                    .fill(Color.white.opacity(HomeBandChrome.containerOpacity))
-            )
     }
 }
 
@@ -504,7 +497,8 @@ struct HomeBlockHoverBackground: ViewModifier {
 }
 
 extension View {
-    /// 把这条带包进带级容器（T8）。两带各一次，别用在日历行上。
+    /// 把这条带包进带级容器（T8；p6 起容器**不画底**、只剩横向 8pt 内边距——见
+    /// `HomeBandContainerChrome`）。单条流一次，别用在日历行上。
     func homeBandContainer() -> some View {
         modifier(HomeBandContainerChrome())
     }
@@ -512,6 +506,75 @@ extension View {
     /// 可交互条目的 hover 底（T8 的唯一一条规则）。调用方传自己的 hover 状态。
     func homeBlockHoverBackground(isHovered: Bool) -> some View {
         modifier(HomeBlockHoverBackground(isHovered: isHovered))
+    }
+}
+
+// MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02）
+
+/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻柔和阴影 + hover 轻微
+/// 放大 / 提亮 / 阴影加深，**不加卡片底与边线**（用户本轮明确）。
+///
+/// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
+/// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
+/// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块常驻
+/// 柔影」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` 都不参与布局
+/// （邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
+///
+/// **brightness 的口径**：`hoverBrightness` 是「1.0 = 不改」的乘性口径（与 `hoverScale` 同形），
+/// 传给 SwiftUI 时要**减 1**——`.brightness(_:)` 的入参是**增量**（0 = 不改），把 1.06 直接传进去
+/// 会白到看不清（A1 的「块的可读性不降」）。
+///
+/// 常量是**起点值**：上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状；
+/// 本文件不再有第二份。测试钉「待在可读区间」（1.005…1.05 / 1.02…1.12 / hover 半径 > 常驻 > 0）。
+enum HomeBlockFloatMetrics {
+    /// 常驻柔影的不透明度（黑）——**两态共用**：hover 的「加深」由半径给出（`hoverShadowRadius`），
+    /// 不透明度不设第二份，免得两个数要手动同步。
+    static let idleShadowOpacity: Double = 0.35
+    /// 常驻柔影的半径。
+    static let idleShadowRadius: CGFloat = 5
+    /// 常驻柔影的 y 偏移（**正数 = 往下方**：光从上来，块才像浮起）。
+    static let idleShadowY: CGFloat = 2
+    /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
+    static let hoverScale: CGFloat = 1.02
+    /// hover 的提亮（乘性口径，1.0 = 不改；实现里减 1 传给 `.brightness`）。
+    static let hoverBrightness: Double = 1.06
+    /// hover 的柔影半径（比常驻值大 = 「阴影加深」）。
+    static let hoverShadowRadius: CGFloat = 9
+    /// hover 进出的动画时长（`.smooth`）。
+    static let duration: Double = 0.2
+}
+
+/// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔影 + hover 轻微放大 / 提亮 / 阴影加深。
+///
+/// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
+/// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
+///
+/// **`compositingGroup()` 在阴影之前**：不合成的话 `.shadow` 会逐个子视图各画一道（块内的字与
+/// 图标各自带影，正是 docs/30 §失败信号里「块内容被阴影糊住」的样子）；合成后整格只有一道轮廓
+/// 影（面板级阴影在 `ContentView` 里也是这么用的）。它只改绘制、不改布局。
+struct HomeBlockFloatModifier: ViewModifier {
+    @State private var hovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hovered ? HomeBlockFloatMetrics.hoverScale : 1)
+            .brightness(hovered ? HomeBlockFloatMetrics.hoverBrightness - 1 : 0)
+            .compositingGroup()
+            .shadow(
+                color: .black.opacity(HomeBlockFloatMetrics.idleShadowOpacity),
+                radius: hovered ? HomeBlockFloatMetrics.hoverShadowRadius : HomeBlockFloatMetrics.idleShadowRadius,
+                y: HomeBlockFloatMetrics.idleShadowY
+            )
+            .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
+            .onHover { hovered = $0 }
+    }
+}
+
+extension View {
+    /// 首页块的浮起样式（p6 / docs/30 §做法 机制一）。唯一调用点是 `HomeFlowView` 的格子，
+    /// 套在格子的 `.frame(width:height:)` **之后**——视觉修饰不改格子尺寸。
+    func homeBlockFloat() -> some View {
+        modifier(HomeBlockFloatModifier())
     }
 }
 
@@ -757,6 +820,11 @@ struct HomeFlowView: View {
                     ForEach(Array(row.indices.enumerated()), id: \.offset) { position, blockIndex in
                         HomeBandCell(block: blocks[blockIndex], albumArtNamespace: albumArtNamespace)
                             .frame(width: row.widths[position], height: row.height, alignment: .topLeading)
+                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻柔影 + hover 轻微
+                            // 放大 / 提亮 / 阴影加深。套在 `.frame` **之后**——判据（`hovered`）
+                            // 与视觉效果都只作用在格子的最终形状上，`scaleEffect` / `shadow`
+                            // 都不改布局尺寸，邻居的位置仍由上面的 plan 定死。
+                            .homeBlockFloat()
                     }
 
                     if row.showsHint {
@@ -834,9 +902,9 @@ struct HomeBandedHomeView: View {
         let blocks = catalog.blocks
 
         GeometryReader { geometry in
-            // **流的可用宽 = 容器内边距扣完之后的那一份**（T8）：容器底画在流的 frame 上，
-            // 内容在它里面两侧各缩 `containerInset`，所以喂给纯函数的宽度必须先扣掉 16pt
-            // ——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会压在圆角上并溢出。
+            // **流的可用宽 = 容器内边距扣完之后的那一份**（T8；p6 起容器只剩这道内边距）：
+            // 内容在容器里两侧各缩 `containerInset`，所以喂给纯函数的宽度必须先扣掉 16pt
+            // ——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会溢出一截。
             let bandWidth = max(0, geometry.size.width - HomeBandChrome.containerInset * 2)
             let items = blocks.map {
                 HomeFlowLayout.Item(
@@ -915,8 +983,9 @@ struct HomeBandedHomeView: View {
             let _ = writeHomeContentHeight(heldPanelHeight - PanelAutoHeight.homeVerticalPadding)
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
-            // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`：极淡圆角底 + 横向 8pt 内边距，
-            // 高度零成本）——分带没了，但"内容成组"的那层底留着；日历行不包（它不是流的一部分）。
+            // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`；p6 起只剩横向 8pt 内边距、
+            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起柔影做；
+            // 日历行不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if !plan.rows.isEmpty {
                     HomeFlowView(

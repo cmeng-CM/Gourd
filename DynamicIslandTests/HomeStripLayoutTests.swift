@@ -68,6 +68,11 @@
 //    才在**最后一行**末尾预留，预留后这行的总宽仍不越过可用宽、且被挤掉的格也计入 `＋N`；
 //  - 「放得下几行」与「n 行要多少高度」是同一个式子的两个方向（阈值上等价，有一条用例钉住）。
 //
+//  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1）
+//  - `HomeBlockFloatMetrics` 待在可读区间：hover 放大 1.005…1.05、提亮 1.02…1.12、
+//    hover 阴影半径 > 常驻半径 > 0（常量是起点值，上屏调参在 Checkpoint；hover 本身驱动不出，
+//    见 docs/30 §已知限制 1）。
+//
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
 //
@@ -1909,6 +1914,35 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(needed, plan.rowsNeeded)
         XCTAssertEqual(needed, 3, "7 块 / 一行 3 块 = 3 行")
+    }
+
+    // MARK: - 首页块浮起（p6-ui-polish / docs/30 §做法 机制一 / D-02）
+
+    /// **每块的「浮起」常量待在可读区间**（p6 / docs/30 §验收标准 A1）。
+    ///
+    /// 断言的是**区间**而不是常数（上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30
+    /// §接口与数据形状）：hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像
+    /// 抖）；提亮要能分辨但不得把字冲白（> 1.12 浅色元素会糊）；柔影必须**常驻可见**
+    /// （半径 > 0——否则块与背景无区分）且 **hover 更深**（半径更大——否则 hover 与常驻没差别，
+    /// 机制一的 hover 半条腿没落地）。
+    ///
+    /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
+    /// §已知限制 1 / D-20），这里钉的是常量；上屏的 hover 观感列入「需真人鼠标复核」清单
+    /// （报告 T1 §待人工验收）。
+    func testHomeBlockFloatMetricsStayInTheLegibleRange() {
+        XCTAssertGreaterThanOrEqual(HomeBlockFloatMetrics.hoverScale, 1.005, "hover 放大要看得出来")
+        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.hoverScale, 1.05, "再大就不像浮起、像抖动")
+        XCTAssertGreaterThanOrEqual(HomeBlockFloatMetrics.hoverBrightness, 1.02, "hover 提亮要看得出来")
+        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.hoverBrightness, 1.12, "再亮字就冲白了")
+        XCTAssertGreaterThan(HomeBlockFloatMetrics.idleShadowRadius, 0, "常驻柔影必须可见（半径 > 0）")
+        XCTAssertGreaterThan(
+            HomeBlockFloatMetrics.hoverShadowRadius, HomeBlockFloatMetrics.idleShadowRadius,
+            "hover 的阴影要比常驻更深（半径更大）"
+        )
+        XCTAssertGreaterThan(HomeBlockFloatMetrics.idleShadowOpacity, 0, "常驻柔影的不透明度为正")
+        XCTAssertLessThanOrEqual(HomeBlockFloatMetrics.idleShadowOpacity, 1, "不透明度是 0…1 的口径（`.black.opacity` 的入参）")
+        XCTAssertGreaterThan(HomeBlockFloatMetrics.duration, 0.1, "太快看不见动画")
+        XCTAssertLessThan(HomeBlockFloatMetrics.duration, 0.3, "再慢就滞后于指针")
     }
 }
 
