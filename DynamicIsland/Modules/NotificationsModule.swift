@@ -1046,6 +1046,42 @@ final class NotificationsModule: GourdModule {
 
 // MARK: - 展开面板视图
 
+/// 展开面板（`NotificationsModuleView` 一族）的**字号档位表**（T3 / D-09）。
+///
+/// 11 处字号字面量 + 行内垂直内边距收在这一处（原来散在视图里），单测按表逐项钉死
+/// （`testNotificationRowMetricsMatchTheBumpedSizes`）——用户反馈「消息面板字体太小」，
+/// 本批主行 +2pt、次要 +1pt；以后调档只动这里。
+///
+/// **只服务展开面板**：首页通知块（`NotificationsHomeBlockView`，定高 96 内画 3 行）
+/// 与 HUD 浮层卡片（`NotificationHUDCardLayout`，按用户倍率缩放）各自有自己的字号口径，
+/// **不读这里**——放大首页块必裁（docs/30 备选⑩），两者与展开页是不同代码路径。
+struct NotificationRowMetrics {
+    /// 模块名「通知」。
+    static let moduleName: CGFloat = 13
+    /// 状态行（「最近 N 条」/「需要完全磁盘访问」/ 错误原因截断）。
+    static let status: CGFloat = 12
+    /// 「全部清除」胶囊文案。
+    static let clearAll: CGFloat = 11
+    /// 刷新图标（`arrow.clockwise`）。
+    static let refresh: CGFloat = 12
+    /// 行内来源 App 名。
+    static let appName: CGFloat = 12
+    /// 行内「·」分隔符。
+    static let separator: CGFloat = 12
+    /// 行内相对时间。
+    static let timestamp: CGFloat = 11
+    /// 行内标题。
+    static let title: CGFloat = 13
+    /// 行内正文。
+    static let body: CGFloat = 12
+    /// 行内 × 关闭按钮。
+    static let dismissIcon: CGFloat = 11
+    /// 脚注（只读能力边界说明）。
+    static let footnote: CGFloat = 10
+    /// 行内垂直内边距（3 → 4：字号变大后行距跟着松一点，行高随之变高）。
+    static let rowVerticalPadding: CGFloat = 4
+}
+
 /// 展开面板：标题行（模块名 + 状态 + 刷新）+ 通知列表（点击整行打开对应 App **并收起刘海**）+ 能力边界说明。
 ///
 /// `.task` 做两件事：取一次最新数据（**不碰权限**）+ 把未读数清零（「自上次打开面板以来」）。
@@ -1074,11 +1110,11 @@ private struct NotificationsModuleView: View {
     private var header: some View {
         HStack(spacing: 6) {
             Text(LocalizedStringKey("module.notifications.name"))
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: NotificationRowMetrics.moduleName, weight: .semibold))
                 .foregroundStyle(.white)
 
             Text(NotificationText.status(store.state, count: store.items.count))
-                .font(.system(size: 11))
+                .font(.system(size: NotificationRowMetrics.status))
                 .foregroundStyle(.white.opacity(store.state == .needsFullDiskAccess ? 0.85 : 0.6))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1092,7 +1128,7 @@ private struct NotificationsModuleView: View {
                     store.dismissAll()
                 } label: {
                     Text(LocalizedStringKey("module.notifications.clearAll"))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: NotificationRowMetrics.clearAll, weight: .medium))
                         .foregroundStyle(.white.opacity(0.75))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -1107,7 +1143,7 @@ private struct NotificationsModuleView: View {
                 Task { await store.refreshAll() }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: NotificationRowMetrics.refresh, weight: .medium))
                     .foregroundStyle(.white.opacity(0.8))
             }
             .buttonStyle(.plain)
@@ -1149,7 +1185,7 @@ private struct NotificationsModuleView: View {
     /// 能力边界（09 §5.5「必须接受」的四条）——一行小字，别让用户以为能在岛上操作通知。
     private var footer: some View {
         Text(LocalizedStringKey("module.notifications.readOnlyNote"))
-            .font(.system(size: 9))
+            .font(.system(size: NotificationRowMetrics.footnote))
             .foregroundStyle(.white.opacity(0.35))
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -1199,7 +1235,7 @@ private struct NotificationRow: View {
             content
             dismissButton
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, NotificationRowMetrics.rowVerticalPadding)
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         // 整行底色走首页那条唯一的 hover 规则（T8 / docs/26 §做法 机制七）——本行原先自己写的是
@@ -1213,17 +1249,17 @@ private struct NotificationRow: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Text(item.displayName)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: NotificationRowMetrics.appName, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
 
                 Text("·")
-                    .font(.system(size: 11))
+                    .font(.system(size: NotificationRowMetrics.separator))
                     .foregroundStyle(.white.opacity(0.4))
 
                 if let delivered = item.deliveredDate {
                     Text(NotificationText.relative(delivered))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .font(.system(size: NotificationRowMetrics.timestamp, weight: .medium, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.white.opacity(0.6))
                 }
@@ -1233,7 +1269,7 @@ private struct NotificationRow: View {
 
             if !item.title.isEmpty {
                 Text(item.title)
-                    .font(.system(size: 11))
+                    .font(.system(size: NotificationRowMetrics.title))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1241,7 +1277,7 @@ private struct NotificationRow: View {
 
             if !item.body.isEmpty {
                 Text(item.body)
-                    .font(.system(size: 10))
+                    .font(.system(size: NotificationRowMetrics.body))
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -1268,7 +1304,7 @@ private struct NotificationRow: View {
             store.dismiss(item)
         } label: {
             Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: NotificationRowMetrics.dismissIcon, weight: .semibold))
                 .foregroundStyle(.white.opacity(isHovered || isDismissHovered ? 1 : 0.6))
                 .padding(3)
                 .contentShape(Rectangle())

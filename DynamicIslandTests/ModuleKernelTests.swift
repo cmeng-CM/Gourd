@@ -4101,6 +4101,41 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    // MARK: - 展开面板通知页的字号档位（T3 / D-09）
+
+    /// **展开面板的 11 处字号 + 行内垂直内边距逐项钉表**（docs/30 §接口与数据形状 机制四）：
+    /// 用户反馈「消息（通知）面板字体太小」——主行 +2pt、次要 +1pt，行内边距 3 → 4。
+    ///
+    /// 视图里不许再出现裸字号字面量（都读 `NotificationRowMetrics`），本用例是这张档位表的
+    /// **唯一执行依据**：改档只动常量表，改了却忘了对表在这里红。
+    ///
+    /// **首页通知块与 HUD 浮层卡片不在表内**（与展开页是不同代码路径：首页块定高 96 内画 3 行、
+    /// HUD 卡片按用户倍率缩放，各自的字号口径见 `NotificationsHomeBlockView` 与
+    /// `NotificationHUDCardLayout`）——这就是「放大展开页不会连带放大两者」的机制保证。
+    func testNotificationRowMetricsMatchTheBumpedSizes() {
+        // 档位表：（表项名, 常量, 目标值），顺序与 docs/30 机制四的表格逐行一致。
+        let table: [(name: String, actual: CGFloat, expected: CGFloat)] = [
+            ("模块名", NotificationRowMetrics.moduleName, 13),
+            ("状态行「最近 N 条」", NotificationRowMetrics.status, 12),
+            ("全部清除", NotificationRowMetrics.clearAll, 11),
+            ("刷新图标", NotificationRowMetrics.refresh, 12),
+            ("来源 App 名", NotificationRowMetrics.appName, 12),
+            ("分隔「·」", NotificationRowMetrics.separator, 12),
+            ("时间", NotificationRowMetrics.timestamp, 11),
+            ("标题", NotificationRowMetrics.title, 13),
+            ("正文", NotificationRowMetrics.body, 12),
+            ("行内 ×", NotificationRowMetrics.dismissIcon, 11),
+            ("脚注", NotificationRowMetrics.footnote, 10),
+        ]
+        XCTAssertEqual(table.count, 11, "档位表就是 11 项（多了少了都说明表被改动过）")
+        for row in table {
+            XCTAssertEqual(row.actual, row.expected, "\(row.name) 应为 \(row.expected)pt（档位表）")
+        }
+
+        // 行内垂直内边距 3 → 4：字号变大后行距跟着松一档（行高随之变高，列表更长、照常滚动）。
+        XCTAssertEqual(NotificationRowMetrics.rowVerticalPadding, 4, "行内 padding 3 → 4")
+    }
+
     // MARK: - 主面板背景（D-26）
 
     /// **主面板背景的生效范围是纯函数**（2026-09-28 用户要求给展开态主面板加「液态玻璃」配置）：
