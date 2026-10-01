@@ -159,6 +159,17 @@
 //    两份名单是那两个视图**真的在读**的门槛键声明（读取点就在它们各自的 `tabs` / `body` 里）。
 //    方向只有一个（登记 ⊆ 在用），反方向在真实键集上不可达（枚举表逐条写明其余门槛键的归属）。
 //
+//  p6-ui-polish / T9 追加（**宿主三 tab 并入面板排序**，docs/30-ui-polish-and-shelf.md §做法 机制七 /
+//  D-15、D-16——上面 T5 那条「宿主行只有开关、没有 ↑↓」的口径由此改写）：
+//  - **一条用例三层**（`testHostPanelRowsJoinThePanelOrderAndDefaultSequenceIsUnchanged`）：
+//    ① 宿主 id（`shelf` / `clipboard` / `terminal`）↔ gate 键的三方映射（`PanelHostTab` ↔ `hostPanelRows`
+//    ↔ `TabSelectionView.hostPanelGateKeys`）；② 取色器不在排序名单（没有排序 id、也没有可写的表）；
+//    ③ **默认序逐字**——喂给 `PanelTabSequence.slots(...)` 骨架的每个 gate 都写明来处，空表时输出
+//    = 改动前 `TabSelectionView.tabs` 的实际渲染顺序；④ **写表后消费点跟随**：走真写路径
+//    （`ModuleSurfaceGroup.panel.writeOrderTable`）+ 真 `panelOrder` 键，面板条（`sequence`）与设置页
+//    名单（`ModuleSettingsSection.panelMovableIDs`）读同一张表，非可排项（用量 / 扩展 tab）槽位不动；
+//    ⑤ 剪贴板图标模式下它没有槽位，残留的排序值不影响 tab 条。
+//
 //  p5-home-blocks / T5 **修复轮**（独立评审 P2：关掉宿主元素后面板还停在它上面；
 //  `docs/29` §机制三那四条宿主行在协调器一侧的闭环）：
 //  - **视图归一化表对键**（`testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows`）：
@@ -2132,6 +2143,173 @@ final class TakeoverEnablementTests: XCTestCase {
         }
         // 四条宿主键各自的视图逐个钉死（改映射必须改这条）
         XCTAssertEqual(gates.map(\.views), [[.shelf], [.terminal], [.notes, .clipboard], [.colorPicker]])
+    }
+
+    /// **宿主三 tab 并入面板排序**（p6-ui-polish / T9，docs/30-ui-polish-and-shelf.md §做法 机制七 /
+    /// D-15、D-16；上面 T5 那条「宿主行只有开关、没有 ↑↓」的口径由此改写）：
+    ///
+    /// ① **宿主 id ↔ gate 键的映射**：`PanelHostTab`（排序词汇表）↔ `hostPanelRows`（登记表）↔
+    ///    `TabSelectionView.hostPanelGateKeys`（视图真的在读的门槛键）三方按同一个键对象 / 键名钉住；
+    /// ② **取色器不在排序名单**（它不是面板 tab：渲染在标题栏图标行，行上不该有死箭头）；
+    /// ③ **默认序（`panelOrder` 为空）与改动前逐字一致**——输入是 `PanelTabSequence.slots(...)` 造出的
+    ///    槽位骨架，每个参数的 gate 来处写在用例里（控制器裁决 2：以改动前的**实际渲染顺序**为准，
+    ///    不照 docs/30 的描述序）；
+    /// ④ **写表后消费点顺序跟随**：走真写路径（`ModuleSurfaceGroup.panel.writeOrderTable`）+ 真偏好键
+    ///    （`Defaults[.panelOrder]`），面板条（`sequence`）与设置页名单（`panelMovableIDs`）读同一张表、
+    ///    同一个顺序；不可排项（用量 / 扩展 tab）的**槽位索引不动**；
+    /// ⑤ 剪贴板**图标模式**下那条 tab 不在条上：`clipboard` 的排序值没有接收者、不影响别的项。
+    func testHostPanelRowsJoinThePanelOrderAndDefaultSequenceIsUnchanged() {
+        // ① 宿主 id ↔ gate 键：id 在 `PanelHostTab`、键在 `hostPanelRows`，映射两边只能是同一批。
+        XCTAssertEqual(
+            PanelHostTab.allCases.map(\.id),
+            ["shelf", "clipboard", "terminal"],
+            "id 取 docs/30 §机制七 的三个字面量（与 ContentView.selectedPanelTabKey 的宿主页键同一批词）"
+        )
+        XCTAssertEqual(PanelHostTab.shelf.gateKey.name, "dynamicShelf", "暂存器 tab 的门槛键")
+        XCTAssertEqual(PanelHostTab.clipboard.gateKey.name, "enableClipboardManager", "剪贴板 tab 的门槛键")
+        XCTAssertEqual(PanelHostTab.terminal.gateKey.name, "enableTerminalFeature", "终端 tab 的门槛键")
+
+        let hostRows = ModuleSettingsSection.hostPanelRows
+        XCTAssertEqual(
+            hostRows.compactMap(\.panelTab).map(\.id),
+            ["shelf", "terminal", "clipboard"],
+            "登记表序仍是枚举表序（暂存器 / 终端 / 剪贴板）——渲染序由排序键决定，不是这一行"
+        )
+        XCTAssertTrue(hostRows[0].key === PanelHostTab.shelf.gateKey, "暂存器：登记的是同一个键对象（.dynamicShelf）")
+        XCTAssertTrue(hostRows[1].key === PanelHostTab.terminal.gateKey, "终端：.enableTerminalFeature")
+        XCTAssertTrue(hostRows[2].key === PanelHostTab.clipboard.gateKey, "剪贴板：.enableClipboardManager")
+        XCTAssertEqual(
+            Set(PanelHostTab.allCases.map(\.gateKey.name)),
+            Set(TabSelectionView.hostPanelGateKeys.map(\.name)),
+            "词汇表的 gate 键 = 面板条真的在读的那份门槛键名单（视图侧删了读取点就会红）"
+        )
+
+        // ② 取色器不在排序名单：表里那一行没有排序 id，`panelOrder` 的合法词表里也没有它的键名。
+        XCTAssertNil(hostRows[3].panelTab, "取色器不是面板 tab：没有排序 id（docs/30 §明确不做 3 / 备选⑧）")
+        XCTAssertEqual(hostRows[3].key.name, "enableColorPickerFeature")
+        XCTAssertFalse(
+            PanelHostTab.allCases.contains { $0.id == hostRows[3].key.name },
+            "取色器的键名不进 `panelOrder` 的 id 词表"
+        )
+
+        // ③ 默认序逐字（槽位骨架 = 改动前 `tabs` 的拼装顺序；每个槽位参数的 gate 来处见下方注释）。
+        let todoID = "com.cmeng.gourd.todos"
+        let progressID = "com.cmeng.gourd.progress"
+        let defaultSlots = PanelTabSequence.slots(
+            home: "home",             // homeTabVisible = enableMinimalisticUI || showStandardMediaControls || showCalendar || showMirror
+            shelf: "shelf",           // dynamicShelf
+            usage: "usage",           // enableLLMUsageFeature
+            clipboard: "clipboard",   // enableClipboardManager && clipboardDisplayMode == .separateTab
+            terminal: "terminal",     // enableTerminalFeature
+            extensions: [(id: "extension-probe-t9", payload: "extension-probe-t9")],  // enableThirdPartyExtensions && enableExtensionNotchExperiences && enableExtensionNotchTabs
+            modules: [                // ModuleRegistry.tabEntries（投影序：todos 20 → progress 30）
+                (id: todoID, defaultOrder: 20, payload: todoID),
+                (id: progressID, defaultOrder: 30, payload: progressID),
+            ]
+        )
+        XCTAssertEqual(
+            PanelTabSequence.sequence(defaultSlots, panelOrder: [:]),
+            ["home", "shelf", "usage", "clipboard", "terminal", "extension-probe-t9", todoID, progressID],
+            "默认序 = 改动前逐字：Home → 暂存器 → 用量 → 剪贴板 → 终端 → 扩展 tab → 模块 tab"
+        )
+
+        // 只留宿主三 tab + 模块（用量 / 扩展关着）——改动前那一条最常见配置的顺序同样逐字。
+        let plainSlots = PanelTabSequence.slots(
+            home: "home",
+            shelf: "shelf",
+            usage: nil,
+            clipboard: "clipboard",
+            terminal: "terminal",
+            extensions: [],
+            modules: [
+                (id: todoID, defaultOrder: 20, payload: todoID),
+                (id: progressID, defaultOrder: 30, payload: progressID),
+            ]
+        )
+        XCTAssertEqual(
+            PanelTabSequence.sequence(plainSlots, panelOrder: [:]),
+            ["home", "shelf", "clipboard", "terminal", todoID, progressID],
+            "用量 / 扩展关着时的默认序（改动前：Home → 暂存器 → 剪贴板 → 终端 → 模块）"
+        )
+
+        // ④ 写表后跟随：真写路径 + 真偏好键（`panelOrder`）。
+        let keys = [Defaults.Keys.panelOrder.name]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+        Defaults[.panelOrder] = [:]
+
+        let moduleEntries = [
+            PanelTabSequence.Entry(id: todoID, defaultOrder: 20),
+            PanelTabSequence.Entry(id: progressID, defaultOrder: 30),
+        ]
+        XCTAssertEqual(
+            ModuleSettingsSection.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: [:]),
+            ["shelf", "clipboard", "terminal", todoID, progressID],
+            "设置页默认名单：前三行是宿主三 tab（T9 计划「前三行宿主行有 ↑↓」的那一条）"
+        )
+
+        let movableIDs = ["shelf", "clipboard", "terminal", todoID, progressID]
+        let moved = ModuleSurfaceGroup.orderTable(ids: movableIDs, moving: "shelf", direction: .down)
+        XCTAssertEqual(
+            moved,
+            ["clipboard": 0, "shelf": 1, "terminal": 2, todoID: 3, progressID: 4],
+            "把「架子」下移一格：整表序号（既有 `writeOrderTable` 的翻盘算式）+ 宿主 id 是合法键"
+        )
+        ModuleSurfaceGroup.panel.writeOrderTable(moved ?? [:])
+        XCTAssertEqual(Defaults[.panelOrder], moved ?? [:], "写的就是 `panelOrder` 这个键（重启后读到的同一份）")
+
+        XCTAssertEqual(
+            ModuleSettingsSection.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: Defaults[.panelOrder]),
+            ["clipboard", "shelf", "terminal", todoID, progressID],
+            "设置页名单跟随新表"
+        )
+        XCTAssertEqual(
+            PanelTabSequence.sequence(defaultSlots, panelOrder: Defaults[.panelOrder]),
+            ["home", "clipboard", "usage", "shelf", "terminal", "extension-probe-t9", todoID, progressID],
+            "面板条跟随新表；用量（索引 2）与扩展 tab（索引 5）原地不动"
+        )
+
+        // 消费点对表：面板条的**可排子序列**与设置页名单逐字相同（两处不存在第二套口径）。
+        let barSortable = PanelTabSequence.sequence(defaultSlots, panelOrder: Defaults[.panelOrder])
+            .filter { $0 != "home" && $0 != "usage" && $0 != "extension-probe-t9" }
+        XCTAssertEqual(
+            barSortable,
+            ModuleSettingsSection.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: Defaults[.panelOrder]),
+            "条的排序子序列（宿主三 + 模块）= 设置页名单"
+        )
+
+        // 取色器没有死箭头：它不在可排名单里，翻盘算式对它是**空操作**（名单没变 → nil → 不写盘）。
+        XCTAssertNil(
+            ModuleSurfaceGroup.orderTable(
+                ids: ModuleSettingsSection.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: Defaults[.panelOrder]),
+                moving: "enableColorPickerFeature",
+                direction: .up
+            ),
+            "取色器不在名单里：没有 ↑↓ 行、也没有可写的表"
+        )
+
+        // ⑤ 剪贴板图标模式（`clipboardDisplayMode != .separateTab`）：条上没有 `clipboard` 槽位，
+        //    表里残留的它没有接收者，不影响别的项（失败信号「排序值异常影响 tab 条」的反例）。
+        let iconModeSlots = PanelTabSequence.slots(
+            home: "home",
+            shelf: "shelf",
+            usage: nil,
+            clipboard: nil,
+            terminal: "terminal",
+            extensions: [],
+            modules: [
+                (id: todoID, defaultOrder: 20, payload: todoID),
+                (id: progressID, defaultOrder: 30, payload: progressID),
+            ]
+        )
+        XCTAssertEqual(
+            PanelTabSequence.sequence(
+                iconModeSlots,
+                panelOrder: ["clipboard": -1, "shelf": 0, "terminal": 1, todoID: 2, progressID: 3]
+            ),
+            ["home", "shelf", "terminal", todoID, progressID],
+            "图标模式：剪贴板不在条上，它的排序值不改变 tab 条的先后"
+        )
     }
 
     /// **宿主元素的视图归一化**（T5 修复轮 P2 的靶子）：四个宿主键关掉时，面板不许停在被它们门控的

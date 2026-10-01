@@ -102,12 +102,22 @@
 //  - **读出来的值也按声明顺序收敛**（野值不落进 UI：与数值型的「读侧再夹一次」同一条理由）。
 //  `list` 型仍**只有多选这一个渲染形态**（键必须逐条登记，不按 manifest schema 自动生成控件）。
 //
+//  p6-ui-polish / T9 增量（**宿主行并入面板排序**，docs/30-ui-polish-and-shelf.md §做法 机制七 /
+//  D-15、D-16；本段**改写**了下面 T5 那条口径里的「只有开关、没有 ↑↓」）：
+//  - `panelOrder` 的合法 id 扩到三条宿主 **tab**（`shelf` / `clipboard` / `terminal`，模块 tab 仍用
+//    模块 id）；面板组件节把「模块行 + 宿主三 tab 行」合并成一份按**当前有效序**渲染的名单
+//    （`panelSectionRows`），行上 ↑↓ 走既有 `writeOrderTable`（`move(_:in:direction:)`）；
+//    三条键 ↔ id 的映射收在 `PanelHostTab`（`TabSelectionView.swift`），与面板条共用同一张表；
+//  - **取色器行不动**：它不是面板 tab（渲染在标题栏图标行），继续只有开关、列在可排名单之后；
+//  - **默认序（表为空）必须与改动前的实际渲染顺序一致**——那条口径在 `TabSelectionView` 的
+//    拼装算式与用例里钉死（本页只是**消费**同一张表：默认前三个可排行就是宿主三 tab）。
+//
 //  p5 批次 / T5 增量（「面板组件」节收全：模块行 + **宿主行**，docs/29-home-blocks-and-panel.md
 //  §做法 机制三 / D-07、D-08）：
 //  - 面板组件节在模块行**之后**多四条**宿主行**（`hostPanelRows`：暂存器 / 终端 / 剪贴板 / 取色器）
 //    ——面板上那四个由上游 `Defaults` 直接门控、**不经模块注册表**的 tab / 图标。名称逐字沿用
 //    上游设置页那一项的字面量（四条 key 都已在 catalog 里），行渲染与模块卡同形（复用
-//    `ModuleSymbolChip`）、**只有开关、没有 ↑↓**（先后写死在 `TabSelectionView` 里）；
+//    `ModuleSymbolChip`）。**T9 起其中三条 tab 行有 ↑↓**（见上段），取色器行仍只有开关；
 //  - 节脚注据此改写成「面板上出现什么」的**全量清单**（四条宿主行 + 声明 `.expanded` 的模块行；
 //    其余面板元素各有归属——枚举表在 docs/29 §机制三）；
 //  - **登记的键必须真的在用**：四条键就是 `TabSelectionView` / `DynamicIslandHeader` 现读的门槛键
@@ -211,9 +221,11 @@ struct ModuleSettingsSection: View {
     ///    `Enable Clipboard Manager` / `Enable Color Picker`——四条 key 都已在
     ///    `Localizable.xcstrings` 里，取值处就在 `SettingsView.swift` 那四个 `Text(...)` 旁）：
     ///    用户在别处认识的词与这里看到的必须是同一个 key，不另起说法（与本页其余几张生产表同一条口径）。
-    /// 2. **只有开关、没有 ↑↓**：这四个宿主元素在面板上的先后**写死在 `TabSelectionView` 的拼装
-    ///    顺序**里，给两个点不动的箭头比不给更坏（与 `HomeCalendarSettingsRow` 同一条先例，
-    ///    docs/28 §5）。
+    /// 2. **↑↓**（p6-ui-polish / T9 改写本条）：三条宿主 **tab** 行（暂存器 / 终端 / 剪贴板）
+    ///    与模块行一起进 `panelOrder` 排序——行上有 ↑↓，渲染位置按**当前有效序**（见
+    ///    `panelMovableIDs`）；**取色器行仍只有开关、没有 ↑↓**（它渲染在标题栏图标行、不是面板
+    ///    tab，docs/30 §明确不做 3 / 备选⑧）。表里三行的**登记顺序**（暂存器 / 终端 / 剪贴板）仍是
+    ///    枚举表序，**不是**渲染序——渲染序由排序键决定。
     /// 3. **只有真的在用的键才上来**：四条都是 `TabSelectionView` / `DynamicIslandHeader` 现读的
     ///    门槛键（那两个视图各自的 `hostPanelGateKeys` 名单），用例按「登记 ⊆ 在用」这**一个方向**
     ///    反查——反方向在真实键集上不可达，面板上其余门槛键各有归属，本表**不重复**它们：
@@ -228,27 +240,56 @@ struct ModuleSettingsSection: View {
             id: "dynamicShelf",
             nameKey: "Enable shelf",
             symbolName: "tray.fill",
-            key: .dynamicShelf
+            key: .dynamicShelf,
+            panelTab: .shelf
         ),
         HostSurfaceRow(
             id: "enableTerminalFeature",
             nameKey: "Enable terminal",
             symbolName: "apple.terminal",
-            key: .enableTerminalFeature
+            key: .enableTerminalFeature,
+            panelTab: .terminal
         ),
         HostSurfaceRow(
             id: "enableClipboardManager",
             nameKey: "Enable Clipboard Manager",
             symbolName: "doc.on.clipboard",
-            key: .enableClipboardManager
+            key: .enableClipboardManager,
+            panelTab: .clipboard
         ),
         HostSurfaceRow(
             id: "enableColorPickerFeature",
             nameKey: "Enable Color Picker",
             symbolName: "eyedropper",
-            key: .enableColorPickerFeature
+            key: .enableColorPickerFeature,
+            panelTab: nil
         ),
     ]
+
+    // MARK: 面板组件节的可排名单（模块行 + 宿主三 tab，p6 / T9）
+
+    /// 三条宿主 **tab** 行的排序词汇（id + 默认序），从 `hostPanelRows` 里取——名称 / 图标 / 键
+    /// 只在那一张表里写一次。输入顺序即表序（暂存器 / 终端 / 剪贴板），**排序不吃输入顺序**
+    /// （`orderedIDs` 按默认序排），渲染序因此与面板条一致。
+    static var hostPanelEntries: [PanelTabSequence.Entry] {
+        hostPanelRows.compactMap { row in
+            row.panelTab.map { PanelTabSequence.Entry(id: $0.id, defaultOrder: $0.defaultOrder) }
+        }
+    }
+
+    /// 「面板组件」节**可排名单**（模块行 + 宿主三 tab 行）的键序——视图那一份
+    /// （`panelSectionRows`）与用例共用这一条算式；**与 `TabSelectionView` 的面板条同一个**
+    /// （`PanelTabSequence.orderedIDs` → `ModuleRegistry.panelRank`），两处不存在第二套口径。
+    ///
+    /// `moduleEntries` 只含**声明 `.expanded` 的模块**（全量 manifest，含未启用——关掉的组件
+    /// 必须还在名单里，见 `panelRows`）；宿主三 tab 由本函数自己补上。未知 id / 不在名单里的
+    /// 键不参与排序（与 `HomeBlockOrdering` 同口径）。
+    static func panelMovableIDs(
+        moduleEntries: [PanelTabSequence.Entry],
+        panelOrder: [String: Int]
+    ) -> [String] {
+        PanelTabSequence.orderedIDs(hostPanelEntries + moduleEntries, panelOrder: panelOrder)
+    }
 
     // MARK: 模块卡「效果 / 出现位置」一行
 
@@ -469,20 +510,69 @@ struct ModuleSettingsSection: View {
             }
     }
 
+    /// 「面板组件」节**可排名单**里的一行（p6-ui-polish / T9）：**模块行 + 宿主三 tab 行**
+    /// （见 `panelSectionRows`）。取色器行**不是可排行**（它不是面板 tab），因此不属于本枚举——
+    /// 它由 `surfaceSection` 单独渲染在名单之后（只有开关、没有 ↑↓）。
+    private enum PanelSectionRow: Identifiable {
+        /// 模块行（声明 `.expanded` 的全量 manifest）。
+        case module(SurfaceRow)
+        /// 宿主 tab 行（暂存器 / 剪贴板 / 终端）——与模块行一起进 `panelOrder` 排序。
+        case hostTab(HostSurfaceRow, PanelHostTab)
+
+        var id: String {
+            switch self {
+            case .module(let row): return row.id
+            case .hostTab(_, let tab): return tab.id
+            }
+        }
+    }
+
+    /// **面板组件节的可排名单**（p6 / T9，docs/30 §做法 机制七 / D-15）：模块行 + 宿主三 tab 行，
+    /// 按**当前有效序**渲染——算式是 `panelMovableIDs`（唯一一份：`PanelTabSequence.orderedIDs`
+    /// → `ModuleRegistry.panelRank`），与 `TabSelectionView` 的面板条**同一张表**。
+    ///
+    /// 名单成员仍是**全量 manifest**（含未启用，见 `panelRows`）+ 三条宿主 tab；**取色器不在名单里**
+    /// （`hostPanelRows` 里 `panelTab == nil` 的那一行，渲染在节末、没有 ↑↓）。
+    /// 默认（`panelOrder` 空）：宿主三行排在最前（默认序为负，见 `PanelHostTab`）——
+    /// 「设置页前三行宿主行有 ↑↓」就是这一条。
+    private var panelSectionRows: [PanelSectionRow] {
+        var rowsByID: [String: PanelSectionRow] = [:]
+        for row in panelRows { rowsByID[row.id] = .module(row) }
+        for row in Self.hostPanelRows {
+            if let tab = row.panelTab { rowsByID[tab.id] = .hostTab(row, tab) }
+        }
+        let moduleEntries = panelRows.map { PanelTabSequence.Entry(id: $0.id, defaultOrder: $0.defaultOrder) }
+        return Self.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: panelOrder)
+            .compactMap { rowsByID[$0] }
+    }
+
     /// 一节的全部内容：卡（图标 + 名称 + 开关 + 上移 / 下移 + 卡片原有的每一行）+ 节头 / 节脚注。
     private func surfaceSection(_ group: ModuleSurfaceGroup) -> some View {
-        let rows = group == .home ? homeRows : panelRows
+        let rows: [PanelSectionRow] = group == .home ? homeRows.map { .module($0) } : panelSectionRows
         return Section {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                ModuleSettingsCard(
-                    registry: registry,
-                    manifest: row.manifest,
-                    group: group,
-                    isFirst: index == 0,
-                    isLast: index == rows.count - 1,
-                    moveUp: { move(row, in: group, direction: .up) },
-                    moveDown: { move(row, in: group, direction: .down) }
-                )
+                switch row {
+                case .module(let surfaceRow):
+                    ModuleSettingsCard(
+                        registry: registry,
+                        manifest: surfaceRow.manifest,
+                        group: group,
+                        isFirst: index == 0,
+                        isLast: index == rows.count - 1,
+                        moveUp: { move(surfaceRow.id, in: group, direction: .up) },
+                        moveDown: { move(surfaceRow.id, in: group, direction: .down) }
+                    )
+                case .hostTab(let hostRow, let tab):
+                    HostSurfaceRowView(
+                        row: hostRow,
+                        order: OrderButtons(
+                            isFirst: index == 0,
+                            isLast: index == rows.count - 1,
+                            moveUp: { move(tab.id, in: group, direction: .up) },
+                            moveDown: { move(tab.id, in: group, direction: .down) }
+                        )
+                    )
+                }
             }
             // 首页的**内置块**（不是模块）：全宽日历行。列在本节末尾——它是流下方那一条全宽行，
             // 与"块与块之间"的顺序表（`homeBlockOrder`）不是一回事，因此**只有开关、没有 ↑↓**
@@ -490,11 +580,11 @@ struct ModuleSettingsSection: View {
             if group == .home {
                 HomeCalendarSettingsRow()
             }
-            // 面板组件的**宿主行**（不是模块，p5 / T5）：暂存器 / 终端 / 剪贴板 / 取色器——面板上
-            // 由上游键直接门控的四个 tab / 图标。排在**模块行之后**、顺序按 `hostPanelRows` 那张表
-            // （枚举表的顺序），同样**只有开关、没有 ↑↓**（先后写死在 `TabSelectionView` 里）。
+            // 面板组件的**取色器行**（p5 / T5 的四条宿主行里唯一不可排的一条）：它渲染在标题栏
+            // 图标行、不是面板 tab，因此**不进排序名单**、列在可排名单之后、只有开关没有 ↑↓
+            // （docs/30 §明确不做 3 / 备选⑧）。
             if group == .panel {
-                ForEach(Self.hostPanelRows) { row in
+                ForEach(Self.hostPanelRows.filter { $0.panelTab == nil }) { row in
                     HostSurfaceRowView(row: row)
                 }
             }
@@ -512,9 +602,13 @@ struct ModuleSettingsSection: View {
     /// 写的是本节的**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`，两节共用
     /// `ModuleSurfaceGroup.orderTable`）；名单在点击这一刻现取（而不是捕获渲染时的那一份），
     /// 因此「点之前名单刚好变了」（模块被开关 / 被摘掉）也按最新名单算。
-    private func move(_ row: SurfaceRow, in group: ModuleSurfaceGroup, direction: HomeBlockOrdering.MoveDirection) {
-        let ids = (group == .home ? homeRows : panelRows).map(\.id)
-        guard let table = ModuleSurfaceGroup.orderTable(ids: ids, moving: row.id, direction: direction) else {
+    ///
+    /// **宿主 tab 行与模块行走同一条路**（p6 / T9）：面板那一节的名单（`panelSectionRows`）
+    /// 就是模块行 + 宿主三 tab，`panelOrder` 拿到的是同一批 id（`shelf` / `clipboard` / `terminal`
+    /// 是新的合法键）；取色器不在名单里，动它没有接收者（也不会被这条路径写）。
+    private func move(_ id: String, in group: ModuleSurfaceGroup, direction: HomeBlockOrdering.MoveDirection) {
+        let ids = (group == .home ? homeRows.map(\.id) : panelSectionRows.map(\.id))
+        guard let table = ModuleSurfaceGroup.orderTable(ids: ids, moving: id, direction: direction) else {
             // 名单没变（已在顶 / 底，或该行已不在名单里）**不写盘**——用户没表达就不留痕迹。
             return
         }
@@ -716,14 +810,25 @@ struct HostSurfaceRow: Identifiable {
     /// 这个宿主元素的总开关——裸读写它（动态键装不上 `@Default`，与已删除的 `FeatureCard.key`
     /// 同一个理由）。
     let key: Defaults.Key<Bool>
+
+    /// 面板条上的排序词汇（p6-ui-polish / T9）：三条宿主 **tab** 行各有自己的 `panelOrder` id
+    /// （`shelf` / `clipboard` / `terminal`，见 `PanelHostTab`），取色器行是 `nil`——它渲染在标题栏
+    /// 图标行、不是面板 tab，不进排序名单（docs/30 §明确不做 3 / 备选⑧），行上也就**没有 ↑↓**。
+    let panelTab: PanelHostTab?
 }
 
-/// 宿主行的一行：图标 chip + 名称 + 开关。**没有 ↑↓**（先后写死在面板里，见 `hostPanelRows` 口径 2）。
+/// 宿主行的一行：图标 chip + 名称 + 开关（可排行再多一组 ↑↓）。
+///
+/// **↑↓ 由 `order` 决定**（p6-ui-polish / T9）：可排的三条宿主 tab 行给 `OrderButtons`，
+/// 取色器行传 `nil`——不是面板 tab 的元素**不给两个点不动的箭头**（docs/28 §5 的先例）。
+/// 按钮形态 / 文案 / 两端置灰与模块卡**共用同一份**（`OrderButtons`），两处不存在第二套皮肤。
 ///
 /// 排版与 `ModuleSettingsCard` / `HomeCalendarSettingsRow` 同一族（chip 在左、开关在右、
 /// 行内边距 `.vertical, 4` 一致），因此一节里的模块行与宿主行看起来是一族人、不分成两套皮肤。
 private struct HostSurfaceRowView: View {
     let row: HostSurfaceRow
+    /// `nil` = 这一行不可排（取色器）。
+    var order: OrderButtons? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -733,6 +838,8 @@ private struct HostSurfaceRowView: View {
                 .fontWeight(.medium)
 
             Spacer(minLength: 12)
+
+            if let order { order }
 
             // **裸 `Binding`，不是 `Defaults.Toggle`**：本行只登记一个
             // 上游键，开关直读写它。代价是那条已知限制：本页开着时从上游设置页改同一个键，
@@ -748,6 +855,35 @@ private struct HostSurfaceRowView: View {
             .toggleStyle(.switch)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// 一行右侧的**上移 / 下移**两个按钮（模块卡与可排宿主行**共用同一份**：形态、文案、两端置灰
+/// 只在 `ModuleSettingsCard` 那条先例里定过一次——两处各写一份就会漂）。
+private struct OrderButtons: View {
+    let isFirst: Bool
+    let isLast: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: moveUp) {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isFirst)
+            .help(Text(LocalizedStringKey("Move Up")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Up")))
+
+            Button(action: moveDown) {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isLast)
+            .help(Text(LocalizedStringKey("Move Down")))
+            .accessibilityLabel(Text(LocalizedStringKey("Move Down")))
+        }
     }
 }
 
@@ -1413,8 +1549,8 @@ private struct ModuleSettingsCard: View {
 
             // 上移 / 下移：**在本节里**重排这一行（写本节的顺序键，见 `move(_:in:direction:)`）。
             // 按钮形态与文案沿用既有那条顺序行的口径（`Move Up` / `Move Down`，`borderless` +
-            // 两端置灰），**不引入拖拽**（docs/26 §明确不做）。
-            orderButtons
+            // 两端置灰），**不引入拖拽**（docs/26 §明确不做）；与可排宿主行共用 `OrderButtons`。
+            OrderButtons(isFirst: isFirst, isLast: isLast, moveUp: moveUp, moveDown: moveDown)
 
             Toggle(isOn: toggle) {
                 Text(ModuleRegistry.label(for: manifest))
@@ -1423,27 +1559,6 @@ private struct ModuleSettingsCard: View {
             .disabled(isFailed)
         }
         .padding(.vertical, 4)
-    }
-
-    /// 卡片右侧的两个排序按钮（在开关左边、与开关同一行）。
-    private var orderButtons: some View {
-        HStack(spacing: 4) {
-            Button(action: moveUp) {
-                Image(systemName: "chevron.up")
-            }
-            .buttonStyle(.borderless)
-            .disabled(isFirst)
-            .help(Text(LocalizedStringKey("Move Up")))
-            .accessibilityLabel(Text(LocalizedStringKey("Move Up")))
-
-            Button(action: moveDown) {
-                Image(systemName: "chevron.down")
-            }
-            .buttonStyle(.borderless)
-            .disabled(isLast)
-            .help(Text(LocalizedStringKey("Move Down")))
-            .accessibilityLabel(Text(LocalizedStringKey("Move Down")))
-        }
     }
 
     // MARK: 开关
