@@ -758,6 +758,14 @@ private struct LauncherModuleView: View {
     @State private var isQuickTargeted = false
     /// 面板内拖拽的**自动收起抑制令牌**（挂载见 `dragItem(for:)`，释放见 `endDragSuppression`）。
     @State private var dragSuppressionToken: UUID?
+    /// 抑制看门狗的**代数**（每次起拖自增；看门狗只在「自己仍是最新那一代」时才有权释放）。
+    @State private var dragSuppressionGeneration = 0
+
+    /// 抑制看门狗时限（秒）。取舍同 `ClipboardManager.dragSafetyResetTimeout` 那段注释：
+    /// 「`onDrag` 没有拖拽结束回调」时用一次有界延时兜底——短了会在慢拖中提前放掉抑制，
+    /// 长了会在落点丢失时白挂抑制；30 秒只服务于「拖拽已经不可能再落下」的兜底，
+    /// 正常路径（drop / 面板收起 / 视图消失）都是立即释放。
+    private static let dragSuppressionWatchdogTimeout: TimeInterval = 30
 
     private var metrics: LauncherGridMetrics {
         LauncherGridMetrics.metrics(iconSize: settings.iconSize, density: settings.density)
@@ -803,6 +811,8 @@ private struct LauncherModuleView: View {
         .task { await store.load() }
         // 泄漏护栏（`onDrag` 没有「取消」回调）：拖拽一旦拖出面板、松手落在面板外，`onDrop`
         // 不会来——面板收起与视图消失这两个「拖拽已经不可能再落下」的时刻兜底释放抑制。
+        // 第三道是有界看门狗（起拖时武装，见 `dragItem(for:)`）：落点被别的 drop 目标吃掉
+        // 这类「没人通知我们」的会话靠它兜底。
         .onChange(of: vm.notchState) { _, state in
             if state == .closed { endDragSuppression() }
         }
@@ -825,7 +835,7 @@ private struct LauncherModuleView: View {
                 quickHintCell
             } else {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: metrics.minimumItemWidth), spacing: metrics.itemSpacing)],
+                    columns: adaptiveColumns,
                     spacing: metrics.itemSpacing
                 ) {
                     ForEach(store.quickApps) { app in
@@ -877,6 +887,11 @@ private struct LauncherModuleView: View {
     /// 提示格的高度：图标边长 + 名称行 + 上下留白（≈ `LauncherGridCell` 的竖直堆叠高度）。
     private var quickHintHeight: CGFloat { metrics.iconSide + 26 }
 
+    /// 两区共用的列定义（**同一份**：列宽 / 间距逐字一致——上区格子与下区格子不许有尺寸差）。
+    private var adaptiveColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: metrics.minimumItemWidth), spacing: metrics.itemSpacing)]
+    }
+
     // MARK: 下区（应用网格）
 
     /// 下区：网格；搜索无命中时**只**替换这一区（上区常驻）。
@@ -912,7 +927,7 @@ private struct LauncherModuleView: View {
     private var grid: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: metrics.minimumItemWidth), spacing: metrics.itemSpacing)],
+                columns: adaptiveColumns,
                 spacing: metrics.itemSpacing
             ) {
                 ForEach(visibleGridApps) { app in
@@ -942,18 +957,31 @@ private struct LauncherModuleView: View {
     /// 穿过分隔线 / 标题 / 边距这类**非投放区**再进投放区的一瞬间，面板就会收起，两区的 `onDrop`
     /// 永远等不到抬手。`setAutoCloseSuppression` 是架子（`ShelfView`）与剪贴板页的既有解法、
     /// 也是面板内唯一的「拖拽正在发生」信号源——令牌一挂，「离开投放区」不再被当成收起信号。
+    /// 起拖时**每次**都自增代数并重新武装看门狗（旧看门狗随即作废），令牌只在第一次真正挂。
     private func dragItem(for app: LauncherApp) -> NSItemProvider {
+        dragSuppressionGeneration += 1
+        let generation = dragSuppressionGeneration
+
         if dragSuppressionToken == nil {
             let token = UUID()
             dragSuppressionToken = token
             vm.setAutoCloseSuppression(true, token: token)
         }
+
+        // 有界看门狗（先例：`ClipboardManager.markDragStart`）：拖拽在面板外结束、或落点被
+        // 别的 drop 目标（例如面板的 dragDetector，`{ _ in true }`）吃掉时，「拖拽已经结束」
+        // 没有任何回调能通知本视图——代数仍是最新且令牌仍活跃才释放，正常 drop 早已把两者
+        // 清掉，旧看门狗因此自动作废（不会误释放下一次拖拽的抑制）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragSuppressionWatchdogTimeout) {
+            guard generation == dragSuppressionGeneration, dragSuppressionToken != nil else { return }
+            endDragSuppression()
+        }
         return NSItemProvider(object: app.id as NSString)
     }
 
-    /// 释放抑制（幂等）。挂三处：**drop 处理**（拖拽在面板内结束时的手感收尾）、
-    /// **面板收起**（`onChange(of: vm.notchState)`）与**视图消失**（`onDisappear`）——
-    /// `onDrag` 没有「拖拽取消」回调，拖出面板 / 松手落在面板外的那些会话只能靠后两处兜底，
+    /// 释放抑制（幂等）。挂四处：**drop 处理**（拖拽在面板内结束）、**面板收起**
+    /// （`onChange(of: vm.notchState)`）、**视图消失**（`onDisappear`）与**看门狗超时**——
+    /// `onDrag` 没有「拖拽取消」回调，后两处（超时 + 护栏）是「没人通知我们」那些会话的兜底，
     /// 否则令牌会一直挂着（抑制泄漏＝面板此后不自动收起）。
     private func endDragSuppression() {
         guard let token = dragSuppressionToken else { return }
@@ -961,13 +989,23 @@ private struct LauncherModuleView: View {
         dragSuppressionToken = nil
     }
 
-    /// 拖拽落下的共同收口：先问 `LauncherQuickDrop.resolve`（**纯函数**，落点判定不在视图里），
-    /// 非 nil 才按区走 `store.pin` / `store.unpin`——落盘在 store 里、经 `LauncherPins` 唯一接缝。
+    /// 拖拽落下的共同收口（两个区域的 `onDrop` 都调它）：先问 `LauncherQuickDrop.resolve`
+    /// （**纯函数**，落点判定不在视图里），非 nil 才按区走 `store.pin` / `store.unpin`
+    /// ——落盘在 store 里、经 `LauncherPins` 唯一接缝。
     ///
     /// 载体是应用 id 的纯文本（`NSItemProvider(object: NSString)`，见 `LauncherGridCell.onDrag`）；
     /// 未知 id（含 Finder 等外来文本）与反向拖（上区收到已固定、下区收到未固定）都由 `resolve`
     /// 判成 nil → no-op，不落盘、不刷新。
+    ///
+    /// 两件事在**函数第一行**做完、都在异步解析之前：
+    /// - `defer { endDragSuppression() }`：`onDrop` 被调到就是「面板收到了这次抬手」——后面
+    ///   无论早退（没有可加载的 provider）还是异步分支失败，抑制都在这里结束；
+    /// - `vm.dropEvent = true` **同步**置位（同既有四处 dropEvent 的口径）：面板自己的
+    ///   「这次抬手是落点、不是点空白」记账要赶得上当次 `!isTargeted`，等异步回来就晚了。
     private func handleDrop(_ providers: [NSItemProvider], target: LauncherDropRegion) -> Bool {
+        defer { endDragSuppression() }
+        vm.dropEvent = true
+
         for provider in providers where provider.canLoadObject(ofClass: NSString.self) {
             provider.loadObject(ofClass: NSString.self) { object, _ in
                 guard let draggedID = object as? String else { return }
@@ -984,12 +1022,9 @@ private struct LauncherModuleView: View {
     /// `resolve` 校验 + 落到 store（先落盘再刷新）。`knownIDs` = 本次扫描的**全量**清单
     /// （不经搜索过滤——搜索只影响下区画什么，不影响"这个 id 是否存在"）。
     ///
-    /// 落点有效时置 `vm.dropEvent`（面板自己的「这次抬手是一次落点、不是点空白」记账，同
-    /// `ShelfView` / `FileShareView` 的口径）；**无论结果如何都释放抑制**——外来文本、反向拖、
-    /// 未知 id 这些 no-op 同样是「拖拽已经结束」。
+    /// 抑制的释放与 `dropEvent` 的置位都在 `handleDrop`（同步、第一行）完成，这里只做落点判定
+    /// 与写入；`resolve` 判 nil（外来文本 / 反向拖 / 未知 id）就到此为止，不落盘、不刷新。
     private func applyDrop(draggedID: String, target: LauncherDropRegion) {
-        defer { endDragSuppression() }
-
         guard LauncherQuickDrop.resolve(
             draggedID: draggedID,
             target: target,
@@ -997,7 +1032,6 @@ private struct LauncherModuleView: View {
             knownIDs: Set(store.apps.map(\.id))
         ) != nil, let app = store.apps.first(where: { $0.id == draggedID }) else { return }
 
-        vm.dropEvent = true
         switch target {
         case .quick: store.pin(app)
         case .grid: store.unpin(app)

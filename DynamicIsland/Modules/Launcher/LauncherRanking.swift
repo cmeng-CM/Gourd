@@ -161,6 +161,12 @@ enum LauncherQuickDrop {
     /// quick：`LauncherPinning.adding(draggedID, to: pinnedIDs)`（追加表尾）；
     /// grid ：`LauncherPinning.removing(draggedID, from: pinnedIDs)`（移除全部同 id）。
     ///
+    /// **返回值是「这次拖放等价于哪种写入」的判定结果，不是消费方要赋的值**：消费者（视图）只用
+    /// 非 nil / nil 分流——非 nil 时改叫 `LauncherStore.pin` / `.unpin`，落盘由 store 经
+    /// `LauncherPins` 完成（先落盘再刷新）。那条写入与本函数返回的表**等价**：两个入口
+    /// （拖放、右键菜单）的语义同源于 `LauncherPinning` 的 adding / removing，因此盘上的值
+    /// 与这里的判定一致，且全模块只有一条落盘路径。
+    ///
     /// 「未知」的判据是 `knownIDs`（调用方传本次扫描的 `Set(apps.map(\.id))`）——本函数因此
     /// 不查 Spotlight、不读 `Defaults`，「纯函数、无副作用」的文件头契约不破。
     static func resolve(draggedID: String, target: LauncherDropRegion,
