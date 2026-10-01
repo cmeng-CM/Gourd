@@ -65,7 +65,7 @@
 
 实现落在 `HomeFlowView` 的格子（`HomeStripView.swift:757-760`：这一层同时拿得到块形档高与行高，能按块形而不是按行高画），新增 `homeBlockFloat()` 修饰符，两层组成：**① 常驻「柔光池」**——每块背后一圈**径向渐变的白光**（中心低透明度 → 边缘完全透明，**无填充边界、无描边**，不是卡片）；**② 内容辉光**——围绕内容的白色低透明度 `.shadow`；hover 时：柔光池与内容辉光加深、`scaleEffect ≈ 1.02`、`brightness ≈ 1.06`，动画 `.smooth(0.18–0.22s)`。**不用黑色阴影**——面板底色是纯黑（`ContentView` 的 `Color.black`），黑影在黑底上恒不可见（T1 首轮独立审查实测发现）；单纯内容辉光在空区只抬 ~0.1/255、实测不可见（Checkpoint 数值比对），故静态区分以**柔光池**为主、内容辉光为辅。**整条带的大底撤掉**（`homeBandContainer()` 只留内边距），行级 hover 底色（`homeBlockHoverBackground`）保留。观感在阶段 Checkpoint 上屏定稿（含「静态区分是否够」的判断，容差写在验收标准 A1）。
 
-**数值口径（p7 起）**：浮起常量自 p7 起以 [31](31-home-workday-launcher.md) §接口与数据形状 1 为准（0.10/6、0.13、0.20/12、0.20、系数 0.50、三停渐变）。
+**2026-10-01 改判：数值自 p7 起以 [31](31-home-workday-launcher.md) §接口与数据形状 1 为准**（0.10/6、0.13、0.20/12、0.20、系数 0.50、三停渐变）。
 
 ### 机制二 · 音乐再缩宽（第 2 条）
 
@@ -211,7 +211,7 @@
 
 - 新修饰符 `homeBlockFloat()`（文件级，`HomeStripView.swift` 内）：效果值经纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 组装出 `FloatEffects { scale / brightness / glowRadius / glowOpacity / poolOpacity }`（测试钉该函数；修饰符不碰常量、不写算式）。唯一调用点 = `HomeFlowView` 的格子，套在格子的 `.frame` **之后**（视觉修饰不改格子尺寸）。
 - **终值**（Checkpoint 两轮上屏调参后定稿）：辉光 `idleGlowOpacity 0.08 / idleGlowRadius 5`（hover `0.16 / 11`）、`hoverScale 1.02 / hoverBrightness 1.06`（组装时减 1 成增量）/ `duration 0.2`；**无黑影项**（`idleShadow*` / `hoverShadow*` / `idleShadowY` 全部删除——面板底色是纯黑，黑影在黑底上恒不可见，T1 首轮审查实测）。
-- **数值自 p7 起以 [31](31-home-workday-launcher.md) §接口与数据形状 1 为准**（0.10/6、0.13、0.20/12、0.20、系数 0.50、三停渐变）。
+- **2026-10-01 改判：数值自 p7 起以 [31](31-home-workday-launcher.md) §接口与数据形状 1 为准**（0.10/6、0.13、0.20/12、0.20、系数 0.50、三停渐变）。
 - 柔光池（**静态区分的主力**）：`poolOpacity 0.06`（hover `0.12`）、池半径经 `HomeBlockFloatMetrics.poolEndRadius(width:height:) = max(0, min(w,h) × 0.45)`（~~`max(48, min(w,h)×0.45)`~~ **2026-10-01 终审修复改判：去掉 48 下界**——min(w,h)<96 时 48 > 半短边，渐变在最近边之前不归零=变相底板；用例对 40/96/140 三档钉「有效半径 ≤ 0.5×min」。径向渐变到全透明；**系数必须 ≤0.5**——格子最近边在 `0.5 × min(w,h)` 处，系数 0.7 时边缘残留 28.6%、形成直角台阶；T1 三轮重审 0.7 → **0.45**）。池挂在块的 `.background`（`.shadow` 之后、`allowsHitTesting(false)`）：不参与缩放/提亮、也不进辉光轮廓，不参与命中、零布局成本。**纯辉光在空区只抬 0.07–0.5/255（Checkpoint 二轮实测），静态区分以池为主、辉光为辅。**
 - 应用链（逐字）：`.scaleEffect` → `.brightness` → `.compositingGroup()` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`（`y` 恒 0——不做位移）→ `.background { GeometryReader { RadialGradient } }` → `.animation(.smooth(duration:), value: hovered)`；`hovered` 由 `.onHover` 就地持有。
 - `homeBandContainer()`：**去掉 `.background(...)`**（保留横向 8pt 内边距 `HomeBandChrome.containerInset`）；`HomeBandChrome.containerOpacity` / `containerCornerRadius` 两个常量已删除；行级 `hoverOpacity 0.06` / `hoverCornerRadius 8` 保留（`homeBlockHoverBackground(isHovered:)` 的唯一取值处）。
