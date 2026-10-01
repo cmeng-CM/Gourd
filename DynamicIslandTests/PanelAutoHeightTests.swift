@@ -77,6 +77,11 @@
 //  判据 `showsSideLyricsHomeLayout(...)` 与键映射 `homePanelTabKey(showsSideLyricsLayout:)`
 //  两处都由用例直接钉住；标准路径（首页键 + 接缝写的那份值）逐字不变。
 //
+//  **hover 退出 × 面板自己动**（p6-ui-polish 回归修复：「切日历页不再塌回关闭态」）：
+//  auto 高度切页会在指针底下把面板缩短，SwiftUI 的 `.onHover(false)` 与隐藏态轮询都会把它
+//  读成「指针离开面板」——判据 `shouldHonorHoverExit` 拿**面板与指针最后一次接触**时的窗口
+//  rect 判「指针还在不在面板里」（`ContentView.swift`，判据层用例在本文件末）。
+//
 
 import AppKit
 import Combine
@@ -1634,6 +1639,89 @@ final class PanelAutoHeightTests: XCTestCase {
         // 切回标准路径：首页槽照常当班（逐字不变的那一条）。
         ledger.selectTab(homePanelTabKey(showsSideLyricsLayout: false))
         XCTAssertEqual(ledger.current, 400, "标准路径仍读首页那一份")
+    }
+
+    // MARK: - hover 退出 × 面板自己动（p6-ui-polish 回归修复：「切日历页不再塌回关闭态」）
+
+    /// **判据层用例**：`shouldHonorHoverExit`（`ContentView.swift` 文件级纯函数，与
+    /// `shouldSuppressHoverOpen` / `shouldHideClosedContentUntilHover` 同一族）。
+    ///
+    /// 回归的实机形态（控制器 3/3 复现）：auto 高度下切页会**在指针底下**把面板缩短
+    ///（日历页 ≈310、通知页 ≈850、首页 ≈604）——SwiftUI 的 `.onHover(false)`（布局一变就补发）
+    /// 与隐藏态轮询的「指针还在窗口里吗」都会把「面板缩走了」读成「指针离开了面板」，
+    /// 照常收起就是「切到日历页 → 面板塌回关闭态」（窗口停在内容高、画面只剩折叠条）。
+    /// 修复：展开态的「面板位置」取**面板与指针最后一次接触**时观测到的那块窗口 rect
+    ///（`lastPanelContactRect`），指针还在那块位置里时这次退出是**面板自己动的**，不收。
+    ///
+    /// **为什么只钉到判据层**：整条链是「真实指针位置 + SwiftUI `.onHover` 的补发 + 隐藏态轮询
+    ///（100ms 采样 `NSEvent.mouseLocation`）」的活窗口交互，单测里没有可驱动的指针与 AppKit 窗口。
+    /// 上屏判据（控制器复验）：指针停在面板下半部 → 切「日历」→ 面板留在打开态（窗口 ≈310、
+    /// AX 元素数不掉）；再把指针移开 → 面板照常收起。本机已用注入鼠标 + AX 驱动在 Debug 构建上
+    /// 逐条跑过这两条判据（修复前：切页即收起；修复后：留在打开态，移开后收起）。
+    func testHoverExitIsNotHonoredWhenThePanelItselfMovesAwayFromThePointer() {
+        // NSEvent 屏幕坐标（左下原点）：接触位置 = 指针还停在通知页（高面板）里时那块窗口 rect。
+        let tallPanelContactRect = CGRect(x: 313, y: 100, width: 887, height: 872)
+        let pointerInsideTallPanel = NSPoint(x: 756, y: 200)
+
+        // ① 面板自己动的（切页取高）那一档：指针读数没动、面板从 872 缩到 310，
+        //    指针仍在**接触位置**之内 → 不算退出（修复的核心断言）。
+        XCTAssertFalse(
+            shouldHonorHoverExit(
+                isOpen: true,
+                lastContactRect: tallPanelContactRect,
+                pointer: pointerInsideTallPanel
+            ),
+            "指针还在最后接触到的面板位置里 → 这次退出是面板缩走了（切页取高），不按 hover 退出收面板"
+        )
+
+        // ② 真退出：指针出了那块接触位置（下方 160pt）→ 照收（既有契约不变）。
+        XCTAssertTrue(
+            shouldHonorHoverExit(
+                isOpen: true,
+                lastContactRect: tallPanelContactRect,
+                pointer: NSPoint(x: 756, y: 40)
+            ),
+            "指针已经出了接触位置 → 真退出，照收"
+        )
+
+        // ③ 真退出（横向移开同样算）：指针从侧面离开面板。
+        XCTAssertTrue(
+            shouldHonorHoverExit(
+                isOpen: true,
+                lastContactRect: tallPanelContactRect,
+                pointer: NSPoint(x: 100, y: 200)
+            ),
+            "指针横向出了接触位置 → 真退出，照收"
+        )
+
+        // ④ 接触位置刷新到**缩小后**的面板（用户重新进过面板）：指针在这块新位置之外 → 真退出。
+        //    （观测量就是轮询 / `handleHover(true)` 记录的「面板窗口」rect——不是别的 app 窗口。）
+        let shrunkPanelContactRect = CGRect(x: 313, y: 650, width: 887, height: 310)
+        XCTAssertTrue(
+            shouldHonorHoverExit(
+                isOpen: true,
+                lastContactRect: shrunkPanelContactRect,
+                pointer: pointerInsideTallPanel
+            ),
+            "接触位置已刷新为缩短后的面板 → 指针在它之外 = 真退出"
+        )
+
+        // ⑤ 没有接触记录（还没观测到过；例如面板由快捷键打开、指针从没进过面板）→ 老口径（照收，保守）。
+        XCTAssertTrue(
+            shouldHonorHoverExit(isOpen: true, lastContactRect: nil, pointer: pointerInsideTallPanel),
+            "没有接触记录 → 按老口径收（没观测过就不猜）"
+        )
+
+        // ⑥ 折叠态：退出只收起 hover 视觉（`finishHoverExit` 在折叠态本来就不关面板）→ 一律按退出处理，
+        //    本判据不得改变折叠态的既有行为。
+        XCTAssertTrue(
+            shouldHonorHoverExit(
+                isOpen: false,
+                lastContactRect: tallPanelContactRect,
+                pointer: pointerInsideTallPanel
+            ),
+            "折叠态一律按退出处理（那一档不关面板，判据不参与）"
+        )
     }
 
     // MARK: - 右下角把手（D-16）

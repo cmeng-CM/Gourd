@@ -48,6 +48,35 @@ func shouldSuppressHoverOpen(activeHUD: ModuleHUD?) -> Bool {
     activeHUD != nil
 }
 
+/// **这次 hover 退出该不该按「用户把鼠标移开」处理**（纯函数，可测；p6-ui-polish 回归修复）。
+///
+/// 展开态的面板位置**不是**「此刻的窗口 frame」，而是**面板与指针最后一次接触**时观测到的那块
+/// 窗口 rect（`lastPanelContactRect`；观测点只有轮询与 `handleHover(true)` 两处）。理由是一个
+/// 具体的回归：auto 高度下切页会**在指针底下**把面板缩短（日历页 ≈310、通知页 ≈850、首页 ≈604），
+/// 而 SwiftUI 的 `.onHover(false)`（布局一变就补发）与隐藏态轮询「指针是否在窗口里」都会把
+/// 「面板缩走了」读成「指针离开了面板」——照常收起就是用户看到的
+/// **「切到日历页 → 面板塌回关闭态」**（窗口停在内容高、画面只剩折叠条）。
+///
+/// 判据（与账本条款 ④ / `PanelAutoHeight.heldForPointer` 同一条设计原则：
+/// **不把面板从光标底下抽走**，docs/29 §已知限制 1）：
+/// - 折叠态：退出只收起 hover 视觉（`finishHoverExit` 在折叠态本来就不关面板）→ 一律按退出处理；
+/// - 展开态 + 指针**还在**那块接触位置里 ⇒ 是**面板自己动的**，不算退出（面板留在原地，
+///   轮询继续看着；用户一动指针、指针出了那块位置，下一次判据立刻按真退出收起）；
+/// - 展开态 + 指针已经出了那块位置 ⇒ 真退出（照收）；
+/// - 没有接触记录（还没观测到过；例如面板是快捷键开的、指针从没进过面板）⇒ 按老口径收（保守）。
+///
+/// 抽成纯函数是为了可测：入参都是纯值，调用点从视图状态取值后传进来，判据本身不读单例、
+/// 不碰视图状态（与 `shouldSuppressHoverOpen` / `shouldHideClosedContentUntilHover` 同一条纪律）。
+func shouldHonorHoverExit(
+    isOpen: Bool,
+    lastContactRect: CGRect?,
+    pointer: NSPoint
+) -> Bool {
+    guard isOpen else { return true }
+    guard let lastContactRect else { return true }
+    return !lastContactRect.contains(pointer)
+}
+
 /// 非刘海屏「不悬停就隐藏」的判据：关闭态内容是否该被整体挪出屏幕。
 ///
 /// 上游的形态是「非刘海屏 + 关闭态 + 设置开启 + **当前没有上游瞬时提示**（sneakPeek：
@@ -460,6 +489,11 @@ struct ContentView: View {
 
     @State private var hoverTask: Task<Void, Never>?
     @State private var isHovering: Bool = false
+    /// 面板与指针**最后一次接触**时的窗口 rect（p6-ui-polish 回归修复；判据见文件级
+    /// `shouldHonorHoverExit`）。刷新点只有两处：隐藏态轮询（指针在窗口内时）与
+    /// `handleHover(true)`；面板收起时清空（下一次展开从干净状态重新观测）。存量 = nil 时
+    /// 判据按老口径收面板（没观测过就不猜），因此它**只可能在「面板自己动了」那一档改变行为**。
+    @State private var lastPanelContactRect: CGRect?
     @State private var lastHapticTime: Date = Date()
     @State private var hoverClickMonitor: Any?
     @State private var hoverClickLocalMonitor: Any?
@@ -1289,6 +1323,10 @@ struct ContentView: View {
                 }
                 if newState == .closed {
                     removeStickyTerminalClickMonitor()
+                    // 面板收起 = 这段「与指针的最后接触」结束：下一次展开从干净状态重新观测
+                    //（不清的话，上一轮量到的那块位置会在下一轮短暂地当「面板位置」用，
+                    // 见 `shouldHonorHoverExit` 与 `lastPanelContactRect` 的注释）。
+                    lastPanelContactRect = nil
                 } else {
                     // Install the outside-click monitor for terminal opens that don't
                     // change `currentView` (e.g. shortcut re-opening with the terminal
@@ -2733,9 +2771,26 @@ struct ContentView: View {
                         self.handleHover(hovering)
                     }
                 } else if self.isHovering && self.interactionsEnabled {
-                    let stillInside = self.vm.notchState == .open
-                        ? self.isPointInsideNotchWindow()
-                        : self.isMouseOverClosedNotchHitArea()
+                    let pointer = NSEvent.mouseLocation
+                    let stillInside: Bool
+                    if self.vm.notchState == .open {
+                        // 「指针在面板里」看两条口径：**面板窗口本身**（`isPointInsideNotchWindow`
+                        // 的既有判据，逐字未动）与**面板与指针最后一次接触的位置**（回归修复：
+                        // 切页取高把面板在指针底下缩短时指针读数没动、面板动了，不该按 hover 退出
+                        // 收面板，判据见 `shouldHonorHoverExit`）。观测点只在这里：指针在**面板窗口**
+                        // 里时刷新「面板的位置」。
+                        if let rect = self.panelWindowRect(containing: pointer) {
+                            self.lastPanelContactRect = rect
+                        }
+                        stillInside = self.isPointInsideNotchWindow(pointer)
+                            || !shouldHonorHoverExit(
+                                isOpen: true,
+                                lastContactRect: self.lastPanelContactRect,
+                                pointer: pointer
+                            )
+                    } else {
+                        stillInside = self.isMouseOverClosedNotchHitArea(pointer)
+                    }
                     if !stillInside {
                         self.hoverTask?.cancel()
                         self.stopHoverClickMonitor()
@@ -2864,6 +2919,13 @@ struct ContentView: View {
             return
         }
 
+        // 指针进入面板 = 一次「接触」：刷新面板与指针的最后接触位置（判据见 `shouldHonorHoverExit`）。
+        // 少了这一拍，「进面板又立刻离开」（≤ 100ms，轮询还没采样到）会被拿更早的接触位置判，
+        // 变成「指针已出那块位置 → 真退出」——多等一拍反而更准；这里记下的是**进入那一刻**的面板位置。
+        if hovering, vm.notchState == .open, let rect = panelWindowRect(containing: NSEvent.mouseLocation) {
+            lastPanelContactRect = rect
+        }
+
         hoverTask?.cancel()
 
         if hovering {
@@ -2935,6 +2997,18 @@ struct ContentView: View {
     }
 
     private func finishHoverExit() {
+        // **面板自己动的，不算退出**（p6-ui-polish 回归修复）：展开态下面板在指针底下缩小时
+        // （auto 高度切页取高），`.onHover(false)` 与隐藏态轮询都会走到这里——指针其实没动过，
+        // 照常收起就是「切到日历页 → 面板塌回关闭态」。判据与观测点在 `shouldHonorHoverExit` /
+        // `lastPanelContactRect`；这一档直接**整体早退**（连 `isHovering` 都不动，轮询因此继续看着，
+        // 用户一动指针就按原判据收），与拖动手柄那条「拖动期间不因 hover 离开收起、下一次真正的
+        // hover 进入 / 离开照旧收起」是同一形态（`shouldPreventAutoClose` 的注释）。
+        guard shouldHonorHoverExit(
+            isOpen: vm.notchState == .open,
+            lastContactRect: lastPanelContactRect,
+            pointer: NSEvent.mouseLocation
+        ) else { return }
+
         withAnimation(.bouncy.speed(1.2)) {
             isHovering = false
         }
@@ -2988,6 +3062,29 @@ struct ContentView: View {
         }
 
         return NSApp.windows.contains(where: { frameContainsPointIncludingTopEdge($0.frame, point) })
+    }
+
+    /// 指针所在的**面板窗口**（`DynamicIslandWindow`）rect；指针不在任何面板窗口里 → nil。
+    ///
+    /// 与 `isPointInsideNotchWindow` **刻意不同源**（p6-ui-polish 回归修复）：那个判据是 hover
+    /// 退出的既有口径——拿不到 `AppDelegate` 时把 `NSApp.windows` 全量算上（设置窗 / 浮层窗 /
+    /// 引导窗都会命中，且不看窗口是否可见），因此**不能用它记录「面板的位置」**：实测指针移到
+    /// 设置窗（或它遗留的 frame）上时，接触位置会被记成那块窗口，面板就再也等不到真退出。
+    /// 这里只认面板窗口本身（`NSApp.windows` 里的 `DynamicIslandWindow`，与
+    /// `syncWindowSizeAfterPanelResize` 识别面板窗口用的是同一条口径）。
+    private func panelWindowRect(containing point: CGPoint = NSEvent.mouseLocation) -> CGRect? {
+        if let appDelegate = AppDelegate.shared {
+            if Defaults[.showOnAllDisplays] {
+                return appDelegate.windows.values.map(\.frame).first { frameContainsPointIncludingTopEdge($0, point) }
+            }
+            if let window = appDelegate.window {
+                return frameContainsPointIncludingTopEdge(window.frame, point) ? window.frame : nil
+            }
+        }
+
+        return NSApp.windows.compactMap { $0 as? DynamicIslandWindow }.map(\.frame).first {
+            frameContainsPointIncludingTopEdge($0, point)
+        }
     }
 
     /// `CGRect.contains` is half-open on max edges; the top pixel needs inclusive maxY.
