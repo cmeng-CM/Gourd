@@ -749,10 +749,15 @@ private struct LauncherModuleView: View {
     @ObservedObject var store: LauncherStore
     let icons: LauncherIconCache
     let settings: LauncherSettings
+    /// 面板级状态：拖拽期间的自动收起抑制令牌经它下发（模块内视图读 vm 的先例：
+    /// `DynamicIslandCalendar` 的 `WheelPicker`；环境由面板根视图注入，缺失会崩——上屏验过）。
+    @EnvironmentObject private var vm: DynamicIslandViewModel
 
     @State private var query = ""
     /// 上区是不是拖拽会话当前悬停的目标（上区高亮的唯一来源）。
     @State private var isQuickTargeted = false
+    /// 面板内拖拽的**自动收起抑制令牌**（挂载见 `dragItem(for:)`，释放见 `endDragSuppression`）。
+    @State private var dragSuppressionToken: UUID?
 
     private var metrics: LauncherGridMetrics {
         LauncherGridMetrics.metrics(iconSize: settings.iconSize, density: settings.density)
@@ -796,6 +801,12 @@ private struct LauncherModuleView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 每次进 tab 都调一次：首次扫目录 + 查使用数据，之后走缓存（幂等，见 `LauncherStore.load`）。
         .task { await store.load() }
+        // 泄漏护栏（`onDrag` 没有「取消」回调）：拖拽一旦拖出面板、松手落在面板外，`onDrop`
+        // 不会来——面板收起与视图消失这两个「拖拽已经不可能再落下」的时刻兜底释放抑制。
+        .onChange(of: vm.notchState) { _, state in
+            if state == .closed { endDragSuppression() }
+        }
+        .onDisappear { endDragSuppression() }
     }
 
     // MARK: 上区（快捷启动）
@@ -823,6 +834,7 @@ private struct LauncherModuleView: View {
                             icon: icons.icon(for: app),
                             metrics: metrics,
                             isPinned: LauncherPinning.isPinned(app.id, in: store.pinned),
+                            dragItem: { dragItem(for: app) },
                             onLaunch: { store.launch(app) },
                             onTogglePin: { store.togglePin(app) }
                         )
@@ -909,6 +921,7 @@ private struct LauncherModuleView: View {
                         icon: icons.icon(for: app),
                         metrics: metrics,
                         isPinned: LauncherPinning.isPinned(app.id, in: store.pinned),
+                        dragItem: { dragItem(for: app) },
                         onLaunch: { store.launch(app) },
                         onTogglePin: { store.togglePin(app) }
                     )
@@ -920,6 +933,33 @@ private struct LauncherModuleView: View {
     }
 
     // MARK: 拖放（上区 / 下区共用收口）
+
+    /// 起拖：交出载体（应用 id 的纯文本），并在**第一次**起拖时挂上自动收起抑制令牌。
+    ///
+    /// **为什么要抑制**：面板背景有一块铺满面板的 `dragDetector`（`ContentView.swift` 的
+    /// `dragDetector`），任何拖拽悬停到面板都会让它 `isTargeted` 进出一次；它 `!isTargeted` 那一支
+    /// 会按常规收起面板（`shouldPreventAutoClose()` 不认识「面板内应用拖拽」）。于是拖拽从格子出发、
+    /// 穿过分隔线 / 标题 / 边距这类**非投放区**再进投放区的一瞬间，面板就会收起，两区的 `onDrop`
+    /// 永远等不到抬手。`setAutoCloseSuppression` 是架子（`ShelfView`）与剪贴板页的既有解法、
+    /// 也是面板内唯一的「拖拽正在发生」信号源——令牌一挂，「离开投放区」不再被当成收起信号。
+    private func dragItem(for app: LauncherApp) -> NSItemProvider {
+        if dragSuppressionToken == nil {
+            let token = UUID()
+            dragSuppressionToken = token
+            vm.setAutoCloseSuppression(true, token: token)
+        }
+        return NSItemProvider(object: app.id as NSString)
+    }
+
+    /// 释放抑制（幂等）。挂三处：**drop 处理**（拖拽在面板内结束时的手感收尾）、
+    /// **面板收起**（`onChange(of: vm.notchState)`）与**视图消失**（`onDisappear`）——
+    /// `onDrag` 没有「拖拽取消」回调，拖出面板 / 松手落在面板外的那些会话只能靠后两处兜底，
+    /// 否则令牌会一直挂着（抑制泄漏＝面板此后不自动收起）。
+    private func endDragSuppression() {
+        guard let token = dragSuppressionToken else { return }
+        vm.setAutoCloseSuppression(false, token: token)
+        dragSuppressionToken = nil
+    }
 
     /// 拖拽落下的共同收口：先问 `LauncherQuickDrop.resolve`（**纯函数**，落点判定不在视图里），
     /// 非 nil 才按区走 `store.pin` / `store.unpin`——落盘在 store 里、经 `LauncherPins` 唯一接缝。
@@ -943,7 +983,13 @@ private struct LauncherModuleView: View {
 
     /// `resolve` 校验 + 落到 store（先落盘再刷新）。`knownIDs` = 本次扫描的**全量**清单
     /// （不经搜索过滤——搜索只影响下区画什么，不影响"这个 id 是否存在"）。
+    ///
+    /// 落点有效时置 `vm.dropEvent`（面板自己的「这次抬手是一次落点、不是点空白」记账，同
+    /// `ShelfView` / `FileShareView` 的口径）；**无论结果如何都释放抑制**——外来文本、反向拖、
+    /// 未知 id 这些 no-op 同样是「拖拽已经结束」。
     private func applyDrop(draggedID: String, target: LauncherDropRegion) {
+        defer { endDragSuppression() }
+
         guard LauncherQuickDrop.resolve(
             draggedID: draggedID,
             target: target,
@@ -951,6 +997,7 @@ private struct LauncherModuleView: View {
             knownIDs: Set(store.apps.map(\.id))
         ) != nil, let app = store.apps.first(where: { $0.id == draggedID }) else { return }
 
+        vm.dropEvent = true
         switch target {
         case .quick: store.pin(app)
         case .grid: store.unpin(app)
@@ -999,11 +1046,14 @@ private struct LauncherSearchField: View {
 /// **拖拽与点击共存**：`.onDrag` 挂最外层容器，`Button` 的点击启动不变——拖拽只在移动超过系统
 /// 阈值后开始，原地按下抬起仍是"点一下启动"（上屏验证过，见 T5 报告）。
 /// 载体是 `app.id` 的纯文本（`NSString`）；接收侧（两区容器）按 `LauncherQuickDrop.resolve` 校验。
+/// `dragItem` 由容器注入（两区共用同一个闭包：起拖时挂自动收起抑制令牌，见 `dragItem(for:)`）。
 private struct LauncherGridCell: View {
     let app: LauncherApp
     let icon: NSImage
     let metrics: LauncherGridMetrics
     let isPinned: Bool
+    /// 起拖：返回拖拽载体（应用 id 的纯文本）。抑制令牌的挂载在容器侧完成。
+    let dragItem: () -> NSItemProvider
     let onLaunch: () -> Void
     let onTogglePin: () -> Void
 
@@ -1038,7 +1088,7 @@ private struct LauncherGridCell: View {
             }
         }
         // 拖拽载体 = 应用 id 的纯文本；挂最外层、Button 的点击启动不变（见类型注释）。
-        .onDrag { NSItemProvider(object: app.id as NSString) }
+        .onDrag(dragItem)
     }
 }
 
