@@ -437,7 +437,8 @@ struct HomeBandDroppedHint: View {
 /// 调研结论（机制七）是**不做每块的永久卡片**（Atoll 与 Nook X 都没有 per-block 容器；每块卡片
 /// 要吃 8–16pt 内边距，而宽度预算正是最紧的）。分带时期那层「整条带共用一个极淡圆角底」的
 /// 大底已撤（p6-ui-polish / docs/30 §做法 机制一 / D-02）：底把内容糊在一个大盒子里、块与块
-/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起辉光**（`homeBlockFloat()`）做。
+/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起光**（柔光池为主 + 内容辉光为辅，
+/// `homeBlockFloat()`）做。
 /// 「可交互的条目」仍在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有
 /// 这一处**（三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
 enum HomeBandChrome {
@@ -459,7 +460,7 @@ enum HomeBandChrome {
 ///
 /// **不再画底**（p6-ui-polish / docs/30 §做法 机制一 / D-02）：分带时期那层 `white.opacity(0.05)`
 /// 的整条大底已撤——「所有内容糊在一个大盒子里」正是用户第 1 条反馈；块与块之间的区分改由每块
-/// 的浮起辉光（`homeBlockFloat()`）做（用户本轮明说：不加区域块与边线）。
+/// 的浮起光（`homeBlockFloat()`：柔光池为主 + 内容辉光为辅）做（用户本轮明说：不加区域块与边线）。
 ///
 /// 用法只有一处（`HomeBandedHomeView` 的单条流）。容器仍画在带自己的 frame 上，因此**带的可用宽
 /// 必须先扣掉两侧的 `containerInset`**（调用方传给这条流的宽度就是扣完的）——否则 plan 按整宽
@@ -505,18 +506,20 @@ extension View {
 
 // MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02）
 
-/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover 轻微
-/// 放大 / 提亮 / 辉光加深，**不加卡片底与边线**（用户本轮明确）。
+/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻「柔光池」（块背后的
+/// 径向渐变白光，为主）+ 内容辉光（围绕内容的浅色 `.shadow`，为辅），hover 时两者一起加深、
+/// 再叠轻微放大 / 提亮，**不加卡片底与边线**（用户本轮明确）。
 ///
 /// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
 /// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
-/// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块常驻
-/// **浅色辉光**」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` 都不参与布局
+/// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块的
+/// 柔光池」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` / 池都不参与布局
 /// （邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
 ///
-/// **为什么是白辉光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
-/// `Color.black`），黑 `.shadow` 在黑底上恒为零效果——静态区分与 hover「加深」都看不见。白色低
-/// 透明度的 `.shadow` 无填充、无边界（不是卡片底），在黑底上给出深度感。**无黑影项**。
+/// **为什么是白光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
+/// `Color.black`），黑 `.shadow` 在黑底上恒为零效果——静态区分与 hover「加深」都看不见。
+/// **为什么光池为主**（Checkpoint 二轮实机测量）：纯内容辉光在空区只抬 0.07–0.5/255，仍不可见，
+/// 故静态区分交给柔光池，辉光只作内容边缘的辅光。两者都是**无填充边界、无描边**的光。**无黑影项**。
 ///
 /// **brightness 的口径**：`hoverBrightness` 是「1.0 = 不改」的乘性口径（与 `hoverScale` 同形），
 /// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:)` 里
@@ -537,6 +540,14 @@ enum HomeBlockFloatMetrics {
     static let hoverGlowOpacity: Double = 0.16
     /// hover 的辉光半径（比常驻大 = 「加深」的另一半；起点 10 → **11**）。
     static let hoverGlowRadius: CGFloat = 11
+    /// 柔光池中心的白色不透明度（径向渐变到全透明）。**静态区分的主力**：纯辉光在实机屏幕上
+    /// 空区只抬 0.07–0.5/255（Checkpoint 二轮测量），池给出可见的一圈光。
+    static let poolOpacity: Double = 0.06
+    /// hover 的柔光池中心不透明度（比常驻大 = 池变亮）。
+    static let hoverPoolOpacity: Double = 0.12
+    /// 柔光池的半径系数：`endRadius = max(48, min(w, h) × factor)`——在方块内约到 0.7 就渐隐，
+    /// 边缘不会出现硬边（硬边就是变相底板）。
+    static let poolEndRadiusFactor: CGFloat = 0.7
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
@@ -548,30 +559,32 @@ enum HomeBlockFloatMetrics {
     /// 算式因此可被纯函数测试钉住：改错映射（如去掉 brightness 的 `- 1`、把两档接反）会让
     /// `testHomeBlockFloatMetricsStayInTheLegibleRange` 变红）。
     ///
-    /// 四项与 SwiftUI 一一对应：`scale` → `.scaleEffect`、`brightness` → `.brightness`（**增量**）、
+    /// 五项与 SwiftUI 一一对应：`scale` → `.scaleEffect`、`brightness` → `.brightness`（**增量**）、
     /// `glowRadius`/`glowOpacity` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`
-    /// （`y` 恒 0——不做 y 位移）。
+    /// （`y` 恒 0——不做 y 位移）、`poolOpacity` → 柔光池径向渐变的中心白 `opacity`。
     struct FloatEffects: Equatable {
         let scale: CGFloat
         let brightness: Double
         let glowRadius: CGFloat
         let glowOpacity: Double
+        let poolOpacity: Double
     }
 
     /// 两档（常驻 / hover）的效果值：常驻档是**中性**（scale = 1、brightness = 0），
-    /// 只有辉光常驻可见。
+    /// 光的两层（柔光池 + 内容辉光）常驻可见。
     static func effects(hovered: Bool) -> FloatEffects {
         FloatEffects(
             scale: hovered ? hoverScale : 1,
             brightness: hovered ? hoverBrightness - 1 : 0,
             glowRadius: hovered ? hoverGlowRadius : idleGlowRadius,
-            glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity
+            glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity,
+            poolOpacity: hovered ? hoverPoolOpacity : poolOpacity
         )
     }
 }
 
-/// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover 轻微放大 / 提亮 /
-/// 辉光加深（半径与不透明度都换 hover 档）。
+/// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容辉光（为辅），
+/// hover 时两层一起加深、再叠轻微放大 / 提亮。
 ///
 /// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
 /// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
@@ -581,6 +594,11 @@ enum HomeBlockFloatMetrics {
 /// **`compositingGroup()` 在辉光之前**：不合成的话 `.shadow` 会逐个子视图各画一道（块内的字与
 /// 图标各自带影，正是 docs/30 §失败信号里「块内容被辉光糊住」的样子）；合成后整格只有一道轮廓
 /// 光（面板级阴影在 `ContentView` 里也是这么用的）。它只改绘制、不改布局。
+///
+/// **柔光池画在 `.shadow` 之后**（`.background` 永远画在被修饰视图之下）：池因此**不参与**缩放与
+/// 提亮、也不进辉光的轮廓（辉光仍只描内容），两层各司其职；池是不参与命中的 `.background`
+/// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算，
+/// 渐变到全透明——**没有填充边界、没有描边**（不是卡片底）。
 struct HomeBlockFloatModifier: ViewModifier {
     @State private var hovered = false
 
@@ -591,6 +609,20 @@ struct HomeBlockFloatModifier: ViewModifier {
             .brightness(effects.brightness)
             .compositingGroup()
             .shadow(color: .white.opacity(effects.glowOpacity), radius: effects.glowRadius)
+            .background {
+                GeometryReader { geo in
+                    RadialGradient(
+                        colors: [.white.opacity(effects.poolOpacity), .clear],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: max(
+                            48,
+                            min(geo.size.width, geo.size.height) * HomeBlockFloatMetrics.poolEndRadiusFactor
+                        )
+                    )
+                }
+                .allowsHitTesting(false)
+            }
             .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
             .onHover { hovered = $0 }
     }
@@ -846,10 +878,11 @@ struct HomeFlowView: View {
                     ForEach(Array(row.indices.enumerated()), id: \.offset) { position, blockIndex in
                         HomeBandCell(block: blocks[blockIndex], albumArtNamespace: albumArtNamespace)
                             .frame(width: row.widths[position], height: row.height, alignment: .topLeading)
-                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻浅色辉光 + hover
-                            // 轻微放大 / 提亮 / 辉光加深。套在 `.frame` **之后**——判据（`hovered`）
-                            // 与视觉效果都只作用在格子的最终形状上，`scaleEffect` / `shadow`
-                            // 都不改布局尺寸，邻居的位置仍由上面的 plan 定死。
+                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容
+                            // 辉光（为辅），hover 时两层一起加深再叠轻微放大 / 提亮。套在 `.frame`
+                            // **之后**——判据（`hovered`）与视觉效果都只作用在格子的最终形状上，
+                            // `scaleEffect` / `shadow` / 池（不参与命中的 `.background`）都不改
+                            // 布局尺寸，邻居的位置仍由上面的 plan 定死。
                             .homeBlockFloat()
                     }
 
@@ -1010,7 +1043,7 @@ struct HomeBandedHomeView: View {
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
             // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`；p6 起只剩横向 8pt 内边距、
-            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起辉光做；
+            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起光（柔光池 + 辉光）做；
             // 日历行不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if !plan.rows.isEmpty {

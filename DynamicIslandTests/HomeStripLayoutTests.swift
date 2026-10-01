@@ -70,9 +70,9 @@
 //
 //  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1）
 //  - 钉**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**（不是常量本身）：常驻档
-//    中性（scale 1 / brightness 增量 0）+ 辉光常驻可见，hover 档辉光半径与不透明度都更大、
-//    放大 1.005…1.05、提亮增量 0.02…0.12（常量是起点值，上屏调参在 Checkpoint；hover 本身
-//    驱动不出，见 docs/30 §已知限制 1）。
+//    中性（scale 1 / brightness 增量 0）+ 柔光池与辉光常驻可见，hover 档池不透明度、辉光半径与
+//    不透明度都更大，放大 1.005…1.05、提亮增量 0.02…0.12（常量是起点值，上屏调参在 Checkpoint；
+//    hover 本身驱动不出，见 docs/30 §已知限制 1）。
 //
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
@@ -1933,9 +1933,9 @@ final class HomeStripLayoutTests: XCTestCase {
     ///
     /// 区间而不是定值（上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状）：
     /// hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像抖）；提亮要能分辨但
-    /// 不得把字冲白（增量 > 0.12 浅色元素会糊）；辉光必须**常驻可见**（半径与不透明度 > 0，
-    /// 否则块与背景无区分）且 **hover 更深**（两项都更大——否则 hover 与常驻没差别，机制一的
-    /// hover 半条腿没落地）。
+    /// 不得把字冲白（增量 > 0.12 浅色元素会糊）；两层光（柔光池 + 内容辉光）必须**常驻可见**
+    /// （> 0，否则块与背景无区分）且 **hover 都更深**（否则 hover 与常驻没差别，机制一的 hover
+    /// 半条腿没落地）；池半径系数 ≤ 1（渐隐在格子内，硬边就是变相底板）。
     ///
     /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
     /// §已知限制 1 / D-20），这里钉的是效果算式；上屏的 hover 观感列入「需真人鼠标复核」清单
@@ -1944,14 +1944,22 @@ final class HomeStripLayoutTests: XCTestCase {
         let idle = HomeBlockFloatMetrics.effects(hovered: false)
         let hover = HomeBlockFloatMetrics.effects(hovered: true)
 
-        // 常驻档必须是中性：静止的块不被缩放、不被提亮，只有辉光可见。
+        // 常驻档必须是中性：静止的块不被缩放、不被提亮，只有柔光池与辉光两层光可见。
         XCTAssertEqual(idle.scale, 1, "常驻不放大")
         XCTAssertEqual(idle.brightness, 0, "常驻不提亮（`.brightness` 的增量档是 0）")
         XCTAssertGreaterThan(idle.glowRadius, 0, "常驻辉光必须可见（半径 > 0）")
         XCTAssertGreaterThan(idle.glowOpacity, 0, "常驻辉光的不透明度为正")
         XCTAssertLessThanOrEqual(idle.glowOpacity, 0.5, "辉光是低透明度的一层，不该成「底」（不透明度 0…0.5）")
+        XCTAssertGreaterThan(idle.poolOpacity, 0, "常驻柔光池必须可见（静态区分的主力）")
+        XCTAssertLessThanOrEqual(idle.poolOpacity, 0.5, "柔光池是低透明度的一层，不该成「底」（不透明度 0…0.5）")
+        XCTAssertGreaterThan(HomeBlockFloatMetrics.poolEndRadiusFactor, 0, "池半径系数为正")
+        XCTAssertLessThanOrEqual(
+            HomeBlockFloatMetrics.poolEndRadiusFactor, 1,
+            "池必须渐隐在格子内（系数 ≤ 1 时短边 0.7 处已到全透明）——否则边缘出现硬边 = 变相底板"
+        )
 
-        // hover 档：两项辉光都更深，放大与提亮待在可读区间。
+        // hover 档：光的两层（柔光池 + 内容辉光）都加深，放大与提亮待在可读区间。
+        XCTAssertGreaterThan(hover.poolOpacity, idle.poolOpacity, "hover 柔光池要比常驻更亮")
         XCTAssertGreaterThan(hover.glowRadius, idle.glowRadius, "hover 辉光半径要比常驻更大")
         XCTAssertGreaterThan(hover.glowOpacity, idle.glowOpacity, "hover 辉光不透明度要比常驻更大")
         XCTAssertGreaterThanOrEqual(hover.scale, 1.005, "hover 放大要看得出来")
