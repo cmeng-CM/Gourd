@@ -7112,6 +7112,109 @@ final class LauncherScannerRankingTests: XCTestCase {
         XCTAssertEqual(LauncherRanking.filter(apps, query: " 备忘录 ").map(\.id), ["notes"])
         XCTAssertEqual(LauncherRanking.filter(apps, query: "照片").map(\.id), ["photos"])
     }
+
+    // MARK: 分区（p7：上区「快捷启动」/ 下区网格）
+
+    /// 分区：上区顺序 = **固定先后**（`pinnedIDs` 表序，不吃 rank 序）、下区 = `ranked` 剔除固定项
+    /// 且**保序**；未知 id 忽略、重复 id 保留首次；空表 / 全固定两边界。
+    func testLauncherPartitionSplitsQuickAndGridStably() {
+        let apps = [app("a", "Alpha"), app("b", "Beta"), app("c", "Gamma")]
+
+        let split = LauncherPartition.split(ranked: apps, pinnedIDs: ["c", "a"])
+        XCTAssertEqual(split.quick.map(\.id), ["c", "a"], "上区顺序 = 固定先后（表序），与 ranked 的先后无关")
+        XCTAssertEqual(split.grid.map(\.id), ["b"], "下区 = ranked 剔除固定项后保序")
+
+        // 同一份 rank 结果（固定项恒在前 → 名称升序）喂进分区：上区仍按固定先后，不按 rank 序
+        let ranked = LauncherRanking.rank(apps, pinned: ["c", "a"], usage: [:])
+        XCTAssertEqual(ranked.map(\.id), ["a", "c", "b"], "底座：rank 的固定项段按名称排（Alpha 在 Gamma 前）")
+        XCTAssertEqual(
+            LauncherPartition.split(ranked: ranked, pinnedIDs: ["c", "a"]).quick.map(\.id),
+            ["c", "a"],
+            "上区不沿用 rank 的固定项段次序——固定先后才是唯一口径"
+        )
+
+        // 上区不随 Spotlight 数据抖动：换一份 usage（rank 序确实变了）上区逐字不变
+        let usageA = LauncherRanking.rank(apps, pinned: ["b"], usage: [:])
+        let usageB = LauncherRanking.rank(
+            apps, pinned: ["b"],
+            usage: ["c": LauncherUsage(lastUsed: Date(timeIntervalSince1970: 999), useCount: 9)]
+        )
+        XCTAssertNotEqual(usageA.map(\.id), usageB.map(\.id), "夹具自证：两份 usage 的下区顺序不同")
+        XCTAssertEqual(
+            LauncherPartition.split(ranked: usageA, pinnedIDs: ["b"]).quick.map(\.id),
+            LauncherPartition.split(ranked: usageB, pinnedIDs: ["b"]).quick.map(\.id),
+            "上区顺序 = 固定先后：Spotlight 数据变了也不动"
+        )
+
+        // 未知 id（残留的已卸载 App）不占位；下区不受影响
+        let withGhost = LauncherPartition.split(ranked: apps, pinnedIDs: ["ghost", "b"])
+        XCTAssertEqual(withGhost.quick.map(\.id), ["b"], "未知 id 忽略")
+        XCTAssertEqual(withGhost.grid.map(\.id), ["a", "c"], "未知 id 不被当作固定项剔除网格")
+
+        // 重复固定（手改 UserDefaults 塞重复项）：保留首次，上区不出现重复格子
+        let duplicated = LauncherPartition.split(ranked: apps, pinnedIDs: ["b", "a", "b"])
+        XCTAssertEqual(duplicated.quick.map(\.id), ["b", "a"], "同 id 只保留第一次")
+        XCTAssertEqual(duplicated.grid.map(\.id), ["c"])
+
+        // 边界：空 pinned → 全进下区（原顺序）；全固定 → 下区空（视图侧由上区兜底）
+        let none = LauncherPartition.split(ranked: apps, pinnedIDs: [])
+        XCTAssertTrue(none.quick.isEmpty)
+        XCTAssertEqual(none.grid.map(\.id), apps.map(\.id), "没有固定项：全部留在下区，顺序不变")
+
+        let all = LauncherPartition.split(ranked: apps, pinnedIDs: ["c", "b", "a"])
+        XCTAssertEqual(all.quick.map(\.id), ["c", "b", "a"])
+        XCTAssertTrue(all.grid.isEmpty, "全固定：下区空")
+
+        let empty = LauncherPartition.split(ranked: [], pinnedIDs: ["ghost"])
+        XCTAssertTrue(empty.quick.isEmpty && empty.grid.isEmpty, "清单为空：两区都空，不崩")
+    }
+
+    /// 拖放解析矩阵（docs/31 §接口与数据形状 2）：quick+未固定 → 追加表尾；grid+已固定 → 移除
+    /// 全部同 id；quick+已固定 / grid+未固定 / 未知 id / 空 id → 一律 no-op（nil）。
+    func testLauncherQuickDropResolveMatrix() {
+        let known: Set<String> = ["a", "b", "c"]
+
+        // quick + 未固定 → 固定，追加到表尾（与 LauncherPinning.adding 同口径）
+        XCTAssertEqual(
+            LauncherQuickDrop.resolve(draggedID: "c", target: .quick, pinnedIDs: ["a"], knownIDs: known),
+            ["a", "c"]
+        )
+        XCTAssertEqual(
+            LauncherQuickDrop.resolve(draggedID: "c", target: .quick, pinnedIDs: [], knownIDs: known),
+            ["c"]
+        )
+
+        // grid + 已固定 → 取消固定，移除全部同 id
+        XCTAssertEqual(
+            LauncherQuickDrop.resolve(draggedID: "a", target: .grid, pinnedIDs: ["a", "b", "a"], knownIDs: known),
+            ["b"],
+            "同 id 的重复项一并清掉（与 LauncherPinning.removing 同口径）"
+        )
+
+        // 四象限的两个反向：quick 收到已固定、grid 收到未固定 → no-op
+        XCTAssertNil(
+            LauncherQuickDrop.resolve(draggedID: "a", target: .quick, pinnedIDs: ["a"], knownIDs: known),
+            "拖上已固定的应用不产生重复项"
+        )
+        XCTAssertNil(
+            LauncherQuickDrop.resolve(draggedID: "c", target: .grid, pinnedIDs: ["a"], knownIDs: known),
+            "拖下未固定的应用无可取消"
+        )
+
+        // 未知 id（外来文本 / 本次扫描不存在的 id）→ 两区都 no-op，不被固定、也不被误删
+        XCTAssertNil(LauncherQuickDrop.resolve(draggedID: "ghost", target: .quick, pinnedIDs: [], knownIDs: known))
+        XCTAssertNil(LauncherQuickDrop.resolve(draggedID: "ghost", target: .grid, pinnedIDs: ["ghost"], knownIDs: known))
+
+        // 空 id → no-op（即便它混进了 knownIDs，显式空判据也先落 nil）
+        XCTAssertNil(LauncherQuickDrop.resolve(draggedID: "", target: .quick, pinnedIDs: [], knownIDs: known))
+        XCTAssertNil(LauncherQuickDrop.resolve(draggedID: "", target: .quick, pinnedIDs: [], knownIDs: ["", "a"]))
+        XCTAssertNil(LauncherQuickDrop.resolve(draggedID: "", target: .grid, pinnedIDs: [""], knownIDs: ["", "a"]))
+
+        // 纯函数：只返回新表，不改传入的表（落盘是 store 的事）
+        let pinned = ["a"]
+        _ = LauncherQuickDrop.resolve(draggedID: "c", target: .quick, pinnedIDs: pinned, knownIDs: known)
+        XCTAssertEqual(pinned, ["a"], "resolve 不修改输入")
+    }
 }
 
 
