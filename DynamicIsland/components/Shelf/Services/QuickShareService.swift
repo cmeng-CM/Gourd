@@ -199,8 +199,8 @@ class QuickShareService: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.title = "Select Files for \(provider.id)"
-        panel.message = "Choose files to share via \(provider.id)"
+        panel.title = String(format: NSLocalizedString("Select Files for %@", comment: "Title of the file picker shown when sharing files from the shelf via the selected provider."), provider.displayName)
+        panel.message = String(format: NSLocalizedString("Choose files to share via %@", comment: "Message of the file picker shown when sharing files from the shelf via the selected provider."), provider.displayName)
 
         let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             defer {

@@ -16095,6 +16095,29 @@
         }
       }
     },
+    "Choose files to share via %@" : {
+      "comment" : "Message of the file picker shown when sharing files from the shelf via the selected provider.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose files to share via %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择要通过 %@ 共享的文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇要透過 %@ 共享的檔案"
+          }
+        }
+      }
+    },
     "Choose which AI providers appear in the Usage tab." : {
       "localizations" : {
         "nl" : {
@@ -61953,6 +61976,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇裝置"
+          }
+        }
+      }
+    },
+    "Select Files for %@" : {
+      "comment" : "Title of the file picker shown when sharing files from the shelf via the selected provider.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Files for %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择共享服务"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇共享服務"
           }
         }
       }
