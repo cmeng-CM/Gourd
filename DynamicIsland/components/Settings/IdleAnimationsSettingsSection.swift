@@ -132,6 +132,13 @@ struct IdleAnimationsSettingsSection: View {
                 Text("Choose animation to display when Gourd is idle. Tap to select, hold to delete custom animations.")
             }
         }
+        // 开关由关变开：若**从未选过样式**，兜底选第一条内置动画（逻辑在 manager 上，闭包只转发，
+        // 不在视图里写判断）。写入走 `Defaults[.selectedIdleAnimation]` 这条既有写路径，
+        // 观察该键的视图（`ContentView` 的关闭态中央槽位 / `IdleAnimationView`）随之被叫醒。
+        .onChange(of: showNotHumanFace) { _, isEnabled in
+            guard isEnabled else { return }
+            IdleAnimationManager.shared.selectFirstBundledIfNoneSelected()
+        }
         .fileImporter(
             isPresented: $showingFilePicker,
             allowedContentTypes: [UTType.json],
@@ -497,6 +504,33 @@ struct URLImportSheet: View {
         }
         .padding(24)
         .frame(width: 400)
+    }
+}
+
+// MARK: - Idle Animation Manager · 「开关打开但从未选过样式」的兜底（p6-ui-polish / T10）
+
+extension IdleAnimationManager {
+    /// 「空闲动画」开关由关变开、而用户**从未选过样式**（`selectedIdleAnimation == nil`）时的兜底：
+    /// 把库里第一条**内置**动画写进选择（库空 / 没有内置动画 → 不动盘）。
+    ///
+    /// 为什么需要（docs/30-ui-polish-and-shelf.md §机制八 / D-17）：开关是 opt-in，而选动画的卡片是
+    /// **开关打开后才可见**——从没选过样式的用户把开关打开后，关闭态中央槽位链上的门
+    /// （`selectedIdleAnimation != nil`）恒假，开了还是看不到。写入走 `Defaults[.selectedIdleAnimation]`
+    /// （与点卡片同一条既有写路径），观察这个键的视图由此被**叫醒**重绘。
+    ///
+    /// 挂在本文件而不是 manager 本体：T10 的文件范围只点名三份文件（计划书 §T10），语义上仍是
+    /// `IdleAnimationManager` 的成员——设置区 `onChange` 与用例都直调这一个方法。
+    ///
+    /// - Returns: 是否发生了写入（已有选择 / 库里没有内置动画 → `false`）。
+    @discardableResult
+    func selectFirstBundledIfNoneSelected() -> Bool {
+        guard Defaults[.selectedIdleAnimation] == nil else { return false }
+        guard let firstBundled = Defaults[.customIdleAnimations].first(where: { $0.isBuiltIn }) else {
+            return false
+        }
+        Defaults[.selectedIdleAnimation] = firstBundled
+        print("🎬 [IdleAnimationManager] Idle animation enabled with no selection: selected first bundled \"\(firstBundled.name)\"")
+        return true
     }
 }
 

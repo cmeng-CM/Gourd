@@ -170,6 +170,17 @@
 //    名单（`ModuleSettingsSection.panelMovableIDs`）读同一张表，非可排项（用量 / 扩展 tab）槽位不动；
 //    ⑤ 剪贴板图标模式下它没有槽位，残留的排序值不影响 tab 条。
 //
+//  p6-ui-polish / T10 追加（**空闲动画：开关打开而从未选过样式时的兜底写**，docs/30-ui-polish-and-shelf.md
+//  §做法 机制八 / D-17——根因是上游 `f9ad0282` 插入的空体分支把关闭态中央槽位吞掉）：
+//  - **一条用例三层**（`testEnablingIdleAnimationSelectsTheFirstBundledStyleWhenNoneChosen`）：
+//    ① 写入——`IdleAnimationManager.selectFirstBundledIfNoneSelected()` 选中的是库里**第一条内置**
+//    动画（用户动画排在最前也不选它）；② **叫醒**——写进去的值经 `selectedIdleAnimation` 键发出
+//    （`ContentView` 的 `@Default(.selectedIdleAnimation)` 观察点靠它重绘），没写就没有新值经这个键
+//    发出（按**值**断言，不数事件条数——同一次写实测会拆成 1~2 条 KVO 通知）；③ 不越权——已有选择 /
+//    库里没有内置动画时一个字都不动。
+//    链上的顺序与 nil 门（`ContentView` 关闭态中央槽位链）没有自动化断言：那是 SwiftUI 视图体里的
+//    分支顺序，只能上屏验收（收尾波截图），计划书未要求为它造断言。
+//
 //  p5-home-blocks / T5 **修复轮**（独立评审 P2：关掉宿主元素后面板还停在它上面；
 //  `docs/29` §机制三那四条宿主行在协调器一侧的闭环）：
 //  - **视图归一化表对键**（`testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows`）：
@@ -3004,6 +3015,118 @@ final class TakeoverEnablementTests: XCTestCase {
             table[key] = languages
         }
         return table
+    }
+
+    // MARK: - 空闲动画（p6-ui-polish / T10，docs/30 §机制八）
+
+    /// `IdleAnimationManager.selectFirstBundledIfNoneSelected()`：「空闲动画」开关打开而**从未选过样式**
+    /// 时的兜底写（docs/30-ui-polish-and-shelf.md §机制八 / D-17）。
+    ///
+    /// 三层：① **写入**——库里第一条**内置**动画进选择（不是第一条用户动画）；② **叫醒**——写进去的
+    /// 值必须经由 `selectedIdleAnimation` 键发出（`ContentView` 的 `@Default(.selectedIdleAnimation)`
+    /// 与 `IdleAnimationView` 都是靠这个键被叫醒的），**没写就不许有新值经这个键发出**；
+    /// ③ **不越权**——已有选择 / 库里没有内置动画时一个字都不动。
+    ///
+    /// 叫醒**按值断言、不数事件条数**：同一次写在测试宿主里实测会拆成 1~2 条 KVO 通知（第一次全量
+    /// 跑测时按条数断言红成假失败——那是投递细节，不是判据）。
+    func testEnablingIdleAnimationSelectsTheFirstBundledStyleWhenNoneChosen() {
+        let keys = [
+            Defaults.Keys.customIdleAnimations.name,
+            Defaults.Keys.selectedIdleAnimation.name,
+        ]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let bundledFirst = CustomIdleAnimation(
+            name: "T10 Fixture Bundled A",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-bundled-a.json")),
+            speed: 1.0,
+            isBuiltIn: true
+        )
+        let bundledSecond = CustomIdleAnimation(
+            name: "T10 Fixture Bundled B",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-bundled-b.json")),
+            speed: 1.0,
+            isBuiltIn: true
+        )
+        let userMade = CustomIdleAnimation(
+            name: "T10 Fixture User",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-user.json")),
+            speed: 1.0,
+            isBuiltIn: false
+        )
+
+        // 叫醒的观察点：订阅 `selectedIdleAnimation` 键（与视图 `@Default` 同一套 KVO 通道）。
+        var observedIDs: Set<UUID> = []
+        let observation = Defaults.observe(.selectedIdleAnimation, options: []) { change in
+            if let id = change.newValue?.id { observedIDs.insert(id) }
+        }
+        defer { observation.invalidate() }
+
+        // ① 写入：用户动画排在最前，选中的仍是**第一条内置**动画。
+        Defaults[.customIdleAnimations] = [userMade, bundledFirst, bundledSecond]
+        Defaults[.selectedIdleAnimation] = nil
+
+        XCTAssertTrue(
+            IdleAnimationManager.shared.selectFirstBundledIfNoneSelected(),
+            "从未选过样式 → 应当发生写入"
+        )
+        XCTAssertEqual(
+            Defaults[.selectedIdleAnimation]?.id,
+            bundledFirst.id,
+            "写入的是**第一条内置**动画（不是排在前面的用户动画）"
+        )
+        XCTAssertTrue(
+            observedIDs.contains(bundledFirst.id),
+            "叫醒：写进去的那条动画经 `selectedIdleAnimation` 键发出（视图的 @Default 观察点靠它重绘）"
+        )
+
+        // ② 不越权：已有选择（哪怕是用户动画）不动。诱饵用**新 id**（`bundledForExisting`）——
+        // 布置阶段从没写过它，方法若越权把它写进选择，它会第一次经 `selectedIdleAnimation` 键发出。
+        let bundledForExisting = CustomIdleAnimation(
+            name: "T10 Fixture Bundled B2",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-bundled-b2.json")),
+            speed: 1.0,
+            isBuiltIn: true
+        )
+        let userChoice = CustomIdleAnimation(
+            name: "T10 Fixture User Choice",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-user-choice.json")),
+            speed: 1.0,
+            isBuiltIn: false
+        )
+        Defaults[.customIdleAnimations] = [bundledForExisting, userChoice]
+        Defaults[.selectedIdleAnimation] = userChoice
+
+        XCTAssertFalse(
+            IdleAnimationManager.shared.selectFirstBundledIfNoneSelected(),
+            "已有选择 → 不写"
+        )
+        XCTAssertEqual(Defaults[.selectedIdleAnimation]?.id, userChoice.id, "用户的选择被原地保留")
+        XCTAssertFalse(
+            observedIDs.contains(bundledForExisting.id),
+            "不写 → 方法没有把内置动画写进选择（没有新值经 `selectedIdleAnimation` 键发出）"
+        )
+
+        // ③ 不越权：库里没有内置动画时不替用户乱选（选择保持 nil）。
+        let userOnlyBait = CustomIdleAnimation(
+            name: "T10 Fixture User Bait",
+            source: .lottieFile(URL(fileURLWithPath: "/tmp/t10-fixture-user-bait.json")),
+            speed: 1.0,
+            isBuiltIn: false
+        )
+        Defaults[.customIdleAnimations] = [userOnlyBait]
+        Defaults[.selectedIdleAnimation] = nil
+
+        XCTAssertFalse(
+            IdleAnimationManager.shared.selectFirstBundledIfNoneSelected(),
+            "没有内置动画可写 → 不写"
+        )
+        XCTAssertNil(Defaults[.selectedIdleAnimation], "选择保持 nil（不越权选中自定义动画）")
+        XCTAssertFalse(
+            observedIDs.contains(userOnlyBait.id),
+            "不写 → 诱饵的自定义动画没有经 `selectedIdleAnimation` 键发出"
+        )
     }
 
     // MARK: - 工具

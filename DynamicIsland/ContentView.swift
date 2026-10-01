@@ -498,6 +498,10 @@ struct ContentView: View {
     @Default(.useMusicVisualizer) var useMusicVisualizer
     @Default(.musicControlWindowEnabled) var musicControlWindowEnabled
     @Default(.showNotHumanFace) var showNotHumanFace
+    /// 空闲动画的当前选择（p6-ui-polish / T10，docs/30 §机制八）：关闭态中央槽位链的门（`!= nil`）与
+    /// **叫醒**都靠它——设置区「开关打开但从未选过样式」的兜底写入后，本视图要**当场重绘**才会显示动画。
+    /// 用 `@Default` 而不是裸读：与 `panelHeightMode` 同一条理由（只读裸值的话写盘不会触发重绘）。
+    @Default(.selectedIdleAnimation) var selectedIdleAnimation
     @Default(.useModernCloseAnimation) var useModernCloseAnimation
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
     /// 面板高度模式（p5-home-blocks / T6，默认 `"auto"`）：右下角拖动把手是**手动档专属**
@@ -1691,6 +1695,14 @@ struct ContentView: View {
                               layout: layout,
                               isHovering: isHovering
                           )
+                      } else if !isCurrentScreenExpansionVisible && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed && selectedIdleAnimation != nil {
+                          // 空闲动画（p6-ui-polish / T10，docs/30 §机制八）：这是 **opt-in 设置**，插在
+                          // 架子行内 / 模块折叠槽这两个**被动指示**之前——开关开着就以它为准（被动槽位让位）。
+                          // 末一条门 `selectedIdleAnimation != nil`：开关开着但从未选过样式时让位给被动槽位
+                          // （不留空；设置区在开关打开时兜底选第一条内置动画）。
+                          // 上游那条同条件的**空体分支**（`!coordinator.expandingView.show` …）已删：它只是
+                          // 拦在动画分支前面把中央槽位吞掉，本机「架子有文件 / 待办开着」时动画因此永远不显示。
+                          DynamicIslandFaceAnimation().animation(.interactiveSpring, value: musicManager.isPlayerIdle)
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && !shelfState.isEmpty && !vm.hideOnClosed && !lockScreenManager.isLocked && !enableMinimalisticUI {
                           ShelfInlineLiveActivity()
                               .transition(.opacity.animation(.smooth(duration: 0.25)))
@@ -1699,9 +1711,6 @@ struct ContentView: View {
                           // 关闭态时显示（与它们共用一条优先级链，故有活动时自动让位）。
                           ModuleCompactSlotView()
                               .transition(.opacity.animation(.smooth(duration: 0.25)))
-                      } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
-                      } else if !isCurrentScreenExpansionVisible && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
-                          DynamicIslandFaceAnimation().animation(.interactiveSpring, value: musicManager.isPlayerIdle)
                       } else if vm.notchState == .open {
                           DynamicIslandHeader()
                               .frame(height: (Defaults[.enableMinimalisticUI] && isDynamicIslandMode) ? nil : max(24, vm.effectiveClosedNotchHeight))
