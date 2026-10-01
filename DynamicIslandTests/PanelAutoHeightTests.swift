@@ -650,41 +650,51 @@ final class PanelAutoHeightTests: XCTestCase {
         // 名单内**没量过**的另一页：仍是旧路径——**保留**上一页的量值（新页量完那一拍无条件覆盖它，
         // §已知限制 2 的形态；切页就清会变成「先跳手动值再跳量值」两次跳动）。缓存（T7 机制五）
         // 只对**量过的**页做一步到位，没量过的页没有条目，这里因此逐字不变。
+        //
+        // **没量过的新页第一份上报无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
+        // 新页比旧值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。这一档**不因
+        // 缓存而变**（T7 裁决 T7-fix 只改缓存命中那一档，见另一条用例）。
         ledger.selectTab(notifications)
         XCTAssertEqual(ledger.current, 200, "名单内没量过的页：先拿上一页的数，等新页量完覆盖")
+        ledger.pointerInsidePanel = { true }
         ledger.report(150, for: notifications)
-        XCTAssertEqual(ledger.current, 150, "新页量完 → 无条件接受")
+        XCTAssertEqual(ledger.current, 150, "没缓存的页：第一份上报无条件接受（变矮 + 光标在面板里都接受）")
+        ledger.pointerInsidePanel = { false }
 
         // **量过的页切回来一步到位**（p6-ui-polish / T7 机制五）：缓存里就有待办上一次被接受的 200，
         // 不再先落在那份 150 上再跳一次（0 次跳动，T6 的「一次跳动」再收一档）。
         ledger.selectTab(todos)
         XCTAssertEqual(ledger.current, 200, "量过的页：直接读 `heightCache`（不是留着的 150）")
 
-        // **新页的第一份上报仍无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
-        // 新页比缓存值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。
+        // 缓存命中的页**第一份上报回普通条款**（T7 裁决 T7-fix）：差 < 8pt 不推窗口（消微跳）；
+        // 变矮时光标在面板内按条款 ④ 拦下（移开鼠标才贴合——§已知限制 1 的既有形态）。
         ledger.pointerInsidePanel = { true }
+        ledger.report(205, for: todos)
+        XCTAssertEqual(ledger.current, 200, "缓存命中 + 首报差 5pt → 滞回拦下（不再多推一次窗口）")
         ledger.report(90, for: todos)
-        XCTAssertEqual(ledger.current, 90, "切页后的第一份上报：无条件接受（变矮、光标在面板里都接受）")
-
-        // 第二份起回到正常条款：光标在面板里 → 变矮被拦、变大照常。
-        ledger.report(60, for: todos)
-        XCTAssertEqual(ledger.current, 90, "第二份起回条款 ④（光标在面板内不缩）")
-        ledger.report(140, for: todos)
-        XCTAssertEqual(ledger.current, 140, "变大照常接受")
+        XCTAssertEqual(ledger.current, 200, "缓存命中 + 变矮 + 光标在面板内 → 条款 ④ 拦下")
         ledger.pointerInsidePanel = { false }
+        ledger.report(90, for: todos)
+        XCTAssertEqual(ledger.current, 90, "光标离开 → 差 ≥ 8pt 的收缩照常接受")
+
+        // 第二份起回正常条款（同页微动 / 变大）。
+        ledger.report(60, for: todos)
+        XCTAssertEqual(ledger.current, 60, "光标已移开 → 收缩 30pt 照常接受")
+        ledger.report(95, for: todos)
+        XCTAssertEqual(ledger.current, 95, "同页 +35pt → 接受")
 
         // 名单外的页（日历）：**清掉**当班值 → `current` = nil → 尺寸层回落手动值。
         ledger.selectTab("com.cmeng.gourd.calendar")
-        XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 140）")
+        XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 95）")
         XCTAssertNil(ledger.measuredHeight, "量出来的那一槽被清掉")
         XCTAssertEqual(ledger.activeTab, "com.cmeng.gourd.calendar")
 
         // 再切回名单内的页：**缓存按页留着**（名单外那一趟只清当班值，不动别人的缓存）——
-        // 量过的待办一步到位回到**最后一次被接受的** 140；若从没量过才是 nil（回落手动值），量完就位。
+        // 量过的待办一步到位回到**最后一次被接受的** 95；若从没量过才是 nil（回落手动值），量完就位。
         ledger.selectTab(todos)
-        XCTAssertEqual(ledger.current, 140, "缓存按页保留（切到名单外不清别人页的缓存）")
+        XCTAssertEqual(ledger.current, 95, "缓存按页保留（切到名单外不清别人页的缓存）")
         ledger.report(180, for: todos)
-        XCTAssertEqual(ledger.current, 180)
+        XCTAssertEqual(ledger.current, 180, "缓存命中 + ≥ 8pt 的变化照常接受")
 
         // 首页：读 `homeContentHeight`（不是量出来的那一份）。
         ledger.selectTab(PanelContentHeight.homeTab)
@@ -732,9 +742,12 @@ final class PanelAutoHeightTests: XCTestCase {
     /// 清值回落手动值，但**缓存按页留着**（切回来还在）。没量过的页没有条目，逐字走旧路径
     /// （留上一页的量值 + 首份上报无条件接受）。
     ///
+    /// **缓存命中的页第一份上报回普通条款**（T7 裁决 T7-fix）：起点已是这一页自己的量值，差 < 8pt
+    /// 的微跳不该再推第二次窗口——「单步」目标；无缓存那一档的无条件豁免逐字不变（另一条用例钉着）。
+    ///
     /// 顺带钉住免防抖标记（`lastChangeWasTabSwitch`）——它就是「这一拍窗口要立刻跟」的账本侧信号：
-    /// 切页换掉当班值、以及新页的**第一份**上报为真；普通的内容变化（滞回之外的同页上报）为假
-    /// （那条仍走 0.15s 防抖的既有链）。
+    /// 切页换掉当班值、以及**没量过**的新页第一份上报为真；普通的内容变化（滞回之外的同页上报）
+    /// 为假（那条仍走 0.15s 防抖的既有链）。
     func testTabSwitchUsesThePerTabHeightCache() {
         let ledger = PanelContentHeight.shared
         ledger.reset()
@@ -763,30 +776,35 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.activeTab, todos)
         XCTAssertTrue(ledger.lastChangeWasTabSwitch, "切页换掉当班值 → 这一拍免防抖（订阅走立即链）")
 
-        // 切页**首份上报仍无条件**（与有没有缓存无关，派发片段条款 ③ 的口径不变）：缓存只是起点，
-        // 页面上真量到的值照样覆盖它——差 5pt 也接受、光标压着面板也接受。窗口侧这两拍走同一条
-        // 立即链（动画把它们连成一段，不是两次台阶）。
-        ledger.pointerInsidePanel = { true }
+        // **缓存命中的页第一份上报回普通条款**（T7 裁决 T7-fix）：起点已经是这一页**自己的**量值，
+        // 与它比出来的差就是「同一页的微动」——差 < 8pt **不推窗口**（消掉切页后那一次微跳）。
+        // 无缓存时的无条件豁免没变（在 `testSelectTabClearsValueForUnlistedPagesAndKeepsItForMeasuredOnes`
+        // 里钉着：变矮 + 光标在面板内也接受）。
         ledger.report(205, for: todos)
-        XCTAssertEqual(ledger.current, 205, "切页首报无条件接受（不比滞回、不看光标）")
-        XCTAssertTrue(ledger.lastChangeWasTabSwitch, "新页的第一份上报同样是「切页那一拍」")
-        ledger.pointerInsidePanel = { false }
+        XCTAssertEqual(ledger.current, 200, "缓存命中 + 首报差 5pt（< 8pt 滞回）→ 不推窗口（单步）")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "滞回拦下 → 没有通知，也就没有「立即推」那一拍")
+
+        // 差 ≥ 8pt 仍按普通条款接受（滞回不是把页面钉死）——但它是**普通过报**，走 0.15s 防抖那条链。
+        ledger.report(210, for: todos)
+        XCTAssertEqual(ledger.current, 210, "缓存命中 + 首报差 10pt（≥ 8pt）→ 接受")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "普通过报不置免防抖标记（不抢立即链）")
+        XCTAssertEqual(ledger.heightCache[todos], 210, "被接受的值照常刷新缓存")
 
         // 名单外的日历：清当班值 → `current` = nil（回落手动值），但**不动别人页的缓存**。
         ledger.selectTab(calendar)
         XCTAssertNil(ledger.current, "名单外的页没有值（回落手动值）")
-        XCTAssertEqual(ledger.heightCache[todos], 205, "名单外那一趟不清别人页的缓存")
+        XCTAssertEqual(ledger.heightCache[todos], 210, "名单外那一趟不清别人页的缓存")
         ledger.selectTab(todos)
-        XCTAssertEqual(ledger.current, 205, "切回来还是缓存里那一份（名单外只是「当班没有值」）")
+        XCTAssertEqual(ledger.current, 210, "切回来还是缓存里那一份（名单外只是「当班没有值」）")
 
         // 切页首报**与缓存同值**：一次都不响（值没变就没有要推的窗口那一拍），标记随之是假。
-        ledger.report(205, for: todos)
-        XCTAssertEqual(ledger.current, 205, "首报与缓存同值 → 值不动")
+        ledger.report(210, for: todos)
+        XCTAssertEqual(ledger.current, 210, "首报与缓存同值 → 值不动")
         XCTAssertFalse(ledger.lastChangeWasTabSwitch, "没有通知就没有「切页那一拍」这回事")
 
         // 普通内容变化（同页、滞回之外）**不是**切页那一拍：仍走 0.15s 防抖那条既有链。
         ledger.report(300, for: todos)
-        XCTAssertEqual(ledger.current, 300, "同页 +95pt → 接受")
+        XCTAssertEqual(ledger.current, 300, "同页 +90pt → 接受")
         XCTAssertFalse(ledger.lastChangeWasTabSwitch, "普通过报不置免防抖标记（走防抖链，不抢立即链）")
         ledger.report(303, for: todos)
         XCTAssertEqual(ledger.current, 300, "同页 3pt 微动仍被滞回吃掉（缓存不改四条款）")

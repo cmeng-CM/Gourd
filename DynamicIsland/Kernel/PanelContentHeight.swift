@@ -62,8 +62,10 @@
 //
 //  **切页平滑三件**（p6-ui-polish / T7，docs/30 §做法 机制五；动画面在 `DynamicIslandApp` 那一侧）：
 //  - **每页高度缓存**（`heightCache`）：每次**接受**上报都写；`selectTab(_:)` 对名单内的页直接读它
-//    ——量过的页切回来**一步到位**（零次跳动），没量过的页仍走「留上一页的量值 + 首份上报无条件」
-//    那条旧路径（名单外的页照旧清值回落手动值；缓存按页留着，切回来还在）；
+//    ——量过的页切回来**一步到位**（零次跳动），且它的第一份上报**回普通条款**（8pt 滞回 + 光标规则：
+//    起点已是这一页自己的量值，差 < 8pt 的那点微跳不该再推第二次窗口，T7 裁决 T7-fix）；没量过的页
+//    仍走「留上一页的量值 + 首份上报无条件」那条旧路径（名单外的页照旧清值回落手动值；缓存按页
+//    留着，切回来还在）；
 //  - **切页首报免防抖**（`lastChangeWasTabSwitch`）：`selectTab` 换掉当班值、或新页的**第一份**上报
 //    被接受时置位。订阅见到它就不走 0.15s 防抖，改用**同一条**立即链（`updateWindowSizeForTabSwitch`，
 //    内部延后一拍读新值）——**不新开 resize 链**；
@@ -171,13 +173,17 @@ final class PanelContentHeight: ObservableObject {
     /// （`DynamicIslandApp` 的订阅）**在 `send()` 的同步回调里**读它，见到为真就走**同一条**立即链
     /// （`updateWindowSizeForTabSwitch`，内部延后一拍读新值），**不新开 resize 链**。
     ///
-    /// **一次性**：每个写入口（`report` / `selectTab`）开头先清掉，只有本次真的发出一声
-    /// `objectWillChange` 且属于上面两档时才置位（没发通知的静默写因此读出来是假；测试直接读它，
-    /// 生产读者只在订阅回调里读）。
+    /// **一次性**：每个写入口（`report` / `selectTab`）**开头**先清掉，只有本次真的发出一声
+    /// `objectWillChange` 且属于上面两档时才置位（被四条款拦下、或值没变的静默写因此读出来是假；
+    /// 测试直接读它，生产读者只在订阅回调里读）。
     private(set) var lastChangeWasTabSwitch = false
 
-    /// 刚切到一个**会上报**的页（`selectTab` 置位）：它的**第一份**上报要**无条件**接受
+    /// 刚切到一个**会上报、且还没量过**的页（`selectTab` 置位）：它的**第一份**上报要**无条件**接受
     /// （派发片段条款 ③ 的「换 tab 无条件接受」），滞回与光标规则都不参与。
+    ///
+    /// **缓存命中的页不置位**（T7 裁决 T7-fix）：`selectTab` 已经把起点放在这一页**自己的**量值上，
+    /// 与它比出来的差就是「同一页的微动」——第一份上报因此回普通条款（8pt 滞回 + 光标规则），
+    /// 差 < 8pt 的那点微跳不再推第二次窗口（「单步」目标）。
     ///
     /// 为什么需要这个位：切页时特意**保留**上一页的量值（一次跳动而不是两次），于是新页的第一份
     /// 上报与旧值之间「看起来像同一 tab 的微动」——少了这个位，光标停在面板里时新页连变矮都做不到
@@ -232,7 +238,11 @@ final class PanelContentHeight: ObservableObject {
         activeTab = tab
         // 名单内：缓存的页一步到位；没缓存的页留着上一页的量值（一次跳动）——但它的第一份上报
         // 无条件接受（`awaitsFirstReport`）。名单外：清值 → `current` = nil → 尺寸层回落手动值。
-        awaitsFirstReport = isMeasured
+        //
+        // **缓存命中的页不置位**（T7 裁决 T7-fix）：豁免的存在理由只是「留着的那份属于**别的**页，
+        // 拿它比出来的差不是同一页的微动」；缓存命中时起点就是这一页自己的量值，比较重新有意义——
+        // 第一份上报回普通条款（8pt 滞回 + 光标规则），免得差 < 8pt 时还多推一次窗口（微跳）。
+        awaitsFirstReport = isMeasured && cached == nil
         if let cached {
             measuredHeight = cached
         }
@@ -252,6 +262,9 @@ final class PanelContentHeight: ObservableObject {
     /// 非首页 tab 的上报（四条款见文件头）。`height` 是**内容高口径**（含表头）——调用方按
     /// `PanelAutoHeight.measuredContentHeight(naturalHeight:headerHeight:)` 折好再报。
     func report(_ height: CGFloat, for tab: String) {
+        // 免防抖标记**一次性**：每次写入口（本函数 / `selectTab`）开头先清掉，只有本次真的发出一声
+        // `objectWillChange` 且属于「切页那一拍」时才重新置位（见 `lastChangeWasTabSwitch`）。
+        lastChangeWasTabSwitch = false
         // 条款 ①：非有限值忽略（首帧的 0/NaN 不会把面板打掉）。
         guard height.isFinite else { return }
         // 首页那一份有自己的槽（算出来的），上报路径不接它的键。
