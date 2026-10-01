@@ -835,7 +835,7 @@ final class PanelAutoHeightTests: XCTestCase {
                 "com.cmeng.gourd.shortcuts",
                 // p6-ui-polish / T6：投放格 + 文件格网格 —— 高是格子数的函数。
                 PanelContentHeight.shelfTab,
-                // p6-ui-polish / T8：左栏固定格高月网格（36N + 78）+ 右栏在其高内滚动 —— 高是当月周数
+                // p6-ui-polish / T8：左栏固定格高月网格（36N + 52）+ 右栏在其高内滚动 —— 高是当月周数
                 // 的函数（旧版面「自己的高是面板高的函数」已不成立，见名单里的注释）。
                 CalendarModule.moduleID,
             ],
@@ -857,7 +857,7 @@ final class PanelAutoHeightTests: XCTestCase {
     /// **日历进测量名单**（p6-ui-polish / T8，docs/30 §做法 §机制六 / §接口与数据形状）。
     ///
     /// 旧版面（`GeometryReader + paneHeight` 两栏填满面板高）的自然高是**面板高**的函数——量它等于
-    /// 把面板高喂回自己；T8 改成自然布局后它变成**当月周数**的函数（左栏 `36N + 78`、右栏在其高内
+    /// 把面板高喂回自己；T8 改成自然布局后它变成**当月周数**的函数（左栏 `36N + 52`、右栏在其高内
     /// 滚动），因此与模块页同一口径上报。判据分三层：① 键 = 模块 id 常量（宿主 `selectedPanelTabKey`
     /// 对 `.module` 传的就是它，不写第二份字面量）；② 名单含它（探针据此进门）；③ 账本行为——切到
     /// 日历页不再回落手动值（682 那种空半屏），量到的就是它。
@@ -887,20 +887,20 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.activeTab, CalendarModule.moduleID)
         XCTAssertNil(ledger.current, "还没量到 → 回落手动值（首帧那一拍）")
 
-        // 2026-10 的自然高 = 258（`MonthGridLayout.monthGridHeight`）→ 账本口径 = 258 + 表头 28 − 16。
+        // 2026-10 的自然高 = 232（`MonthGridLayout.monthGridHeight`）→ 账本口径 = 232 + 表头 28 − 16。
         let natural = MonthGridLayout.monthGridHeight(
             forMonth: makeFixedMonth(2026, 10), calendar: fixedGridCalendar(firstWeekday: 1)
         )
-        XCTAssertEqual(natural, 258, "前提：2026-10 = 5 周 → 36 × 5 + 78")
+        XCTAssertEqual(natural, 232, "前提：2026-10 = 5 周 → 36 × 5 + 52")
 
         ledger.report(natural + 28 - 16, for: CalendarModule.moduleID)
-        XCTAssertEqual(ledger.current, 270, "日历页的量值进门（名单外的页写不进这个槽）")
+        XCTAssertEqual(ledger.current, 244, "日历页的量值进门（名单外的页写不进这个槽）")
         XCTAssertEqual(
             PanelAutoHeight.panelHeight(
-                contentHeight: 270, mode: PanelAutoHeight.modeAuto,
+                contentHeight: 244, mode: PanelAutoHeight.modeAuto,
                 manualHeight: 682, screenVisibleHeight: nil
             ),
-            310,
+            284,
             "auto 档：面板高 = 量值 + 宿主内边距（不是盘上残留的 682 手动值——「不再 682 空半屏」）"
         )
     }

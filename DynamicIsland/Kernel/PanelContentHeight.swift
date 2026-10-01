@@ -44,7 +44,7 @@
 //  面板无关）；架子（`shelfTab`，p6-ui-polish / T6 进名单）是「投放格 + 文件格网格」，格数决定
 //  行数、行数决定高，纵向 `ScrollView` 的理想高就是网格自然高——**不再是**旧版面那个「拖放区整块
 //  填满」的形状（旧判断见 `measuredTabs` 的注释）。日历（`CalendarModule.moduleID`，
-//  p6-ui-polish / T8 进名单）T8 起是两栏自然布局：左栏月网格按固定格高自然堆叠（`36N + 78`）、
+//  p6-ui-polish / T8 进名单）T8 起是两栏自然布局：左栏月网格按固定格高自然堆叠（`36N + 52`）、
 //  右栏在其高内滚动——自然高 = 当月周数的函数，**不再是**旧版面那个「自己的高是面板高的函数」
 //  的形状（`GeometryReader + paneHeight`；旧判断同样见 `measuredTabs` 的注释）。
 //  **不上报的两页**：计时器（`.frame` 吃面板高 + 250 的 per-tab 下限）、终端（终端仿真块按屏高
@@ -119,7 +119,7 @@ final class PanelContentHeight: ObservableObject {
     ///   的判断（左投送块按容器高撑成正方形、文件区一行横滚）——投放格缩成一枚格子、
     ///   文件区改多行网格后，这一页的高就是内容高（docs/30 §做法 机制三）。
     /// - `calendar`（模块 id `CalendarModule.moduleID`，p6-ui-polish / T8）：两栏自然布局——
-    ///   左栏月网格按**固定格高自然堆叠**（高 = `36N + 78`，与首页日历行同源
+    ///   左栏月网格按**固定格高自然堆叠**（高 = `36N + 52`，与首页日历行同源
     ///   `MonthGridLayout.monthGridHeight`），右栏事件列拿同一个高度、在里面滚动；
     ///   这一页的高因此是「当月周数」的函数。T8 前的「日历没有自然高」是**旧版面**的判断
     ///   （`GeometryReader + paneHeight` 两栏填满面板高，探针按无高提案只会量到 10pt 级理想高、

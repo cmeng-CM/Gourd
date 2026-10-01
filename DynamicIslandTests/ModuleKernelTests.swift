@@ -6192,8 +6192,8 @@ final class MonthGridLayoutTests: XCTestCase {
 @MainActor
 final class HomeCalendarRowLayoutTests: XCTestCase {
 
-    /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`36 × 5 + 78 = 258`；
-    /// T8 前是「最坏 6 周」的固定 294）− 26（收起态日期头，含与列表之间的 4pt 间距）= 232
+    /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`36 × 5 + 52 = 232`；
+    /// T8 前是「最坏 6 周」的固定 294、T8 首版 258）− 26（收起态日期头，含与列表之间的 4pt 间距）= 206
     /// → 今日清单 5 行（`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，内容高度仍在行高之内。
     ///
     /// 固定到 2026-10 再取行高：`HomeCalendarRow.rowHeight` 随运行日所在月的周数走，直接拿它
@@ -6208,9 +6208,9 @@ final class HomeCalendarRowLayoutTests: XCTestCase {
 
         // 5 周月的行高（2026-10 在两种周起点下都是 5 周，见 HomeStripLayoutTests 的同源用例）。
         let rowHeight = HomeCalendarRow.rowHeight(forMonth: october2026, calendar: calendar)
-        XCTAssertEqual(rowHeight, 258, "36 × 5 + 78")
+        XCTAssertEqual(rowHeight, 232, "36 × 5 + 52")
         let listHeight = rowHeight - HomeTodayListLayout.collapsedHeaderHeight
-        XCTAssertEqual(listHeight, 232, "258 − 26")
+        XCTAssertEqual(listHeight, 206, "232 − 26")
 
         let five = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 5)
         XCTAssertEqual(five.visibleItemCount, 5, "5 条全显示")
