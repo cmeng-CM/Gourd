@@ -131,6 +131,42 @@ class IdleAnimationManager {
         return animations
     }
     
+    // MARK: - Render-time Resolution（p6-ui-polish / T10 fix）
+    
+    /// 新鲜内置列表的**进程内缓存**：`loadBundledAnimations()` 会扫 bundle 并逐条打日志，而解析在
+    /// **渲染期**（面动画视图 body）调用；bundle 路径在一次运行里不变，缓存安全。
+    private var cachedBundledAnimations: [CustomIdleAnimation]?
+    
+    /// 渲染期解析动画的**源**：内置动画存储值里的 `source` 是**写入时刻的绝对路径**——换安装位置 /
+    /// 卸载 DMG 卷（实锤：`/Volumes/壶中天/Gourd.app/…/Dog waiting.json`）后失效，面动画因此加载为空。
+    /// 内置动画按 `name` 从**新鲜内置列表**（当前 bundle）取同一条，只把 `source` 换成当前 URL。
+    ///
+    /// **身份仍取存储值**（id / speed / isBuiltIn 等原样保留）：`animationTransformOverrides` 的键与
+    /// 「已选择」判定都按存储 id 走；且 `loadBundledAnimations()` 每次加载都新生成 UUID——同一份文件的
+    /// 新旧两条 id 不同，**id 当不了匹配键，`name` 才是内置动画的稳定身份**（T10 fix 候选决策 1）。
+    ///
+    /// - 自定义动画（`isBuiltIn == false`）：存储值原样返回（它的路径就是用户的文件，不经内置解析）。
+    /// - 内置动画但新鲜列表里没有同名条目（旧版本删过的样式）：`nil`（回落空，不揣测、不动盘）。
+    func resolvedAnimation(for animation: CustomIdleAnimation) -> CustomIdleAnimation? {
+        guard animation.isBuiltIn else { return animation }
+        
+        let bundled: [CustomIdleAnimation]
+        if let cached = cachedBundledAnimations {
+            bundled = cached
+        } else {
+            bundled = loadBundledAnimations() ?? []
+            cachedBundledAnimations = bundled
+        }
+        
+        guard let fresh = bundled.first(where: { $0.name == animation.name }) else {
+            return nil
+        }
+        
+        var resolved = animation
+        resolved.source = fresh.source
+        return resolved
+    }
+    
     // MARK: - User Animations
     
     /// Load user-imported animations from storage directory

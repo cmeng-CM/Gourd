@@ -181,6 +181,15 @@
 //    链上的顺序与 nil 门（`ContentView` 关闭态中央槽位链）没有自动化断言：那是 SwiftUI 视图体里的
 //    分支顺序，只能上屏验收（收尾波截图），计划书未要求为它造断言。
 //
+//  p6-ui-polish / T10 **修复轮**追加（**内置动画的渲染期源解析**——第二层根因：存储值里是写入时刻的
+//  绝对路径，实锤 `/Volumes/壶中天/Gourd.app/…` 指向已卸载的卷 → `IdleAnimationView` 加载为空）：
+//  - **一条用例三层**（`testBuiltInIdleAnimationResolvesToTheCurrentBundleFileAtRenderTime`）：
+//    ① 死路径的内置动画经 `IdleAnimationManager.resolvedAnimation(for:)` 解析回**当前 bundle 里真实
+//    存在的文件**（非 nil / 非空，= `Bundle.main` 的同一份资源）；② 身份仍取存储值（id / speed 不变，
+//    覆盖与「已选择」判定按存储 id）——匹配键是 `name` 不是 id（`loadBundledAnimations()` 每次加载
+//    都新生成 UUID，见 manager 里那段注释）；③ 自定义动画（`isBuiltIn == false`）不走内置解析、
+//    原样返回；另加回落层：新鲜列表里没有同名条目 → nil。
+//
 //  p5-home-blocks / T5 **修复轮**（独立评审 P2：关掉宿主元素后面板还停在它上面；
 //  `docs/29` §机制三那四条宿主行在协调器一侧的闭环）：
 //  - **视图归一化表对键**（`testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows`）：
@@ -3126,6 +3135,92 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertFalse(
             observedIDs.contains(userOnlyBait.id),
             "不写 → 诱饵的自定义动画没有经 `selectedIdleAnimation` 键发出"
+        )
+    }
+
+    /// `IdleAnimationManager.resolvedAnimation(for:)`：**渲染期解析**内置动画的源（p6-ui-polish / T10 fix）。
+    ///
+    /// 实锤形态：`defaults read com.cmeng.gourd selectedIdleAnimation` 里存的是
+    /// `file:///Volumes/壶中天/Gourd.app/Contents/Resources/Dog waiting.json`——写入时刻的绝对路径，
+    /// 卷卸载 / 换安装位置后失效（`/Volumes/壶中天` 不存在），面动画加载为空。三层：
+    /// ① 死路径的内置动画解析回**当前 bundle 里真实存在的文件**（非 nil / 非空）；② 身份仍取存储值
+    /// （id 不变——变换覆盖与「已选择」判定按存储 id）；③ 自定义动画不走内置解析、原样返回；
+    /// 另加回落层：新鲜列表里没有同名条目（旧版本删过的样式）→ nil。
+    func testBuiltInIdleAnimationResolvesToTheCurrentBundleFileAtRenderTime() throws {
+        // 存储值的实锤形态：内置 + 指向已卸载的 DMG 卷的绝对路径。
+        let staleURL = URL(fileURLWithPath: "/Volumes/壶中天/Gourd.app/Contents/Resources/Dog waiting.json")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: staleURL.path),
+            "前置：这条存储路径在盘上不存在（卷已卸载）"
+        )
+
+        let stored = CustomIdleAnimation(
+            id: UUID(),
+            name: "Dog waiting",
+            source: .lottieFile(staleURL),
+            speed: 1.0,
+            isBuiltIn: true
+        )
+
+        // ① 解析到当前 bundle 的真实文件。
+        let resolved = try XCTUnwrap(
+            IdleAnimationManager.shared.resolvedAnimation(for: stored),
+            "内置动画要解析出当前 bundle 的同一条，不能是 nil"
+        )
+        XCTAssertEqual(resolved.id, stored.id, "身份仍是存储值（覆盖 / 「已选择」判定按存储 id）")
+        XCTAssertEqual(resolved.name, stored.name, "同名（name 是内置动画的稳定身份）")
+        XCTAssertTrue(resolved.isBuiltIn, "仍是内置动画")
+        XCTAssertEqual(resolved.speed, stored.speed, "速度等呈现字段仍取存储值")
+
+        guard case .lottieFile(let resolvedURL) = resolved.source else {
+            return XCTFail("解析结果的源形态仍是 .lottieFile")
+        }
+        XCTAssertFalse(resolvedURL.path.hasPrefix("/Volumes/"), "不再是死卷路径")
+        XCTAssertFalse(resolvedURL.path.isEmpty, "非空路径")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: resolvedURL.path),
+            "解析到当前 bundle 里真实存在的文件：\(resolvedURL.path)"
+        )
+        XCTAssertEqual(resolvedURL.lastPathComponent, "Dog waiting.json", "文件名不变")
+        let bundleURL = try XCTUnwrap(
+            Bundle.main.url(forResource: "Dog waiting", withExtension: "json"),
+            "测试宿主（App）bundle 里应带这份内置资源"
+        )
+        XCTAssertEqual(resolvedURL.path, bundleURL.path, "解析结果 = 当前 bundle 的同一份资源")
+
+        // ② 旧版本删过的样式（新鲜列表里没有同名条目）→ 回落 nil（不留旧路径、不揣测）。
+        let orphan = CustomIdleAnimation(
+            name: "T10 Fix Fixture Not In Bundle",
+            source: .lottieFile(staleURL),
+            speed: 1.0,
+            isBuiltIn: true
+        )
+        XCTAssertNil(
+            IdleAnimationManager.shared.resolvedAnimation(for: orphan),
+            "新鲜内置列表里没有同名条目 → nil（候选决策：回落空不加戏）"
+        )
+
+        // ③ 自定义动画不走内置解析：同一个 URL 原样返回（哪怕它在盘上不存在）。
+        let customURL = URL(fileURLWithPath: "/tmp/t10-fix-custom-not-installed.json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: customURL.path), "前置：自定义路径也不存在")
+        let custom = CustomIdleAnimation(
+            name: "Dog waiting",
+            source: .lottieFile(customURL),
+            speed: 1.0,
+            isBuiltIn: false
+        )
+        let resolvedCustom = try XCTUnwrap(
+            IdleAnimationManager.shared.resolvedAnimation(for: custom),
+            "自定义动画原样返回"
+        )
+        guard case .lottieFile(let resolvedCustomURL) = resolvedCustom.source else {
+            return XCTFail("自定义动画的源形态不变")
+        }
+        XCTAssertEqual(resolvedCustom.id, custom.id)
+        XCTAssertEqual(
+            resolvedCustomURL.path,
+            customURL.path,
+            "自定义动画不走内置解析（名字与内置同名也不换源）"
         )
     }
 
