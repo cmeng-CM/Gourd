@@ -38,8 +38,31 @@ struct HoverButton: View {
     @State private var wiggleToken: Int = 0
     @State private var lastExternalTriggerToken: Int?
 
+    /// 尺寸档 → 边长（pt）的**唯一取值处**（p6-ui-polish / T2 抽成纯函数，供测试钉档）。
+    ///
+    /// 三档对应 `Image.Scale` 的三个既有取值（不新造枚举，调用点写 `scale: .small` 与系统语义同名）：
+    /// - `.large` = 40（展开面板的播放键）、`.medium` = 30（缺省档，展开面板的其余键）——**两档是
+    ///   既有值，不动**：展开面板等处的键尺寸必须与 T2 改动前逐字一致；
+    /// - `.small` = 26（**T2 新增**）：首页音乐块紧凑控制行的键径——
+    ///   `MusicControlsView.CompactMetrics.controlKeyDiameter` 引用同一档，五键装宽度
+    ///   `5×26 + 4×6 + 36 + 6 = 196 ≤ min 200` 见那边的算式注释。
+    ///
+    /// `@unknown default` 落到 `.medium` 的 30：将来 SwiftUI 若加新档，行为等于缺省档而不是崩溃。
+    static func buttonSize(for scale: Image.Scale) -> CGFloat {
+        switch scale {
+        case .small:
+            return 26
+        case .medium:
+            return 30
+        case .large:
+            return 40
+        @unknown default:
+            return 30
+        }
+    }
+
     var body: some View {
-        let size = CGFloat(scale == .large ? 40 : 30)
+        let size = Self.buttonSize(for: scale)
         
         Button(action: {
             triggerPressEffect()

@@ -62,8 +62,9 @@
 //  P2 接管批次 / T5 追加（音乐接管模块 + 命名空间环境键的默认值半边）：
 //  - **`MusicModule` 的 manifest 契约**：`surfaces == [.home]`（不含 `.expanded` / `.compact`）、
 //    `defaultPlacement == Placement(slot: nil, order: 0)`（= 被接管的内置音乐块的默认序号）、
-//    真源键 `showStandardMediaControls`、**三条取值型声明**（p5-home-blocks / T3 起成套改：
-//    块宽 240/300、形态 `.compact`、`showAlbumArt` 默认 false）、`config` = 只登记上游两键 +
+//    真源键 `showStandardMediaControls`、**三条取值型声明**（p5-home-blocks / T3 起成套改，
+//    块宽 p6-ui-polish / T2 再缩一档：200/250、形态 `.compact`、`showAlbumArt` 默认 false）、
+//    `config` = 只登记上游两键 +
 //    本模块自己的呈现键 `showAlbumArt`（P2 首页修正批次 / T5 追加，D-06）；
 //  - **`MusicModule.isVisible(showStandardMediaControls:autoHideInactive:hasActiveSession:)`** 四组：
 //    两段是「且」（表达式逐字沿用上游那个 `shouldShowMusicPlayer`）；
@@ -883,8 +884,8 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 同款：三条钩子的**行为**（真源压过 overrides / 可用性过滤 / 重同步）由本文件上半段的假模块覆盖，
     /// 这里钉的是真模块的声明——`surfaces == [.home]`（不声明 tab、不占折叠槽位）、`order 0`
     /// （= 被接管的内置音乐块的默认序号，接管前后首页顺序一致）、真源键 `showStandardMediaControls`、
-    /// **T3 的三条取值型声明各一条**：块宽 240/300（降档）、形态 `.compact`（从大块降为紧凑条）、
-    /// 封面默认关（`MusicConfigDefaults.showAlbumArt == false`）。
+    /// **T3 的三条取值型声明各一条**（块宽 p6-ui-polish / T2 再缩一档）：块宽 200/250、形态
+    /// `.compact`（从大块降为紧凑条）、封面默认关（`MusicConfigDefaults.showAlbumArt == false`）。
     ///
     /// `config` 两个键的默认值**取上游键的默认值**（D-03 / docs/20 §已知限制 1：登记值必须等于真源值，
     /// 否则这份登记就是假的）：`playerColorTinting` 与 `useMusicVisualizer` 在上游
@@ -952,12 +953,14 @@ final class TakeoverEnablementTests: XCTestCase {
                 + "防止它被悄悄翻回 true）"
         )
 
-        // 三条取值型声明（T3 成套改）：真源 = 上游总开关；块宽降档 240/300；形态降为紧凑档
+        // 三条取值型声明（T3 成套改；块宽 T2 再缩一档）：真源 = 上游总开关；块宽 200/250；形态紧凑档
         XCTAssertEqual(MusicModule.takeoverEnableKey?.name, Defaults.Keys.showStandardMediaControls.name)
         XCTAssertEqual(
             MusicModule.homeBlockWidth,
-            ModuleHomeBlockWidth(min: 240, ideal: 300),
-            "T3 起 240/300（不再是 300/420：那一档是配大封面选的，封面降成 40pt 小图后只会挤走同行的块）"
+            ModuleHomeBlockWidth(min: 200, ideal: 250),
+            "T2 起 200/250（T3 是 240/300、更早是 300/420：那两档是配大封面选的；"
+                + "200 的下界由封面档装宽度 5×26 + 4×6 + 36 + 6 = 196 + 4pt 余量定，见 "
+                + "MusicControlsView.CompactMetrics.albumArtRowInstallWidth）"
         )
         XCTAssertEqual(
             MusicModule.homeFormFactor, .compact,
@@ -1549,7 +1552,7 @@ final class TakeoverEnablementTests: XCTestCase {
     }
 
     /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
-    /// 取回 240/300（`HomeStripView` 就靠它给音乐块 T3 降档后的宽度）、`takeoverEnableKey(for:)`
+    /// 取回 200/250（`HomeStripView` 就靠它给音乐块 T2 缩宽后的宽度）、`takeoverEnableKey(for:)`
     /// 取回 `showStandardMediaControls`（启用真源）。
     ///
     /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
@@ -1563,8 +1566,8 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertEqual(
             registry.homeBlockWidth(for: MusicModule.moduleID),
-            ModuleHomeBlockWidth(min: 240, ideal: 300),
-            "音乐块宽度声明经注册表原样取给宿主（240/300：T3 降档后的那一档）"
+            ModuleHomeBlockWidth(min: 200, ideal: 250),
+            "音乐块宽度声明经注册表原样取给宿主（200/250：T2 缩宽后的那一档）"
         )
         XCTAssertEqual(
             registry.takeoverEnableKey(for: MusicModule.moduleID)?.name,

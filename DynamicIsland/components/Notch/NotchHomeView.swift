@@ -417,11 +417,12 @@ struct MusicControlsView: View {
     /// 封面尺寸 / 圆角 / 进度条样式 / 按钮外观与顺序一概未动；`GeometryReader` 仍是宽度来源
     /// （只把读数上移一层，宽度换算见 `songInfo(width:)`）。
     ///
-    /// **密度档**（p5-home-blocks / T3 fix / D-17）：`regular`（缺省）= 上面那套，展开面板逐字不变；
-    /// `compact` = 首页音乐块那一档——标准档内容约 127pt，96 高的紧凑档里**控制三键整行被裁**
-    /// （T3 阶段 Checkpoint 上屏实测：AX 有元素、屏上没有）。紧凑档只留「曲名（单行）+ 进度 + 控制三键」：
-    /// 艺人行 / 歌词行 / 大内边距都留给展开面板，播放键从 `.large`（40）降到 `.medium`（30），
-    /// 各段高度见 `CompactMetrics`（唯一取值处；总和 ≤ 96 由单测钉住）。
+    /// **密度档**（p5-home-blocks / T3 fix / D-17；T2 收窄）：`regular`（缺省）= 上面那套，展开面板
+    /// 逐字不变；`compact` = 首页音乐块那一档——标准档内容约 127pt，96 高的紧凑档里**控制三键整行被裁**
+    /// （T3 阶段 Checkpoint 上屏实测：AX 有元素、屏上没有）。紧凑档只留「曲名（单行）+ 进度 + 控制行」：
+    /// 艺人行 / 歌词行 / 大内边距都留给展开面板，控制行的键**五槽一档**（T2 起 `.small` = 26，
+    /// 播放键也不再单独走一档；T2 前紧凑档是播放键 `.medium` = 30 + 其余键 `HoverButton` 缺省同档），
+    /// 各段高度见 `CompactMetrics`（唯一取值处；总和 ≤ 96 与封面档装宽度 ≤ min 由单测钉住）。
     var body: some View {
         GeometryReader { geo in
             VStack(alignment: .leading, spacing: controlsSpacing) {
@@ -458,13 +459,15 @@ struct MusicControlsView: View {
 
     /// 紧凑档的**高度预算**（D-17 的实现口径）：整条内容高 = 六项之和，必须
     /// ≤ `HomeFlowView.compactBlockHeight`（96）。**唯一取值处**——`body` / `musicSlider` /
-    /// `slotView(for:)` 都从这里取数，`HomeStripLayoutTests.testCompactMusicBarFitsTheCompactTier`
-    /// 钉住「总和 ≤ 96」这条不变量（改任何一个数都要在那边同步）。
+    /// `slotView(for:)` / `MusicHomeBlockView`（封面那两档）都从这里取数，
+    /// `HomeStripLayoutTests.testCompactMusicBarFitsTheCompactTier` 钉「总和 ≤ 96」、
+    /// `testMusicBlockWidthAndCompactControlsFitTheMinimum`（T2）钉**装宽度关系式**
+    /// （改任何一个数都要在这两处同步）。
     ///
     /// 六个数的依据都是**固有高**（不是拍出来的比例）：曲名行 17 = `MarqueeText` 的
     /// `1.3 × NSFont.headline.pointSize(13)`；进度行 34 = `MusicSliderView` 的 stacked 算式
-    /// `轨道 14（max(8, 14)）+ 间距 6 + 时间行 14`；控制行 30 = `.medium` 档 `HoverButton` 的边长
-    /// （播放键在标准档是 `.large` = 40，紧凑档缩到与其余键同档）。
+    /// `轨道 14（max(8, 14)）+ 间距 6 + 时间行 14`；控制行 26 = `.small` 档 `HoverButton` 的边长
+    /// （T2 起；标准档的播放键 `.large` = 40、其余键 `.medium` = 30，**两档不动**）。
     enum CompactMetrics {
         /// 顶部内边距（标准档 10）。
         static let topPadding: CGFloat = 4
@@ -476,14 +479,37 @@ struct MusicControlsView: View {
         static let sliderRowHeight: CGFloat = 34
         /// 「进度组 ↔ 控制行」的间距（标准档是 `VStack` 缺省 8）。
         static let controlsSpacing: CGFloat = 6
-        /// 控制行：紧凑档里播放键也走 `.medium`——**每一个槽位都 ≤ 30**
-        /// （`HoverButton` 的 `.medium` 边长 = 30；媒体输出 / AirPlay / 点赞三个槽位本来也是它）。
-        static let controlsRowHeight: CGFloat = 30
+        /// 控制键的键径（T2：30 → 26）：紧凑档里**每一个槽位**都是这一档
+        /// （播放键也从 `.large` 40 落到同一档）——真源是 `HoverButton.buttonSize(for: .small)`，
+        /// 测试把两处钉在一起（改了 `HoverButton` 的档而不动这里，装宽度算式就是假的）。
+        static let controlKeyDiameter: CGFloat = 26
+        /// 控制行的键距（T2：8 → 6；**只**紧凑档收，标准档仍是 8）。
+        static let controlsKeySpacing: CGFloat = 6
+        /// 控制行高 = 键径（一行全是同档方形键；`.none` 槽位给 `Spacer`，只占宽不占高）。
+        static let controlsRowHeight: CGFloat = controlKeyDiameter
+        /// 小封面边长（T2：40 → 36）：`MusicHomeBlockView` 直接引它，模块里不再自带一份。
+        static let albumArtSide: CGFloat = 36
+        /// 小封面与它右侧控制条的间距（T2：8 → 6，与键距同一条呼吸感）。
+        static let albumArtSpacing: CGFloat = 6
 
-        /// 整条内容高（不含宿主给的块高）——「不裁不溢」的判据就是它 ≤ 96。
+        /// 整条内容高（不含宿主给的块高）——「不裁不溢」的判据就是它 ≤ 96：
+        /// **`4 + 17 + 4 + 34 + 6 + 26 = 91 ≤ 96`**（T2 前是 95，控制行 30 → 26）。
         static var contentHeight: CGFloat {
             topPadding + titleRowHeight + titleSliderSpacing + sliderRowHeight
                 + controlsSpacing + controlsRowHeight
+        }
+
+        /// **封面档的装宽度**（T2 / D-04）：封面打开那一档一行里要放下的全部横向宽度 =
+        /// 「五键 + 四道键距」+「封面 + 封面距」= **`5×26 + 4×6 + 36 + 6 = 196`**。
+        /// 它必须 **≤ 音乐块声明的 `min`**（`MusicModule.homeBlockMinWidth` = 200，余量 4）——
+        /// 破了这条，封面打开时控制键就会被裁（T3 那次「控制三键整行被裁」的宽度版）。
+        /// 五键的「五」= `MusicControlButton.slotCount`（最坏情形：五个槽位全是真键，没有 `.none`）。
+        /// 块宽的真源在模块侧（这里不引用它，避免视图反向依赖模块）；两边的关系由
+        /// `HomeStripLayoutTests.testMusicBlockWidthAndCompactControlsFitTheMinimum` 钉在一起。
+        static var albumArtRowInstallWidth: CGFloat {
+            CGFloat(MusicControlButton.slotCount) * controlKeyDiameter
+                + CGFloat(MusicControlButton.slotCount - 1) * controlsKeySpacing
+                + albumArtSide + albumArtSpacing
         }
     }
 
@@ -500,9 +526,17 @@ struct MusicControlsView: View {
     /// 「进度组 ↔ 控制行」的间距（标准档 `VStack` 缺省 8 / 紧凑档 6）。
     private var controlsSpacing: CGFloat { density == .compact ? CompactMetrics.controlsSpacing : 8 }
 
-    /// 播放键的尺寸档：标准档 `.large`（40），紧凑档与其余键同档 `.medium`（30）。
+    /// 「控制行里键与键的间距」（标准档 8 逐字不变 / 紧凑档 6，T2 起收这一档）。
+    private var controlKeySpacing: CGFloat { density == .compact ? CompactMetrics.controlsKeySpacing : 8 }
+
+    /// **非播放键**的尺寸档：标准档 `.medium`（30，逐字不变），紧凑档 `.small`（26，T2 新增）。
+    /// `slotView(for:)` 的**每一个**槽位都走它（媒体输出 / AirPlay 两个 picker 按钮把档位作为参数接住）——
+    /// 紧凑档里五键必须同档，装宽度算式（`CompactMetrics.albumArtRowInstallWidth`）才成立。
+    private var controlKeyScale: Image.Scale { density == .compact ? .small : .medium }
+
+    /// 播放键的尺寸档：标准档 `.large`（40），紧凑档 `.small`（26，与其余键同档）。
     /// **仍然走同一份槽位实现**（`slotView(for:)` 用同一个 `HoverButton`）——D-17 明确不要第二套控制条。
-    private var playPauseScale: Image.Scale { density == .compact ? .medium : .large }
+    private var playPauseScale: Image.Scale { density == .compact ? .small : .large }
 
     /// 「标题 / 歌手」文字区相对音乐区块的 leading 内边距（pt）——宽度换算要用同一个值。
     private static let songInfoLeadingInset: CGFloat = 5
@@ -603,7 +637,7 @@ struct MusicControlsView: View {
     }
 
     private var playbackControls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: controlKeySpacing) {
             ForEach(Array(displayedSlots.enumerated()), id: \.offset) { _, slot in
                 slotView(for: slot)
             }
@@ -764,6 +798,8 @@ struct MusicControlsView: View {
         }
     }
 
+    /// 控制行的槽位（两种密度共用同一份实现；**键的尺寸档由密度定**，见 `controlKeyScale` /
+    /// `playPauseScale`——紧凑档五键同走 `.small` 26，标准档逐字沿用 `.large` 播放键 + `.medium` 其余键）。
     @ViewBuilder
     private func slotView(for control: MusicControlButton) -> some View {
         switch control {
@@ -812,7 +848,7 @@ struct MusicControlsView: View {
             HoverButton(
                 icon: "shuffle",
                 iconColor: musicManager.isShuffled ? brandAccentColor : .white,
-                scale: .medium
+                scale: controlKeyScale
             ) {
                 MusicManager.shared.toggleShuffle()
             }
@@ -820,19 +856,19 @@ struct MusicControlsView: View {
             HoverButton(
                 icon: repeatIcon,
                 iconColor: repeatIconColor,
-                scale: .medium
+                scale: controlKeyScale
             ) {
                 MusicManager.shared.toggleRepeat()
             }
         case .mediaOutput:
-            MediaOutputPickerButton()
+            MediaOutputPickerButton(scale: controlKeyScale)
         case .airPlay:
-            AirPlayPickerButton()
+            AirPlayPickerButton(scale: controlKeyScale)
         case .lyrics:
             HoverButton(
                 icon: enableLyrics ? "quote.bubble.fill" : "quote.bubble",
                 iconColor: enableLyrics ? brandAccentColor : .white,
-                scale: .medium
+                scale: controlKeyScale
             ) {
                 enableLyrics.toggle()
             }
@@ -841,7 +877,7 @@ struct MusicControlsView: View {
                 HoverButton(
                     icon: presentation.iconName,
                     iconColor: presentation.isActive ? brandAccentColor : .white,
-                    scale: .medium
+                    scale: controlKeyScale
                 ) {
                     toggle()
                 }
@@ -862,7 +898,7 @@ struct MusicControlsView: View {
     ) -> some View {
         HoverButton(
             icon: icon,
-            scale: .medium,
+            scale: controlKeyScale,
             pressEffect: press,
             externalTriggerToken: trigger?.token,
             externalTriggerEffect: trigger?.pressEffect
@@ -1311,8 +1347,12 @@ private struct MediaOutputPickerButton: View {
     @State private var isHoveringPopover = false
     @EnvironmentObject private var vm: DynamicIslandViewModel
 
+    /// 键的尺寸档（p6 / T2）：调用方（`MusicControlsView.slotView`）按密度传——
+    /// 缺省 `.medium`（30）是**展开面板那一档，逐字不变**；紧凑档传 `.small`（26）。
+    var scale: Image.Scale = .medium
+
     var body: some View {
-        HoverButton(icon: buttonIcon, iconColor: .white, scale: .medium) {
+        HoverButton(icon: buttonIcon, iconColor: .white, scale: scale) {
             isPopoverPresented.toggle()
             if isPopoverPresented {
                 routeManager.refreshDevices()
@@ -1367,8 +1407,12 @@ private struct AirPlayPickerButton: View {
         musicManager.bundleIdentifier == "com.apple.Music"
     }
 
+    /// 键的尺寸档（p6 / T2）：与 `MediaOutputPickerButton.scale` 同口径——缺省 `.medium`
+    /// 是展开面板那一档（逐字不变），紧凑档由 `slotView(for:)` 传 `.small`。
+    var scale: Image.Scale = .medium
+
     var body: some View {
-        HoverButton(icon: "airplayaudio", iconColor: .white, scale: .medium) {
+        HoverButton(icon: "airplayaudio", iconColor: .white, scale: scale) {
             isPopoverPresented.toggle()
             if isPopoverPresented {
                 Task { await airPlayManager.refreshDevices() }

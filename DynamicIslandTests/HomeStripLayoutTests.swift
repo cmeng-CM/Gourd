@@ -798,8 +798,8 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(Self.bothBandsMinimumHeight, 244, "140 + 8 + 96：两带一起放得下的最低高度")
     }
 
-    /// **紧凑档音乐条的高度预算**（p5-home-blocks / T3 fix / D-17）：`MusicControlsView` 紧凑档的
-    /// 六项之和必须 ≤ **紧凑档高**（`HomeFlowView.compactBlockHeight` = 96）——这是「不裁不溢」的
+    /// **紧凑档音乐条的高度预算**（p5-home-blocks / T3 fix / D-17；T2 收窄）：`MusicControlsView`
+    /// 紧凑档的六项之和必须 ≤ **紧凑档高**（`HomeFlowView.compactBlockHeight` = 96）——这是「不裁不溢」的
     /// 算术判据（T3 阶段 Checkpoint 上屏实测过：标准档内容 ≈127pt，96 里控制三键整行被裁）。
     ///
     /// 六个数都是**固有高**、不是拍出来的比例（T3 fix 离线实测，`NSHostingView.fittingSize`）：
@@ -807,9 +807,11 @@ final class HomeStripLayoutTests: XCTestCase {
     ///   纯文本截断 16）；
     /// - 进度行 34 = `MusicSliderView`（stacked，**同一份滑条实现**）的实测固有高
     ///   （轨道 `max(8, 14)` + 间距 6 + 时间行 14）；
-    /// - 控制行 30 = `.medium` 档 `HoverButton` 的实测边长（标准档 `.large` 是 40）。
+    /// - 控制行 26 = `.small` 档 `HoverButton` 的实测边长（T2 起；标准档 `.large` 是 40、`.medium` 30）。
     ///
-    /// 上屏的最终判据仍以截图为准（字体度量随系统漂，这里钉的是预算与六项取值）。
+    /// 上屏的最终判据仍以截图为准（字体度量随系统漂，这里钉的是预算与六项取值）；
+    /// **装宽度**（封面档 ≤ min）那条在 T2 的
+    /// `testMusicBlockWidthAndCompactControlsFitTheMinimum` 里。
     func testCompactMusicBarFitsTheCompactTier() {
         typealias Metrics = MusicControlsView.CompactMetrics
         XCTAssertEqual(Metrics.topPadding, 4, "标准档 10 → 紧凑档 4")
@@ -817,16 +819,20 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(Metrics.titleSliderSpacing, 4, "组内间距与标准档同值（不动它）")
         XCTAssertEqual(Metrics.sliderRowHeight, 34, "stacked MusicSliderView 的固有高")
         XCTAssertEqual(Metrics.controlsSpacing, 6, "标准档的 VStack 缺省是 8")
-        XCTAssertEqual(Metrics.controlsRowHeight, 30, "播放键在紧凑档走 .medium（标准档 .large = 40）")
+        XCTAssertEqual(Metrics.controlsRowHeight, 26, "T2 起紧凑档五键同走 .small 档（26；标准档播放键 .large = 40）")
+        XCTAssertEqual(
+            Metrics.controlsRowHeight, Metrics.controlKeyDiameter,
+            "控制行高 = 键径（一行全是同档方形键）"
+        )
 
-        XCTAssertEqual(Metrics.contentHeight, 95, "六项之和（4 + 17 + 4 + 34 + 6 + 30）")
+        XCTAssertEqual(Metrics.contentHeight, 91, "六项之和（4 + 17 + 4 + 34 + 6 + 26）")
         XCTAssertLessThanOrEqual(
             Metrics.contentHeight, HomeFlowView.compactBlockHeight,
             "整条内容必须装进紧凑档 \(HomeFlowView.compactBlockHeight)pt——超了就是 Checkpoint 那次「控制三键被裁」"
         )
         XCTAssertLessThanOrEqual(
-            max(Metrics.contentHeight, 40), HomeFlowView.compactBlockHeight,
-            "封面打开那一档：HStack 的高 = max(40pt 小封面, 控制条内容) 也必须装进紧凑档"
+            max(Metrics.contentHeight, Metrics.albumArtSide), HomeFlowView.compactBlockHeight,
+            "封面打开那一档：HStack 的高 = max(\(Metrics.albumArtSide)pt 小封面, 控制条内容) 也必须装进紧凑档"
         )
     }
 
@@ -1854,14 +1860,14 @@ final class HomeStripLayoutTests: XCTestCase {
 
     /// **用户实况那一档的分布**（面板 1041×853，全部组件开着；docs/28 §4.2 的预期表）。
     ///
-    /// 名单是**当前生产声明**（p5-home-blocks / T3 之后：音乐 240/300 紧凑、镜子 140/140 方形大块、
-    /// 其余模块块走宿主统一 180/240、统计 220/300）。
+    /// 名单是**当前生产声明**（p5-home-blocks / T3 之后：音乐紧凑、镜子 140/140 方形大块、
+    /// 其余模块块走宿主统一 180/240、统计 220/300；T2 起音乐缩为 200/250）。
     /// 可用宽 = 1041 − 2 × 8（容器内边距）= 1025；可用高取 560
     ///（该档实测的内容高只有 ≈536：日历行 294 + 缝 8 + 两行流（140 + 8 + 96）= 546 > 536，
     /// 所以取 560 这一档——**恰好放得下**是这条用例要的题面）。
     func testFlowDistributionAtUserPanelSize() {
         let items = [
-            flowItem(240, 300, 96),    // 音乐（T3 起紧凑：240/300、96）
+            flowItem(200, 250, 96),    // 音乐（T2 起再缩一档：200/250、96）
             flowItem(140, 140, HomeFlowView.largeBlockHeight),   // 镜子（方形大块：边长 = 档高）
             flowItem(180, 240, 96),    // 待办
             flowItem(180, 240, 96),    // 前台应用
@@ -1873,11 +1879,11 @@ final class HomeStripLayoutTests: XCTestCase {
             items: items, availableWidth: 1025, availableHeight: 560,
             calendarHeight: 294, metrics: flowMetrics
         )
-        // 行1：音乐 240 + 8 + 镜子 140 + 8 + 待办 180 + 8 + 前台 180 + 8 + 进度 180 = 952 ≤ 1025 ✓
+        // 行1：音乐 200 + 8 + 镜子 140 + 8 + 待办 180 + 8 + 前台 180 + 8 + 进度 180 = 912 ≤ 1025 ✓
         // 行2：通知 180 + 8 + 统计 220 = 408 ✓
         XCTAssertEqual(
             flowRows(plan), [[0, 1, 2, 3, 4], [5, 6]],
-            "全开时仍是「一行五块 + 一行两块」——音乐降档后第一行的成员没变"
+            "全开时仍是「一行五块 + 一行两块」——音乐缩宽后第一行的成员没变"
         )
         XCTAssertEqual(
             plan.rows[0].height, HomeFlowView.largeBlockHeight,
@@ -1956,6 +1962,65 @@ final class HomeStripLayoutTests: XCTestCase {
         // 动画时长：太快看不见、再慢就滞后于指针。
         XCTAssertGreaterThan(HomeBlockFloatMetrics.duration, 0.1, "太快看不见动画")
         XCTAssertLessThan(HomeBlockFloatMetrics.duration, 0.3, "再慢就滞后于指针")
+    }
+
+    // MARK: - 音乐块再缩宽（p6-ui-polish / docs/30 §做法 机制二 / D-03 · D-04）
+
+    /// **T2 的三条钉**（docs/30 §接口与数据形状·机制二）：① min/ideal 取值；② **封面档装宽度**
+    /// 关系式 `5×26 + 4×6 + 36 + 6 = 196 ≤ min`；③ 紧凑高度和 ≤ 96。
+    ///
+    /// 关系式而不是三个各自独立的魔数：封面打开那一档，「封面 + 封面距 + 五键 + 四道键距」必须
+    /// 装进块声明的 `min`——破了这条，封面打开时控制键会被裁（T3 那次「控制三键整行被裁」的宽度版，
+    /// 也是 docs/30 §验收标准 A2 的算术判据）。三个来源都读**生产常量**（不是用例里另抄一份）：
+    /// - 块宽 = `MusicModule` 的命名常量（`homeBlockMinWidth` / `homeBlockIdealWidth`，声明从它们装）；
+    /// - 四档键与封面值 = `MusicControlsView.CompactMetrics`（唯一取值处）；
+    /// - 键径的**真源**是 `HoverButton.buttonSize(for:)` 的 `.small` 档（紧凑行的每个槽位都走它），
+    ///   所以本用例同时钉它一档、并顺带把 `.medium` / `.large` 钉回 30 / 40——
+    ///   展开面板等处的键尺寸必须与 T2 改动前逐字一致（docs/30 机制二的口径）。
+    ///
+    /// **本用例不是上屏证据**：真实布局里这条关系式成不成立（有没有别的内边距吃掉余量）由
+    /// 控制器在 Checkpoint 上屏核对（截图 `.workflow/p6-ui-polish/evidence/t2-music-narrow.png`）。
+    func testMusicBlockWidthAndCompactControlsFitTheMinimum() throws {
+        typealias Metrics = MusicControlsView.CompactMetrics
+
+        // ① min/ideal 取值（上屏调参由控制器回写；本用例钉当前档 200/250）
+        let declared = try XCTUnwrap(MusicModule.homeBlockWidth, "音乐模块必须声明块宽（接管模块的那一档）")
+        XCTAssertEqual(declared.min, 200, "T2 起 min 200（T3 是 240：封面档只剩 10pt 余量）")
+        XCTAssertEqual(declared.ideal, 250, "T2 起 ideal 250（T3 是 300：那一档是配大封面选的）")
+        XCTAssertEqual(MusicModule.homeBlockMinWidth, declared.min, "声明从命名常量装（两个 200 不许漂开）")
+        XCTAssertEqual(MusicModule.homeBlockIdealWidth, declared.ideal, "声明从命名常量装（两个 250 不许漂开）")
+        XCTAssertEqual(MusicModule.homeFormFactor, .compact, "宽度与形态同批（T2 只缩宽，不换档）")
+
+        // ② 封面档的装宽度：四档取值先逐个钉，再钉求和式与 ≤ min 的关系
+        XCTAssertEqual(Metrics.controlKeyDiameter, 26, "T2：控制键 30 → 26")
+        XCTAssertEqual(Metrics.controlsKeySpacing, 6, "T2：键距 8 → 6")
+        XCTAssertEqual(Metrics.albumArtSide, 36, "T2：封面 40 → 36")
+        XCTAssertEqual(Metrics.albumArtSpacing, 6, "T2：封面距 8 → 6")
+        XCTAssertEqual(
+            HoverButton.buttonSize(for: .small), Metrics.controlKeyDiameter,
+            "紧凑控制行的键径就是 HoverButton 的 .small 档——两处不一致时装宽度算式是假的"
+        )
+        XCTAssertEqual(HoverButton.buttonSize(for: .medium), 30, "展开面板的其余键仍是 30（T2 不动中档）")
+        XCTAssertEqual(HoverButton.buttonSize(for: .large), 40, "展开面板的播放键仍是 40（T2 不动大档）")
+
+        XCTAssertEqual(
+            Metrics.albumArtRowInstallWidth, 196,
+            "五键 + 四道键距 + 封面 + 封面距 = 5×26 + 4×6 + 36 + 6"
+        )
+        XCTAssertLessThanOrEqual(
+            Metrics.albumArtRowInstallWidth, declared.min,
+            "封面档的装宽度必须 ≤ 块声明的 min——超了就是「封面打开时控制键被裁」"
+        )
+        XCTAssertEqual(
+            Metrics.albumArtRowInstallWidth + 4, declared.min,
+            "余量 4（余量变成 0 或负就是踩线：字体 / 图标度量一漂就裁）"
+        )
+
+        // ③ 紧凑高度和 ≤ 96（装宽度之外的另一半：竖着也要装得下）
+        XCTAssertLessThanOrEqual(
+            Metrics.contentHeight, HomeFlowView.compactBlockHeight,
+            "整条内容高（\(Metrics.contentHeight)）必须 ≤ 紧凑档高 \(HomeFlowView.compactBlockHeight)"
+        )
     }
 }
 
