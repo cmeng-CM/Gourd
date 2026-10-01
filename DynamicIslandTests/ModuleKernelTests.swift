@@ -2020,8 +2020,8 @@ final class ModuleKernelTests: XCTestCase {
     }
 
     /// 坏配置回落（docs/31 §接口 3 的 `resolveWorkdays` / `resolveWorkHours` 口径）：
-    /// 空表 / 全坏值 → 默认工作日一~五；workdays 坏值逐项忽略；上下班小时先夹取到
-    /// `workHourRange`、再判 `end ≤ start`，非法一律回落 (9, 18)。
+    /// 空表 / 全坏值 → 默认工作日一~五；workdays 坏值逐项忽略；上下班小时**任一项越界即整体
+    /// 回落 (9, 18)、不夹取**（2026-10-01 T2 审查裁定），两值都在区间内但 `end ≤ start` 同样回落。
     func testWorkdayResolveFallsBackOnInvalidConfig() throws {
         let calendar = try fixedGregorian()
 
@@ -2039,7 +2039,7 @@ final class ModuleKernelTests: XCTestCase {
         // workHourRange：0...23 的单一来源（T3 的整数滑块与读侧夹取共用这一个常量）
         XCTAssertEqual(WorkdayCalendar.workHourRange, 0...23)
 
-        // workStart 30（夹到 23 后与默认下班 18 倒挂）→ 默认
+        // workStart 30（越界）→ 整体回落默认（不夹到 23）
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 30, end: nil).start, 9)
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 30, end: nil).end, 18)
         // workEnd 0（早于默认上班 9）→ 默认
@@ -2048,13 +2048,22 @@ final class ModuleKernelTests: XCTestCase {
         // end ≤ start（18 → 9 倒挂；12 = 12 相等）→ 默认
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 18, end: 9).start, 9)
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 12, end: 12).end, 18)
-        // nil / nil → 默认；合法值原样；越界值夹到端点后仍合法就保留
+        // nil / nil → 默认；区间内的合法值原样
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: nil).start, 9)
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: nil, end: nil).end, 18)
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 8, end: 17).start, 8)
         XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 8, end: 17).end, 17)
-        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: -5, end: nil).start, 0, "−5 夹到 0（0 < 18 仍合法）")
-        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 22, end: 24).end, 23, "24 夹到 23")
+        // 端点 0 与 23 是**有效**配置（0–23 班、0–5 班）：只在越界时回落，边界值不回落也不夹取
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 0, end: 23).start, 0, "0 是区间内有效值")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 0, end: 23).end, 23, "23 是区间内有效值")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 0, end: 5).end, 5)
+        // 越界值**一律**整体回落默认（不夹到端点）：−5 / 24 / 99 三档
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: -5, end: nil).start, 9, "−5 越界 → 9")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: -5, end: nil).end, 18, "−5 越界 → 18（同一份配置整体回落）")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 22, end: 24).start, 9, "24 越界 → 整体回落（不夹到 23）")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 22, end: 24).end, 18)
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 9, end: 99).end, 18, "99 越界 → 整体回落")
+        XCTAssertEqual(WorkdayCalendar.resolveWorkHours(start: 9, end: 99).start, 9)
 
         // 读侧归一：判定入口对坏配置也回落默认——9–18 的班，10/12 正午 → 距下班 360 分
         XCTAssertEqual(

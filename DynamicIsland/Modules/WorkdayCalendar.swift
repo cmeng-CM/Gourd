@@ -126,16 +126,21 @@ enum WorkdayCalendar {
 
     /// `workStart` / `workEnd` 配置 → 可用的（上班, 下班）。
     ///
-    /// 口径（docs/31 §接口 3）：`nil` 先取默认，再夹取到 `workHourRange`，最后判 `end ≤ start`
-    /// ——非法（含夹取后相等或倒挂）回落默认 `(9, 18)`。返回值恒满足 `0 ≤ start < end ≤ 23`，
-    /// 因此后续的时间边界构造不可能倒挂。
+    /// 口径（docs/31 §接口 3；越界处置经 2026-10-01 T2 审查裁定）：`nil`（未配置）先取 manifest
+    /// 默认（9 / 18）；随后**任一值不在 `workHourRange`（0…23）内即整体回落默认 `(9, 18)`——
+    /// 不夹取**（把手改坏值 `99` 夹成 23 会得到「有效但荒谬」的 9–23 班，回落默认更可预期，
+    /// 与「非法一律回落」的既定容错口径一致）；两值都在区间内但 `end ≤ start`（相等或倒挂）
+    /// 同样回落默认。返回值恒满足 `0 ≤ start < end ≤ 23`，因此后续的时间边界构造不可能倒挂。
     static func resolveWorkHours(start: Int?, end: Int?) -> (start: Int, end: Int) {
-        let clampedStart = min(max(start ?? defaultWorkStartHour, workHourRange.lowerBound), workHourRange.upperBound)
-        let clampedEnd = min(max(end ?? defaultWorkEndHour, workHourRange.lowerBound), workHourRange.upperBound)
-        guard clampedEnd > clampedStart else {
+        let resolvedStart = start ?? defaultWorkStartHour
+        let resolvedEnd = end ?? defaultWorkEndHour
+        guard workHourRange.contains(resolvedStart),
+              workHourRange.contains(resolvedEnd),
+              resolvedEnd > resolvedStart
+        else {
             return (defaultWorkStartHour, defaultWorkEndHour)
         }
-        return (clampedStart, clampedEnd)
+        return (resolvedStart, resolvedEnd)
     }
 
     /// `Calendar.component(.weekday)`（1 = 周日 … 7 = 周六）→ **ISO**（1 = 周一 … 7 = 周日）。
@@ -178,7 +183,11 @@ enum WorkdayCalendar {
         let hours = resolveWorkHours(start: workStartHour, end: workEndHour)
         guard let start = hourBoundary(hours.start, on: now, calendar: calendar),
               let end = hourBoundary(hours.end, on: now, calendar: calendar)
-        else { return .restDay }
+        else {
+            // 正常参数不可达的兜底（`Calendar` 推不出当天的整点边界）：宁可显示「已下班」，
+            // 也不显示一个错误的倒计时。
+            return .afterEnd
+        }
 
         if now < start {
             let minutes = calendar.dateComponents([.minute], from: now, to: start).minute ?? 0
