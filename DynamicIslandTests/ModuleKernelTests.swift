@@ -75,6 +75,9 @@
 //  p7 / T3 工作日统计模块化——`WorkdayRowText` 的行文案矩阵（四态 → key 映射、`compactDuration`
 //  边界、`leftDays` 的 0 与正数两档、10/1 当天的现状核对）、progress manifest 的三键契约
 //  （类型 / 默认值与 `WorkdayCalendar` 常量同源）、模块三个新键的真句柄读侧（覆盖值优先 / 坏值归一）。
+//  p7 / T5 启动台两区——`LauncherStore.pin` / `.unpin` 驱动 `quickApps` / `gridApps` 的分区
+//  （上区 = **固定先后**、下区 = 剔除固定项保序）、**先落盘再刷新**、pin / unpin 的幂等
+//  （固定表走内存假体 `LauncherPins`，不碰开发机真实 `Defaults` 域）。
 //
 
 import AppKit
@@ -7492,6 +7495,75 @@ final class LauncherModuleTests: XCTestCase {
 
         Defaults[key] = []
         XCTAssertEqual(Defaults[key], [], "清空同样往返（回到「没有固定项」）")
+    }
+
+    // MARK: 分区（上区 = 固定先后 / 下区 = 剔除固定项保序）
+
+    /// **pin / unpin 驱动两区**（p7 / T5，docs/31-home-workday-launcher.md §接口与数据形状 2）：
+    /// 走生产的 `LauncherStore.pin` / `.unpin`（内存假体 `LauncherPins`），断言**先落盘再刷新**与
+    /// 两区结果——pin 后上区含、下区不含、盘上值正确；unpin 后回落下区；重复 pin / unpin 幂等
+    /// （表不变、不写盘）。
+    ///
+    /// 取数与其他 store 用例同款：临时目录 fixture + 注入的空使用数据（不查 Spotlight、不碰开发机
+    /// 真实 `Defaults` 域——固定表只有一个内存假体）。
+    func testLauncherStorePinUnpinUpdatesPartitions() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+        try makeApp(in: root, folderName: "Beta.app", bundleID: "com.example.beta")
+        try makeApp(in: root, folderName: "Gamma.app", bundleID: "com.example.gamma")
+
+        let disk = PinDisk()
+        let store = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: disk.pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: false) },
+            fetchUsage: { _ in [:] }
+        )
+        store.prepare()
+        await store.load()
+
+        // 起步：没有固定项 → 上区空（视图画提示格）、下区 = 排名全量（无使用数据 → 名称序）
+        XCTAssertTrue(store.quickApps.isEmpty, "空 `pinnedApps` → 上区是空的")
+        XCTAssertEqual(store.gridApps.map(\.name), ["Alpha", "Beta", "Gamma"], "下区 = 排名全量")
+        XCTAssertEqual(disk.table, [])
+
+        let alpha = try XCTUnwrap(store.apps.first { $0.name == "Alpha" })
+        let beta = try XCTUnwrap(store.apps.first { $0.name == "Beta" })
+
+        // pin：**先落盘再刷新**——盘上先有值，内存镜像随之更新，两区（现算）立即跟随
+        store.pin(beta)
+        XCTAssertEqual(disk.table, ["com.example.beta"], "固定已经落盘")
+        XCTAssertEqual(disk.writes, 1, "固定一次落盘一次")
+        XCTAssertEqual(store.pinned, ["com.example.beta"], "内存镜像 = 盘上值")
+        XCTAssertEqual(store.quickApps.map(\.id), ["com.example.beta"], "上区含固定项")
+        XCTAssertEqual(store.gridApps.map(\.name), ["Alpha", "Gamma"], "下区剔除固定项、保序")
+
+        // 重复 pin：幂等（表不变、不写盘、上区不出现第二枚同 id 格子）
+        store.pin(beta)
+        XCTAssertEqual(disk.writes, 1, "重复固定不再落盘（幂等）")
+        XCTAssertEqual(store.quickApps.map(\.id), ["com.example.beta"])
+
+        // 再固定一个：追加表尾 → 上区顺序 = **固定先后**（不是名称序）
+        store.pin(alpha)
+        XCTAssertEqual(disk.table, ["com.example.beta", "com.example.alpha"])
+        XCTAssertEqual(store.quickApps.map(\.name), ["Beta", "Alpha"], "上区顺序 = 固定先后")
+        XCTAssertEqual(store.gridApps.map(\.name), ["Gamma"])
+
+        // unpin：取消固定 → **回落**下区（按 rank 序该在哪就在哪）
+        store.unpin(beta)
+        XCTAssertEqual(disk.table, ["com.example.alpha"], "取消固定已经落盘")
+        XCTAssertEqual(disk.writes, 3, "两次 pin + 一次 unpin 各落盘一次")
+        XCTAssertEqual(store.quickApps.map(\.name), ["Alpha"])
+        XCTAssertEqual(store.gridApps.map(\.name), ["Beta", "Gamma"], "回落下区、保序")
+
+        // 重复 unpin：幂等（表不变、不写盘）
+        store.unpin(beta)
+        XCTAssertEqual(disk.table, ["com.example.alpha"])
+        XCTAssertEqual(disk.writes, 3, "重复取消不再落盘")
+        XCTAssertEqual(store.quickApps.map(\.name), ["Alpha"])
+        XCTAssertEqual(store.gridApps.map(\.name), ["Beta", "Gamma"])
     }
 
     // MARK: 排序接入（先名称、后 Spotlight、固定恒优先）

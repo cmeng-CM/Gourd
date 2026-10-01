@@ -82815,6 +82815,38 @@
         }
       }
     },
+    "module.launcher.quickLaunch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quick Launch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷启动"
+          }
+        }
+      }
+    },
+    "module.launcher.quickLaunchHint" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag apps here to pin"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将应用拖到这里固定"
+          }
+        }
+      }
+    },
     "module.mirror.name" : {
       "localizations" : {
         "en" : {

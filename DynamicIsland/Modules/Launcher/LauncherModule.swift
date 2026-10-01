@@ -45,10 +45,14 @@
 //    `context.ui.requestCollapse()`（与待办 / 通知同口径）= §处理链路的两步；
 //  - 固定：`.contextMenu` 固定 / 取消固定、键 = `LauncherApp.id`、**先落盘再刷新**
 //    = §改动点设计 3；
-//  - 排序接入：先按名称（空 `usage`）立即渲染，Spotlight 回来再重排 = §改动点设计 4。
+//  - 排序接入：先按名称（空 `usage`）立即渲染，Spotlight 回来再重排 = §改动点设计 4；
+//  - 两区（p7 / T5，docs/31-home-workday-launcher.md §接口与数据形状 2/6）：上区「快捷启动」=
+//    固定项（顺序 = **固定先后**，`LauncherPartition.split` 现算），下区 = 排名剔除固定项后过搜索；
+//    拖上 = 固定、拖下 = 取消固定，与右键菜单**共用 `LauncherPins` 唯一接缝**（先落盘再刷新、幂等）。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.launcher.name` / `.summary` /
-//  `.searchPlaceholder` / `.pin` / `.unpin` / `.empty` / `.noMatch`。
+//  `.searchPlaceholder` / `.pin` / `.unpin` / `.empty` / `.noMatch` / `.quickLaunch` /
+//  `.quickLaunchHint`。
 //  **颜色**：面板是黑底、系统外观可为浅色——本模块内所有文字与图标一律显式浅色
 //  （`Color.white` / `.white.opacity(...)`），不用 `.primary` / `.secondary`（同 ProgressModule 的教训）。
 //
@@ -56,6 +60,7 @@
 import AppKit
 import Defaults
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - 配置默认值
 
@@ -381,6 +386,19 @@ final class LauncherStore: ObservableObject {
         LauncherRanking.rank(apps, pinned: pinned, usage: usage)
     }
 
+    /// 上区「快捷启动」：固定项，顺序 = **固定先后**（`pinnedApps` 表序）；本次扫描里不存在的
+    /// 固定 id 由 `split` 丢掉。上区**不受搜索影响**（搜索是找未固定应用的主路径，D-15）。
+    var quickApps: [LauncherApp] { partition.quick }
+
+    /// 下区网格：`ranked` 剔除固定项后**保序**。视图再对它过 `LauncherRanking.filter` 接搜索。
+    var gridApps: [LauncherApp] { partition.grid }
+
+    /// 两区 = `LauncherPartition.split` 的现算结果（与 `ranked` 同一条「每次读现算」的口径：
+    /// `apps` / `pinned` / `usage` 各自变更都会经 `@Published` 重绘，缓存反而要引失效逻辑）。
+    private var partition: (quick: [LauncherApp], grid: [LauncherApp]) {
+        LauncherPartition.split(ranked: ranked, pinnedIDs: pinned)
+    }
+
     private let logger: ModuleLogger
     /// config 快照的读取。`iconSize` / `density` 是"每次取内容现读现用"，`showRecents` 另有一道闸门
     /// （见 `LauncherSettings` 的注释与 `loadUsage()`）。
@@ -494,6 +512,21 @@ final class LauncherStore: ObservableObject {
         let updated = pins.toggle(app.id)
         pinned = updated   // 落盘之后才换内存值，屏幕与盘不会有一帧的分歧
         logger.info("\(wasPinned ? "取消固定" : "固定")：\(app.name)（\(app.id)），现有固定项 \(updated.count) 个")
+    }
+
+    /// 固定（拖到上区落这里）：走 `pins.pin` **先落盘再刷新**，幂等（重复固定表不变、不写盘）
+    /// ——与 `togglePin` 同一口径，两个入口共用 `LauncherPins` 这条接缝。
+    func pin(_ app: LauncherApp) {
+        let updated = pins.pin(app.id)
+        pinned = updated
+        logger.info("固定：\(app.name)（\(app.id)），现有固定项 \(updated.count) 个")
+    }
+
+    /// 取消固定（拖到下区落这里）：同上，`pins.unpin` 幂等（重复取消不写盘）。
+    func unpin(_ app: LauncherApp) {
+        let updated = pins.unpin(app.id)
+        pinned = updated
+        logger.info("取消固定：\(app.name)（\(app.id)），现有固定项 \(updated.count) 个")
     }
 
     /// 点图标：启动 App → **收起面板**（与待办 / 通知同口径：动作完成即收起，不要求用户再按一次）。
@@ -694,14 +727,21 @@ final class LauncherModule: GourdModule {
     }
 }
 
-// MARK: - 展开面板视图（搜索框 + 应用网格）
+// MARK: - 展开面板视图（搜索框 + 上区快捷启动 + 下区应用网格）
 
-/// 展开面板的启动台（本批唯一的 surface）：**顶部搜索框 + 应用网格**。
+/// 展开面板的启动台（本批唯一的 surface）：**顶部搜索框 + 上下两区**（p7 / T5）。
+///
+/// - **上区「快捷启动」**：固定项（顺序 = 固定先后），小标题 + 网格或空态虚线提示格；
+///   常驻、**不受搜索影响**（上区是「固定」语义，D-15）；是拖放的接收容器 → `store.pin`。
+/// - **下区**：现有应用网格，数据源 = `LauncherRanking.filter(store.gridApps, query:)`
+///   （排名剔除固定项后再过搜索）；搜索无命中**只替换这一区**；同样是拖放接收容器 → `store.unpin`。
+/// - `isScanning` / `apps.isEmpty` 走既有整页占位、**不画上区**（扫不到应用时提示格是空承诺）。
 ///
 /// 三件事各归各处，视图这一层只做呈现：
 /// - 取数与状态（扫描缓存 / 固定项 / 使用数据）在 `LauncherStore`；
-/// - 排序与过滤是 T1 的纯函数（`LauncherRanking.rank` / `.filter`）——视图里**不另写**
-///   匹配或排序逻辑（否则"搜索命中的顺序"与"网格的顺序"会变成两套口径）；
+/// - 排序与过滤是 T1 的纯函数（`LauncherRanking.rank` / `.filter`），分区与拖放判定是 T4 的纯函数
+///   （`LauncherPartition.split` / `LauncherQuickDrop.resolve`）——视图里**不另写**匹配、排序或
+///   拖放判定逻辑（否则"拖下去的落点"与"屏幕上看到的区"会变成两套口径）；
 /// - 图标在 `LauncherIconCache`（按可见项惰性取 + 缓存）。
 ///
 /// 搜索词是 **UI 局部 `@State`**（不进 Defaults）：面板重开 = 干净的一屏。
@@ -711,38 +751,145 @@ private struct LauncherModuleView: View {
     let settings: LauncherSettings
 
     @State private var query = ""
+    /// 上区是不是拖拽会话当前悬停的目标（上区高亮的唯一来源）。
+    @State private var isQuickTargeted = false
 
     private var metrics: LauncherGridMetrics {
         LauncherGridMetrics.metrics(iconSize: settings.iconSize, density: settings.density)
     }
 
-    /// 视野里的清单：先 `ranked`（固定 → 最近 → 次数 → 名称），再过搜索。
-    private var visibleApps: [LauncherApp] {
-        LauncherRanking.filter(store.ranked, query: query)
+    /// 搜索词去掉空白后是不是空的（与 `LauncherRanking.filter` 的「空查询」同一口径：
+    /// 决定下区空位里摆不摆 `noMatch` 那句提示，见 `gridSection`）。
+    private var hasSearchKeyword: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 下区的内容：排名剔除固定项后，再过搜索（上区不受搜索影响，见 `quickSection`）。
+    private var visibleGridApps: [LauncherApp] {
+        LauncherRanking.filter(store.gridApps, query: query)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LauncherSearchField(query: $query)
 
-            Group {
-                if store.isScanning {
-                    LauncherPlaceholder(kind: .loading)
-                } else if store.apps.isEmpty {
-                    LauncherPlaceholder(kind: .noApps)
-                } else if visibleApps.isEmpty {
-                    LauncherPlaceholder(kind: .noMatch)
-                } else {
-                    grid
-                }
+            if store.isScanning {
+                LauncherPlaceholder(kind: .loading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if store.apps.isEmpty {
+                // 扫不到应用时不画上区：提示格会是一句空承诺（docs/31 §接口 6 的占位态口径）。
+                LauncherPlaceholder(kind: .noApps)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                quickSection
+
+                // 两区之间的细分隔线（0.08 白、1pt 高）。
+                Rectangle()
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 1)
+
+                gridSection
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 每次进 tab 都调一次：首次扫目录 + 查使用数据，之后走缓存（幂等，见 `LauncherStore.load`）。
         .task { await store.load() }
+    }
+
+    // MARK: 上区（快捷启动）
+
+    /// 上区：小标题「快捷启动」+ 固定项网格（与下区**同一 `metrics`**：列宽 / 间距逐字一致）。
+    ///
+    /// 空时一枚虚线提示格（「将应用拖到这里固定」）——拖拽的可发现性全靠它。整区是拖放接收容器：
+    /// 拖拽会话悬停时叠一层 0.06 白高亮（`isTargeted`），落点判定交给 `LauncherQuickDrop.resolve`。
+    private var quickSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(LocalizedStringKey("module.launcher.quickLaunch"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.45))
+
+            if store.quickApps.isEmpty {
+                quickHintCell
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: metrics.minimumItemWidth), spacing: metrics.itemSpacing)],
+                    spacing: metrics.itemSpacing
+                ) {
+                    ForEach(store.quickApps) { app in
+                        LauncherGridCell(
+                            app: app,
+                            icon: icons.icon(for: app),
+                            metrics: metrics,
+                            isPinned: LauncherPinning.isPinned(app.id, in: store.pinned),
+                            onLaunch: { store.launch(app) },
+                            onTogglePin: { store.togglePin(app) }
+                        )
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onDrop(of: [.utf8PlainText], isTargeted: $isQuickTargeted) { providers in
+            handleDrop(providers, target: .quick)
+        }
+        .overlay {
+            if isQuickTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(.white.opacity(0.06))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// 空态提示格：虚线圆角框 + 居中文案，高度 ≈ 一格（图标 + 名称 + 上下留白）。
+    ///
+    /// 宽度取整区（不是一格宽）：9 字文案在一格宽里会折成三行、虚线框的可发现性也弱；
+    /// 文档只钉了「高度与一格同高」（docs/31 §接口 6）。
+    private var quickHintCell: some View {
+        Text(LocalizedStringKey("module.launcher.quickLaunchHint"))
+            .font(.system(size: 9))
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: quickHintHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .foregroundStyle(.white.opacity(0.18))
+            )
+    }
+
+    /// 提示格的高度：图标边长 + 名称行 + 上下留白（≈ `LauncherGridCell` 的竖直堆叠高度）。
+    private var quickHintHeight: CGFloat { metrics.iconSide + 26 }
+
+    // MARK: 下区（应用网格）
+
+    /// 下区：网格；搜索无命中时**只**替换这一区（上区常驻）。
+    ///
+    /// 下区整块是拖放接收容器（拖到下区 = 取消固定）。数据源是 `store.gridApps` 过搜索后的结果。
+    private var gridSection: some View {
+        Group {
+            if visibleGridApps.isEmpty {
+                if hasSearchKeyword {
+                    LauncherPlaceholder(kind: .noMatch)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // 全部应用都已固定到上区：下区没有内容可放——这不是「搜索无命中」，
+                    // 不摆那句提示（上区已经把它们全画出来了）。
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                grid
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onDrop(of: [.utf8PlainText], isTargeted: nil) { providers in
+            handleDrop(providers, target: .grid)
+        }
     }
 
     /// 应用网格：列数按面板宽度**自适应**（`GridItem(.adaptive(minimum:))`），
@@ -756,7 +903,7 @@ private struct LauncherModuleView: View {
                 columns: [GridItem(.adaptive(minimum: metrics.minimumItemWidth), spacing: metrics.itemSpacing)],
                 spacing: metrics.itemSpacing
             ) {
-                ForEach(visibleApps) { app in
+                ForEach(visibleGridApps) { app in
                     LauncherGridCell(
                         app: app,
                         icon: icons.icon(for: app),
@@ -770,6 +917,44 @@ private struct LauncherModuleView: View {
             .padding(.vertical, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: 拖放（上区 / 下区共用收口）
+
+    /// 拖拽落下的共同收口：先问 `LauncherQuickDrop.resolve`（**纯函数**，落点判定不在视图里），
+    /// 非 nil 才按区走 `store.pin` / `store.unpin`——落盘在 store 里、经 `LauncherPins` 唯一接缝。
+    ///
+    /// 载体是应用 id 的纯文本（`NSItemProvider(object: NSString)`，见 `LauncherGridCell.onDrag`）；
+    /// 未知 id（含 Finder 等外来文本）与反向拖（上区收到已固定、下区收到未固定）都由 `resolve`
+    /// 判成 nil → no-op，不落盘、不刷新。
+    private func handleDrop(_ providers: [NSItemProvider], target: LauncherDropRegion) -> Bool {
+        for provider in providers where provider.canLoadObject(ofClass: NSString.self) {
+            provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let draggedID = object as? String else { return }
+                // 回调在后台队列，回到主线程再改 `@Published` 状态（同 `MusicSlotConfigurationView`）。
+                DispatchQueue.main.async {
+                    applyDrop(draggedID: draggedID, target: target)
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    /// `resolve` 校验 + 落到 store（先落盘再刷新）。`knownIDs` = 本次扫描的**全量**清单
+    /// （不经搜索过滤——搜索只影响下区画什么，不影响"这个 id 是否存在"）。
+    private func applyDrop(draggedID: String, target: LauncherDropRegion) {
+        guard LauncherQuickDrop.resolve(
+            draggedID: draggedID,
+            target: target,
+            pinnedIDs: store.pinned,
+            knownIDs: Set(store.apps.map(\.id))
+        ) != nil, let app = store.apps.first(where: { $0.id == draggedID }) else { return }
+
+        switch target {
+        case .quick: store.pin(app)
+        case .grid: store.unpin(app)
+        }
     }
 }
 
@@ -805,10 +990,15 @@ private struct LauncherSearchField: View {
     }
 }
 
-/// 网格里的一个格子：**图标 + 名称**，点一下启动；右键固定 / 取消固定。
+/// 网格里的一个格子：**图标 + 名称**，点一下启动；右键固定 / 取消固定；可拖拽（两区共用这个格子）。
 ///
-/// 图标由调用方（网格）按需取好传进来（见 `LauncherIconCache`）；固定项右上角一枚小图钉
-/// （"哪些是固定的"要一眼能看出来，否则右键菜单里的状态是唯一的线索）。
+/// 图标由调用方（网格）按需取好传进来（见 `LauncherIconCache`）。`isPinned` 只决定右键菜单的
+/// 文案（固定 / 取消固定）——右上角的图钉角标**已删**（p7：下区不再含固定项，上区本身就是
+/// 「固定」的呈现，角标没有要标的东西了）。
+///
+/// **拖拽与点击共存**：`.onDrag` 挂最外层容器，`Button` 的点击启动不变——拖拽只在移动超过系统
+/// 阈值后开始，原地按下抬起仍是"点一下启动"（上屏验证过，见 T5 报告）。
+/// 载体是 `app.id` 的纯文本（`NSString`）；接收侧（两区容器）按 `LauncherQuickDrop.resolve` 校验。
 private struct LauncherGridCell: View {
     let app: LauncherApp
     let icon: NSImage
@@ -826,16 +1016,6 @@ private struct LauncherGridCell: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: metrics.iconSide, height: metrics.iconSide)
-                    .overlay(alignment: .topTrailing) {
-                        if isPinned {
-                            Image(systemName: "pin.fill")
-                                .font(.system(size: 7, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(3)
-                                .background(Circle().fill(.black.opacity(0.6)))
-                                .offset(x: 2, y: -2)
-                        }
-                    }
 
                 Text(app.name)
                     .font(.system(size: metrics.labelFontSize))
@@ -857,6 +1037,8 @@ private struct LauncherGridCell: View {
                 Text(LocalizedStringKey(isPinned ? "module.launcher.unpin" : "module.launcher.pin"))
             }
         }
+        // 拖拽载体 = 应用 id 的纯文本；挂最外层、Button 的点击启动不变（见类型注释）。
+        .onDrag { NSItemProvider(object: app.id as NSString) }
     }
 }
 

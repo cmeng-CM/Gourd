@@ -156,6 +156,11 @@
 //    （空表 / 全坏值 → 一~五，与块判定同一处）；
 //  - **三条 titleKey 与七条 weekday 选项 key** 在允许清单用例的 ④ 档里逐个 `XCTAssertResolves`。
 //
+//  p7 / T5 追加（启动台上区**两条新 key**，docs/31-home-workday-launcher.md §接口与数据形状 5 / D-18）：
+//  - `testLauncherQuickLaunchKeysLiveOnlyInTheInPackageCatalog`：`module.launcher.quickLaunch` /
+//    `.quickLaunchHint` 的 zh-Hans / en 值与 `translated` 状态、宿主 bundle 的 zh-Hans 解析，
+//    以及「只在进包那份 catalog」（根那份不得收这两条键）。
+//
 //  p5-home-blocks / T5 追加（「面板组件」节的**宿主行**——模块行之外的另一半，docs/29 §做法 机制三 / D-07、D-08）：
 //  - **四条宿主行的键解析**（`testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys`）：数据源是生产表
 //    `ModuleSettingsSection.hostPanelRows`（与本页其余几张生产表同口径）——顺序 / 键名 / `nameKey`
@@ -1609,6 +1614,45 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertTrue(config.set("workdays", to: ["6"]))
         XCTAssertFalse(workdays.toggleMultiSelect("6", config: config), "最后一枚拒绝取消")
         XCTAssertEqual(workdays.selectedOptions(from: config), ["6"], "拒绝之后盘上一个字节没动")
+    }
+
+    /// **启动台上区两条新 key**（p7 / T5，docs/31 §接口与数据形状 5 / D-18）：`module.launcher.quickLaunch`
+    /// 与 `.quickLaunchHint`——zh-Hans / en 两个值逐字写死、都落 `translated`，并在宿主 bundle 的
+    /// zh-Hans 一份里**解析得出**（视图里是 `Text(LocalizedStringKey(...))` 直查，键写错 / 文案没编进去
+    /// 就是一行没有标签的文字）。
+    ///
+    /// 判据读**两份 catalog 原文件**（`testShelfUserVisibleStringsUseTheUnifiedName` 同款口径，含
+    /// `catalogTable` 那套解析）：落点是**只在进包那份**（`DynamicIsland/Localizable.xcstrings`）——
+    /// 根 catalog 对本批新键 grep 计数为 0，这里把「不落根那份」也钉住（D-18：全新键只落进包那份）。
+    func testLauncherQuickLaunchKeysLiveOnlyInTheInPackageCatalog() throws {
+        let rootURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let inPackage = "DynamicIsland/Localizable.xcstrings"
+        let rootCatalog = "Localizable.xcstrings"
+        let tables = [
+            inPackage: try Self.catalogTable(at: rootURL.appendingPathComponent(inPackage)),
+            rootCatalog: try Self.catalogTable(at: rootURL.appendingPathComponent(rootCatalog)),
+        ]
+
+        let expected: [(key: String, zhHans: String, en: String)] = [
+            ("module.launcher.quickLaunch", "快捷启动", "Quick Launch"),
+            ("module.launcher.quickLaunchHint", "将应用拖到这里固定", "Drag apps here to pin"),
+        ]
+
+        for row in expected {
+            let languages = try XCTUnwrap(
+                tables[inPackage]?[row.key],
+                "\(row.key) 不在进包那份 catalog 里（上区文案没落？）"
+            )
+            XCTAssertEqual(languages["zh-Hans"]?.value, row.zhHans, "\(row.key) 的 zh-Hans 值")
+            XCTAssertEqual(languages["zh-Hans"]?.state, "translated", "\(row.key) 的 zh-Hans 未落 translated")
+            XCTAssertEqual(languages["en"]?.value, row.en, "\(row.key) 的 en 值")
+            XCTAssertEqual(languages["en"]?.state, "translated", "\(row.key) 的 en 未落 translated")
+            XCTAssertNil(
+                tables[rootCatalog]?[row.key],
+                "\(row.key) 不该出现在根 catalog（D-18：全新键只落进包那份）"
+            )
+            XCTAssertResolves(row.key)
+        }
     }
 
     /// **卡片与模块算的是同一组尺度**（T2 审查的 Important 的回归用例）：卡片上「勾中的那一组」
