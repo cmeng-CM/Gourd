@@ -29,7 +29,9 @@ import UniformTypeIdentifiers
 /// 通用 / 外观（`.core`，无节头）→ 媒体与显示 → **效率** → 系统 → 集成 → 关于（`.info`，无节头）。
 /// 「效率」在「系统」**之前**是本次重排的一条：计时器 / 剪贴板 / 日历 / 统计 / 终端这些是
 /// 日常用得最多的，排在「控制 / 电池」这类配置一次就不动的页前面。
-private enum SettingsTabGroup: String, CaseIterable, Identifiable {
+/// **T11（p6-ui-polish / docs/30 §做法 机制九 / D-18）起不再是 `private`**：页 → 组的映射
+/// 抽成 `SettingsTabGroup.group(for:)` 静态函数供测试直调，测试与枚举必须同可见性。
+enum SettingsTabGroup: String, CaseIterable, Identifiable {
     case core
     case mediaAndDisplay
     case productivity
@@ -53,9 +55,40 @@ private enum SettingsTabGroup: String, CaseIterable, Identifiable {
         case .info:             return nil
         }
     }
+
+    /// **页 → 组 的唯一映射表**（T11 起抽成静态函数：测试直调这里，不再去戳视图层的
+    /// `availableTabs`；见 `TakeoverEnablementTests.testModulesSettingsPageSitsInMediaAndDisplayGroup`）。
+    ///
+    /// **T5 重排 + T11 归位**（判定与读点计数见 `docs/09-features-and-mechanisms.md` 的逐页意义判定表）：
+    /// - 通用 / 外观（`.core`，无节头）：每次装完机都会碰的两页；
+    /// - 媒体与显示：媒体 / 实时活动 / 锁屏 / 设备 / **组件**——都在调"刘海上看什么、怎么看"，
+    ///   组件页决定的正是面板里放哪些块，与这一组同口径；
+    /// - **效率（`.productivity`）**：计时器、剪贴板、日历、统计、终端、暂存器、取色器、下载、
+    ///   屏幕助手、快捷键——**原「实用工具」与「开发者」两页一并并进来**（D-07：不设「上游功能」
+    ///   分组，"实用工具"属性的页都归这一组）；组内按使用频率排，故统计 / 终端紧跟在日历之后；
+    /// - 系统：控制（HUD 与 OSD）/ 电池——一次配好就不动的系统级浮层；
+    /// - 集成：**只剩扩展一页**——docs/26 时期「扩展 / 组件必须相邻」的口径被 **D-18 有意推翻**
+    ///   （T11：组件归「媒体与显示」），两页不再同组、也不再要求相邻；
+    /// - 关于（`.info`，无节头）。
+    ///
+    /// **`.notes` 仍留着 case（含 `title` / `systemImage` / `tint` / `detailView` 与
+    /// `NotesSettingsView` 本体）**，但它**不再出现在 `availableTabs` 里**——判定与理由见那里。
+    static func group(for tab: SettingsTab) -> SettingsTabGroup {
+        switch tab {
+        case .general, .appearance:                                          return .core
+        case .media, .liveActivities, .lockScreen, .devices, .modules:       return .mediaAndDisplay
+        case .timer, .clipboard, .calendar, .stats, .terminal, .shelf,
+             .colorPicker, .downloads, .screenAssistant, .shortcuts:         return .productivity
+        case .hudAndOSD, .battery:                                           return .system
+        case .extensions:                                                    return .integrations
+        case .notes:                                                         return .productivity
+        case .about:                                                         return .info
+        }
+    }
 }
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
+/// **T11 起不再是 `private`**：`SettingsTabGroup.group(for:)` 以它为入参，测试要能构造 case。
+enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case liveActivities
     case appearance
@@ -88,29 +121,9 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
     /// Which sidebar group this tab belongs to.
     ///
-    /// **T5 重排的唯一映射表**（判定与读点计数见 `docs/09-features-and-mechanisms.md` 的逐页意义判定表）：
-    /// - 通用 / 外观（`.core`，无节头）：每次装完机都会碰的两页；
-    /// - 媒体与显示：媒体 / 实时活动 / 锁屏 / 设备——都在调"刘海上看什么、怎么看"；
-    /// - **效率（`.productivity`）**：计时器、剪贴板、日历、统计、终端、暂存器、取色器、下载、
-    ///   屏幕助手、快捷键——**原「实用工具」与「开发者」两页一并并进来**（D-07：不设「上游功能」
-    ///   分组，"实用工具"属性的页都归这一组）；组内按使用频率排，故统计 / 终端紧跟在日历之后；
-    /// - 系统：控制（HUD 与 OSD）/ 电池——一次配好就不动的系统级浮层；
-    /// - 集成：扩展 / 组件——同一类"可扩展性"设置，两页必须相邻；
-    /// - 关于（`.info`，无节头）。
-    ///
-    /// **`.notes` 仍留着 case（含 `title` / `systemImage` / `tint` / `detailView` 与
-    /// `NotesSettingsView` 本体）**，但它**不再出现在 `availableTabs` 里**——判定与理由见那里。
+    /// 映射本体在 `SettingsTabGroup.group(for:)`（T11 抽成静态函数供测试直调），这里只转发。
     var group: SettingsTabGroup {
-        switch self {
-        case .general, .appearance:                                          return .core
-        case .media, .liveActivities, .lockScreen, .devices:                 return .mediaAndDisplay
-        case .timer, .clipboard, .calendar, .stats, .terminal, .shelf,
-             .colorPicker, .downloads, .screenAssistant, .shortcuts:         return .productivity
-        case .hudAndOSD, .battery:                                           return .system
-        case .extensions, .modules:                                          return .integrations
-        case .notes:                                                         return .productivity
-        case .about:                                                         return .info
-        }
+        SettingsTabGroup.group(for: self)
     }
 
     var title: String {
@@ -513,8 +526,12 @@ struct SettingsView: View {
     ///
     /// **T5（docs/26 §做法 机制五 / D-06 / D-07 / D-08）**：按主题 + 使用频率重排——
     /// 通用 / 外观 → 媒体与显示 → 效率（计时器、剪贴板、日历、统计、终端、暂存器、取色器、
-    /// 下载、屏幕助手、快捷键）→ 系统（控制、电池）→ 集成（扩展、组件）→ 关于。
+    /// 下载、屏幕助手、快捷键）→ 系统（控制、电池）→ 集成 → 关于。
     /// 组里不再有「实用工具 / 开发者」，也**没有「上游功能」这一类**（用户明确不要）。
+    ///
+    /// **T11 归位（p6-ui-polish / docs/30 §做法 机制九 / D-18）**：组件页从「集成」挪进
+    /// 「媒体与显示」（排在 `.devices` 之后），「集成」只剩扩展一页；docs/26 时期
+    /// 「扩展 / 组件必须相邻」的口径随之作废（有意改判，判据在 `SettingsTabGroup.group(for:)`）。
     ///
     /// ### 为什么 `.notes` 不在这份名单里（**删页留码**）
     ///
@@ -533,11 +550,12 @@ struct SettingsView: View {
             // Core（通用 / 外观）
             .general,
             .appearance,
-            // Media & Display
+            // Media & Display（T11 起组件也在这组：面板里放哪些块 = "刘海上看什么"）
             .media,
             .liveActivities,
             .lockScreen,
             .devices,
+            .modules,
             // Efficiency（原「实用工具」+「开发者」两组的全部页；按使用频率排）
             .timer,
             .clipboard,
@@ -552,9 +570,8 @@ struct SettingsView: View {
             // System
             .hudAndOSD,
             .battery,
-            // Integrations（组件与扩展相邻：同一类"可扩展性"设置）
+            // Integrations（T11 起只剩扩展一页：组件已移入 Media & Display，两页不再相邻）
             .extensions,
-            .modules,
             // Info
             .about
         ]

@@ -3129,6 +3129,20 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    // MARK: - 设置侧栏归位（p6-ui-polish / T11，docs/30 §做法 机制九 / §接口「机制九」）
+
+    /// 页 → 组的唯一映射（`SettingsTabGroup.group(for:)`，T11 抽出的静态函数）：
+    /// **组件页归「媒体与显示」**（D-18：推翻 docs/26 时期「扩展 / 组件必须相邻」的口径），
+    /// 而**扩展页留在「集成」**——两页不再同组。
+    ///
+    /// 断言打在映射本身（唯一真源）而不是侧栏渲染上：`groupedFilteredTabs` 完全由
+    /// `tab.group` 驱动，映射对了，「媒体与显示」段与「集成」段两处渲染就都在对的位置；
+    /// `availableTabs` 的组内顺序（`.modules` 排在 `.devices` 之后）不在这里钉。
+    func testModulesSettingsPageSitsInMediaAndDisplayGroup() {
+        XCTAssertEqual(SettingsTabGroup.group(for: .modules), .mediaAndDisplay)
+        XCTAssertEqual(SettingsTabGroup.group(for: .extensions), .integrations)
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。
