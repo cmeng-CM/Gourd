@@ -3849,7 +3849,7 @@ struct Shelf: View {
                     HStack {
                         QuickShareProviderIconImage(provider: selectedProvider, size: 16)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Currently selected: \(selectedProvider.id)")
+                            Text("Currently selected: \(selectedProvider.displayName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Text("Files dropped on the shelf will be shared via this service")

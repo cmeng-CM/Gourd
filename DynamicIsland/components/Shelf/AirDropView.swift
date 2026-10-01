@@ -95,7 +95,7 @@ struct AirDropView: View {
                                                 }
                                                 .foregroundColor(.accentColor)
 
-                                                Text(provider.id)
+                                                Text(provider.displayName)
                                                     .lineLimit(1)
                                                     .fixedSize(horizontal: true, vertical: false)
                                             }
@@ -122,7 +122,7 @@ struct AirDropView: View {
                                             .foregroundColor(.accentColor)
 
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text("Currently: \(selected.id)")
+                                                Text("Currently: \(selected.displayName)")
                                                     .font(.caption)
                                                     .foregroundStyle(.secondary)
                                                     .lineLimit(1)
