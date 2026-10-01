@@ -983,10 +983,24 @@ private struct LauncherModuleView: View {
     /// （`onChange(of: vm.notchState)`）、**视图消失**（`onDisappear`）与**看门狗超时**——
     /// `onDrag` 没有「拖拽取消」回调，后两处（超时 + 护栏）是「没人通知我们」那些会话的兜底，
     /// 否则令牌会一直挂着（抑制泄漏＝面板此后不自动收起）。
+    ///
+    /// **释放后若面板仍开着，补一次悬停复核**（`vm.shouldRecheckHover.toggle()`）——与架子
+    /// 拖动收尾的同源解法（`ShelfItemView.swift` 的 `onDragEnded`，注释原文 "the hover-exit that
+    /// would have closed it already came and went, so ask for a fresh evaluation"）。原因：
+    /// 拖拽期间 `finishHoverExit` 已把面板的 `isHovering` 置 false、只因本令牌压制而没有收面板，
+    /// 此后面板的轮询不再复查（`ContentView.swift` 的 `hiddenEdgeHoverPolling` 只在 `isHovering`
+    /// 为真那一支看）——不补这一次，拖拽在面板外结束 / 被别的 drop 目标吃掉 / 看门狗兜底释放后，
+    /// 面板会一直站着直到下一次悬停进出，而不是「按正常判据收起」。复核用的是**现行判据**
+    /// （`isHovering` 与 `shouldPreventAutoClose()`）：仍判为在悬停就不收（面板留在原地让用户
+    /// 看到结果），已离开才按正常悬停退出收起。
+    /// 顺序要紧：先释放令牌，复核里的 `shouldPreventAutoClose()` 才不再被本令牌挡下。
     private func endDragSuppression() {
         guard let token = dragSuppressionToken else { return }
         vm.setAutoCloseSuppression(false, token: token)
         dragSuppressionToken = nil
+        if vm.notchState == .open {
+            vm.shouldRecheckHover.toggle()
+        }
     }
 
     /// 拖拽落下的共同收口（两个区域的 `onDrop` 都调它）：先问 `LauncherQuickDrop.resolve`

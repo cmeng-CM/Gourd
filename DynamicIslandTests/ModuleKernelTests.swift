@@ -2061,7 +2061,7 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(WorkdayCalendar.resolveWorkdays(from: ["6", "7"]), [6, 7], "合法子集原样（周末班）")
         XCTAssertEqual(WorkdayCalendar.resolveWorkdays(from: ["1", "bogus", "5", "5"]), [1, 5], "坏值逐项忽略、重复合并")
 
-        // workHourRange：0...23 的单一来源（T3 的整数滑块与读侧夹取共用这一个常量）
+        // workHourRange：0...23 的单一来源（T3 的整数滑块与读侧越界回落共用这一个常量；读侧不夹取）
         XCTAssertEqual(WorkdayCalendar.workHourRange, 0...23)
 
         // workStart 30（越界）→ 整体回落默认（不夹到 23）

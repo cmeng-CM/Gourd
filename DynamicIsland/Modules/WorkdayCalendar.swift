@@ -57,7 +57,7 @@ enum WorkdayCalendar {
     static let defaultWorkStartHour = 9
     static let defaultWorkEndHour = 18
 
-    /// 小时取值的**单一来源**：设置控件的整数滑块与读侧夹取共用这一个区间，
+    /// 小时取值的**单一来源**：设置控件的整数滑块与读侧的越界回落（不夹取）共用这一个区间，
     /// 禁止在他处再写一份 `0...23` 字面量（照 `LauncherGridMetrics.iconSizeRange` 先例）。
     static let workHourRange: ClosedRange<Int> = 0...23
 

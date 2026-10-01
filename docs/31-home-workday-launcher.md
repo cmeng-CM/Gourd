@@ -71,13 +71,14 @@
 1. **节假日表只含 2026 年**（国办发明电〔2025〕7号）：2027 年及以后退化为纯星期判定——调休周六会被算作休息日、法定假日会被算作工作日；年度更新需发版。
 2. **工作时间为整点**（0–23 的整数滑块）：不支持 8:30 这类半小时粒度；不支持跨天班次。
 3. 周/月/季/年的进度条分子包含「今天按工作时长比例」的部分完成，与「剩 N 天」（只数整天、不含今天）是两套口径并存的显示——是刻意的：前者是进度、后者是计数。
-4. **CUA 取证限制**：hover 仍不可驱动（p6 实测；本批首页 hover 观感照旧列真人复核）；**面板内拖拽经合成事件可送达**（T5 复测：下区→上区固定、上区→下区取消，日志 + `defaults read` + 截图三证）；**右键菜单路径与真实鼠标手感**仍列真人复核（右键固定/取消从未被真人走过，见第 10 条）。
+4. **CUA 取证限制**：hover 仍不可驱动（p6 实测；本批首页 hover 观感照旧列真人复核）；**面板内拖拽经合成事件可送达**（T5 复测：下区→上区固定、上区→下区取消，日志 + `defaults read` + 截图三证）；**右键菜单路径与真实鼠标手感**仍列真人复核（右键固定/取消从未被真人走过，见第 11 条）。
 5. 启动台上区随固定数量换行长高，会压缩下区网格可视行数（面板 850 顶格内滚动）；固定项很多时上区可能占掉大半面板。
-6. 调休上班日的「今天」行按工作时长正常推进（与普通工作日无异，无特殊标注）。
-7. 周起止随系统日历 `firstWeekday`（不强制周一起始）；「本周剩 N 天」按同一周区间计算。
-8. 首页静态光的观感因显示器亮度/夜览而异；验收用像素判据（块间 ≤3/255、块内 ≥10/255）替代主观评分。
-9. **拖拽抑制有 30 秒兜底窗口**：`onDrag` 没有「拖拽取消」回调——拖拽被取消 / 在面板外结束时，令牌靠 30 秒有界看门狗释放（正常 drop / 面板关闭 / 视图消失三条立即释放）。窗口内「悬停自动收起」被抑制：拖拽真的没落下时，面板最长多站 30 秒才收起。
-10. **右键菜单路径未验证**：格子菜单文案由 `isPinned` 决定，但它与面板根 `.contextMenu`（`ContentView.swift:1403`）的遮挡关系未知，右键固定 / 取消固定从未真人验证过（p2 起即如此）；本批固定态取证走的是应用自身读路径（`defaults write` + 重启），不是右键路径。
+6. **手改配置文件的越界值在卡面与模块间显示分叉**：手写 `workStart` / `workEnd` 越界值时，设置卡面按区间**夹取**显示（`ModuleSettingsSection.swift:1048` 一带的 `intValue` / `doubleValue` clamp，其余数值键同口径），模块按 `WorkdayCalendar.resolveWorkHours` **回落默认 (9, 18)** 运行——两边各自自洽，仅手改可见（UI 拨不出界；终审 Minor，登记不修）。
+7. 调休上班日的「今天」行按工作时长正常推进（与普通工作日无异，无特殊标注）。
+8. 周起止随系统日历 `firstWeekday`（不强制周一起始）；「本周剩 N 天」按同一周区间计算。
+9. 首页静态光的观感因显示器亮度/夜览而异；验收用像素判据（块间 ≤3/255、块内 ≥10/255）替代主观评分。
+10. **拖拽抑制有 30 秒兜底窗口；释放令牌时补一次悬停复核**（终审修复波）：`onDrag` 没有「拖拽取消」回调——拖拽被取消 / 在面板外结束时，令牌靠 30 秒有界看门狗释放（正常 drop / 面板关闭 / 视图消失三条立即释放），释放时若面板仍开着就**补一次悬停复核**（`vm.shouldRecheckHover.toggle()`，同 `ShelfItemView` 拖动收尾先例）——此后按正常悬停判据收起：看门狗只是兜底定时器，不再出现「面板一直站着直到下一次悬停进出」。
+11. **右键菜单路径未验证**：格子菜单文案由 `isPinned` 决定，但它与面板根 `.contextMenu`（`ContentView.swift:1403`）的遮挡关系未知，右键固定 / 取消固定从未真人验证过（p2 起即如此）；本批固定态取证走的是应用自身读路径（`defaults write` + 重启），不是右键路径。
 
 ## 实际交付
 
@@ -103,10 +104,11 @@
 2. **分区 / 拖放用例归置独立测试类 `LauncherPartitionDropTests`**（计划未指定落点）：审查 Minor——类名与承载内容必须相符；`LauncherScannerRankingTests` 回到「扫描 / 排序 / 过滤」名义（T4 fix `bc4f04d1`）。
 3. **计划外新增「面板内拖拽自动收起抑制」修复**（计划与 §接口 6 原稿均未写）：T5 首轮上屏发现面板级 `dragDetector` 把面板内拖拽的 targeted 进出当收起信号（拖拽穿非投放区即收起、`onDrop` 收不到抬手）→ `T5 fix` 挂抑制令牌；独立审查 1 Important（释放面三泄漏）+ 3 Minor → `T5 fix2` 收口（`defer` 第一行、`dropEvent` 同步置位、30 秒看门狗 + 两道护栏、`adaptiveColumns` 去重）。复测：拖上固定 / 拖下取消两向送达并落盘。
 4. **T3 顺带修正 `ModuleSettingsSection` 一处陈旧注释**（在点名文件内、但是注释非功能）：描述 `progress` surfaces 的注释自 p3-widgets 起与实现不符（`[.compact,.expanded]` → 实际 `[.home]`），就地更正，避免本批读者以为旧口径还在。
+5. **D-16 的「右键菜单路径上屏」取证降级**（终审修复波补记）：面板根 `.contextMenu`（`ContentView.swift:1403`）遮挡格子菜单、本机不可驱动（T5 实测：右键任意位置出的都是同一个「设置」菜单）——固定态取证改走 `defaults write` + 重启读路径 + 真人复核清单。遮挡是 p2 起既有的面板行为、非本批引入（T5 报告 §一.3），也不在本批点名文件内；替代证据的强度不低于原降级预案，原委见 §已知限制 11 与遗留项 1②。
 
 **遗留项**（本批明确未做；逐条有出处）：
 
-1. **真人复核清单（四项）**：① 首页 hover 观感（池 / 辉光加深、轻微放大提亮，且邻居不被挤开；CUA 驱动不出 hover，同 docs/30 D-20）；② 右键菜单路径（与面板根 `.contextMenu` 的遮挡关系未知，p2 起即未真人验证，见 §已知限制 10）；③ 「搜索只过滤下区」的上屏证据缺（键盘 / 滚轮合成事件进不了 SwiftUI 绑定，仅代码结构保证 + 纯函数用例）；④ 真实鼠标手感下的拖拽-点击边界与上区悬停高亮一帧。
+1. **真人复核清单（四项）**：① 首页 hover 观感（池 / 辉光加深、轻微放大提亮，且邻居不被挤开；CUA 驱动不出 hover，同 docs/30 D-20）；② 右键菜单路径（与面板根 `.contextMenu` 的遮挡关系未知，p2 起即未真人验证，见 §已知限制 11）；③ 「搜索只过滤下区」的上屏证据缺（键盘 / 滚轮合成事件进不了 SwiftUI 绑定，仅代码结构保证 + 纯函数用例）；④ 真实鼠标手感下的拖拽-点击边界与上区悬停高亮一帧。
 2. **2027 及以后的节假日表**：表外年份按纯星期判定，年度更新随发版（§已知限制 1、§明确不做 2）。
 3. **p6 遗留项未动**：旧分带渲染器残留、用量 tab 遗留口子等（沿用 docs/29 §遗留 / docs/30 §遗留清单，本批不清理）。
 
@@ -179,7 +181,7 @@ enum WorkdayCalendar {
 
     static func isWorkday(_ date: Date, workdays: Set<Int>, calendar: Calendar = .autoupdatingCurrent) -> Bool
         // 顺序：makeup 含 → true；holidays 含 → false；否则 ISO 星期 ∈ workdays
-    static func resolveWorkdays(from raw: [String]) -> Set<Int>     // 空/全坏 → defaultWorkdays
+    static func resolveWorkdays(from raw: [String]) -> Set<Int>     // 坏值**逐项忽略**、余项保留（空 / 全坏 → defaultWorkdays）
     static func resolveWorkHours(start: Int?, end: Int?)
         -> (start: Int, end: Int)   // 任一值不在 workHourRange、或 end ≤ start → 回落 (9, 18)（不夹取：坏值一律回落默认）
 
@@ -245,11 +247,12 @@ enum WorkdayCalendar {
 ### 6. 启动台视图形状（T5）
 
 - 结构：搜索框（不动）→ 上区（小标题 + `LazyVGrid`(同一 metrics) 或虚线提示格）→ 细分隔线（0.08 白、1pt 高）→ 下区网格（现有 `LazyVGrid`，数据源换 `filter(gridApps)`）。
+- **占位态（四态）**（`LauncherModule.swift:897-915` 一带）：扫描中 → 整页 `loading`；扫不到应用 → 整页 `noApps`（不画上区与分隔线——提示格会是一句空承诺）；搜索无命中 → **只**替换下区为 `noMatch`（上区常驻）；**下区空且无搜索词**（全部应用都已固定到上区）→ 下区为空白 `Color.clear`——第四态不摆 `noMatch`（那不是「搜索无命中」，上区已经把它们全画出来了）。
 - 拖放：格子 `.onDrag { NSItemProvider(object: app.id as NSString) }`；上区容器 `.onDrop(of: [.utf8PlainText], isTargeted:)` → `resolve(target: .quick)` → `store.pin`；下区容器 `.onDrop` → `resolve(target: .grid)` → `store.unpin`；`knownIDs = Set(store.apps.map(\.id))`。上区 `isTargeted` 时叠 `RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.06))` 高亮。落点判定全在 `handleDrop` / `applyDrop` 一处收口：`resolve` 判 nil（外来文本 / 反向拖 / 未知 id）不落盘、不刷新。
-- **拖拽的自动收起抑制（T5 实际实现，计划未写）**：`LauncherModuleView` 用 `@EnvironmentObject vm` + **每拖拽一枚 `UUID` 抑制令牌**（`vm.setAutoCloseSuppression(_:token:)`；先例 `ShelfView.swift:283` / `NotchClipboardView.swift:95`）：`onDrag` 起拖时置位并**武装 30 秒看门狗**（代数 + 令牌双判据，先例 `ClipboardManager.markDragStart`）；两个 `onDrop` 处理器**第一行** `defer { endDragSuppression() }` 释放（早退 / 异步失败也释放），顶部**同步** `vm.dropEvent = true`（赶得上当次 `!isTargeted`）；另有三道护栏——`onChange(of: vm.notchState)` 到 `.closed`、`onDisappear`、看门狗超时。原因是面板级 `dragDetector`（`ContentView.swift:2666` 一带）会把**面板内拖拽**的 targeted 进出当成收起信号：不抑制时拖拽穿过分隔线 / 标题 / 边距即收起面板，两区 `onDrop` 永远等不到抬手（T5 首轮上屏实测）。
+- **拖拽的自动收起抑制（T5 实际实现，计划未写）**：`LauncherModuleView` 用 `@EnvironmentObject vm` + **每拖拽一枚 `UUID` 抑制令牌**（`vm.setAutoCloseSuppression(_:token:)`；先例 `ShelfView.swift:283` / `NotchClipboardView.swift:95`）：`onDrag` 起拖时置位并**武装 30 秒看门狗**（代数 + 令牌双判据，先例 `ClipboardManager.markDragStart`）；两个 `onDrop` 处理器**第一行** `defer { endDragSuppression() }` 释放（早退 / 异步失败也释放），顶部**同步** `vm.dropEvent = true`（赶得上当次 `!isTargeted`）；另有三道护栏——`onChange(of: vm.notchState)` 到 `.closed`、`onDisappear`、看门狗超时。释放时若面板仍开着，补一次**悬停复核**（`vm.shouldRecheckHover.toggle()`，同 `ShelfItemView` 拖动收尾先例；终审修复波，见 §已知限制 10）。原因是面板级 `dragDetector`（`ContentView.swift:2666` 一带）会把**面板内拖拽**的 targeted 进出当成收起信号：不抑制时拖拽穿过分隔线 / 标题 / 边距即收起面板，两区 `onDrop` 永远等不到抬手（T5 首轮上屏实测）。
 - `LauncherGridCell`：图钉角标删除（下区已无固定项）；`isPinned` 参数保留（右键菜单文案 固定/取消固定）。
 - 两区共用的 `GridItem`：`.adaptive(minimum:spacing:)` 抽成 `adaptiveColumns`（列宽 / 间距逐字一致，上区格子与下区格子不许有尺寸差）。
-- 虚线提示格：`RoundedRectangle(cornerRadius: 10).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(.white.opacity(0.18))` + 居中文案（`quickLaunchHint`），高度与一格同高。
+- 虚线提示格（`LauncherModule.swift:873-888`）：`RoundedRectangle(cornerRadius: 10).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(.white.opacity(0.18))` + 居中文案（`quickLaunchHint`）；**宽度取整区**（不是一格宽：9 字文案在一格宽里会折成三行、虚线框的可发现性也弱），只钉**高度**与一格同高（`quickHintHeight = iconSide + 26`）。
 
 ## 决策摘要
 
@@ -270,7 +273,7 @@ enum WorkdayCalendar {
 | D-13 | 拖放 = SwiftUI `onDrag/onDrop` + 纯文本 id 载体 + 接收侧校验、未知/外来丢弃 | agent | 同仓 `onDrop` 先例（架子）；`NSDraggingSource` 是为跨 App 拖文件，此处过重 |
 | D-14 | 右键菜单保留为并行入口；两入口共用 `LauncherPins` 接缝（先落盘再刷新、幂等） | agent | 既有功能不回退；单一写路径防两份状态 |
 | D-15 | 上区空态虚线提示格 + 小标题「快捷启动」 + 细分隔线；搜索只过滤下区 | agent | 拖拽的可发现性靠空态提示；上区是「固定」语义，不该被搜索清空 |
-| D-16 | 拖拽取证按降级预案记账（纯函数 + 右键菜单路径上屏 + 真人复核清单） | agent | CUA hover 先例（docs/30 D-20）；不为取证改交互 |
+| D-16 | 拖拽取证按降级预案记账（纯函数 + 右键菜单路径上屏 + 真人复核清单） | agent | CUA hover 先例（docs/30 D-20）；不为取证改交互。**右键路径上屏已降级——见 §实际交付 偏离⑤ / §已知限制 11**（终审修复波补记） |
 | D-17 | 全局约束沿用：不新增 TCC/网络/依赖；不改手动高度语义；完成即本地提交不 push；界面改动上屏留证 | agent | 项目既有批次口径（p5/p6 一致） |
 | D-18 | 文案落点：已存在于两份 catalog 的键两份同改；全新键只落进包那份（`DynamicIsland/Localizable.xcstrings`） | agent | 根 catalog 不在任何 target（docs/30 口径），且根那份对本批**全部新增/改值键** grep 计数为 0（进包那份含既有的 `module.progress` / `module.launcher` 键族——本批要改的那几个正是在它里面改值）；跨 catalog 一致性测试只盯两边都有的键 |
 
