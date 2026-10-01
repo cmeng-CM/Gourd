@@ -253,6 +253,18 @@ struct FileShareView: View {
                     }
                 }
             }
+
+            Divider()
+
+            // 旧「点按投放块 → 选择文件投送」的入口（T6 把大块缩成一格后挪到这里）：
+            // 走服务里既有的 `showFilePicker(for:from:)` —— NSOpenPanel 选文件，再按选中
+            // 供应商投送（面板的标题/说明已在 T4 本地化）。文案走 catalog。
+            Button {
+                showQuickSharePopover = false
+                Task { await handleClick() }
+            } label: {
+                Text("Choose Files to Send…")
+            }
         }
         .padding()
         .onAppear { vm.setAutoCloseSuppression(true, token: autoCloseToken) }
@@ -295,6 +307,13 @@ struct FileShareView: View {
         isProcessing = true
         defer { isProcessing = false }
         await quickShare.shareDroppedFiles(providers, using: selectedProvider, from: hostView)
+    }
+
+    /// 选择文件去投送（旧「点按投放块」的入口，现在挂 popover 里的按钮上）。
+    /// 走 `QuickShareService.showFilePicker(for:from:)`：NSOpenPanel → `shareFilesOrText`；
+    /// `hostView` 是投放格自己的背景 NSView（分享面板的锚点，与改动前同一个）。
+    private func handleClick() async {
+        await quickShare.showFilePicker(for: selectedProvider, from: hostView)
     }
 }
 

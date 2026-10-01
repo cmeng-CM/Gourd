@@ -22463,6 +22463,29 @@
         }
       }
     },
+    "Choose Files to Send…": {
+      "comment": "Button in the shelf share-target tile's provider popover: opens the file picker and shares the chosen files via the selected provider.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Files to Send…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择文件投送…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇檔案投送…"
+          }
+        }
+      }
+    },
     "Choose which system controls should display custom OSD windows.": {
       "comment": "A footer description for the \"Controls\" section of the Custom OSD settings view.",
       "localizations": {
