@@ -68,10 +68,11 @@
 //    才在**最后一行**末尾预留，预留后这行的总宽仍不越过可用宽、且被挤掉的格也计入 `＋N`；
 //  - 「放得下几行」与「n 行要多少高度」是同一个式子的两个方向（阈值上等价，有一条用例钉住）。
 //
-//  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1）
+//  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1；p7 / docs/31 §接口 1 调参）
 //  - 钉**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**（不是常量本身）：常驻档
 //    中性（scale 1 / brightness 增量 0）+ 柔光池与辉光常驻可见，hover 档池不透明度、辉光半径与
-//    不透明度都更大，放大 1.005…1.05、提亮增量 0.02…0.12（常量是起点值，上屏调参在 Checkpoint；
+//    不透明度都更大，放大 1.005…1.05、提亮增量 0.02…0.12；p7 起常驻池 ∈ 0.08…0.25、
+//    hover 与常驻池差 ≥ 0.03、effects 与声明常量逐项同源（调参后的最终值回写 docs/31 §接口 1；
 //    hover 本身驱动不出，见 docs/30 §已知限制 1）。
 //
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
@@ -2123,12 +2124,19 @@ final class HomeStripLayoutTests: XCTestCase {
     /// （T1 首轮审查意见 2）：常量到应用的算式（含 brightness 的 `- 1`、两档映射的方向）改错
     /// 就会变红——例如去掉 brightness 的 `- 1`，hover 档的增量会变成 1.06 > 0.12 上界。
     ///
-    /// 区间而不是定值（上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状）：
+    /// 区间而不是定值（上屏调参由执行者在任务内做，调完回写 docs/31 §接口第 1 小节）：
     /// hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像抖）；提亮要能分辨但
     /// 不得把字冲白（增量 > 0.12 浅色元素会糊）；两层光（柔光池 + 内容辉光）必须**常驻可见**
     /// （> 0，否则块与背景无区分）且 **hover 都更深**（否则 hover 与常驻没差别，机制一的 hover
     /// 半条腿没落地）；池半径系数 ≤ 0.5（最近边在 `0.5 × min(w, h)` 处——系数过大时边缘残留亮度，
     /// 形成直角台阶 = 变相底板）。
+    ///
+    /// **p7 档位扩展**（docs/31 §接口第 1 小节；静态区分加强后钉得更具体）：常驻池的不透明度
+    /// ∈ **0.08…0.25**（p6 的 0.06 实机近不可见，下限抬到 0.08；上限 0.25 防池变「亮底」）、
+    /// `hoverPoolOpacity − poolOpacity ≥ 0.03`（两档可辨差的下限）、`hoverGlowRadius > idleGlowRadius > 0`
+    /// 与 `hoverGlowOpacity > idleGlowOpacity > 0`（辉光两档次序 + 常驻可见一并钉住），并补
+    /// 「`effects(hovered:)` 与声明常量同源」——修饰符只消费 effects，effects 与常量漂开就等于
+    /// 测试钉的是另一个数（p6 两档断言只钉了次序，没钉同一性）。
     ///
     /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
     /// §已知限制 1 / D-20），这里钉的是效果算式；上屏的 hover 观感列入「需真人鼠标复核」清单
@@ -2143,8 +2151,9 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertGreaterThan(idle.glowRadius, 0, "常驻辉光必须可见（半径 > 0）")
         XCTAssertGreaterThan(idle.glowOpacity, 0, "常驻辉光的不透明度为正")
         XCTAssertLessThanOrEqual(idle.glowOpacity, 0.5, "辉光是低透明度的一层，不该成「底」（不透明度 0…0.5）")
-        XCTAssertGreaterThan(idle.poolOpacity, 0, "常驻柔光池必须可见（静态区分的主力）")
-        XCTAssertLessThanOrEqual(idle.poolOpacity, 0.5, "柔光池是低透明度的一层，不该成「底」（不透明度 0…0.5）")
+        // p7：常驻池的档位（下限 = 0.06 实测不可见后的可辨起点；上限防池变「亮底」）。
+        XCTAssertGreaterThanOrEqual(idle.poolOpacity, 0.08, "常驻柔光池必须可辨（p7 下限 0.08）")
+        XCTAssertLessThanOrEqual(idle.poolOpacity, 0.25, "常驻柔光池不该成「亮底」（p7 上限 0.25）")
         XCTAssertGreaterThan(HomeBlockFloatMetrics.poolEndRadiusFactor, 0, "池半径系数为正")
         XCTAssertLessThanOrEqual(
             HomeBlockFloatMetrics.poolEndRadiusFactor, 0.5,
@@ -2154,12 +2163,32 @@ final class HomeStripLayoutTests: XCTestCase {
 
         // hover 档：光的两层（柔光池 + 内容辉光）都加深，放大与提亮待在可读区间。
         XCTAssertGreaterThan(hover.poolOpacity, idle.poolOpacity, "hover 柔光池要比常驻更亮")
+        XCTAssertGreaterThanOrEqual(
+            hover.poolOpacity - idle.poolOpacity, 0.03,
+            "p7：两档池的可辨差有下限（≥ 0.03）——hover 与常驻必须分得出（p6 只钉了次序）"
+        )
         XCTAssertGreaterThan(hover.glowRadius, idle.glowRadius, "hover 辉光半径要比常驻更大")
+        XCTAssertGreaterThan(idle.glowRadius, 0, "常驻辉光可见：idle < hover 且 idle > 0")
         XCTAssertGreaterThan(hover.glowOpacity, idle.glowOpacity, "hover 辉光不透明度要比常驻更大")
+        XCTAssertGreaterThan(idle.glowOpacity, 0, "常驻辉光可见：idle < hover 且 idle > 0")
         XCTAssertGreaterThanOrEqual(hover.scale, 1.005, "hover 放大要看得出来")
         XCTAssertLessThanOrEqual(hover.scale, 1.05, "再大就不像浮起、像抖动")
         XCTAssertGreaterThanOrEqual(hover.brightness, 0.02, "hover 提亮要看得出来（增量 ≥ 0.02）")
         XCTAssertLessThanOrEqual(hover.brightness, 0.12, "再亮字就冲白了（增量 ≤ 0.12）")
+
+        // p7：`effects(hovered:)` 与声明常量**同源**——修饰符只消费 effects，两者漂开时上面的
+        // 档位断言的就不是真正上屏的那个数（同一性，逐项钉）。
+        XCTAssertEqual(idle.glowRadius, HomeBlockFloatMetrics.idleGlowRadius, "常驻辉光半径 = 声明常量")
+        XCTAssertEqual(idle.glowOpacity, HomeBlockFloatMetrics.idleGlowOpacity, "常驻辉光不透明度 = 声明常量")
+        XCTAssertEqual(idle.poolOpacity, HomeBlockFloatMetrics.poolOpacity, "常驻池 = 声明常量")
+        XCTAssertEqual(hover.glowRadius, HomeBlockFloatMetrics.hoverGlowRadius, "hover 辉光半径 = 声明常量")
+        XCTAssertEqual(hover.glowOpacity, HomeBlockFloatMetrics.hoverGlowOpacity, "hover 辉光不透明度 = 声明常量")
+        XCTAssertEqual(hover.poolOpacity, HomeBlockFloatMetrics.hoverPoolOpacity, "hover 池 = 声明常量")
+        XCTAssertEqual(hover.scale, HomeBlockFloatMetrics.hoverScale, "hover 放大 = 声明常量")
+        XCTAssertEqual(
+            hover.brightness, HomeBlockFloatMetrics.hoverBrightness - 1,
+            "hover 提亮 = 常量 − 1（组装口径）"
+        )
 
         // 动画时长：太快看不见、再慢就滞后于指针。
         XCTAssertGreaterThan(HomeBlockFloatMetrics.duration, 0.1, "太快看不见动画")

@@ -526,37 +526,44 @@ extension View {
 /// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:)` 里
 /// `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
 ///
-/// 常量是**上屏调参后的定稿值**（起点值见 docs/30 §接口与数据形状的留痕口径；本组已按 Checkpoint
-/// 的实机截图调过一轮辉光强度：常驻 0.05/4 → **0.08/5**、hover 0.10/10 → **0.16/11**）；本文件
-/// 不再有第二份。测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 /
-/// 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
+/// 常量是**上屏调参后的定稿值**（起点值见 docs/31 §接口与数据形状第 1 小节的留痕口径；本组先按
+/// p6 的一轮实机调参：辉光 0.05/4 → 0.08/5、hover 0.10/10 → 0.16/11；p7 再按用户「不 hover 也要
+/// 能分清区域」的反馈整组上调：辉光 0.08/5 → **0.10/6**、柔光池 0.06 → **0.13**、hover 池 0.12 →
+/// **0.20**、hover 辉光 0.16/11 → **0.20/12**，池系数放到不变量上限 **0.50**）；本文件不再有第二份。
+/// 测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 / 不透明度为正，hover
+/// 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
 enum HomeBlockFloatMetrics {
     /// 常驻辉光的不透明度（白，低透明度 = 无填充的深度感）。
     ///
-    /// **起点值 0.05 在实机屏幕上几乎不可见**（Checkpoint 截图裁切比对），已调到 **0.08**。
-    static let idleGlowOpacity: Double = 0.08
-    /// 常驻辉光的半径（起点 4 → **5**，与不透明度同批上屏调参）。
-    static let idleGlowRadius: CGFloat = 5
-    /// hover 的辉光不透明度（比常驻大 = 「加深」的一半；随常驻同批上调 **0.10 → 0.16**）。
-    static let hoverGlowOpacity: Double = 0.16
-    /// hover 的辉光半径（比常驻大 = 「加深」的另一半；起点 10 → **11**）。
-    static let hoverGlowRadius: CGFloat = 11
+    /// 留痕：起点 0.05（实机几乎不可见）→ p6 调参 **0.08** → p7 再上调 **0.10**（静态区分加强）。
+    static let idleGlowOpacity: Double = 0.10
+    /// 常驻辉光的半径（留痕：起点 4 → p6 **5** → p7 **6**，与不透明度同批上调）。
+    static let idleGlowRadius: CGFloat = 6
+    /// hover 的辉光不透明度（比常驻大 = 「加深」的一半；留痕：起点 0.10 → p6 **0.16** → p7 **0.20**）。
+    static let hoverGlowOpacity: Double = 0.20
+    /// hover 的辉光半径（比常驻大 = 「加深」的另一半；留痕：起点 10 → p6 **11** → p7 **12**）。
+    static let hoverGlowRadius: CGFloat = 12
     /// 柔光池中心的白色不透明度（径向渐变到全透明）。**静态区分的主力**：纯辉光在实机屏幕上
-    /// 空区只抬 0.07–0.5/255（Checkpoint 二轮测量），池给出可见的一圈光。
-    static let poolOpacity: Double = 0.06
-    /// hover 的柔光池中心不透明度（比常驻大 = 池变亮）。
-    static let hoverPoolOpacity: Double = 0.12
+    /// 空区只抬 0.07–0.5/255（p6 Checkpoint 二轮测量），池给出可见的一圈光。
+    ///
+    /// 留痕：起点 0.06（p6 实机仍近不可见，用户 p7 反馈「不悬浮分不清区域」）→ p7 上调 **0.13**，
+    /// 上屏像素测量后若仍不达标再在 0.13…0.18 内微调（最终值拍完照回写 docs/31 §接口第 1 小节）。
+    static let poolOpacity: Double = 0.13
+    /// hover 的柔光池中心不透明度（比常驻大 = 池变亮；留痕：0.12 → p7 **0.20**）。
+    static let hoverPoolOpacity: Double = 0.20
     /// 柔光池的半径系数：`endRadius = min(w, h) × factor`——唯一算式在 `poolEndRadius(width:height:)`。
     ///
     /// **系数必须 ≤ 0.5**：格子的**最近边**在 `0.5 × min(w, h)` 处，系数过大会让渐变在边缘还没走完
     /// ——0.7 时边缘仍残留 28.6% 强度（idle ≈4.4/255、hover ≈8.7/255），在格子边缘形成**直角台阶**
-    /// = 变相底板（T1 三轮独立重审实测；且与「渐变到全透明、无边界」的口径不符）。取 **0.45**：
-    /// 到最近边之前就归零，留一点余量。
+    /// = 变相底板（p6 T1 三轮独立重审实测；且与「渐变到全透明、无边界」的口径不符）。
+    ///
+    /// 留痕：p6 收敛到 **0.45**（留余量）；p7 用户仍反馈区分不足，放到**不变量上限 0.50**——渐变
+    /// 恰在最近边归零（三停渐变让尾部更软，边缘不留强度），系数不再有上调空间（> 0.5 即破不变量）。
     ///
     /// **不设最小半径下界**（终审修复）：曾写成 `max(48, …)`，`min(w, h) < 96` 的格子（如矮块
     /// 40pt 档）会被下界顶过最近边（`48 > 0.5 × 40 = 20`）——渐变在边缘还没归零，又变回直角台阶
     /// = 变相底板。下界就此删掉，短边再小也按同一系数走。
-    static let poolEndRadiusFactor: CGFloat = 0.45
+    static let poolEndRadiusFactor: CGFloat = 0.50
 
     /// 柔光池的**有效** endRadius（唯一算式；`HomeBlockFloatModifier` 只消费它）。
     ///
@@ -619,6 +626,10 @@ enum HomeBlockFloatMetrics {
 /// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算且系数
 /// ≤ 0.5（最近边在 `0.5 × min(w, h)` 处）——渐变**在边缘之前就归零**，没有填充边界、没有描边、
 /// 也不留直角台阶（不是卡片底）。
+///
+/// **池的渐变自 p7 起是三停**（`0 → poolOpacity`、`0.6 → poolOpacity × 0.35`、`1 → .clear`，见
+/// docs/31 §做法 机制一）：两停时亮度到尾巴才塌，三停把中段压平、尾段拉长，光晕更软更长（仍到
+/// 全透明归零，不出现边界）。
 struct HomeBlockFloatModifier: ViewModifier {
     @State private var hovered = false
 
@@ -632,7 +643,11 @@ struct HomeBlockFloatModifier: ViewModifier {
             .background {
                 GeometryReader { geo in
                     RadialGradient(
-                        colors: [.white.opacity(effects.poolOpacity), .clear],
+                        stops: [
+                            .init(color: .white.opacity(effects.poolOpacity), location: 0),
+                            .init(color: .white.opacity(effects.poolOpacity * 0.35), location: 0.6),
+                            .init(color: .clear, location: 1),
+                        ],
                         center: .center,
                         startRadius: 0,
                         endRadius: HomeBlockFloatMetrics.poolEndRadius(
