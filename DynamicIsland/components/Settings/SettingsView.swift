@@ -3837,7 +3837,7 @@ struct Shelf: View {
                     ForEach(quickShareService.availableProviders, id: \.id) { provider in
                         HStack {
                             QuickShareProviderIconImage(provider: provider, size: 16)
-                            Text(provider.id)
+                            Text(provider.displayName)
                         }
                         .tag(provider.id)
                     }
