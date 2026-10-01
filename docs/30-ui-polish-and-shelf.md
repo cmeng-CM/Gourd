@@ -16,7 +16,7 @@
 
 ## 一句话方案
 
-一批十项的用户可见修正：**首页每块加「浮起」样式**（常驻软阴影 + hover 放大/提亮，不加卡片底与边线）并把整条带的大底撤掉、**音乐块再缩宽**（200/250 档）、**通知面板字号整体 +1~2pt**；**架子**统一命名「隔空投送与文件暂存」、修好 ✕ 点不动的命中区、把左投送块缩成一枚小投放格并让文件区变成全宽多行网格；**面板高度切换**改为单步动画（窗口动画 + 每页高度缓存 + 启动台就绪前不塌陷）；**日历**按当月实际周数取高（首页行 36N+78、日历页自然高并进测量名单），首页底部留白随之收敛到设计值；**架子/终端/剪贴板**三个宿主 tab 并入排序设置；**空闲动画**修掉上游回归并让它按设置生效；**设置侧栏「组件」**移入「媒体与显示」分组。
+一批十项的用户可见修正：**首页每块加「浮起」样式**（常驻软阴影 + hover 放大/提亮，不加卡片底与边线）并把整条带的大底撤掉、**音乐块再缩宽**（200/250 档）、**通知面板字号整体 +1~2pt**；**架子**统一命名「隔空投送与文件暂存」、修好 ✕ 点不动的命中区、把左投送块缩成一枚小投放格并让文件区变成全宽多行网格；**面板高度切换**改为单步动画（窗口动画 + 每页高度缓存 + 启动台就绪前不塌陷）；**日历**按当月实际周数取高（首页行 ~~36N+78~~ **2026-10-01 T8 校准改判：36N+52（见 D-23）**、日历页自然高并进测量名单），首页底部留白随之收敛（实测 89 → 28）；**架子/终端/剪贴板**三个宿主 tab 并入排序设置；**空闲动画**修掉上游回归并让它按设置生效；**设置侧栏「组件」**移入「媒体与显示」分组。
 
 ## 背景与目标
 
@@ -86,9 +86,9 @@
 
 ### 机制六 · 日历取高与首页底部留白（第 6、7 条）
 
-- **首页日历行**：行高 `294 固定 → 36N + 78`（N = 当月实际周数；把 `MonthGridView` 的周数算式抽成纯函数 `weekCount(for:calendar:)` 供两边共用），10 月 5 周 → 258；面板高随月变化是接受的行为。
+- **首页日历行**：行高 `294 固定 → 36N + 52`（~~78~~ **2026-10-01 T8 校准改判：78 → 52，见 D-23**；N = 当月实际周数，把 `MonthGridView` 的周数算式抽成纯函数 `weekCount(for:calendar:)` 供两边共用），10 月 5 周 → 232（原稿 258）；面板高随月变化是接受的行为。
 - **日历页**：改成**理想高可传播的自然布局**（现结构是 `GeometryReader` + `paneHeight` 两栏 frame，探针按无高提案量会答出 10pt 级理想高、面板落到下限——必须去掉几何高依赖：网格按固定格高自然堆叠、右栏事件列在可用高内滚动）；把**日历模块的 tab 键**（`CalendarModule.moduleID`，当前实测 `com.cmeng.gourd.calendar`）加进 `measuredTabs`，探针按自然理想高上报（不再回落手动值）。
-- **结果**：auto 档首页底部可见留白从实测 89pt 收敛到设计值 ≈20pt（±6）；日历页高 ≈ 内容高（10 月 ≈ 340pt）。
+- **结果**：auto 档首页底部可见留白从实测 89pt 收敛到 **28pt**（~~20±6~~ **2026-10-01 T8 校准改判：口径 = 设计 20 + 日历末行格内空档 ≈8，见 D-23 与 A10**）；日历页高 ≈ 内容高（实测内容 288 → 面板 310，原稿估算 340 作废）。
 
 ### 机制七 · 宿主行排序（第 8 条）
 
@@ -183,6 +183,7 @@
 8. **缓存命中且离开期间内容变矮时，光标在面板内不缩**（条款 ④ 的既有形态，T7 裁决后可见）：切回量过的页、而这一页在离开期间内容变矮 → 8pt 滞回 + 光标规则把它拦下，**移开鼠标才贴合**。无缓存那一档（第一次进这一页）不受影响。
 9. **跨安装位置的存储资源路径会失效**：本次修了**内置**空闲动画的渲染期解析（盘上的值仍指向写入时刻的绝对路径，如 `/Volumes/壶中天/...`；渲染期按 `name` 从当前 bundle 重新解析）。**自定义动画不在此列**：`isBuiltIn == false` 原样返回存储路径——从 DMG / 移动卷时代导入的自定义动画，卷卸载或换安装位置后仍会加载失败（如实记；要修得给自定义动画另立「重定位」语义）。
 10. **架构边界（逐条 5 项）**：① 通知页字号只覆盖**展开页**（首页通知块定高 96、HUD 卡片固定尺寸都不动，D-09）；② 日历页高随月份（5/6 周差 36pt，见 4）；③ 剪贴板排序只在分栏模式可见（见 5）；④ **取色器不参与排序**（不是面板 tab，渲染在标题栏图标行，D-16）；⑤ 启动台 850 顶格仍滚动（见 3）。
+11. **两类取证受工具限制**（终审已裁定为「实现做了、证据降级」，如实收）：① D-10 的**换帧采样**未做——CUA 观测"等待稳定"，拿不到动画中间帧；替代证据 = 每页终值（Home 578 / Shelf 241 / Calendar 310 / Launcher 872，`t7-switch-single-step.txt`）+ 端到端「无先塌陷再长高」观察 + 代码链（`.workflow/p6-ui-polish/evidence/`）；② t4 命名证据里**设置行「启用隔空投送与文件暂存」的截图**未拍成——设置窗 Form 惰性渲染 + CUA 滚动推不动（event/a11y/PageUp 均试过），替代证据 = AX 元素文本（`t4-shelf-strings.txt`，含该行与脚注的机器可读面貌）+ catalog 用例 + `t6-shelf-grid.png` 里的「系统分享菜单」回落文案。
 
 ## 验收标准
 
@@ -208,7 +209,7 @@
 
 - 新修饰符 `homeBlockFloat()`（文件级，`HomeStripView.swift` 内）：效果值经纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 组装出 `FloatEffects { scale / brightness / glowRadius / glowOpacity / poolOpacity }`（测试钉该函数；修饰符不碰常量、不写算式）。唯一调用点 = `HomeFlowView` 的格子，套在格子的 `.frame` **之后**（视觉修饰不改格子尺寸）。
 - **终值**（Checkpoint 两轮上屏调参后定稿）：辉光 `idleGlowOpacity 0.08 / idleGlowRadius 5`（hover `0.16 / 11`）、`hoverScale 1.02 / hoverBrightness 1.06`（组装时减 1 成增量）/ `duration 0.2`；**无黑影项**（`idleShadow*` / `hoverShadow*` / `idleShadowY` 全部删除——面板底色是纯黑，黑影在黑底上恒不可见，T1 首轮审查实测）。
-- 柔光池（**静态区分的主力**）：`poolOpacity 0.06`（hover `0.12`）、池半径 `max(48, min(w, h) × 0.45)`（径向渐变到全透明；**系数必须 ≤0.5**——格子最近边在 `0.5 × min(w,h)` 处，系数 0.7 时边缘残留 28.6%、形成直角台阶=变相底板；T1 三轮重审 0.7 → **0.45**）。池挂在块的 `.background`（`.shadow` 之后、`allowsHitTesting(false)`）：不参与缩放/提亮、也不进辉光轮廓，不参与命中、零布局成本。**纯辉光在空区只抬 0.07–0.5/255（Checkpoint 二轮实测），静态区分以池为主、辉光为辅。**
+- 柔光池（**静态区分的主力**）：`poolOpacity 0.06`（hover `0.12`）、池半径经 `HomeBlockFloatMetrics.poolEndRadius(width:height:) = max(0, min(w,h) × 0.45)`（~~`max(48, min(w,h)×0.45)`~~ **2026-10-01 终审修复改判：去掉 48 下界**——min(w,h)<96 时 48 > 半短边，渐变在最近边之前不归零=变相底板；用例对 40/96/140 三档钉「有效半径 ≤ 0.5×min」。径向渐变到全透明；**系数必须 ≤0.5**——格子最近边在 `0.5 × min(w,h)` 处，系数 0.7 时边缘残留 28.6%、形成直角台阶；T1 三轮重审 0.7 → **0.45**）。池挂在块的 `.background`（`.shadow` 之后、`allowsHitTesting(false)`）：不参与缩放/提亮、也不进辉光轮廓，不参与命中、零布局成本。**纯辉光在空区只抬 0.07–0.5/255（Checkpoint 二轮实测），静态区分以池为主、辉光为辅。**
 - 应用链（逐字）：`.scaleEffect` → `.brightness` → `.compositingGroup()` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`（`y` 恒 0——不做位移）→ `.background { GeometryReader { RadialGradient } }` → `.animation(.smooth(duration:), value: hovered)`；`hovered` 由 `.onHover` 就地持有。
 - `homeBandContainer()`：**去掉 `.background(...)`**（保留横向 8pt 内边距 `HomeBandChrome.containerInset`）；`HomeBandChrome.containerOpacity` / `containerCornerRadius` 两个常量已删除；行级 `hoverOpacity 0.06` / `hoverCornerRadius 8` 保留（`homeBlockHoverBackground(isHovered:)` 的唯一取值处）。
 
@@ -279,7 +280,7 @@
 
 **机制七（排序）**
 
-- `PanelHostTab`（`TabSelectionView.swift`，文件作用域）：`shelf / clipboard / terminal`；`id` = `panelOrder` 的键（与 `ContentView.selectedPanelTabKey` 同词）；`gateKey`（`.dynamicShelf` / `.enableClipboardManager` / `.enableTerminalFeature`）；`defaultOrder = -30 / -20 / -10`（负值 = 缺键时恒在一切模块之前 = 改动前的实际顺序）。
+- `PanelHostTab`（`TabSelectionView.swift`，文件作用域）：`shelf / clipboard / terminal`；`id` = `panelOrder` 的键（`shelf`、`terminal` 与 `ContentView.selectedPanelTabKey` / 账本键同词；**`clipboard` 是排序专用键——该面板页渲染 `.notes`、账本键为 `notes`**）；`gateKey`（`.dynamicShelf` / `.enableClipboardManager` / `.enableTerminalFeature`）；`defaultOrder = -30 / -20 / -10`（负值 = 缺键时恒在一切模块之前 = 改动前的实际顺序）。
 - `PanelTabSequence`（`@MainActor`，视图与用例共用的**唯一**拼装与排序算式）：`Entry { id, defaultOrder }`、`Slot<Payload> { id, isSortable, defaultOrder, payload }`（`.fixed` / `.sortable` 两档构造）、`slots(home:shelf:usage:clipboard:terminal:extensions:modules:)`（**槽位骨架** = 改动前 `tabs` 的拼装顺序逐字）、`orderedIDs(_:panelOrder:)`（排序的**唯一算式** → `ModuleRegistry.panelRank`）、`sequence(_:panelOrder:)`（只重排**可排槽位**——宿主三 tab + 模块 tab；**不可排项 Home / 用量 / 扩展留在原槽位索引上**，这是「默认序逐字 + 位置不动」的落点）。
 - 设置页：`ModuleSettingsSection.hostPanelEntries`（宿主三 tab 的 `Entry`）+ **`panelMovableIDs(moduleEntries:panelOrder:)`**（可排名单的键序，与面板条同一算式；取色器行不在名单里）。`panelOrder` 新增合法 id：`shelf` / `terminal` / `clipboard`（模块 tab 仍用模块 id）；行上 ↑↓ 复用 `writeOrderTable`。**默认序（表为空）与改动前逐字一致**（测试钉死；存量 `panelOrder`（只有模块 id）下宿主仍排最前 = 向后兼容）。
 - `取色器`不是面板 tab（渲染在标题栏图标行），保持开关-only（备选⑧）。
@@ -310,8 +311,8 @@
 | D-10 | 面板切页高度必须单步、带动画、不塌陷 | 用户 | 第 5 条「卡顿」「高度不够」 |
 | D-11 | 实现：窗口动画（NSAnimationContext）+ 每页高度缓存 + 切页首报免防抖 + 启动台就绪门 | agent | 机制五；实测 0.9s 时窗口 872/内容 690 的脱节与三拍塌陷是直接证据 |
 | D-12 | 启动台保持 850 顶格（不改上界函数） | agent | 物理上放不下（1.6k 自然高）；改上界会动到全局高度契约；**该收窄在批末报告显著呈现，用户可否决** |
-| D-13 | 日历按当月实际周数取高：首页行 `36N+78`；日历页自然高 + 进测量名单 | 用户 | 第 6 条「为什么这么高」；实测内容 ~300 而面板 682 |
-| D-14 | 首页底部留白收敛到设计值 ≈20pt；盘上 manual 残留清回出厂 auto，报告说明 | 用户 | 第 7 条；留白 89pt 的分解（20 设计 + ~69 日历行多预留）；manual 系上批验收残留 |
+| D-13 | 日历按当月实际周数取高：首页行 ~~36N+78~~ **36N+52（2026-10-01 T8 校准改判，见 D-23）**；日历页自然高 + 进测量名单 | 用户 | 第 6 条「为什么这么高」；实测内容 ~300 而面板 682 |
+| D-14 | 首页底部留白收敛（实测 89 → 28，~~≈20~~ 见 D-23）；盘上 manual 残留清回出厂 auto，报告说明 | 用户 | 第 7 条；留白 89pt 的分解（20 设计 + ~69 日历行多预留）；manual 系上批验收残留 |
 | D-15 | 三个宿主 tab（shelf/terminal/clipboard）并入 `panelOrder` 排序；设置页两节合并为一份有序名单 | 用户 | 第 8 条；推翻 p5 D-07「宿主行不参与排序」 |
 | D-16 | 取色器不做排序（不是面板 tab）；默认序必须与现状逐字一致（测试钉死） | agent | 备选⑧的理由；防「排序一开就变序」；**该收窄在批末报告显著呈现，用户可否决** |
 | D-17 | 空闲动画：删空分支 + 优先级上移到被动槽位之前 + 未选样式自动选第一条 | 用户 | 第 9 条；根因=上游空分支 + 槽位占位（机制八） |
