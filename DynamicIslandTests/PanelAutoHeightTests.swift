@@ -512,8 +512,8 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.report(300, for: "com.cmeng.gourd.todos")
         XCTAssertEqual(openNotchSize.height, 340, "量出来的 300 与算出来的走同一个出口（300 + 40）")
 
-        // auto + 切到**名单外**的页（日历 / 计时器 / 暂存器 / 终端）：回落手动值（今天的行为）。
-        ledger.selectTab("com.cmeng.gourd.calendar")
+        // auto + 切到**名单外**的页（计时器 / 终端）：回落手动值（今天的行为）。
+        ledger.selectTab("terminal")
         XCTAssertEqual(
             openNotchSize.height, 333,
             "名单外的页没有值 → 手动值（不是继承上一页量出来的 300）"
@@ -630,8 +630,8 @@ final class PanelAutoHeightTests: XCTestCase {
 
     /// **切页**（T7 复核 P1 + p6-ui-polish / T7 机制五）：名单外的页必须**没有值**（回落手动值），
     /// 名单内**没量过**的页保留到新页量完，**量过**的页直接读每页缓存（一步到位），首页读算出来的
-    /// 那一份。为什么前两条是硬要求：不清值就会继承上一页的高度——首页 → 待办 ~200 → 日历，
-    /// 日历按 200 画两栏月历（`max(130, 200 − 28 − 36)` = 136pt），挤得不能用。
+    /// 那一份。为什么前两条是硬要求：不清值就会继承上一页的高度——首页 → 待办 ~200 → 终端，
+    /// 终端按 200 的画布铺一屏（高是面板高的函数），挤得不能用。
     func testSelectTabClearsValueForUnlistedPagesAndKeepsItForMeasuredOnes() {
         let ledger = PanelContentHeight.shared
         ledger.reset()
@@ -683,11 +683,11 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.report(95, for: todos)
         XCTAssertEqual(ledger.current, 95, "同页 +35pt → 接受")
 
-        // 名单外的页（日历）：**清掉**当班值 → `current` = nil → 尺寸层回落手动值。
-        ledger.selectTab("com.cmeng.gourd.calendar")
+        // 名单外的页（终端）：**清掉**当班值 → `current` = nil → 尺寸层回落手动值。
+        ledger.selectTab("terminal")
         XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 95）")
         XCTAssertNil(ledger.measuredHeight, "量出来的那一槽被清掉")
-        XCTAssertEqual(ledger.activeTab, "com.cmeng.gourd.calendar")
+        XCTAssertEqual(ledger.activeTab, "terminal")
 
         // 再切回名单内的页：**缓存按页留着**（名单外那一趟只清当班值，不动别人的缓存）——
         // 量过的待办一步到位回到**最后一次被接受的** 95；若从没量过才是 nil（回落手动值），量完就位。
@@ -731,7 +731,7 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.report(200, for: "com.cmeng.gourd.notifications")
         XCTAssertEqual(notifications, 1, "同一个数（换页的第一拍）→ 滞回之外也不响")
 
-        ledger.selectTab("com.cmeng.gourd.calendar")
+        ledger.selectTab("terminal")
         XCTAssertEqual(notifications, 2, "名单外的页把值清掉 → current 变 nil → 响一次")
 
         withExtendedLifetime(cancellable) {}
@@ -755,7 +755,7 @@ final class PanelAutoHeightTests: XCTestCase {
 
         let todos = "com.cmeng.gourd.todos"
         let notifications = "com.cmeng.gourd.notifications"
-        let calendar = "com.cmeng.gourd.calendar"
+        let terminal = "terminal"
 
         // 待办量出 200：**接受即写缓存**（四条款通过之后的每一个被接受的值都算）。
         ledger.selectTab(todos)
@@ -790,8 +790,8 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertFalse(ledger.lastChangeWasTabSwitch, "普通过报不置免防抖标记（不抢立即链）")
         XCTAssertEqual(ledger.heightCache[todos], 210, "被接受的值照常刷新缓存")
 
-        // 名单外的日历：清当班值 → `current` = nil（回落手动值），但**不动别人页的缓存**。
-        ledger.selectTab(calendar)
+        // 名单外的终端：清当班值 → `current` = nil（回落手动值），但**不动别人页的缓存**。
+        ledger.selectTab(terminal)
         XCTAssertNil(ledger.current, "名单外的页没有值（回落手动值）")
         XCTAssertEqual(ledger.heightCache[todos], 210, "名单外那一趟不清别人页的缓存")
         ledger.selectTab(todos)
@@ -822,9 +822,9 @@ final class PanelAutoHeightTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
-    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6）：内容随条数 / 格子数变的那几页
-    /// ——四个模块页 + **架子**（宿主页，T6 进名单）；另外三页刻意不在里面，
-    /// 逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
+    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6、T8）：内容随条数 / 格子数 / 月周数变
+    /// 的那几页——四个模块页 + **架子**（宿主页，T6 进名单）+ **日历**（模块页，T8 进名单）；
+    /// 另外两页刻意不在里面，逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
     func testMeasuredTabListIsTheCountDrivenPages() {
         XCTAssertEqual(
             PanelContentHeight.measuredTabs,
@@ -835,8 +835,11 @@ final class PanelAutoHeightTests: XCTestCase {
                 "com.cmeng.gourd.shortcuts",
                 // p6-ui-polish / T6：投放格 + 文件格网格 —— 高是格子数的函数。
                 PanelContentHeight.shelfTab,
+                // p6-ui-polish / T8：左栏固定格高月网格（36N + 78）+ 右栏在其高内滚动 —— 高是当月周数
+                // 的函数（旧版面「自己的高是面板高的函数」已不成立，见名单里的注释）。
+                CalendarModule.moduleID,
             ],
-            "名单 = 内容随条数 / 格子数变的那几页（多一个 / 少一个都要连理由一起改）"
+            "名单 = 内容随条数 / 格子数 / 月周数变的那几页（多一个 / 少一个都要连理由一起改）"
         )
         XCTAssertEqual(PanelContentHeight.hysteresis, 8, "滞回阈值 = 8pt（docs/29 §做法 机制六）")
 
@@ -846,13 +849,75 @@ final class PanelAutoHeightTests: XCTestCase {
             PanelContentHeight.isMeasuredTab(PanelContentHeight.homeTab),
             "首页有算出来的那一份，不走测量"
         )
-        // 未覆盖的三页：日历 / 计时器（自然高是面板高的函数）、终端（整块填满，没有自然高）。
-        XCTAssertFalse(
-            PanelContentHeight.isMeasuredTab("com.cmeng.gourd.calendar"),
-            "日历的 `.frame(height: maxTabContentHeight)` 是面板高的函数——量它每接受一次就缩 12pt"
-        )
+        // 未覆盖的两页：计时器（`.frame` 吃面板高 + 250 的 per-tab 下限）、终端（整块填满，没有自然高）。
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("com.cmeng.gourd.timer"))
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("terminal"))
+    }
+
+    /// **日历进测量名单**（p6-ui-polish / T8，docs/30 §做法 §机制六 / §接口与数据形状）。
+    ///
+    /// 旧版面（`GeometryReader + paneHeight` 两栏填满面板高）的自然高是**面板高**的函数——量它等于
+    /// 把面板高喂回自己；T8 改成自然布局后它变成**当月周数**的函数（左栏 `36N + 78`、右栏在其高内
+    /// 滚动），因此与模块页同一口径上报。判据分三层：① 键 = 模块 id 常量（宿主 `selectedPanelTabKey`
+    /// 对 `.module` 传的就是它，不写第二份字面量）；② 名单含它（探针据此进门）；③ 账本行为——切到
+    /// 日历页不再回落手动值（682 那种空半屏），量到的就是它。
+    func testCalendarIsAMeasuredTab() {
+        // ① 键：模块 id 的唯一字面量（manifest 与用例共用）。
+        XCTAssertEqual(
+            CalendarModule.moduleID, "com.cmeng.gourd.calendar",
+            "日历页的 tab 键 = 模块 id（`ContentView.selectedPanelTabKey` 的 `.module` 分支传它）"
+        )
+
+        // ② 名单：探针的进门判据（名单外的页静默不上报）。
+        XCTAssertTrue(
+            PanelContentHeight.measuredTabs.contains(CalendarModule.moduleID),
+            "日历页在测量名单里（T8 前不在：旧版面「自己的高是面板高的函数」）"
+        )
+        XCTAssertTrue(
+            PanelContentHeight.isMeasuredTab(CalendarModule.moduleID),
+            "`isMeasuredTab` 对日历键为真——探针据此上报"
+        )
+
+        // ③ 账本行为：切到日历页 + 上报 → `current` 就是量出来的那一份（不是手动回落值）。
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        ledger.selectTab(CalendarModule.moduleID)
+        XCTAssertEqual(ledger.activeTab, CalendarModule.moduleID)
+        XCTAssertNil(ledger.current, "还没量到 → 回落手动值（首帧那一拍）")
+
+        // 2026-10 的自然高 = 258（`MonthGridLayout.monthGridHeight`）→ 账本口径 = 258 + 表头 28 − 16。
+        let natural = MonthGridLayout.monthGridHeight(
+            forMonth: makeFixedMonth(2026, 10), calendar: fixedGridCalendar(firstWeekday: 1)
+        )
+        XCTAssertEqual(natural, 258, "前提：2026-10 = 5 周 → 36 × 5 + 78")
+
+        ledger.report(natural + 28 - 16, for: CalendarModule.moduleID)
+        XCTAssertEqual(ledger.current, 270, "日历页的量值进门（名单外的页写不进这个槽）")
+        XCTAssertEqual(
+            PanelAutoHeight.panelHeight(
+                contentHeight: 270, mode: PanelAutoHeight.modeAuto,
+                manualHeight: 682, screenVisibleHeight: nil
+            ),
+            310,
+            "auto 档：面板高 = 量值 + 宿主内边距（不是盘上残留的 682 手动值——「不再 682 空半屏」）"
+        )
+    }
+
+    /// 固定日历（格里高利 + GMT + `en_US_POSIX` + `firstWeekday`，与 `MonthGridLayoutTests` 同式）。
+    private func fixedGridCalendar(firstWeekday: Int) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.firstWeekday = firstWeekday
+        calendar.minimumDaysInFirstWeek = 1
+        return calendar
+    }
+
+    /// 固定月份的首日零点。
+    private func makeFixedMonth(_ year: Int, _ month: Int) -> Date {
+        fixedGridCalendar(firstWeekday: 1).date(from: DateComponents(year: year, month: month, day: 1))!
     }
 
     /// **架子进测量名单**（p6-ui-polish / T6，docs/30 §做法 机制三 / D-08）。
@@ -1461,7 +1526,7 @@ final class PanelAutoHeightTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
-    /// **不在名单里的页**一个值都不写（覆盖范围的负向护栏）：拿日历的键挂同一个夹具，账本必须
+    /// **不在名单里的页**一个值都不写（覆盖范围的负向护栏）：拿终端的键挂同一个夹具，账本必须
     /// 保持空——名单外的页要回落「今天的行为」（手动值），悄悄写一个值就是另一套高度来源。
     func testUnlistedPageWritesNothingEvenWhenProbed() {
         let ledger = PanelContentHeight.shared
@@ -1469,9 +1534,9 @@ final class PanelAutoHeightTests: XCTestCase {
         defer { ledger.reset() }
 
         let host = mountFillStylePage(
-            rowCount: 3, tab: "com.cmeng.gourd.calendar", headerHeight: 24, isCurrent: { true }
+            rowCount: 3, tab: "terminal", headerHeight: 24, isCurrent: { true }
         )
-        XCTAssertNil(ledger.current, "名单外的页（日历）不上报")
+        XCTAssertNil(ledger.current, "名单外的页（终端）不上报")
         XCTAssertNil(ledger.activeTab)
         withExtendedLifetime(host) {}
     }

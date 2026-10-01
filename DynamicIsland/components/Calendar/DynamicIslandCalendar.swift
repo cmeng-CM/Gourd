@@ -410,8 +410,10 @@ struct CalendarView: View {
 
     /// 今日列表的可用高度（2026-09-29）：面板高度 − 刘海底座 − 首页内边距 − 收起态日期头。
     ///
-    /// 口径与独立面板 `StandaloneCalendarView.maxTabContentHeight` 同源（都从 `vm.notchSize`
-    /// 往下减），否则同一个面板高度会算出两套行数。今日列表的行数**只**由这里决定
+    /// 口径与独立面板旧档的 `StandaloneCalendarView.maxTabContentHeight` 同源（都从 `vm.notchSize`
+    /// 往下减）——独立面板 p6-ui-polish / T8 起改**自然高**布局（docs/30 §做法 机制六），那个
+    /// 「按面板高反推」的口径现在只剩本视图（**仅供 `#Preview`**，运行期不可达；首页日历见
+    /// `HomeCalendarRow` 自己按行高算的那一份）。今日列表的行数**只**由这里决定
     /// （`HomeTodayListLayout.capacity`），不再靠滚动容纳条目。
     private var availableTodayListHeight: CGFloat {
         let panelHeight = vm.notchSize.height > 0 ? vm.notchSize.height : openNotchSize.height
@@ -581,6 +583,35 @@ enum MonthGridLayout {
             current = next
         }
         return days
+    }
+
+    /// 显示月份在固定格高网格里占的**周数**（纯函数）：`MonthGridView` 两侧的高度算式共用的唯一来源。
+    ///
+    /// 就是 `days(forMonth:calendar:)`（网格渲染的那份数据）按 7 列摊开后的行数——**逐字同源**，
+    /// 不另写一份「按日历算周数」的算式：首格 = 当月首日所在周的起点、末格 = 当月末日所在周的终点，
+    /// 两端含跨月补格、总格数恒为 7 的倍数（`days(forMonth:)` 的口径），因此 `count / 7` 就是
+    /// `LazyVGrid`（7 列）画出来的行数。另起一份算式会在「首周起点跟 `firstWeekday` 走」
+    /// 「一个月最多跨 6 周」这些边界上与网格漂（2026 年 8 月 = 7/26–9/5 = 6 周即那类边界）。
+    ///
+    /// 取不到当月（异常日期 → 空数组）→ 0 周（调用方各自兜底，不产生负高）。
+    static func weekCount(for month: Date, calendar: Calendar = .current) -> Int {
+        days(forMonth: month, calendar: calendar).count / 7
+    }
+
+    /// 整月网格在**固定格高**下要的高度（纯函数）：`36 × N + 78`，N = `weekCount(for:calendar:)`。
+    ///
+    /// 算式（`MonthGridView` 的既有内部刻度，两处宿主共用的唯一一份）：
+    /// - 网格视口 = `(高度 − 4 − 56) − 22` = `高度 − 82`（4 = 网格自身 `.padding(.top, 4)`；
+    ///   56 = `pickerViewportHeight` 里让给「月份标题行 + 周标题行」的固定扣减；22 = 周标题行与
+    ///   其下日格之间那段的扣减）；
+    /// - 一周占 `30`（日格 `minHeight`）+ `6`（`LazyVGrid` 行距）= **36pt**；`N` 周需要
+    ///   `36N − 6`（末行不带行距）+ `2`（网格 `.padding(.bottom, 2)`）= `36N − 4`；
+    /// - 视口 ≥ 内容 → `高度 ≥ 36N + 78`：3 周 186、5 周 258（2026-10）、6 周 294。
+    ///
+    /// 两个调用方：首页日历行（`HomeCalendarRow.rowHeight`，宿主 plan 的预算与行的 frame 同值）与
+    /// 独立日历页（`StandaloneCalendarView` 左栏，面板高按它上报）。
+    static func monthGridHeight(forMonth month: Date, calendar: Calendar = .current) -> CGFloat {
+        36 * CGFloat(weekCount(for: month, calendar: calendar)) + 78
     }
 
     /// 某个日期所在月份的**首日零点**——按月数据的键（`MonthEventSnapshot.month` 与
@@ -892,7 +923,7 @@ struct MonthGridView: View {
     }
 
     /// 日格的**三个高度刻度**（T4 新增第二行后仍是这一份，别改成会撑高的写法）：
-    /// 日格恒 30pt（`HomeCalendarRow` 的行高算式 `36 × 周数 + 78` 依赖这个 30）、第一行（数字 +
+    /// 日格恒 30pt（`MonthGridLayout.monthGridHeight` 的行高算式 `36 × 周数 + 78` 依赖这个 30）、第一行（数字 +
     /// 选中圆）与第二行（农历 / 节假日）各自的高度——三者互相咬合：`19 + 11 == 30`。
     ///
     /// **为什么有两档选中圆**：30pt 的日格里塞下「圆 + 一行 9pt 文字」时，圆的最大直径是
@@ -968,7 +999,7 @@ struct MonthGridView: View {
             .frame(maxWidth: .infinity, minHeight: Self.dayCellHeight)
             // 事件标记：右侧小圆点（位置与颜色见 `eventMarker` 的注释）。放在日格**右下角**而不是
             // 日号正下方，是为了和选中圆永不重叠；`overlay` 不进布局，日格仍恰好 30pt 高
-            // （`HomeCalendarRow` 的行高算式 `36 × 周数 + 78` 依赖这个 30，别改成会撑高的写法）。
+            // （`MonthGridLayout.monthGridHeight` 的算式 `36 × 周数 + 78` 依赖这个 30，别改成会撑高的写法）。
             // T4 的第二行让日格下半部分多了文字：那颗点在**右下角内缩**（右 6pt / 下 2pt），
             // 与居中的第二行之间仍有 `MonthCellSubtitle` 判据里预留的那段横向余量（见该类型注释）。
             .overlay(alignment: .bottomTrailing) {
@@ -1047,6 +1078,14 @@ struct StandaloneCalendarView: View {
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
 
+    /// 左栏**显示月份**（`MonthGridView` 自持，经 `onDisplayedMonthChange` 回声到这里）：只用于左栏高度
+    /// ——网格高度算式与首页日历行**同源**（`MonthGridLayout.monthGridHeight`，`36N + 78`）。
+    /// 初值与 `MonthGridView` 的初值同式（选中日所在月，见那边的 init）；出现时回调会再对齐一次。
+    @State private var displayedMonth: Date = Date().startOfMonth
+
+    /// 两栏之间的间距（旧 `body` 里的局部常量逐字搬上来：几何读数去掉后它得有个具名住处）。
+    private static let paneSpacing: CGFloat = 12
+
     private let calendar = Calendar.current
 
     private var filteredEvents: [EventModel] {
@@ -1070,63 +1109,63 @@ struct StandaloneCalendarView: View {
         )
     }
 
-    private var resolvedNotchHeight: CGFloat {
-        let height = vm.notchSize.height
-        return height > 0 ? height : openNotchSize.height
-    }
-
-    private var headerHeight: CGFloat {
-        max(24, vm.effectiveClosedNotchHeight)
-    }
-
-    private var maxTabContentHeight: CGFloat {
-        let available = resolvedNotchHeight - headerHeight - 36
-        return max(130, available)
+    /// 左栏（整月网格）的高度 = `36 × 显示月份周数 + 78`（与首页日历行同源，算式见
+    /// `MonthGridLayout.monthGridHeight`）：这个高度下网格视口恰好一屏放下整月，网格内不滚动。
+    /// 翻月改的是**显示月份**（`monthNavigationMovesSelection: true` 会连带挪选中日，两条都会经
+    /// `onDisplayedMonthChange` 回声）→ 这一页的自然高随之变 → 探针重报，面板高跟着走
+    /// （「面板高随月变化」是 docs/30 §做法 机制六 接受的行为）。
+    private var monthGridHeight: CGFloat {
+        MonthGridLayout.monthGridHeight(forMonth: displayedMonth, calendar: calendar)
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let paneSpacing: CGFloat = 12
-            let paneWidth = max((geometry.size.width - paneSpacing) / 2, 0)
-            let paneHeight = max(0, geometry.size.height)
+        // **自然高布局**（p6-ui-polish / T8，docs/30 §做法 机制六）：旧结构是
+        // `GeometryReader` + `paneHeight = geometry.size.height` 的两栏定高 frame——探针按
+        // 「宽给定、高 unspecified」量这一页时，`GeometryReader` 的理想高只有 10pt 级，整页自然高
+        // 因此被答成 10、面板落到下限。现在两栏的高度都来自**内容**：左栏 = 月网格按固定格高自然堆叠的
+        // 高（`36N + 78`，与首页日历行同源），右栏 = 同一个高度（事件列在它里面滚动 / 裁剪），
+        // 这一页**不再读任何几何高度**（宽度也不读：两栏 `.frame(maxWidth: .infinity)` 等分，
+        // 结果与旧的 `paneWidth = (width − 间距) / 2` 逐字相同）。
+        HStack(alignment: .top, spacing: Self.paneSpacing) {
+            // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
+            // 翻月把选中日一并挪到新月份首日）。
+            // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后的
+            // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
+            // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
+            MonthGridView(
+                selectedDate: $selectedDate,
+                scrollTarget: $datePickerScrollTarget,
+                monthNavigationMovesSelection: true,
+                monthEvents: monthEventSnapshot,
+                onDisplayedMonthChange: { month in
+                    // 左栏高度按**这个月份**算（见 `monthGridHeight`）；顺手抓该月的标记数据。
+                    displayedMonth = month
+                    Task { await calendarManager.updateMonthEvents(for: month) }
+                },
+                // **日历面板也不画网格上下的那两条滚动提示渐变**（2026-09-30 用户第 5 条
+                // 「日历面板还存在两条线的遮罩」/ D-04）：首页日历行早就传了 `false`（上一批
+                // D-01），这是第二处、也是最后一处。理由是两条在纯黑面板上只是脏线，而它们盖住的
+                // 正是 T4 新加的那一行（农历 / 节假日）——网格可滚这件事由右侧清单的滚动与
+                // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
+                showsScrollFades: false
+            )
+                // 左栏宽度 = 两栏等分（`.frame(maxWidth: .infinity)` 的结果与旧 `paneWidth` 同值）
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: monthGridHeight, alignment: .topLeading)
+                .layoutPriority(1)
 
-            HStack(alignment: .top, spacing: paneSpacing) {
-                // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
-                // 翻月把选中日一并挪到新月份首日）。
-                // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后的
-                // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
-                // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
-                MonthGridView(
-                    selectedDate: $selectedDate,
-                    scrollTarget: $datePickerScrollTarget,
-                    monthNavigationMovesSelection: true,
-                    monthEvents: monthEventSnapshot,
-                    onDisplayedMonthChange: { month in
-                        Task { await calendarManager.updateMonthEvents(for: month) }
-                    },
-                    // **日历面板也不画网格上下的那两条滚动提示渐变**（2026-09-30 用户第 5 条
-                    // 「日历面板还存在两条线的遮罩」/ D-04）：首页日历行早就传了 `false`（上一批
-                    // D-01），这是第二处、也是最后一处。理由是两条在纯黑面板上只是脏线，而它们盖住的
-                    // 正是 T4 新加的那一行（农历 / 节假日）——网格可滚这件事由右侧清单的滚动与
-                    // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
-                    showsScrollFades: false
-                )
-                    .frame(width: paneWidth, alignment: .topLeading)
-                    .frame(height: paneHeight, alignment: .topLeading)
-                    .layoutPriority(1)
-
-                rightEventsPane
-                    .frame(width: paneWidth, alignment: .topLeading)
-                    .frame(height: paneHeight, alignment: .topLeading)
-                    .layoutPriority(1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
+            rightEventsPane
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                // 右栏拿**同一个高度**：事件列表在它里面滚动 / 裁剪（它不参与「这一页要多高」，
+                // 因此把它的大内容量进自然高是不可能的——旧结构正是靠 `paneHeight` 把它钉住的）。
+                .frame(height: monthGridHeight, alignment: .topLeading)
+                .layoutPriority(1)
         }
-        .frame(height: maxTabContentHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
         .onAppear {
-            // 显示月份由 `MonthGridView` 自持（随选中日同步），这里只钉选中日与滚动落点。
+            // 显示月份由 `MonthGridView` 自持（随选中日同步），这里只在 `onDisplayedMonthChange` 的回声里
+            // 读一份用于左栏高度；出现时钉选中日与滚动落点。
             selectedDate = Date.now
             requestDatePickerCenterOnCurrentDate()
             Task {

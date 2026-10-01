@@ -39,23 +39,29 @@ import SwiftUI
 /// 展开面板首页的**全宽日历行**：左边整月网格、右边所选日期的今日清单。
 ///
 /// 行的存在性由 `Defaults[.showCalendar]` 门控（在 `NotchHomeView` 的接缝处判断，关掉时本视图根本
-/// 不生成——不留空壳、不占高度）。行高是**固定档**：面板高度不足时优先保上排 strip（strip 拿
-/// `max(0, 剩余高度)`），本行不参与「按内容伸缩」的协商。
+/// 不生成——不留空壳、不占高度）。行高是**按当月周数算出的固定档**（`36N + 78`，见 `rowHeight`）：
+/// 面板高度不足时优先保上排 strip（strip 拿 `max(0, 剩余高度)`），本行不参与「按内容伸缩」的协商。
 struct HomeCalendarRow: View {
-    /// 行高：固定档，**按「一屏显示整月」反推**（2026-09-29 复审要求，改自 190）。
+    /// 行高 = `36 × N + 78`（N = **当前月**的实际周数；算式本体与独立日历页同源，逐项推导见
+    /// `MonthGridLayout.monthGridHeight(forMonth:calendar:)`）。
     ///
-    /// 算式（`MonthGridView` 的既有内部刻度，本批未改它）：
-    /// - 网格视口 = `(rowHeight − 4 − 56) − 22` = `rowHeight − 82`
-    ///   （4 = 网格自身 `.padding(.top, 4)`；56 = `pickerViewportHeight` 里让给「月份标题行 + 周标题行」的
-    ///   固定扣减；22 = 周标题行与其下日格之间那段的扣减）；
-    /// - 一周占 `30`（日格 `minHeight`）+ `6`（`LazyVGrid` 行距）= **36pt**；`N` 周需要
-    ///   `36N − 6`（末行不带行距）+ `2`（网格 `.padding(.bottom, 2)`）= `36N − 4`；
-    /// - 于是 `rowHeight ≥ 36N + 78`：3 周 186、5 周 258、**6 周 294**。
+    /// **按当月实际**（p6-ui-polish / T8，docs/30 §做法 机制六）：3 周 186、5 周 258（2026-10）、
+    /// 6 周 294。旧口径是「最坏 6 周」的固定 294（2026-09-29 复审定的那一档），5 周月因此白留
+    /// 36pt——首页底部可见留白从实测 89pt 收敛到设计值 ≈20pt 就是这一段。面板高随月变化是**接受**的
+    /// 行为（docs/30 §做法 机制六）。
     ///
-    /// **取 6 周（294）**：一个月最多跨 6 周（例：2026 年 8 月 = 7/26–9/5），只有 294 才能让最坏月份
-    /// 也一屏看全、不靠行内滚动——这正是用户要的「显示整月」。294 下网格视口 = 212 = 6 周内容
-    /// （6×30 + 5×6 + 2 = 212），恰好放下。
-    static let rowHeight: CGFloat = 294
+    /// **宿主 plan 的预算读同一个数**（`HomeStripView` 的三处 `calendarHeight`）：行与它的预算因此
+    /// 永远同值，不会出现「行比预算高一段、末行被面板裁掉」。
+    ///
+    /// 浏览翻月**不改**行高（本行按当前月算；翻到更高的月份时网格在自己的视口里滚动）——宿主 plan
+    /// (HomeStripView) 不在 T8 的文件范围，行高若跟着**显示**月份走，翻到 6 周月时行会比预算高 36pt、
+    /// 末行被面板裁掉（T8 的失败信号之一）；「按当前月」是同一份预算下唯一自洽的那一档。
+    static var rowHeight: CGFloat { rowHeight(forMonth: Date()) }
+
+    /// 行高的**纯函数**入口（按给定月份；测试钉 2026-08 = 6 周 / 2026-10 = 5 周这类边界）。
+    static func rowHeight(forMonth month: Date, calendar: Calendar = .current) -> CGFloat {
+        MonthGridLayout.monthGridHeight(forMonth: month, calendar: calendar)
+    }
 
     /// 本行与上排 strip 之间的间距（接缝里的 `VStack(spacing:)` 取同一个值，两处只有一个数）。
     static let rowSpacing: CGFloat = 8

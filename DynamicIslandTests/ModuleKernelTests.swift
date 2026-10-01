@@ -6186,18 +6186,31 @@ final class MonthGridLayoutTests: XCTestCase {
 
 // MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）
 
-/// 日历行是**固定行高**：行高与「今日清单显示几行」是同一组数字，算错就会出现
+/// 日历行是**按当月周数算出的固定行高**：行高与「今日清单显示几行」是同一组数字，算错就会出现
 /// 「清单溢出到行外」或「行内留白」——这里把这条算术钉住（`HomeCalendarRow` 与
 /// `HomeTodayListLayout` 共用常量，不在两处各写一套）。
 @MainActor
 final class HomeCalendarRowLayoutTests: XCTestCase {
 
-    /// 294（行高，2026-09-29 复审后由 190 改为 294：一屏显示 6 周整月）− 26（收起态日期头，
-    /// 含与列表之间的 4pt 间距）= 268 → 今日清单 5 行（`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，
-    /// 内容高度仍在行高之内。
+    /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`36 × 5 + 78 = 258`；
+    /// T8 前是「最坏 6 周」的固定 294）− 26（收起态日期头，含与列表之间的 4pt 间距）= 232
+    /// → 今日清单 5 行（`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，内容高度仍在行高之内。
+    ///
+    /// 固定到 2026-10 再取行高：`HomeCalendarRow.rowHeight` 随运行日所在月的周数走，直接拿它
+    /// 参与字面量断言换个 6 周月就整片红。
     func testRowHeightYieldsFiveItemRowsPlusOverflowRow() {
-        let listHeight = HomeCalendarRow.rowHeight - HomeTodayListLayout.collapsedHeaderHeight
-        XCTAssertEqual(listHeight, 268, "294 − 26")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.firstWeekday = 1
+        calendar.minimumDaysInFirstWeek = 1
+        let october2026 = calendar.date(from: DateComponents(year: 2026, month: 10, day: 1))!
+
+        // 5 周月的行高（2026-10 在两种周起点下都是 5 周，见 HomeStripLayoutTests 的同源用例）。
+        let rowHeight = HomeCalendarRow.rowHeight(forMonth: october2026, calendar: calendar)
+        XCTAssertEqual(rowHeight, 258, "36 × 5 + 78")
+        let listHeight = rowHeight - HomeTodayListLayout.collapsedHeaderHeight
+        XCTAssertEqual(listHeight, 232, "258 − 26")
 
         let five = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 5)
         XCTAssertEqual(five.visibleItemCount, 5, "5 条全显示")
