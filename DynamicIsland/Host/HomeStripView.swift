@@ -522,18 +522,21 @@ extension View {
 /// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:)` 里
 /// `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
 ///
-/// 常量是**起点值**：上屏调参由控制器在阶段 Checkpoint 做，调完回写 docs/30 §接口与数据形状；
-/// 本文件不再有第二份。测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 /
+/// 常量是**上屏调参后的定稿值**（起点值见 docs/30 §接口与数据形状的留痕口径；本组已按 Checkpoint
+/// 的实机截图调过一轮辉光强度：常驻 0.05/4 → **0.08/5**、hover 0.10/10 → **0.16/11**）；本文件
+/// 不再有第二份。测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 /
 /// 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
 enum HomeBlockFloatMetrics {
     /// 常驻辉光的不透明度（白，低透明度 = 无填充的深度感）。
-    static let idleGlowOpacity: Double = 0.05
-    /// 常驻辉光的半径。
-    static let idleGlowRadius: CGFloat = 4
-    /// hover 的辉光不透明度（比常驻大 = 「加深」的一半）。
-    static let hoverGlowOpacity: Double = 0.10
-    /// hover 的辉光半径（比常驻大 = 「加深」的另一半）。
-    static let hoverGlowRadius: CGFloat = 10
+    ///
+    /// **起点值 0.05 在实机屏幕上几乎不可见**（Checkpoint 截图裁切比对），已调到 **0.08**。
+    static let idleGlowOpacity: Double = 0.08
+    /// 常驻辉光的半径（起点 4 → **5**，与不透明度同批上屏调参）。
+    static let idleGlowRadius: CGFloat = 5
+    /// hover 的辉光不透明度（比常驻大 = 「加深」的一半；随常驻同批上调 **0.10 → 0.16**）。
+    static let hoverGlowOpacity: Double = 0.16
+    /// hover 的辉光半径（比常驻大 = 「加深」的另一半；起点 10 → **11**）。
+    static let hoverGlowRadius: CGFloat = 11
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
