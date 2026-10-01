@@ -628,9 +628,10 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.current, 380)
     }
 
-    /// **切页**（T7 复核 P1）：名单外的页必须**没有值**（回落手动值），名单内的页保留到新页量完，
-    /// 首页读算出来的那一份。为什么这条是硬要求：不清值就会继承上一页的高度——首页 → 待办 ~200
-    /// → 日历，日历按 200 画两栏月历（`max(130, 200 − 28 − 36)` = 136pt），挤得不能用。
+    /// **切页**（T7 复核 P1 + p6-ui-polish / T7 机制五）：名单外的页必须**没有值**（回落手动值），
+    /// 名单内**没量过**的页保留到新页量完，**量过**的页直接读每页缓存（一步到位），首页读算出来的
+    /// 那一份。为什么前两条是硬要求：不清值就会继承上一页的高度——首页 → 待办 ~200 → 日历，
+    /// 日历按 200 画两栏月历（`max(130, 200 − 28 − 36)` = 136pt），挤得不能用。
     func testSelectTabClearsValueForUnlistedPagesAndKeepsItForMeasuredOnes() {
         let ledger = PanelContentHeight.shared
         ledger.reset()
@@ -646,17 +647,21 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.report(200, for: todos)
         XCTAssertEqual(ledger.current, 200)
 
-        // 名单内的另一页：**保留**上一页的量值（新页量完那一拍无条件覆盖它——一次跳动，
-        // §已知限制 2 的形态；切页就清会变成「先跳手动值再跳量值」两次跳动）。
+        // 名单内**没量过**的另一页：仍是旧路径——**保留**上一页的量值（新页量完那一拍无条件覆盖它，
+        // §已知限制 2 的形态；切页就清会变成「先跳手动值再跳量值」两次跳动）。缓存（T7 机制五）
+        // 只对**量过的**页做一步到位，没量过的页没有条目，这里因此逐字不变。
         ledger.selectTab(notifications)
-        XCTAssertEqual(ledger.current, 200, "名单内的页：先拿上一页的数，等新页量完覆盖")
+        XCTAssertEqual(ledger.current, 200, "名单内没量过的页：先拿上一页的数，等新页量完覆盖")
         ledger.report(150, for: notifications)
         XCTAssertEqual(ledger.current, 150, "新页量完 → 无条件接受")
 
-        // **新页的第一份上报无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
-        // 新页比旧值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。
+        // **量过的页切回来一步到位**（p6-ui-polish / T7 机制五）：缓存里就有待办上一次被接受的 200，
+        // 不再先落在那份 150 上再跳一次（0 次跳动，T6 的「一次跳动」再收一档）。
         ledger.selectTab(todos)
-        XCTAssertEqual(ledger.current, 150, "切到待办：先留着上一次量出来的 150（一次跳动的起点）")
+        XCTAssertEqual(ledger.current, 200, "量过的页：直接读 `heightCache`（不是留着的 150）")
+
+        // **新页的第一份上报仍无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
+        // 新页比缓存值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。
         ledger.pointerInsidePanel = { true }
         ledger.report(90, for: todos)
         XCTAssertEqual(ledger.current, 90, "切页后的第一份上报：无条件接受（变矮、光标在面板里都接受）")
@@ -668,15 +673,16 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.current, 140, "变大照常接受")
         ledger.pointerInsidePanel = { false }
 
-        // 名单外的页（日历）：**清掉** → `current` = nil → 尺寸层回落手动值。
+        // 名单外的页（日历）：**清掉**当班值 → `current` = nil → 尺寸层回落手动值。
         ledger.selectTab("com.cmeng.gourd.calendar")
-        XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 150）")
+        XCTAssertNil(ledger.current, "名单外的页没有值（不是继承上一页的 140）")
         XCTAssertNil(ledger.measuredHeight, "量出来的那一槽被清掉")
         XCTAssertEqual(ledger.activeTab, "com.cmeng.gourd.calendar")
 
-        // 再切回名单内的页：值已被清 → 新页量出来之前是 nil（回落手动值），量完就位。
+        // 再切回名单内的页：**缓存按页留着**（名单外那一趟只清当班值，不动别人的缓存）——
+        // 量过的待办一步到位回到**最后一次被接受的** 140；若从没量过才是 nil（回落手动值），量完就位。
         ledger.selectTab(todos)
-        XCTAssertNil(ledger.current, "上一页是名单外 → 回来时也没有存量值")
+        XCTAssertEqual(ledger.current, 140, "缓存按页保留（切到名单外不清别人页的缓存）")
         ledger.report(180, for: todos)
         XCTAssertEqual(ledger.current, 180)
 
@@ -718,6 +724,83 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.selectTab("com.cmeng.gourd.calendar")
         XCTAssertEqual(notifications, 2, "名单外的页把值清掉 → current 变 nil → 响一次")
 
+        withExtendedLifetime(cancellable) {}
+    }
+
+    /// **切页读每页缓存**（p6-ui-polish / T7 机制五，docs/30 D-10 / D-11）：量过的页切回来**一步到位**
+    /// ——直接落回它上一次被接受的那一份，既不先落在上一页的量值上、也不落手动值；名单外的页照旧
+    /// 清值回落手动值，但**缓存按页留着**（切回来还在）。没量过的页没有条目，逐字走旧路径
+    /// （留上一页的量值 + 首份上报无条件接受）。
+    ///
+    /// 顺带钉住免防抖标记（`lastChangeWasTabSwitch`）——它就是「这一拍窗口要立刻跟」的账本侧信号：
+    /// 切页换掉当班值、以及新页的**第一份**上报为真；普通的内容变化（滞回之外的同页上报）为假
+    /// （那条仍走 0.15s 防抖的既有链）。
+    func testTabSwitchUsesThePerTabHeightCache() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let todos = "com.cmeng.gourd.todos"
+        let notifications = "com.cmeng.gourd.notifications"
+        let calendar = "com.cmeng.gourd.calendar"
+
+        // 待办量出 200：**接受即写缓存**（四条款通过之后的每一个被接受的值都算）。
+        ledger.selectTab(todos)
+        ledger.report(200, for: todos)
+        XCTAssertEqual(ledger.current, 200)
+        XCTAssertEqual(ledger.heightCache[todos], 200, "被接受的上报立即进缓存")
+
+        // 通知没量过：没有条目 → 逐字走旧路径（先留着上一页的 200），首份上报无条件 + 写缓存。
+        XCTAssertNil(ledger.heightCache[notifications], "没量过的页没有条目（旧路径的判据）")
+        ledger.selectTab(notifications)
+        XCTAssertEqual(ledger.current, 200, "没缓存的页：先拿上一页的数，等首份上报覆盖")
+        ledger.report(150, for: notifications)
+        XCTAssertEqual(ledger.heightCache[notifications], 150)
+
+        // **一步到位**：切回量过的待办，直接读缓存里的 200——不再先落在那份 150 上（0 次跳动）。
+        ledger.selectTab(todos)
+        XCTAssertEqual(ledger.current, 200, "量过的页切回来一步到位（缓存值，不是上一页的 150）")
+        XCTAssertEqual(ledger.activeTab, todos)
+        XCTAssertTrue(ledger.lastChangeWasTabSwitch, "切页换掉当班值 → 这一拍免防抖（订阅走立即链）")
+
+        // 切页**首份上报仍无条件**（与有没有缓存无关，派发片段条款 ③ 的口径不变）：缓存只是起点，
+        // 页面上真量到的值照样覆盖它——差 5pt 也接受、光标压着面板也接受。窗口侧这两拍走同一条
+        // 立即链（动画把它们连成一段，不是两次台阶）。
+        ledger.pointerInsidePanel = { true }
+        ledger.report(205, for: todos)
+        XCTAssertEqual(ledger.current, 205, "切页首报无条件接受（不比滞回、不看光标）")
+        XCTAssertTrue(ledger.lastChangeWasTabSwitch, "新页的第一份上报同样是「切页那一拍」")
+        ledger.pointerInsidePanel = { false }
+
+        // 名单外的日历：清当班值 → `current` = nil（回落手动值），但**不动别人页的缓存**。
+        ledger.selectTab(calendar)
+        XCTAssertNil(ledger.current, "名单外的页没有值（回落手动值）")
+        XCTAssertEqual(ledger.heightCache[todos], 205, "名单外那一趟不清别人页的缓存")
+        ledger.selectTab(todos)
+        XCTAssertEqual(ledger.current, 205, "切回来还是缓存里那一份（名单外只是「当班没有值」）")
+
+        // 切页首报**与缓存同值**：一次都不响（值没变就没有要推的窗口那一拍），标记随之是假。
+        ledger.report(205, for: todos)
+        XCTAssertEqual(ledger.current, 205, "首报与缓存同值 → 值不动")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "没有通知就没有「切页那一拍」这回事")
+
+        // 普通内容变化（同页、滞回之外）**不是**切页那一拍：仍走 0.15s 防抖那条既有链。
+        ledger.report(300, for: todos)
+        XCTAssertEqual(ledger.current, 300, "同页 +95pt → 接受")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "普通过报不置免防抖标记（走防抖链，不抢立即链）")
+        ledger.report(303, for: todos)
+        XCTAssertEqual(ledger.current, 300, "同页 3pt 微动仍被滞回吃掉（缓存不改四条款）")
+
+        // 切页读缓存时**值相同就不响**（`selectTab` 只在 `current` 真的变时发通知，口径不变）。
+        var notificationCount = 0
+        let cancellable = ledger.objectWillChange.sink { _ in notificationCount += 1 }
+        ledger.selectTab(notifications)
+        XCTAssertEqual(notificationCount, 1, "通知页的缓存 150 ≠ 300 → 响一次")
+        XCTAssertEqual(ledger.current, 150, "另一个量过的页同样一步到位")
+        ledger.selectTab(todos)
+        XCTAssertEqual(notificationCount, 2, "回待办：缓存 300 → 响一次")
+        ledger.selectTab(todos)
+        XCTAssertEqual(notificationCount, 2, "同键重复声明（每帧都调）→ 不响")
         withExtendedLifetime(cancellable) {}
     }
 
@@ -1037,6 +1120,75 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertLessThan(wideValue, 200, "不是单列那 404（按真实布面 6 列量）")
         withExtendedLifetime(wide) {}
         withExtendedLifetime(narrow) {}
+    }
+
+    /// **启动台就绪门**（p6-ui-polish / T7 机制五，docs/30 D-11）：`apps` 首轮扫描完成前探针**一次都不报**
+    /// ——那几帧页面上是 loading / 空态占位，量它进账本就是首开「先塌陷再长高」的三拍。
+    ///
+    /// 判据分两半，这里都钉住：① **模块侧** `LauncherStore.hasLoadedApps`（`load()` 前后一假一真；
+    /// 与「只扫一次」的 `hasLoaded` 不是一回事——那个在扫描**开始前**就置位）；② **探针侧**
+    /// `PanelContentHeight.isTabReportReady`（宿主按 tab 接的就是 ①：为假时同一页挂了探针也不上报，
+    /// 为真才进账本，且**不是永久封锁**）。
+    func testLauncherDoesNotReportBeforeAppsLoad() async {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let launcherTab = LauncherModule.manifest.id
+        XCTAssertEqual(launcherTab, "com.cmeng.gourd.launcher", "探针的键 = 模块 id（测量名单里那一条）")
+        XCTAssertTrue(PanelContentHeight.isMeasuredTab(launcherTab), "前提：启动台在测量名单里")
+
+        // ① 模块侧的就绪判据。`roots` 给空目录（扫描立即返回空表），`showRecents = false` +
+        //    `fetchUsage` 注入空样本 → 整条 `load()` 不碰 Spotlight、也不扫开发机真实的 /Applications。
+        let store = LauncherStore(
+            logger: ModuleLogger(moduleID: launcherTab, shortID: "launcher"),
+            roots: [],
+            pins: LauncherPins(read: { [] }, write: { _ in }),
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: false) },
+            fetchUsage: { _ in [:] }
+        )
+        XCTAssertFalse(store.hasLoadedApps, "还没 load：就绪门是关的")
+
+        // ② 宿主那条接缝的判据（`DynamicIslandApp` 里按同一个 tab 转发同一个属性）。
+        ledger.isTabReportReady = { tab in
+            guard tab == launcherTab else { return true }
+            return store.hasLoadedApps
+        }
+
+        // 加载前：同一页挂上探针**一次都不报**（`current` 保持 nil → 尺寸层回落手动值，
+        // 而不是先把空态占位高写进账本、等 App 扫完再改一次）。
+        let beforeLoad = mountPanelPage(
+            Color.clear.frame(height: 60)
+                .panelContentHeightReport(tab: launcherTab, headerHeight: 24, isCurrent: { true }),
+            width: 700, height: 600
+        )
+        XCTAssertNil(ledger.current, "首轮扫描完成前不上报（loading / 空态占位高不进账本）")
+        XCTAssertNil(ledger.activeTab, "一次都没进门，`activeTab` 也不该被写")
+
+        // 首轮扫描完成：`roots` 空 → 空表，但**算已就绪**（空目录的高就是这一页的高，不开特例）。
+        await store.load()
+        XCTAssertTrue(store.hasLoadedApps, "`load()` 之后就绪（本标记只在 `apps` 落地后置位）")
+        XCTAssertEqual(store.apps, [], "空根目录 → 空表（本用例只关心就绪门，不造真 `.app`）")
+
+        // 加载后：同一页再量一趟就进门了——就绪门是**闸门**，不是把这一页永久挡住。
+        let afterLoad = mountPanelPage(
+            Color.clear.frame(height: 60)
+                .panelContentHeightReport(tab: launcherTab, headerHeight: 24, isCurrent: { true }),
+            width: 700, height: 600
+        )
+        guard let measured = ledger.current else {
+            return XCTFail("就绪后仍未上报——就绪门把这一页永久挡住了（量值再也进不来）")
+        }
+        XCTAssertEqual(
+            measured,
+            PanelAutoHeight.measuredContentHeight(naturalHeight: 60, headerHeight: 24),
+            accuracy: 1,
+            "就绪后的量值照常进门（夹具 60 高 = 模拟网格 / 真实空态）"
+        )
+        XCTAssertEqual(ledger.activeTab, launcherTab)
+
+        withExtendedLifetime(beforeLoad) {}
+        withExtendedLifetime(afterLoad) {}
     }
 
     /// **探针对渲染透明**（`sizeThatFits` 逐字转发提案）：整页在这一层里面仍然把这个 700×600 的

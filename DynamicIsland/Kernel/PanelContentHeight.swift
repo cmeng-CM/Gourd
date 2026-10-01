@@ -60,6 +60,16 @@
 //  链**；切 tab 那一刻的尺寸由既有 `updateWindowSizeForTabSwitch()` 经 `openNotchSize` 读本账本
 //  （读到的就是 `selectTab` 刚定下来的那一份）。
 //
+//  **切页平滑三件**（p6-ui-polish / T7，docs/30 §做法 机制五；动画面在 `DynamicIslandApp` 那一侧）：
+//  - **每页高度缓存**（`heightCache`）：每次**接受**上报都写；`selectTab(_:)` 对名单内的页直接读它
+//    ——量过的页切回来**一步到位**（零次跳动），没量过的页仍走「留上一页的量值 + 首份上报无条件」
+//    那条旧路径（名单外的页照旧清值回落手动值；缓存按页留着，切回来还在）；
+//  - **切页首报免防抖**（`lastChangeWasTabSwitch`）：`selectTab` 换掉当班值、或新页的**第一份**上报
+//    被接受时置位。订阅见到它就不走 0.15s 防抖，改用**同一条**立即链（`updateWindowSizeForTabSwitch`，
+//    内部延后一拍读新值）——**不新开 resize 链**；
+//  - **就绪门**（`isTabReportReady`，宿主注入）：这一页此刻还**没有可量的内容**时探针不上报
+//    （启动台 `apps` 首轮扫描完成前页面上是 loading / 空态占位，量它 = 首开「先塌陷再长高」三拍）。
+//
 
 import CoreGraphics
 import Foundation
@@ -128,12 +138,43 @@ final class PanelContentHeight: ObservableObject {
     /// 永远只增不减）。
     var pointerInsidePanel: @MainActor () -> Bool = { false }
 
+    /// 这一页此刻**能不能上报**（就绪门，p6-ui-polish / T7 机制五）。**宿主注入**：默认「都能」。
+    ///
+    /// 唯一的用例是启动台——`apps` 首轮扫描完成前页面上是 loading / 空态占位，**那不是这一页的
+    /// 自然高**（进了账本 = 首开「先塌陷再长高」的三拍）。判据（扫完没有）住在模块侧
+    /// （`LauncherModule.hasLoadedApps`），宿主把它按 tab 接进来；账本不认模块类型、也不存第二份
+    /// 状态，只留一个判据闭包——与 `pointerInsidePanel` 是**同一条注入形态**（默认值也一样：
+    /// 没接上时不拦任何上报，测量链条退回改动前的宽松口径）。
+    var isTabReportReady: @MainActor (String) -> Bool = { _ in true }
+
     /// 上一次**被接受**的页（`report` 的 tab、或 `selectTab(_:)` 定下来的页）。`current` 靠它二选一。
     private(set) var activeTab: String?
 
     /// 量出来的那一份（`activeTab` 是名单内某一页时的 `current`）。`private(set)`：写入口只有
     /// `report` / `selectTab`，读出来是给用例与排查看的（生产读者一律走 `current`）。
     private(set) var measuredHeight: CGFloat?
+
+    /// **每页量出来的高度**（p6-ui-polish / T7 机制五）：`report(_:for:)` 每次**接受**一个值就写进来，
+    /// 于是「切回量过的页」不必先落在上一页的量值（或手动值）上再跳一次——`selectTab(_:)` 直接读它，
+    /// **一步到位**。没量过的页没有条目 → 仍走旧路径（留上一页的量值 + 首份上报无条件接受）。
+    ///
+    /// 名单外的页（日历 / 计时器 / 终端）不上报，因此**不会**有条目；缓存按页留着（切到名单外的页只
+    /// 清「当班值」，不清别人的缓存）。**不是第二份「当前值」**：`current` 仍由 `activeTab` +
+    /// （`homeContentHeight` / `measuredHeight`）二选一决定，缓存只改「切页那一刻的起点」。
+    private(set) var heightCache: [String: CGFloat] = [:]
+
+    /// 最近一次写入口之后，**这一声 `objectWillChange` 是不是「切页那一拍」**（T7 机制五的免防抖标记）。
+    ///
+    /// 「切页那一拍」两档：① `selectTab(_:)` 把当班值换成了另一页的（缓存一步到位 / 名单外清值 /
+    /// 首页槽换了值）；② 新页的**第一份**上报被接受（`awaitsFirstReport`）。这两种变化都不该等
+    /// 0.15s 防抖——页面已经换了，窗口晚一拍跟上就是用户说的「卡顿」。消费方
+    /// （`DynamicIslandApp` 的订阅）**在 `send()` 的同步回调里**读它，见到为真就走**同一条**立即链
+    /// （`updateWindowSizeForTabSwitch`，内部延后一拍读新值），**不新开 resize 链**。
+    ///
+    /// **一次性**：每个写入口（`report` / `selectTab`）开头先清掉，只有本次真的发出一声
+    /// `objectWillChange` 且属于上面两档时才置位（没发通知的静默写因此读出来是假；测试直接读它，
+    /// 生产读者只在订阅回调里读）。
+    private(set) var lastChangeWasTabSwitch = false
 
     /// 刚切到一个**会上报**的页（`selectTab` 置位）：它的**第一份**上报要**无条件**接受
     /// （派发片段条款 ③ 的「换 tab 无条件接受」），滞回与光标规则都不参与。
@@ -170,20 +211,31 @@ final class PanelContentHeight: ObservableObject {
     ///
     /// 三档（口径见文件头「切页时谁说了算」）：
     /// - 首页键 → `current` 读 `homeContentHeight`（首页自己在 body 里写）；
-    /// - 名单内的页 → **保留**上一页量出来的值（新页量完那一拍无条件覆盖它，一次跳动）；
-    /// - 名单外的页 → **清掉**量出来的值 → `current` = nil → 尺寸层回落手动值。
+    /// - 名单**内**的页 → **量过的**直接读 `heightCache[tab]`（T7 机制五，**一步到位**）；
+    ///   没量过的保留上一页量出来的值（新页量完那一拍无条件覆盖它，一次跳动）；
+    /// - 名单**外**的页 → **清掉**量出来的值 → `current` = nil → 尺寸层回落手动值
+    ///   （缓存按页留着：切回来还是量过的那一份）。
     func selectTab(_ tab: String) {
         guard !tab.isEmpty, tab != activeTab else { return }
         let isHome = tab == Self.homeTab
         let isMeasured = Self.isMeasuredTab(tab)
-        let newCurrent: CGFloat? = isHome ? homeContentHeight : (isMeasured ? measuredHeight : nil)
+        // 缓存一步到位（T7 机制五）：量过的页用上次被接受的那一份；没量过的页 `cached` = nil →
+        // 仍是旧路径（留上一页的量值，等首份上报）。名单外的页不读缓存（照旧清值）。
+        let cached = isMeasured ? heightCache[tab] : nil
+        let newCurrent: CGFloat? = isHome ? homeContentHeight : (isMeasured ? (cached ?? measuredHeight) : nil)
+        lastChangeWasTabSwitch = false
         if newCurrent != current {
+            // 切页那一拍：订阅见到这个标记就走立即链（免防抖），不等 0.15s。
+            lastChangeWasTabSwitch = true
             objectWillChange.send()
         }
         activeTab = tab
-        // 名单内：留着上一页的量值（一次跳动）——但它的第一份上报无条件接受（`awaitsFirstReport`）。
-        // 名单外：清值 → `current` = nil → 尺寸层回落手动值。
+        // 名单内：缓存的页一步到位；没缓存的页留着上一页的量值（一次跳动）——但它的第一份上报
+        // 无条件接受（`awaitsFirstReport`）。名单外：清值 → `current` = nil → 尺寸层回落手动值。
         awaitsFirstReport = isMeasured
+        if let cached {
+            measuredHeight = cached
+        }
         if !isHome, !isMeasured {
             measuredHeight = nil
         }
@@ -214,10 +266,11 @@ final class PanelContentHeight: ObservableObject {
         }
 
         // 刚切到这一页的第一份上报：同样**无条件**（切页时留着的是上一页的量值，与它比出来的差
-        // 不是「同一页的微动」，见 `awaitsFirstReport`）。
+        // 不是「同一页的微动」，见 `awaitsFirstReport`）——而且它是**切页那一拍**：订阅见到标记就
+        // 走立即链（免防抖），新页量到的那一拍窗口马上跟上（T7 机制五）。
         if awaitsFirstReport {
             awaitsFirstReport = false
-            accept(height, for: tab)
+            accept(height, for: tab, isTabSwitchFirstReport: true)
             return
         }
 
@@ -242,18 +295,29 @@ final class PanelContentHeight: ObservableObject {
         measuredHeight = nil
         homeContentHeight = nil
         awaitsFirstReport = false
+        heightCache = [:]
+        lastChangeWasTabSwitch = false
         pointerInsidePanel = { false }
+        isTabReportReady = { _ in true }
     }
 
     /// 接受一个新值：**`current` 真的变了**才响一声 `objectWillChange`（尺寸层据此走 0.15s 防抖那条
     /// 既有的 resize 链；同 tab 内 8pt 以下的微动与「值没变」的切页因此一次都不响）。
-    private func accept(_ height: CGFloat, for tab: String) {
+    ///
+    /// `isTabSwitchFirstReport` = 本次是「新页的第一份上报」（T7 机制五）→ 这一声通知配
+    /// `lastChangeWasTabSwitch` 标记，订阅据此走立即链（免防抖）。
+    ///
+    /// 用户可见的落点：**每次接受都写 `heightCache`**（包括这一档）——下一次切回这一页就是一步到位。
+    private func accept(_ height: CGFloat, for tab: String, isTabSwitchFirstReport: Bool = false) {
         let newCurrent = tab == Self.homeTab ? homeContentHeight : height
+        lastChangeWasTabSwitch = false
         if newCurrent != current {
+            lastChangeWasTabSwitch = isTabSwitchFirstReport
             objectWillChange.send()
         }
         activeTab = tab
         measuredHeight = height
+        heightCache[tab] = height
     }
 }
 
@@ -269,6 +333,9 @@ extension View {
     /// - `isCurrent`：这一页此刻还是不是面板上的那一页。切 tab 的那 0.3s 里旧页还活着（transition），
     ///   而条款 ③ 是「换 tab 无条件接受」——旧页只要量到新尺寸就会把账本抢回去（判据 `tab != activeTab`
     ///   恰好成立），面板于是来回跳。这个闸门把**已经不当班**的页整个挡在账本外。
+    ///
+    /// 另有一道**就绪门**（T7 机制五）：`PanelContentHeight.isTabReportReady` 为假时同样不上报
+    /// （判据由宿主按 tab 注入，唯一用例是启动台首轮扫描完成前那份 loading / 空态占位高）。
     func panelContentHeightReport(
         tab: String,
         headerHeight: CGFloat,
@@ -313,10 +380,13 @@ private struct PanelContentHeightProbe: ViewModifier {
         }
     }
 
-    /// 上报一次（探针的判据都收在这里：当班 → 名单内 → 折成内容高口径 → 交账本）。
+    /// 上报一次（探针的判据都收在这里：当班 → 名单内 → **这一页就绪** → 折成内容高口径 → 交账本）。
     private func reportNaturalHeight(_ naturalHeight: CGFloat) {
         guard isCurrent() else { return }
         guard PanelContentHeight.isMeasuredTab(tab) else { return }
+        // 就绪门（T7 机制五）：这一页还没有可量的内容时一次都不报（启动台首轮扫描完成前是
+        // loading / 空态占位，量它 = 面板「先塌陷再长高」三拍）。默认「都能」——没接上时不影响。
+        guard PanelContentHeight.shared.isTabReportReady(tab) else { return }
         PanelContentHeight.shared.report(
             PanelAutoHeight.measuredContentHeight(
                 naturalHeight: naturalHeight,

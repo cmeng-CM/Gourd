@@ -20,6 +20,8 @@ import AVFoundation
 import Combine
 import Defaults
 import KeyboardShortcuts
+// 窗口尺寸动画的曲线（`CAMediaTimingFunction`，p6-ui-polish / T7 机制五）：系统框架，非新增依赖。
+import QuartzCore
 import Sparkle
 import SwiftUI
 import SkyLightWindow
@@ -463,9 +465,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         resizeWindows(to: requiredSize, animated: animateResize, force: false)
     }
 
+    /// **切页那一拍的立即链**（p6-ui-polish / T7 机制五）：`coordinator.$currentView` 的订阅与新页
+    /// 首份上报（账本 `lastChangeWasTabSwitch` 标记）都走这里——立即重算、`force: true`（尺寸没变也
+    /// 要重排多屏），**不新开第二条 resize 链**。
+    ///
+    /// **必动画**（机制五口径 ①）：切页这一拍的尺寸变化正是用户看得见的那一下，动画由
+    /// `resizeWindow` 兑现；`shouldAnimateResize` 那条既有的例外照旧生效（极简 UI + 活跃提醒 →
+    /// 该档仍走瞬时）。
     private func updateWindowSizeForTabSwitch() {
         let requiredSize = calculateRequiredNotchSize()
-        resizeWindows(to: requiredSize, animated: false, force: true)
+        resizeWindows(
+            to: requiredSize,
+            animated: shouldAnimateResize(for: requiredSize),
+            force: true
+        )
     }
     
     private func calculateRequiredNotchSize() -> CGSize {
@@ -631,8 +644,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // considered, but an unchanged frame still needs no AppKit display
         // transaction. Avoiding that no-op matters during hover/click opens.
         guard window.frame != targetFrame else { return }
-        window.setFrame(targetFrame, display: true)
+
+        // **瞬时路径**（`animated == false`）：拖拽手柄的连续更新（`ContentView`
+        // `syncWindowSizeAfterPanelResize`，另有自己的实时链）、初始化、以及 `shouldAnimateResize`
+        // 拦下的那一档（极简 UI + 活跃提醒）。逐字保留改动前的写法——拖拽实时路径绝不进动画分支，
+        // 否则每一帧都在开一段 0.25s 的动画，与鼠标打架（T7 的失败信号之一）。
+        guard animated else {
+            window.setFrame(targetFrame, display: true)
+            return
+        }
+
+        // **动画路径**（p6-ui-polish / T7 机制五口径 ①）：兑现这个一直存在的形参。
+        // 显式 `animator()` 代理不受 `animationBehavior = .none` 影响——那一项只挡**隐式**动画
+        // （`setFrame(_:display:animate:)` 与属性赋值的默认动画），显式代理动画照常执行；
+        // 因此窗口的 `animationBehavior = .none` 原样保留（用户拖动整窗 / 系统的隐式动画仍然瞬时）。
+        // 时长与曲线对齐内容侧的 `.smooth(duration: 0.3)`：0.25s + easeInEaseOut，窗口先到、内容跟上。
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.windowResizeAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().setFrame(targetFrame, display: true)
+        }
     }
+
+    /// 面板窗口尺寸动画的时长（秒）。与内容侧的 `.smooth(duration: 0.3)` 对齐：0.25s 略快一点，
+    /// 窗口先到位、内容随后贴合（窗口滞后才看得见「脱节」）。
+    private static let windowResizeAnimationDuration: TimeInterval = 0.25
 
     private func shouldAnimateResize(for newSize: CGSize) -> Bool {
         if Defaults[.enableMinimalisticUI] && !ReminderLiveActivityManager.shared.activeWindowReminders.isEmpty {
@@ -839,19 +875,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.debouncedUpdateWindowSize()
         }.store(in: &cancellables)
 
-        // **高度账本的变化 → 同一条防抖链**（p5-home-blocks / T7，docs/29 §做法 机制六）：
-        // 内容页（待办 / 通知 / 启动台 / 快捷指令）把量出来的自然高写进 `PanelContentHeight`，
-        // 账本只在**值真的变了**时响一声（同一 tab 的 8pt 以下微动、值没变的切页都不响）。
-        // 这里只用既有那条 0.15s 防抖：上报发生在布局那一刻（那一帧的窗口尺寸已经定死），
-        // 防抖之后的这一趟正好落在新一帧之后——**不新开第二条 resize 链**。
+        // **高度账本的变化 → 既有的 resize 链**（p5-home-blocks / T7，docs/29 §做法 机制六；
+        // p6-ui-polish / T7 机制五加一档）：内容页（待办 / 通知 / 启动台 / 快捷指令 / 架子）把量出来的
+        // 自然高写进 `PanelContentHeight`，账本只在**值真的变了**时响一声（同一 tab 的 8pt 以下微动、
+        // 值没变的切页都不响）。两档都**不新开 resize 链**：
+        // - 普通过报（内容变多 / 变少）→ 0.15s 防抖那条（上报发生在布局那一刻、那一帧的窗口尺寸
+        //   已经定死，防抖之后的这一趟正好落在新一帧之后）；
+        // - **切页那一拍**（`lastChangeWasTabSwitch`：`selectTab` 换了当班值，或新页的首份上报到）
+        //   → **免防抖**，改走**同一条**立即链 `updateWindowSizeForTabSwitch`（T7 机制五口径 ②）。
+        //   延后一拍再算：`objectWillChange` 发在账本写字段**之前**（willSet 语义），同步读到的还是
+        //   旧值——与 `coordinator.$currentView` 那条订阅同一个理由。
         //
-        // 切 tab 本身**不靠这里**：`coordinator.$currentView` 那条（上面的
-        // `updateWindowSizeForTabSwitch`）是立即重算，它经 `openNotchSize` 读到的是账本里
-        // **上一页**的值（新页还没布局）；新页量出来之后由本订阅补上那一拍（§已知限制 2 的
-        // 「切换瞬间有一次性跳动」）。
+        // 切 tab 本身**也靠这里一起兜**：`coordinator.$currentView` 那条（上面的
+        // `updateWindowSizeForTabSwitch`）是立即重算，账本里若已有这一页的缓存它当场就读到；
+        // 两条谁先谁后都不影响结果（尺寸相同就是一次 no-op，`resizeWindow` 的 frame 相等守卫）。
         PanelContentHeight.shared.objectWillChange
             .sink { [weak self] _ in
-                self?.debouncedUpdateWindowSize()
+                guard let self else { return }
+                if PanelContentHeight.shared.lastChangeWasTabSwitch {
+                    DispatchQueue.main.async {
+                        self.updateWindowSizeForTabSwitch()
+                    }
+                } else {
+                    self.debouncedUpdateWindowSize()
+                }
             }
             .store(in: &cancellables)
 
@@ -860,6 +907,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 不另写一份面板几何。默认实现是「在外面」——不接上时账本不拦任何变化。
         PanelContentHeight.shared.pointerInsidePanel = { [weak self] in
             self?.vm.isMouseHovering() ?? false
+        }
+
+        // 账本就绪门（p6-ui-polish / T7 机制五）：启动台在 `apps` 首轮扫描完成前**不上报**——
+        // 那几帧页面上是 loading / 空态占位，量它进账本 = 首开「先塌陷再长高」三拍。
+        // 判据住在模块侧（`LauncherModule.hasLoadedApps`），这里按模块 id 转发；其余页恒真
+        // （拿不到实例时也恒真——宁可不拦，不可把一页的量值永久挡在门外）。
+        PanelContentHeight.shared.isTabReportReady = { tab in
+            guard tab == LauncherModule.manifest.id else { return true }
+            guard let launcher = ModuleRegistry.shared.instance(for: tab) as? LauncherModule else { return true }
+            return launcher.hasLoadedApps
         }
 
         // Observe terminal settings changes

@@ -362,6 +362,17 @@ final class LauncherStore: ObservableObject {
     /// 首次扫目录中（网格位置显示一个小转圈，避免"点进去一片空白"）。
     @Published private(set) var isScanning = false
 
+    /// **`apps` 的首轮扫描是否已完成**（p6-ui-polish / T7 机制五的就绪门判据）。
+    ///
+    /// 与 `hasLoaded`（"扫过一次"）**不是一回事**：`hasLoaded` 在扫描**开始前**就置位（那是"只扫一次"
+    /// 的闸门），本标记只在 `apps` 真的落地之后才置位。
+    ///
+    /// 用处只有一个：**探针的就绪门**——首轮扫描完成前页面上是 loading / 空态占位，那不是这一页的
+    /// 自然高（进了高度账本 = 首开「先塌陷再长高」三拍，T7 的失败信号）。故意**不是** `@Published`：
+    /// 唯一读者是就绪门闭包（`LauncherModule.hasLoadedApps`），而 `apps` 落地本来就会让视图重绘
+    /// （探针在那一帧重新上报），不需要第二声通知。
+    private(set) var hasLoadedApps = false
+
     /// 视野里的清单：**固定 → 最近使用 → 使用次数 → 名称**（`LauncherRanking.rank`，唯一排序出口）。
     ///
     /// 每次读都现算（同 `ModuleRegistry` 的投影口径）：`apps` / `pinned` / `usage` 各自的变更
@@ -444,6 +455,9 @@ final class LauncherStore: ObservableObject {
 
             apps = scanned
             isScanning = false
+            // 就绪门开（T7 机制五）：这一刻起页面上才是**这一页的内容**（网格 / 真实的空态），
+            // 探针的量值才允许进高度账本。空目录同样算"已就绪"——那确实是这一页的高。
+            hasLoadedApps = true
             logger.info("扫描完成：\(apps.count) 个应用，耗时 \(Int(Date().timeIntervalSince(startedAt) * 1000))ms；固定项 \(pinned.count) 个")
         }
 
@@ -656,6 +670,11 @@ final class LauncherModule: GourdModule {
 
     /// 没有常驻副作用（不订阅通知、不起定时器），所以没有要收的东西。
     func deactivate() async {}
+
+    /// **就绪门的判据**（p6-ui-polish / T7 机制五）：`apps` 首轮扫描完成前，展开页上的量值
+    /// （loading / 空态占位的高）不进高度账本。宿主把它接进 `PanelContentHeight.isTabReportReady`
+    /// ——本模块不碰账本本身，只回答"我这页此刻有没有可量的内容"。
+    var hasLoadedApps: Bool { store.hasLoadedApps }
 
     /// 只答 `expanded`：`.compact` / `.lockscreen` / `.home` 一律 `.none`（不占位、不算失败）。
     ///
