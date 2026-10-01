@@ -167,8 +167,10 @@ final class FrontAppModule: GourdModule {
 /// `current` 为 nil（取不到前台应用）时上半画一行浅色 `—`、网格仍照画全部——这时"谁是当前应用"
 /// 本来就不成立，画不出来的是那一行，不是这一块的内容。
 ///
-/// **装不下的那些不画**：块就 180pt 宽 / 152pt 高那么点地方（最小档 = 4 行 × 6 格 = 24 格），
-/// 溢出的格子静默不画；本批不做溢出提示（§明确不做「`＋N` 的观感」/ 已知限制见报告）。
+/// **装不下的那些不画**：块就 180pt 宽 / **96pt 高**（紧凑档档高 `HomeFlowView.compactBlockHeight`）
+/// 那么点地方（最小档 = 2 行 × 6 格 = 12 格）——旧注释的 152 是 strip 时代的最小可用高、
+/// 分带渲染器退役后已不是生产值（docs/29 §实际交付 遗留 5），溢出的格子静默不画；
+/// 本批不做溢出提示（§明确不做「`＋N` 的观感」/ 已知限制见报告）。
 ///
 /// **颜色**：面板黑底 + 系统外观可为浅色 → 一律显式浅色（`Color.white` / `.white.opacity(…)`）。
 private struct FrontAppHomeBlockView: View {
@@ -340,7 +342,8 @@ enum FrontAppGridBudget {
     /// 于是 `k ≤ (高 − 28) / 30` —— 中间那个 `+6` 与 `(k−1)×6` 末尾的 `−6` 正好抵消，
     /// 所以公式就是 `(高 − 当前行) / (格 + 行间距)`，不需要额外项。
     ///
-    /// 152pt（strip 的最小可用高度）→ **4 行**；再矮就一行行地减，放不下任何一行时是 0（不画网格）。
+    /// 152pt（strip 时代的旧样本，见 `ShortcutsFrontAppTests` 里保留的参数化样本，docs/29 D-58）
+    /// → **4 行**；**紧凑档档高 96pt → 2 行**；再矮就一行行地减，放不下任何一行时是 0（不画网格）。
     static func rowCount(forHeight height: CGFloat) -> Int {
         max(0, Int((height - currentIconSize) / (cellSize + rowSpacing)))
     }

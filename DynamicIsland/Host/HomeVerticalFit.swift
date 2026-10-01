@@ -34,8 +34,9 @@
 //  **T7 改动前后**：旧三档是 `both` / `stripOnly` / `calendarOnly`；新四档里 `both` 与
 //  `noCalendar` 的算式与旧 `both` / `stripOnly` 逐字一致（没有紧凑块时新四档**退化成旧三档**：
 //  `both` ≡ 旧 both、`noCalendar` ≡ 旧 stripOnly、`none` ≡ 旧 calendarOnly——旧 `calendarOnly`
-//  那一档在生产档下从来不画日历行，见 `HomeCalendarRow.rowHeight`（294）> `HomeStripView.minimumUsableHeight`
-//  （152），判据的 `available >= calendarRowHeight` 因而不可能成立）。
+//  那一档在生产档下从来不画日历行，见 `HomeCalendarRow.rowHeight`（**p6 起按当月**：`36N + 52`，
+//  10 月 232；旧口径是固定 294）> `HomeStripView.minimumUsableHeight`（现为大块档 140；旧 152），
+//  判据的 `available >= calendarRowHeight` 因而不可能成立）。
 //
 //  为什么是**纯函数**（无 SwiftUI、无偏好、无单例）：取舍只有几条边界，值得穷举；放在视图里就只能
 //  靠改高度、截图、肉眼比，判错一位也没人知道。视图侧只剩「按 plan 画哪几条」的机械动作。

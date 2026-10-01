@@ -94,7 +94,8 @@ final class PanelContentHeight: ObservableObject {
     /// （`HomeBandedHomeView`）不在屏幕上。落在首页键上，`current` 就会拿「上一次标准首页算出来的
     /// 值」当内容高（auto 档下面板高度 = 那个值 + 40，与侧歌词无关；且把手隐藏、滑块禁用，用户
     /// 没得改）。因此给它一个**没人上报**的键：`selectTab(_:)` 走到「名单外」那一档 →
-    /// `current` = nil → 尺寸层回落**手动值**（D-45 对日历 / 计时器 / 终端同一条口径）。
+    /// `current` = nil → 尺寸层回落**手动值**（D-45 对名单外的页同一条口径；p6 起名单外的
+    /// 只剩计时器 / 终端——日历与暂存器已进 `measuredTabs`，见 T8 / T6）。
     /// 判据（哪一支在屏幕上）由 `showsSideLyricsHomeLayout(...)` 给，标准路径的首页键逐字不变。
     static let sideLyricsHomeTab = "sideLyricsHome"
 
@@ -428,8 +429,9 @@ private struct PanelContentHeightProbe: ViewModifier {
 /// 宽度自适应的那几页因此按真实布面量（T7 复核 P2，见 `placeSubviews` 的注释）。
 ///
 /// `placeSubviews` 里回调属**观察**：账本的 `report` 只写自己的字段并在值变化时发一次
-/// `objectWillChange`，读者是 `DynamicIslandApp` 的 Combine 订阅（0.15s 防抖后异步重算窗口），
-/// **没有任何视图观察它**——因此不会在视图更新里触发视图失效（`@Published` 的经典警告来源）。
+/// `objectWillChange`，读者是 `DynamicIslandApp` 的 Combine 订阅（**两档**：普通过报走
+/// 0.15s 防抖那条；**切页首报免防抖**——`lastChangeWasTabSwitch` 为真时走同一条立即链，
+/// T7 机制五），**没有任何视图观察它**——因此不会在视图更新里触发视图失效（`@Published` 的经典警告来源）。
 /// 回调本身声明成**非隔离**的（`Layout` 的协议方法就是非隔离的），补隔离在调用侧。
 private struct PanelNaturalHeightLayout: Layout {
     let onNaturalHeight: (CGFloat) -> Void
