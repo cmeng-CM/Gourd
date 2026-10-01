@@ -8988,7 +8988,20 @@
       }
     },
     "Allow moving files when dragging out" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖出时允许移动文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖出時允許移動檔案"
+          }
+        }
+      }
     },
     "Allowed Features" : {
       "comment" : "A label describing the allowed features for an app extension.",
@@ -16147,13 +16160,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择从架子共享文件时使用的服务。将文件拖到架子上或点击架子按钮选择文件。"
+            "value" : "选择从投送暂存共享文件时使用的服务。将文件拖到投送暂存上或点击投送暂存按钮选择文件。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇從架子共享檔案時使用的服務。將檔案拖到架子上或點按架子按鈕選擇檔案。"
+            "value" : "選擇從投送暫存共享檔案時使用的服務。將檔案拖到投送暫存上或點按投送暫存按鈕選擇檔案。"
           }
         }
       }
@@ -30501,6 +30514,12 @@
     },
     "Enable shelf" : {
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable AirDrop & File Shelf"
+          }
+        },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
@@ -30534,13 +30553,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用架子"
+            "value" : "启用隔空投送与文件暂存"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用架子"
+            "value" : "啟用隔空投送與檔案暫存"
           }
         }
       }
@@ -32888,13 +32907,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拖放到架子上的文件将通过此服务共享"
+            "value" : "拖放到投送暂存的文件将通过此服务共享"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拖放到架子上的檔案將透過此服務共享"
+            "value" : "拖放到投送暫存的檔案將透過此服務共享"
           }
         }
       }
@@ -32936,13 +32955,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从架子共享的文件将使用此服务"
+            "value" : "从投送暂存共享的文件将使用此服务"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從架子共享的檔案將使用此服務"
+            "value" : "從投送暫存共享的檔案將使用此服務"
           }
         }
       }
@@ -52129,13 +52148,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加项目时默认打开搁板标签"
+            "value" : "添加项目时默认打开投送暂存标签"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增項目時預設開啟擱板標籤"
+            "value" : "新增項目時預設開啟投送暫存標籤"
           }
         }
       }
@@ -57613,6 +57632,18 @@
             "state" : "translated",
             "value" : "Raftan Kaldır"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从暂存移除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從暫存移除"
+          }
         }
       }
     },
@@ -57657,13 +57688,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拖拽后从架子上移除"
+            "value" : "拖拽后从暂存移除"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拖移後從架子上移除"
+            "value" : "拖移後從暫存移除"
           }
         }
       }
@@ -63089,20 +63120,33 @@
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "暂存器"
+            "state" : "translated",
+            "value" : "投送暂存"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "暫存器"
+            "state" : "translated",
+            "value" : "投送暫存"
           }
         }
       }
     },
     "Shelf item" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂存项目"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫存項目"
+          }
+        }
+      }
     },
     "Shell" : {
       "localizations" : {
@@ -68663,7 +68707,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：四条宿主行（暂存器 / 终端 / 剪贴板 / 取色器——只有开关、没有上下箭头：它们的先后写死在面板里）+ 声明了展开面板的模块行。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
+            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：四条宿主行（投送暂存 / 终端 / 剪贴板 / 取色器——只有开关、没有上下箭头：它们的先后写死在面板里）+ 声明了展开面板的模块行。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
           }
         }
       }
@@ -72223,6 +72267,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "系統效能監視器"
+          }
+        }
+      }
+    },
+    "System Share Menu" : {
+      "comment" : "Display name for the system share menu fallback provider in the shelf's quick share picker.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System Share Menu"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统分享菜单"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系統分享選單"
           }
         }
       }

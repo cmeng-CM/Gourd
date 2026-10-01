@@ -2658,6 +2658,176 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(registry.tabEntries.map(\.id), [surfaceBID])
     }
 
+    // MARK: - 架子统一命名（p6-ui-polish / T4）
+
+    /// T4：架子统一命名——设置行「启用隔空投送与文件暂存」、短名「投送暂存」（`Shelf` 一个 key
+    /// 同时供侧栏、页标题与 tab 文案，不拆 key），四条无中文的文案补齐，供应商回落不再直出英文。
+    ///
+    /// 判据读**两份 catalog 原文件**（设计文档 §接口与数据形状 · 机制三 命名表）：
+    ///  1. 关键 key 的 zh-Hans / zh-Hant / en 逐条断言——`en` 的解析口径与运行时一致：有 `en` 条目
+    ///     取条目值，缺条目时以 key 自身为值（catalog 的源语言口径；视图里都是 `Text(key)` 直查）；
+    ///  2. 同一个 key 在两份 catalog 都有时逐语言一致（「两份 catalog 打架」的判据——`Shelf` 即其一）；
+    ///  3. 全量负断言：每个 zh 值（含繁体形态）不得再出现「架子 / 搁板 / 暂存器」旧名。
+    ///
+    /// 面板 tab 只画图标（`TabButton` 不渲染 label），tab 名不在可观察判据里。
+    func testShelfUserVisibleStringsUseTheUnifiedName() throws {
+        let rootURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let catalogNames = ["DynamicIsland/Localizable.xcstrings", "Localizable.xcstrings"]
+        var tables: [String: [String: [String: CatalogUnit]]] = [:]
+        for name in catalogNames {
+            tables[name] = try Self.catalogTable(at: rootURL.appendingPathComponent(name))
+        }
+
+        // 1) 命名表逐条：zh-Hans / zh-Hant / en 三个值都逐字断言。
+        for row in Self.shelfNamingTable {
+            let owners = catalogNames.filter { tables[$0]?[row.key] != nil }
+            XCTAssertFalse(owners.isEmpty, "\(row.key) 在两份 catalog 里都查不到（key 被改名了？）")
+            for name in owners {
+                let languages = tables[name]?[row.key] ?? [:]
+                XCTAssertNotNil(languages["zh-Hans"], "\(name) · \(row.key) 缺 zh-Hans 条目")
+                XCTAssertEqual(languages["zh-Hans"]?.value, row.zhHans, "\(name) · \(row.key) 的 zh-Hans 不是统一名")
+                XCTAssertEqual(languages["zh-Hans"]?.state, "translated", "\(name) · \(row.key) 的 zh-Hans 未落 translated")
+                XCTAssertNotNil(languages["zh-Hant"], "\(name) · \(row.key) 缺 zh-Hant 条目")
+                XCTAssertEqual(languages["zh-Hant"]?.value, row.zhHant, "\(name) · \(row.key) 的 zh-Hant 不是统一名")
+                XCTAssertEqual(languages["zh-Hant"]?.state, "translated", "\(name) · \(row.key) 的 zh-Hant 未落 translated")
+                XCTAssertEqual(
+                    languages["en"]?.value ?? row.key,
+                    row.en ?? row.key,
+                    "\(name) · \(row.key) 的 en 不是统一名"
+                )
+            }
+            // 两份 catalog 都收了这个 key：值必须逐语言一致。
+            if owners.count == 2 {
+                for language in ["zh-Hans", "zh-Hant", "en"] {
+                    XCTAssertEqual(
+                        tables[owners[0]]?[row.key]?[language]?.value,
+                        tables[owners[1]]?[row.key]?[language]?.value,
+                        "\(row.key) 的 \(language) 在两份 catalog 里打架"
+                    )
+                }
+            }
+        }
+
+        // 2) 面板组脚注是整段文案：只钉「含新短名、不含旧名」。
+        let footerKey = "settings.modules.group.panel.footer"
+        let footer = tables["DynamicIsland/Localizable.xcstrings"]?[footerKey]?["zh-Hans"]?.value
+        XCTAssertNotNil(footer, "\(footerKey) 缺 zh-Hans 文案")
+        XCTAssertTrue(footer?.contains("投送暂存") ?? false, "面板组脚注没换成「投送暂存」：\(footer ?? "nil")")
+        XCTAssertFalse(footer?.contains("暂存器") ?? true, "面板组脚注仍留着「暂存器」")
+
+        // 3) 全量负断言：两份 catalog 的每个 zh 值都不再出现旧名。
+        for name in catalogNames {
+            for (key, languages) in tables[name] ?? [:] {
+                for language in ["zh-Hans", "zh-Hant"] {
+                    guard let value = languages[language]?.value else { continue }
+                    for legacy in Self.legacyShelfNames {
+                        XCTAssertFalse(
+                            value.contains(legacy),
+                            "\(name) · \(key)（\(language)）仍含旧名「\(legacy)」：\(value)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// 一条命名断言（`en == nil` = catalog 里没有显式 `en` 条目，期望值就是 key 自身）。
+    private struct ShelfNamingExpectation {
+        let key: String
+        let zhHans: String
+        let zhHant: String
+        var en: String? = nil
+    }
+
+    /// 设计文档 §接口与数据形状 · 机制三 命名表的逐字期望值——含 `Enable shelf` 的新英文
+    /// （`Enable AirDrop & File Shelf`）、供应商回落 `System Share Menu`，以及根 catalog 那条
+    /// 完全磁盘访问引导（它的旧译里也有「暂存器」）。
+    private static let shelfNamingTable: [ShelfNamingExpectation] = [
+        ShelfNamingExpectation(
+            key: "Enable shelf",
+            zhHans: "启用隔空投送与文件暂存",
+            zhHant: "啟用隔空投送與檔案暫存",
+            en: "Enable AirDrop & File Shelf"
+        ),
+        ShelfNamingExpectation(key: "Shelf", zhHans: "投送暂存", zhHant: "投送暫存", en: "Shelf"),
+        ShelfNamingExpectation(
+            key: "Open shelf tab by default if items added",
+            zhHans: "添加项目时默认打开投送暂存标签",
+            zhHant: "新增項目時預設開啟投送暫存標籤"
+        ),
+        ShelfNamingExpectation(
+            key: "Remove from shelf after dragging",
+            zhHans: "拖拽后从暂存移除",
+            zhHant: "拖移後從暫存移除"
+        ),
+        ShelfNamingExpectation(key: "Remove from Shelf", zhHans: "从暂存移除", zhHant: "從暫存移除"),
+        ShelfNamingExpectation(key: "Shelf item", zhHans: "暂存项目", zhHant: "暫存項目"),
+        ShelfNamingExpectation(
+            key: "Allow moving files when dragging out",
+            zhHans: "拖出时允许移动文件",
+            zhHant: "拖出時允許移動檔案"
+        ),
+        ShelfNamingExpectation(
+            key: "Choose which service to use when sharing files from the shelf. Drag files onto the shelf or click the shelf button to pick files.",
+            zhHans: "选择从投送暂存共享文件时使用的服务。将文件拖到投送暂存上或点击投送暂存按钮选择文件。",
+            zhHant: "選擇從投送暫存共享檔案時使用的服務。將檔案拖到投送暫存上或點按投送暫存按鈕選擇檔案。"
+        ),
+        ShelfNamingExpectation(
+            key: "Files dropped on the shelf will be shared via this service",
+            zhHans: "拖放到投送暂存的文件将通过此服务共享",
+            zhHant: "拖放到投送暫存的檔案將透過此服務共享"
+        ),
+        ShelfNamingExpectation(
+            key: "Files shared from the shelf will use this service",
+            zhHans: "从投送暂存共享的文件将使用此服务",
+            zhHant: "從投送暫存共享的檔案將使用此服務"
+        ),
+        ShelfNamingExpectation(
+            key: "System Share Menu",
+            zhHans: "系统分享菜单",
+            zhHant: "系統分享選單",
+            en: "System Share Menu"
+        ),
+        ShelfNamingExpectation(
+            key: "Without Full Disk Access, Shelf can only read files from Documents and Downloads. Grant Full Disk Access to make Shelf work globally.",
+            zhHans: "如果没有完全磁盘访问权限，投送暂存只能读取文档和下载目录的文件。授予完全磁盘访问权限以使投送暂存在全局范围工作。",
+            zhHant: "如果沒有完整磁碟取用權，投送暫存只能讀取文件和下載目錄的檔案。授予完整磁碟取用權以使投送暫存在全域範圍工作。"
+        ),
+    ]
+
+    /// 旧名（D-05「旧译清零」）：zh 值里一律不再出现——含繁体形态。
+    private static let legacyShelfNames = ["架子", "搁板", "擱板", "暂存器", "暫存器"]
+
+    /// catalog 里一条语言条目的取值与状态。
+    private struct CatalogUnit {
+        let value: String
+        let state: String
+    }
+
+    /// 解析一份 `.xcstrings` 原文件：key →（语言 → 条目）。文件读不到或结构不对就抛出——
+    /// 「读不到文件」不该静默变成通过。
+    private static func catalogTable(at url: URL) throws -> [String: [String: CatalogUnit]] {
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "\(url.path) 不是 JSON 对象"
+        )
+        let strings = try XCTUnwrap(root["strings"] as? [String: Any], "\(url.path) 缺 strings 表")
+        var table: [String: [String: CatalogUnit]] = [:]
+        for (key, rawEntry) in strings {
+            guard let entry = rawEntry as? [String: Any],
+                  let localizations = entry["localizations"] as? [String: Any] else { continue }
+            var languages: [String: CatalogUnit] = [:]
+            for (language, rawLocalization) in localizations {
+                guard let unit = (rawLocalization as? [String: Any])?["stringUnit"] as? [String: Any],
+                      let value = unit["value"] as? String else { continue }
+                languages[language] = CatalogUnit(value: value, state: unit["state"] as? String ?? "")
+            }
+            table[key] = languages
+        }
+        return table
+    }
+
     // MARK: - 工具
 
     /// 让出主 actor 若干回合，直到条件成立（桥的回调是 `Task { @MainActor }`，不是同帧）。

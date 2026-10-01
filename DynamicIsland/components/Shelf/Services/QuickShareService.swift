@@ -31,6 +31,15 @@ struct QuickShareProvider: Identifiable, Hashable, Sendable {
     var supportsRawText: Bool
 }
 
+extension QuickShareProvider {
+    /// 界面上显示的供应商名。`System Share Menu` 是 macOS 分享菜单的回落 id（同时是持久化到
+    /// `quickShareProvider` 的选择值），显示时走 catalog 本地化（zh「系统分享菜单」）；
+    /// 其余是系统分享服务名（系统已本地化），原样显示。
+    var displayName: String {
+        id == "System Share Menu" ? String(localized: "System Share Menu") : id
+    }
+}
+
 class QuickShareService: ObservableObject {
     static let shared = QuickShareService()
     

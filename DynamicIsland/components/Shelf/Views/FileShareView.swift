@@ -124,7 +124,7 @@ struct FileShareView: View {
                         .animation(.spring(response: 0.36, dampingFraction: 0.7), value: vm.dropZoneTargeting)
                 }
 
-                Text(selectedProvider.id)
+                Text(selectedProvider.displayName)
                     .font(.system(.headline, design: .rounded))
                     .foregroundColor(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
@@ -180,7 +180,7 @@ struct FileShareView: View {
                                         }
                                         .foregroundColor(.accentColor)
 
-                                        Text(provider.id)
+                                        Text(provider.displayName)
                                             .lineLimit(1)
                                             .truncationMode(.tail)
                                             .layoutPriority(1)
@@ -209,7 +209,7 @@ struct FileShareView: View {
                                     .foregroundColor(.accentColor)
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("Currently: \(selected.id)")
+                                        Text("Currently: \(selected.displayName)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
