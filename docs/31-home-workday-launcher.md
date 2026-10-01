@@ -152,7 +152,7 @@ enum WorkdayCalendar {
         // 顺序：makeup 含 → true；holidays 含 → false；否则 ISO 星期 ∈ workdays
     static func resolveWorkdays(from raw: [String]) -> Set<Int>     // 空/全坏 → defaultWorkdays
     static func resolveWorkHours(start: Int?, end: Int?)
-        -> (start: Int, end: Int)   // 先夹取到 workHourRange，再判 end ≤ start → 回落 (9, 18)
+        -> (start: Int, end: Int)   // 任一值不在 workHourRange、或 end ≤ start → 回落 (9, 18)（不夹取：坏值一律回落默认）
 
     enum TodayState: Equatable {
         case restDay                       // 非工作日
@@ -162,7 +162,9 @@ enum WorkdayCalendar {
     }
     static func todayState(now: Date, workdays: Set<Int>, workStartHour: Int,
                            workEndHour: Int, calendar: Calendar) -> TodayState
-    static func todayFraction(now: Date, ...) -> Double             // 0…1；休息日 = 0
+    static func todayFraction(
+        now: Date, workdays: Set<Int>, workStartHour: Int, workEndHour: Int, calendar: Calendar
+    ) -> Double                                                     // 0…1；休息日 / 上班前 = 0
 
     /// scope ∈ [.week, .month, .quarter, .year]（.day 由 todayState/todayFraction 承担）
     /// progress = (今天之前的工作日数 + 今天(工作日时)的 todayFraction) / 区间工作日总数（总数为 0 → 0）
