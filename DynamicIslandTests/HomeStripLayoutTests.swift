@@ -1935,7 +1935,8 @@ final class HomeStripLayoutTests: XCTestCase {
     /// hover 的放大要让块「看得出浮起」但不至于像抖动（> 1.05 小字上开始像抖）；提亮要能分辨但
     /// 不得把字冲白（增量 > 0.12 浅色元素会糊）；两层光（柔光池 + 内容辉光）必须**常驻可见**
     /// （> 0，否则块与背景无区分）且 **hover 都更深**（否则 hover 与常驻没差别，机制一的 hover
-    /// 半条腿没落地）；池半径系数 ≤ 1（渐隐在格子内，硬边就是变相底板）。
+    /// 半条腿没落地）；池半径系数 ≤ 0.5（最近边在 `0.5 × min(w, h)` 处——系数过大时边缘残留亮度，
+    /// 形成直角台阶 = 变相底板）。
     ///
     /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
     /// §已知限制 1 / D-20），这里钉的是效果算式；上屏的 hover 观感列入「需真人鼠标复核」清单
@@ -1954,8 +1955,9 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(idle.poolOpacity, 0.5, "柔光池是低透明度的一层，不该成「底」（不透明度 0…0.5）")
         XCTAssertGreaterThan(HomeBlockFloatMetrics.poolEndRadiusFactor, 0, "池半径系数为正")
         XCTAssertLessThanOrEqual(
-            HomeBlockFloatMetrics.poolEndRadiusFactor, 1,
-            "池必须渐隐在格子内（系数 ≤ 1 时短边 0.7 处已到全透明）——否则边缘出现硬边 = 变相底板"
+            HomeBlockFloatMetrics.poolEndRadiusFactor, 0.5,
+            "池必须在**最近边之前**归零：最近边在 0.5 × min(w, h) 处，系数 > 0.5 时边缘仍残留亮度、"
+                + "形成直角台阶 = 变相底板（0.7 曾实测残留 28.6%）"
         )
 
         // hover 档：光的两层（柔光池 + 内容辉光）都加深，放大与提亮待在可读区间。

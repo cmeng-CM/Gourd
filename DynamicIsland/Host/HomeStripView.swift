@@ -545,9 +545,13 @@ enum HomeBlockFloatMetrics {
     static let poolOpacity: Double = 0.06
     /// hover 的柔光池中心不透明度（比常驻大 = 池变亮）。
     static let hoverPoolOpacity: Double = 0.12
-    /// 柔光池的半径系数：`endRadius = max(48, min(w, h) × factor)`——在方块内约到 0.7 就渐隐，
-    /// 边缘不会出现硬边（硬边就是变相底板）。
-    static let poolEndRadiusFactor: CGFloat = 0.7
+    /// 柔光池的半径系数：`endRadius = max(48, min(w, h) × factor)`。
+    ///
+    /// **系数必须 ≤ 0.5**：格子的**最近边**在 `0.5 × min(w, h)` 处，系数过大会让渐变在边缘还没走完
+    /// ——0.7 时边缘仍残留 28.6% 强度（idle ≈4.4/255、hover ≈8.7/255），在格子边缘形成**直角台阶**
+    /// = 变相底板（T1 三轮独立重审实测；且与「渐变到全透明、无边界」的口径不符）。取 **0.45**：
+    /// 到最近边之前就归零，留一点余量。
+    static let poolEndRadiusFactor: CGFloat = 0.45
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
@@ -597,8 +601,9 @@ enum HomeBlockFloatMetrics {
 ///
 /// **柔光池画在 `.shadow` 之后**（`.background` 永远画在被修饰视图之下）：池因此**不参与**缩放与
 /// 提亮、也不进辉光的轮廓（辉光仍只描内容），两层各司其职；池是不参与命中的 `.background`
-/// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算，
-/// 渐变到全透明——**没有填充边界、没有描边**（不是卡片底）。
+/// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算且系数
+/// ≤ 0.5（最近边在 `0.5 × min(w, h)` 处）——渐变**在边缘之前就归零**，没有填充边界、没有描边、
+/// 也不留直角台阶（不是卡片底）。
 struct HomeBlockFloatModifier: ViewModifier {
     @State private var hovered = false
 
