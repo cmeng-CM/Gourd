@@ -26,17 +26,79 @@ import Defaults
 
 import QuickLook
 
-/// Layout metrics for the hover-revealed remove (x) button on a shelf item.
-/// Shared between the SwiftUI overlay and the AppKit drag view's hit-testing so
-/// the corner the button occupies is excluded from the drag/click handler.
-private enum ShelfRemoveButton {
+/// Layout metrics shared by a shelf cell's SwiftUI content and the AppKit drag
+/// view that sits on top of it.
+///
+/// Both have to end up with the *same* frame: the drag view arbitrates clicks,
+/// and the corner it yields to the remove button is expressed relative to its
+/// own bounds (`ShelfRemoveButton.hitRect`). When the bare `NSView` was allowed
+/// to grow into its full HStack slot (wider and taller than the drawn cell),
+/// the ✕ was drawn at one origin and the yield region computed at another, so
+/// clicks on the ✕ landed on the drag view and only selected the item.
+enum ShelfCellMetrics {
+    /// Width of the icon/name column, before padding.
+    static let contentWidth: CGFloat = 105
+    /// Horizontal padding around the content.
+    static let horizontalPadding: CGFloat = 5
+    /// Vertical padding around the content.
+    static let verticalPadding: CGFloat = 10
+    /// Edge length of the file icon.
+    static let iconSize: CGFloat = 56
+    /// Distance between the icon and the name.
+    static let contentSpacing: CGFloat = 2
+    /// Height reserved for the (up to two line) name.
+    static let textHeight: CGFloat = 30
+
+    /// Size of the visible cell content — also the frame of the drag view.
+    static var size: CGSize {
+        CGSize(
+            width: contentWidth + 2 * horizontalPadding,
+            height: iconSize + contentSpacing + textHeight + 2 * verticalPadding
+        )
+    }
+}
+
+/// Hit geometry for the hover-revealed remove (x) button on a shelf item.
+///
+/// The button is drawn by SwiftUI while the click is arbitrated by the AppKit
+/// drag view on top of it, so both sides must agree on exactly one rectangle:
+/// `hitRect(in:)` is that rectangle, `buttonRect(in:)` places the drawn button
+/// inside it, and `yieldsHitTest(to:in:)` is what `DraggableClickView.hitTest`
+/// answers with. Coordinates here are top-left origin (SwiftUI's convention) —
+/// the drag view flips its AppKit point before asking.
+enum ShelfRemoveButton {
     /// Diameter of the circular remove button.
     static let size: CGFloat = 20
-    /// Inset of the button from the item's top-trailing corner.
-    static let inset: CGFloat = 2
-    /// Square corner region (top-trailing) reserved for the button while
-    /// hovering, so clicks there hit the button instead of the drag view.
+    /// Square corner region (top-trailing) reserved for the button while it is
+    /// visible, so clicks there hit the button instead of the drag view.
     static let hitRegion: CGFloat = 30
+
+    /// The reserved top-trailing region of a cell.
+    static func hitRect(in cell: CGRect) -> CGRect {
+        CGRect(
+            x: cell.maxX - hitRegion,
+            y: cell.minY,
+            width: hitRegion,
+            height: hitRegion
+        )
+    }
+
+    /// Where the button is drawn: centred inside `hitRect(in:)`.
+    static func buttonRect(in cell: CGRect) -> CGRect {
+        let region = hitRect(in: cell)
+        return CGRect(
+            x: region.midX - size / 2,
+            y: region.midY - size / 2,
+            width: size,
+            height: size
+        )
+    }
+
+    /// Whether a point (top-left origin, cell space) falls in the region the
+    /// drag view yields to the button.
+    static func yieldsHitTest(to point: CGPoint, in cell: CGRect) -> Bool {
+        hitRect(in: cell).contains(point)
+    }
 }
 
 struct ShelfItemView: View {
@@ -51,6 +113,10 @@ struct ShelfItemView: View {
     @State private var isHovering = false
 
     private var isSelected: Bool { viewModel.isSelected }
+    /// The ✕ is shown while hovering (as before) and, after a click, while the
+    /// item is selected — the file-manager convention, and it keeps removal
+    /// reachable when hover isn't available (CUA-driven sessions).
+    private var showsRemoveButton: Bool { isHovering || isSelected }
     private var shouldHideDuringDrag: Bool { selection.isDragging && selection.isSelected(item.id) && false }
     
     init(item: ShelfItem) {
@@ -61,21 +127,32 @@ struct ShelfItemView: View {
     var body: some View {
         ZStack {
             if !shouldHideDuringDrag {
-                VStack(alignment: .center, spacing: 2) {
+                VStack(alignment: .center, spacing: ShelfCellMetrics.contentSpacing) {
                     iconView
                     textView
                 }
-                .frame(width: 105)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 5)
+                .frame(width: ShelfCellMetrics.contentWidth)
+                .padding(.vertical, ShelfCellMetrics.verticalPadding)
+                .padding(.horizontal, ShelfCellMetrics.horizontalPadding)
                 .background(backgroundView)
                 .contentShape(Rectangle())
                 .animation(.easeInOut(duration: 0.1), value: debouncedDropTarget)
                 .animation(.easeInOut(duration: 0.1), value: isSelected)
-                .overlay(alignment: .topTrailing) {
-                    if isHovering {
-                        removeButton
+                .overlay {
+                    // Placed from the same rect `DraggableClickView.hitTest`
+                    // yields (`ShelfRemoveButton.buttonRect` ⊂ `hitRect`), so
+                    // the drawn ✕ and the click that reaches it cannot drift
+                    // apart again.
+                    GeometryReader { proxy in
+                        if showsRemoveButton {
+                            let rect = ShelfRemoveButton.buttonRect(
+                                in: CGRect(origin: .zero, size: proxy.size)
+                            )
+                            removeButton
+                                .position(x: rect.midX, y: rect.midY)
+                        }
                     }
+                    .animation(.smooth(duration: 0.15), value: showsRemoveButton)
                 }
                 // Keep removal reachable without hover (VoiceOver / keyboard):
                 // expose the item as one element with a named remove action.
@@ -88,7 +165,7 @@ struct ShelfItemView: View {
                 DraggableClickHandler(
                     item: item,
                     viewModel: viewModel,
-                    isHovering: isHovering,
+                    removeButtonVisible: showsRemoveButton,
                     // Hover is detected here (in the AppKit drag view via a
                     // tracking area) rather than with SwiftUI's `.onHover`,
                     // because this NSView sits on top of the cell and
@@ -111,11 +188,21 @@ struct ShelfItemView: View {
                     // came and went, so ask for a fresh evaluation.
                     onDragEnded: { vm.shouldRecheckHover.toggle() }
                 )
+                // The drag view must have exactly the visible cell's frame:
+                // the ✕ yield region is expressed in the view's own bounds
+                // (`ShelfRemoveButton.hitRect`). Left unconstrained, a bare
+                // `NSView` swallows the whole HStack slot — wider and taller
+                // than the drawn cell — and the region it yielded and the ✕
+                // SwiftUI drew disagreed about where "top-trailing" is.
+                .frame(
+                    width: ShelfCellMetrics.size.width,
+                    height: ShelfCellMetrics.size.height
+                )
             } else {
                 Color.clear
-                    .frame(width: 105)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 5)
+                    .frame(width: ShelfCellMetrics.contentWidth)
+                    .padding(.vertical, ShelfCellMetrics.verticalPadding)
+                    .padding(.horizontal, ShelfCellMetrics.horizontalPadding)
             }
         }
         .onChange(of: viewModel.isDropTargeted) { _, targeted in
@@ -153,7 +240,7 @@ struct ShelfItemView: View {
         Image(nsImage: viewModel.thumbnail ?? viewModel.icon ?? NSImage())
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: 56, height: 56)
+            .frame(width: ShelfCellMetrics.iconSize, height: ShelfCellMetrics.iconSize)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 2)
     }
@@ -165,15 +252,16 @@ struct ShelfItemView: View {
             .lineLimit(2)
             .truncationMode(.middle)
             .multilineTextAlignment(.center)
-            .frame(height: 30, alignment: .top)
+            .frame(height: ShelfCellMetrics.textHeight, alignment: .top)
     }
 
-    /// Hover-revealed circular remove button in the top-trailing corner.
-    /// Removes just this item from the shelf via the same path as the
+    /// Hover- or selection-revealed circular remove button in the top-trailing
+    /// corner. Removes just this item from the shelf via the same path as the
     /// right-click "Remove" menu item (`ShelfActionService.remove`).
     /// Uses a `Button` (not a bare tap gesture) so it carries button
     /// semantics for VoiceOver; the item also exposes a hover-independent
-    /// "Remove from Shelf" accessibility action (see `body`).
+    /// "Remove from Shelf" accessibility action (see `body`). Its position is
+    /// set by the caller from `ShelfRemoveButton.buttonRect(in:)`.
     private var removeButton: some View {
         Button {
             ShelfActionService.remove(item)
@@ -190,7 +278,6 @@ struct ShelfItemView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Circle())
-        .padding(ShelfRemoveButton.inset)
         .help("Remove from Shelf")
         .accessibilityLabel("Remove from Shelf")
         .transition(.scale.combined(with: .opacity))
@@ -255,7 +342,9 @@ struct ShelfItemView: View {
 private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
     let item: ShelfItem
     let viewModel: ShelfItemViewModel
-    let isHovering: Bool
+    /// Whether the remove (x) button is currently drawn on top of this cell —
+    /// the drag view yields its corner to the button exactly when it is.
+    let removeButtonVisible: Bool
     let onHoverChange: (Bool) -> Void
     @Binding var cachedPreviewImage: NSImage?
     @ViewBuilder let dragPreviewContent: () -> Content
@@ -267,7 +356,7 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
         let view = DraggableClickView()
         view.item = item
         view.viewModel = viewModel
-        view.isHovering = isHovering
+        view.removeButtonVisible = removeButtonVisible
         view.onHoverChange = onHoverChange
         view.dragPreviewImage = cachedPreviewImage ?? renderDragPreview()
         view.onRightClick = onRightClick
@@ -279,7 +368,7 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
     func updateNSView(_ nsView: DraggableClickView, context: Context) {
         nsView.item = item
         nsView.viewModel = viewModel
-        nsView.isHovering = isHovering
+        nsView.removeButtonVisible = removeButtonVisible
         nsView.onHoverChange = onHoverChange
         // Only update preview if cached version is available
         if let cached = cachedPreviewImage {
@@ -323,7 +412,9 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
         var onClick: ((NSEvent, NSView) -> Void)?
         var onDragEnded: (() -> Void)?
         var onHoverChange: ((Bool) -> Void)?
-        var isHovering = false
+        /// Mirrors the SwiftUI side's `showsRemoveButton`: the ✕ is drawn
+        /// exactly when this is true, and the yield region below follows it.
+        var removeButtonVisible = false
 
         private var mouseDownEvent: NSEvent?
         private let dragThreshold: CGFloat = ShelfDragMetrics.threshold
@@ -363,18 +454,21 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
-            // While hovering, yield the top-trailing corner to the SwiftUI
-            // remove (x) button drawn beneath this drag view, so tapping it
-            // removes the item instead of opening it or starting a drag.
-            if isHovering {
+            // While the remove (x) button is drawn, yield its corner to the
+            // SwiftUI button beneath this drag view, so tapping it removes the
+            // item instead of opening it or starting a drag. The region comes
+            // from `ShelfRemoveButton.hitRect` — the same rect the button is
+            // drawn in — so the drawn ✕ and the yielding rect cannot drift
+            // apart again. AppKit bounds are bottom-left origin, so the point
+            // is converted into the top-left origin space `hitRect` speaks
+            // before asking.
+            if removeButtonVisible {
                 let local = convert(point, from: superview)
-                let corner = NSRect(
-                    x: bounds.maxX - ShelfRemoveButton.hitRegion,
-                    y: bounds.maxY - ShelfRemoveButton.hitRegion,
-                    width: ShelfRemoveButton.hitRegion,
-                    height: ShelfRemoveButton.hitRegion
-                )
-                if corner.contains(local) { return nil }
+                let cell = CGRect(origin: .zero, size: bounds.size)
+                let topLeftPoint = CGPoint(x: local.x, y: bounds.maxY - local.y)
+                if ShelfRemoveButton.yieldsHitTest(to: topLeftPoint, in: cell) {
+                    return nil
+                }
             }
             return super.hitTest(point)
         }
