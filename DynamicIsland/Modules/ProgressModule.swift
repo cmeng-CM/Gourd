@@ -17,25 +17,39 @@
 
 //
 //  ProgressModule.swift
-//  Gourd 内置模块 · 日/周/月/季/年进度（P1 批次 / T4；p3-widgets / T1 改首页块）
+//  Gourd 内置模块 · 工作日统计（P1 批次 / T4；p3-widgets / T1 改首页块；p7 / T3 改工作日口径）
 //
 //  P1 的试点模块（D-07）：零私有 API、零依赖——它同时是「新增一个模块 = 实现
 //  `GourdModule` + 往 `KernelBootstrap.builtinModules` 加一行」（验收 A3）里那「一行」的样本。
 //
 //  **形态定稿（2026-09-27 用户反馈后重做，09 §5.3 呈现行；2026-09-30 折叠态撤销；
 //  2026-09-30 本批（p3-widgets）改首页块，26 §做法 机制一；
-//  2026-09-30 p5-home-blocks / T2 按 docs/29 §做法 机制二 定稿）**：
+//  2026-09-30 p5-home-blocks / T2 按 docs/29 §做法 机制二 定稿；
+//  2026-10-01 p7 / T3 按 docs/31 §做法 机制二 改**工作日口径**）**：
 //  - **首页块（`home`，本模块今天唯一声明的 surface）= 紧凑清单**：一行一个尺度（图标 + 标签 +
-//    细进度条 + 百分比）。**能画几行由块自己的尺寸定**（`ProgressHomeBlockLayout`：宽度档与高度档
-//    取小者），不缩字、不滚动——96 高的紧凑块里五行放得下（5×14 + 4×6 = 94），因此默认三档
-//    （今天 / 本周 / 本月）与勾上的第四、第五档**都会上屏**；再放不下就按声明顺序只画前几个。
+//    细进度条 + **行动文案**——不再是百分比，见下面「行语义」）。**能画几行由块自己的尺寸定**
+//    （`ProgressHomeBlockLayout`：宽度档与高度档取小者），不缩字、不滚动——96 高的紧凑块里
+//    五行放得下（5×14 + 4×6 = 94），因此默认三档（今天 / 本周 / 本月）与勾上的第四、第五档
+//    **都会上屏**；再放不下就按声明顺序只画前几个。
 //    **块宽由宿主声明**（`homeBlockWidth` = 180 / 240），模块不参与「我在首页占多宽」的决策
 //    （D-11 口径），只按放置后的尺寸分档。
+//  - **行语义（p7 / T3 改判，docs/31 §做法 机制二 / D-04~D-09）**：**今天行** = 工作时长
+//    进度条（`WorkdayCalendar.todayFraction`，休息日 / 上班前为 0）+ 行动文案（距上班 / 距下班
+//    「2h20m」、已下班、休息日——`WorkdayRowText`，纯函数出口）；**周 / 月 / 季 / 年行** =
+//    该区间已过工作日占比（`WorkdayCalendar.spanStats.progress`）+ 「剩 N 天」（今天之后、
+//    不含今天的工作日个数）。工作日 = 星期集合 × 内置 2026 国务院节假日与调休表
+//    （`WorkdayCalendar` 先查表后看星期；表外年份退化纯星期，docs/31 §已知限制 1）。
+//    旧口径**自然时间百分比**（`ProgressCalculator.progress`）自此**不再直出**——它仍被
+//    保留的旧展开视图引用（见「死代码」那条）。
 //  - **展示哪几档由用户定**（docs/29 §做法 机制二 / D-04、D-05）：默认 **今天 / 本周 / 本月**
 //    （`ProgressCalculator.defaultVisibleScopes`），组件卡上新增的「显示的尺度」多选可以把
 //    **本季 / 今年**勾出来——`scopes` 读的是 `context.config`（覆盖值优先、坏值回落默认），
-//    不再是 manifest 的默认值。它是**自然时间进度**（`Calendar` 口径：日 / 周 / 月 / 季 / 年），
-//    不是任务完成度（那是待办的事）、也不是工作日口径（不引节假日与调休表，docs/29 §明确不做 1）。
+//    不再是 manifest 的默认值。行数含义是**工作日统计**（不是任务完成度——那是待办的事，
+//    也不是自然时间进度——那是本批改判掉的旧口径，docs/29 D-03 → docs/31 §做法 机制二）。
+//  - **上下班时间与工作日集合可配置**（docs/31 §接口 4 / D-08）：`workStart` / `workEnd`
+//    （整点，默认 9 / 18，区间单一来源 = `WorkdayCalendar.workHourRange`）、`workdays`
+//    （ISO 1=周一…7=周日，默认一~五）——读侧一律经 `WorkdayCalendar.resolveWorkHours` /
+//    `resolveWorkdays` 归一（坏值回落默认，不崩）。
 //  - ~~展开态（`expanded`）= 剩余量清单~~ **本批改判**：进度是**纯展示**（没有 `Button` / `Toggle` /
 //    `Picker`），用户判定「如果只是显示，就改为首页小组件」（26 §背景与目标 第 1 条）——
 //    `.expanded` 不再声明，模块不再占展开 tab。那份展开清单（`ProgressModuleView` /
@@ -61,8 +75,14 @@
 //  图标一律显式浅色（`Color.white` / `.white.opacity(...)`），不再依赖语义色。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.progress.name` / `module.progress.summary`、
-//  `module.progress.scope.<scope>`、`module.progress.remaining`、`module.progress.unit.<unit>`；
-//  组件卡那一行的标题是 `settings.modules.progress.visibleScopes`（显示的尺度 / Scales shown）。
+//  `module.progress.scope.<scope>`（行标签，沿用）、`module.progress.workday.<形态>`
+//  （今天行四态与「剩 %d 天」，p7 / T3 新增）、`module.progress.weekday.<ISO 1…7>`
+//  （工作日多选的七个选项，p7 / T3 新增）；`module.progress.remaining` /
+//  `module.progress.unit.<unit>` **只被未挂载的旧展开视图引用**（`ProgressModuleView` /
+//  `ProgressScopeRow`，见「死代码」）。组件卡上的标题是
+//  `settings.modules.progress.visibleScopes`（显示的尺度 / Scales shown）与
+//  `settings.modules.progress.workStart` / `.workEnd` / `.workdays`
+//  （上班时间（时）/ 下班时间（时）/ 工作日）。
 //
 
 import SwiftUI
@@ -101,17 +121,20 @@ final class ProgressModule: GourdModule {
     /// - **`defaultEnabled` 为 `false`（2026-09-28 用户判定「时间进度」无行动价值）**：
     ///   代码与 manifest 全部保留（可在组件页手动开回）。本模块**不是接管模块**（没有上游总开关），
     ///   因此启用真源就是既有那一条——`moduleEnableOverrides` 压过这里的默认值；
-    /// - `config` 三项只声明类型与默认值；`visibleScopes` 的默认值即「出厂显示哪些尺度」
+    /// - `config` 六项只声明类型与默认值；`visibleScopes` 的默认值即「出厂显示哪些尺度」
     ///   （**今天 / 本周 / 本月**，docs/29 §做法 机制二 / D-04）。**它今天有用户可见的配置入口**：
     ///   组件卡的「显示的尺度」多选（`ModuleSettingsSection.configControls`）写的是同一个键的
     ///   **覆盖值**，读取侧 `scopes` 先看覆盖值、取不到才回落到这里的默认值。
+    ///   `workStart` / `workEnd`（整点，默认 9 / 18）与 `workdays`（ISO 星期集合，默认一~五）
+    ///   同款——组件卡的三行控件写覆盖值，读取侧 `workHours` / `workdays` 经 `WorkdayCalendar`
+    ///   归一（docs/31 §接口 4 / D-08）；默认值取自 `WorkdayCalendar` 的常量，不写第二份字面量。
     ///   `style` / `baseCalendar` 仍**没有入口**（前者「只实现清单这一种形态」、后者算法口径未定）。
     static let manifest = ModuleManifest(
         manifestVersion: 1,
         id: "com.cmeng.gourd.progress",
         name: LocalizedText(key: "module.progress.name"),
         summary: LocalizedText(key: "module.progress.summary"),
-        icon: IconSpec(type: "symbol", name: "chart.pie"),
+        icon: IconSpec(type: "symbol", name: "briefcase"),
         version: "1.0.0",
         apiVersion: HostInfo.currentAPIVersion,
         kind: "builtin",
@@ -142,6 +165,29 @@ final class ProgressModule: GourdModule {
                     default: .string(ProgressBaseCalendar.gregorian.rawValue),
                     values: ProgressBaseCalendar.allCases.map(\.rawValue),
                     itemType: nil
+                ),
+                // 工作日统计三键（p7 / T3，docs/31 §接口 4）：默认值一律取 `WorkdayCalendar`
+                // 的常量——「9 / 18」「一~五」只有那一份，manifest 不写第二份字面量。
+                "workStart": ConfigNode(
+                    type: "integer",
+                    title: nil,
+                    default: .int(WorkdayCalendar.defaultWorkStartHour),
+                    values: nil,
+                    itemType: nil
+                ),
+                "workEnd": ConfigNode(
+                    type: "integer",
+                    title: nil,
+                    default: .int(WorkdayCalendar.defaultWorkEndHour),
+                    values: nil,
+                    itemType: nil
+                ),
+                "workdays": ConfigNode(
+                    type: "list",
+                    title: nil,
+                    default: .strings(WorkdayCalendar.defaultWorkdays.sorted().map(String.init)),
+                    values: nil,
+                    itemType: "string"
                 ),
             ]
         )
@@ -175,11 +221,18 @@ final class ProgressModule: GourdModule {
     /// 展开面板因此不再有「进度」tab；那份展开清单的视图代码保留在文件里（可逆），但不挂 surface。
     ///
     /// 配置在**每次请求时重读**：宿主 `requestRedraw()` 触发重算时，视图拿到的是新的
-    /// `visibleScopes`——组件卡勾一下「本季」，首页块在同一会话里就多一行（不需要重启）。
+    /// `visibleScopes` / `workdays` / 上下班时间——组件卡勾一下「本季」或拨一下滑块，
+    /// 首页块在同一会话里就换行 / 换文案（不需要重启）。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .home:
-            return .view(AnyView(ProgressHomeBlockView(scopes: scopes)))
+            let hours = workHours
+            return .view(AnyView(ProgressHomeBlockView(
+                scopes: scopes,
+                workdays: workdays,
+                workStartHour: hours.start,
+                workEndHour: hours.end
+            )))
         case .expanded, .compact, .lockscreen:
             return .none
         }
@@ -205,14 +258,36 @@ final class ProgressModule: GourdModule {
     var scopes: [ProgressCalculator.Scope] {
         ProgressCalculator.resolveScopes(from: context.config.get("visibleScopes", as: [String].self) ?? [])
     }
+
+    /// 工作日集合（ISO 1=周一…7=周日）= **覆盖值优先**，取不到才回落到 manifest 的 `workdays`
+    /// 默认值（一~五）——与 `scopes` 逐字同款，`?? []` 只兜「键漂出 schema」（空表在
+    /// `resolveWorkdays` 里同样回落默认，不崩、也不空表）。
+    ///
+    /// 归一（坏值逐项忽略、空 / 全坏回落默认）在 `WorkdayCalendar.resolveWorkdays` 一处实现；
+    /// 组件卡的「工作日」多选走的是同一个函数（`multiSelectEffectiveSet`），卡片勾中的那一组
+    /// 与块判定用的那一组因此是同一个判定（docs/31 §接口 4）。
+    var workdays: Set<Int> {
+        WorkdayCalendar.resolveWorkdays(from: context.config.get("workdays", as: [String].self) ?? [])
+    }
+
+    /// 可用的（上班, 下班）小时 = **覆盖值优先**，取不到回落 manifest 默认（9 / 18）；
+    /// 越界 / 倒挂一律回落默认——归一在 `WorkdayCalendar.resolveWorkHours` 一处实现
+    /// （返回值恒满足 `0 ≤ start < end ≤ 23`，见那边的注释）。
+    var workHours: (start: Int, end: Int) {
+        WorkdayCalendar.resolveWorkHours(
+            start: context.config.get("workStart", as: Int.self),
+            end: context.config.get("workEnd", as: Int.self)
+        )
+    }
 }
 
 // MARK: - 首页块（紧凑清单）
 
 /// 首页块的**取舍**（纯函数，无 SwiftUI 依赖，单测直接钉边界）。
 ///
-/// 规格（[29](../../docs/29-home-blocks-and-panel.md) §做法 机制二 / D-03~D-05；原 26 §做法 机制一）：
-/// 块内容是**紧凑清单**——一行一个尺度（图标 + 标签 + 细条 + 百分比），一行的高度钉在 `rowHeight`；
+/// 规格（[29](../../docs/29-home-blocks-and-panel.md) §做法 机制二 / D-03~D-05；原 26 §做法 机制一；
+/// 行**语义**自 p7 / T3 起是工作日口径，[31](../../docs/31-home-workday-launcher.md) §做法 机制二）：
+/// 块内容是**紧凑清单**——一行一个尺度（图标 + 标签 + 细条 + 行动文案），一行的高度钉在 `rowHeight`；
 /// **能画几行由块的尺寸定**：**宽度档与高度档取小者**（`listedScopes(_:forWidth:height:)`），
 /// 行数再按 `visibleScopes` 解析出来的那一组的**先后**取前 N 个——**不缩字、不滚动**（docs/29 §已知限制 3）。
 /// （「那一组」的顺序：组件卡写进去的恒是选项的声明顺序，手改配置文件写别的顺序也照它来。）
@@ -228,8 +303,9 @@ final class ProgressModule: GourdModule {
 /// - **宽度档**只在两种退化情形出手：**非有限宽**（NaN / ±∞，取不到真值）→ **1 行**；
 ///   以及**低于声明最小宽 180 的窄块**（`HomeStripLayoutMath` 规则 ③ 的单块兜底、被压缩过的宽度，
 ///   **也包括首帧的 0**——0 是有限数，落这一档）→ **3 行**。因此 180 起一行就够排完五档
-///   （一行的固定宽 ≈ 图标 12 + 两段间距 + 百分比 ≈ 28 + 标签），宽度**不是**行数的真实约束
-///   ——不再按宽度少画行（旧版「≥220 画两行」会让「勾上本季」在窄块上看起来没反应）。
+///   （一行的固定宽 ≈ 图标 12 + 两段间距 + 行动文案（最长一档「距下班 2h20m」量级 ≈ 70pt，
+///   EN 的「This quarter」+「13 days left」更宽）+ 标签，进度条仍拿得到余量），宽度**不是**
+///   行数的真实约束——不再按宽度少画行（旧版「≥220 画两行」会让「勾上本季」在窄块上看起来没反应）。
 enum ProgressHomeBlockLayout {
     /// 一行的**行高**：11pt 文字（`ProgressHomeRow` 的字号）的自然行高（实测 14pt）。
     ///
@@ -292,19 +368,24 @@ enum ProgressHomeBlockLayout {
     }
 }
 
-/// 首页块：**紧凑清单**（图标 + 标签 + 细进度条 + 百分比，一行一个尺度）。
+/// 首页块：**紧凑清单**（图标 + 标签 + 细进度条 + 行动文案，一行一个尺度）。
 ///
-/// 与展开面板那份「剩余量清单」**同源**：进度值都是同一个 `ProgressCalculator.progress(for:now:)`
-/// （不另写一套统计），刷新粒度也沿用同一个**粗粒度 60s**（docs/13 已知限制 14：清单最小单位是分钟；
-/// 首页块只在展开面板里存在，`TimelineView` 的 60s 心跳只在块可见时跑）。
+/// 行取值与文案**全部来自 `WorkdayCalendar` / `WorkdayRowText`**（不另写一套统计）：
+/// 今天行 = 工作时长进度 + 四态文案；周 / 月 / 季 / 年行 = 工作日占比 + 「剩 N 天」。
+/// 刷新粒度沿用**粗粒度 60s**（docs/13 已知限制 14：清单最小单位是分钟；
+/// `TimelineView` 的 60s 心跳只在块可见时跑）——正午的「距下班」按分钟跳动，符合工作时间的粒度。
 ///
 /// **只读**：块里不挂任何控件（这正是用户判定「只是显示 → 改为首页小组件」的理由）；
-/// 没有空态、没有失败态——「今天」的进度在任何时刻都是有定义的。
+/// 没有空态、没有失败态——「今天」的工作时长进度在任何时刻都是有定义的。
 ///
 /// 尺寸用 `GeometryReader` 读**放置后**的宽高（不是测量）：按 `ProgressHomeBlockLayout` 的两条档位
 /// 取小者定行数（见那边的类型注释）。颜色一律显式白色系（面板黑底、系统外观可能浅色，见文件头「颜色」）。
 private struct ProgressHomeBlockView: View {
     let scopes: [ProgressCalculator.Scope]
+    /// 工作日判定的输入（`content(for:)` 从 config 现读、经 `WorkdayCalendar` 归一后传入）。
+    let workdays: Set<Int>
+    let workStartHour: Int
+    let workEndHour: Int
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
@@ -317,7 +398,13 @@ private struct ProgressHomeBlockView: View {
 
                 VStack(alignment: .leading, spacing: ProgressHomeBlockLayout.rowSpacing) {
                     ForEach(rows, id: \.self) { scope in
-                        ProgressHomeRow(scope: scope, now: timeline.date)
+                        ProgressHomeRow(
+                            scope: scope,
+                            now: timeline.date,
+                            workdays: workdays,
+                            workStartHour: workStartHour,
+                            workEndHour: workEndHour
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -326,7 +413,12 @@ private struct ProgressHomeBlockView: View {
     }
 }
 
-/// 首页块的一行：图标 + 标签 + 细进度条 + 百分比。
+/// 首页块的一行：图标 + 标签 + 细进度条 + 行动文案。
+///
+/// **行语义（p7 / T3，docs/31 §接口 4 / D-06、D-09）**：今天行 = `todayFraction` 的条 +
+/// `WorkdayRowText.todayTrailing`（休息日 / 距上班 %@ / 距下班 %@ / 已下班）；其余行 =
+/// `spanStats.progress` 的条 + `WorkdayRowText.leftDays`（剩 N 天）。判定与算术在 `WorkdayCalendar`，
+/// 文案拼装在 `WorkdayRowText`——本视图只把两者摆上屏。
 ///
 /// 与展开行（`ProgressScopeRow`）的差别只有三处：**不画剩余量**、**不画悬停的起止时刻**（窄块里
 /// 那两段固定宽度的文字会把进度条挤没，首页块是「一眼看多少」）、**行高与条高都被钉住**
@@ -334,9 +426,34 @@ private struct ProgressHomeBlockView: View {
 private struct ProgressHomeRow: View {
     let scope: ProgressCalculator.Scope
     let now: Date
+    let workdays: Set<Int>
+    let workStartHour: Int
+    let workEndHour: Int
 
     var body: some View {
-        HStack(spacing: 6) {
+        // 一行只算一次：条的取值与右侧文案来自**同一次**判定（分别算会出现同一次重绘里的两个真相）。
+        let calendar = Calendar.autoupdatingCurrent
+        let progressValue: Double
+        let trailingText: String
+        if scope == .day {
+            progressValue = WorkdayCalendar.todayFraction(
+                now: now, workdays: workdays,
+                workStartHour: workStartHour, workEndHour: workEndHour, calendar: calendar
+            )
+            trailingText = WorkdayRowText.todayTrailing(state: WorkdayCalendar.todayState(
+                now: now, workdays: workdays,
+                workStartHour: workStartHour, workEndHour: workEndHour, calendar: calendar
+            ))
+        } else {
+            let stats = WorkdayCalendar.spanStats(
+                scope: scope, now: now, workdays: workdays,
+                workStartHour: workStartHour, workEndHour: workEndHour, calendar: calendar
+            )
+            progressValue = stats.progress
+            trailingText = WorkdayRowText.leftDays(stats.remainingWorkdays)
+        }
+
+        return HStack(spacing: 6) {
             Image(systemName: scope.symbolName)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
@@ -346,17 +463,17 @@ private struct ProgressHomeRow: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 // **标签不截断**（`fixedSize` + `lineLimit(1)`，与展开行的标签同一条口径）：
-                // 窄块里被挤的应该是**进度条**（百分比那一段是数的真身），不是尺度名——
+                // 窄块里被挤的应该是**进度条**（行动文案是数的真身），不是尺度名——
                 // 少了 `fixedSize` 时 180 宽的英文块会把「This month」显示成「This mo…」。
                 .lineLimit(1)
                 .fixedSize()
 
-            ProgressView(value: ProgressCalculator.progress(for: scope, now: now))
+            ProgressView(value: progressValue)
                 .progressViewStyle(.linear)
                 .frame(height: ProgressHomeBlockLayout.barHeight)
                 .frame(maxWidth: .infinity)
 
-            Text(ProgressText.percent(ProgressCalculator.progress(for: scope, now: now)))
+            Text(trailingText)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
@@ -367,6 +484,64 @@ private struct ProgressHomeRow: View {
     }
 }
 
+// MARK: - 行文案出口（工作日口径）
+
+/// 首页块行动文案的**唯一出口**（纯函数，`internal` 供单测直接钉矩阵——同
+/// `ProgressCalculator.Scope.symbolName` 那条「为一条能被断言的契约放开可见性，而不是为测试改行为」）。
+///
+/// 规格（docs/31 §接口与数据形状 4 / D-09）：
+/// - 时长格式 `compactDuration(minutes:)`：`≥60` 分 → `"2h20m"`（整点是 `"3h"`，不带 `0m`）；
+///   `<60` 分 → `"45m"`；`0` 与负数 → `"0m"`。**刻意不带空格、不带秒**——180 宽的块里
+///   右侧这一段越短，进度条拿到的余量越多（失败信号：行文字被截断 / 进度条被挤没）。
+/// - 今天行四态：休息日 / 距上班 %@ / 距下班 %@ / 已下班（后两者 `%@` = `compactDuration`）；
+/// - 区间行：`剩 %d 天`（N ≥ 0；0 也照写——「今天之后没有工作日了」是事实，不隐藏）。
+///
+/// 文案字符串经 `Bundle.main` 解析（与 `ProgressText` 同一条口径；查不到时 `Bundle` 原样返回 key）。
+enum WorkdayRowText {
+    /// `360` → `"6h"`、`140` → `"2h20m"`、`45` → `"45m"`、`0` → `"0m"`（负数按 0 处理）。
+    static func compactDuration(minutes: Int) -> String {
+        let clamped = max(0, minutes)
+        let hours = clamped / 60
+        let remainder = clamped % 60
+        if hours == 0 {
+            return "\(remainder)m"
+        }
+        return remainder == 0 ? "\(hours)h" : "\(hours)h\(remainder)m"
+    }
+
+    /// 今天行四态 → （文案 key, 实参）。实参为 `nil` = 该形态没有插值。
+    /// **纯结构出口**：四态到 key 的映射在这里被单测逐条钉住（最终字符串由 `todayTrailing` 拼）。
+    static func todayKey(_ state: WorkdayCalendar.TodayState) -> (key: String, argument: String?) {
+        switch state {
+        case .restDay:
+            return ("module.progress.workday.rest", nil)
+        case .beforeStart(let minutes):
+            return ("module.progress.workday.toStart", compactDuration(minutes: minutes))
+        case .working(let minutesToEnd):
+            return ("module.progress.workday.toEnd", compactDuration(minutes: minutesToEnd))
+        case .afterEnd:
+            return ("module.progress.workday.clockedOut", nil)
+        }
+    }
+
+    /// 今天行的最终 trailing 文案（`WorkdayCalendar.TodayState` → 本地化字符串）。
+    static func todayTrailing(state: WorkdayCalendar.TodayState) -> String {
+        let (key, argument) = todayKey(state)
+        guard let argument else { return localized(key) }
+        return String(format: localized(key), argument)
+    }
+
+    /// 区间行的 trailing：`剩 %d 天`（N ≥ 0，负数按 0 处理）。
+    static func leftDays(_ count: Int) -> String {
+        String(format: localized("module.progress.workday.leftDays"), max(0, count))
+    }
+
+    /// 与 `ProgressText.localized` 同一条口径的查表（同文件内复用私有实现）。
+    private static func localized(_ key: String) -> String {
+        ProgressText.localized(key)
+    }
+}
+
 // MARK: - 展开面板视图（剩余量清单；本批已撤销该 surface，代码保留）
 
 /// 展开面板里的 progress 内容：**剩余量清单**——一行一个尺度，主信息是「还剩多久」。
@@ -374,6 +549,10 @@ private struct ProgressHomeRow: View {
 /// **本批（p3-widgets / T1）起不再被任何 surface 渲染**：`surfaces` 已改成 `[.home]`，
 /// 展开面板不再有「进度」tab（D-01）。代码**保留**是为了可逆——将来要回到面板，
 /// 把 `.expanded` 加回 manifest 的 `surfaces` 与 `content(for:)` 的 `.expanded` 分支即可。
+///
+/// **死代码（p7 / T3 追加，D-10）**：本视图（与 `ProgressScopeRow`）的**语义已由工作日口径取代
+/// （p7）；重挂面向前需按新语义重写**——它画的是自然时间百分比与自然时间剩余量，而模块自
+/// p7 起是**工作日统计**（docs/31 §做法 机制二）。照原样重挂会让同一块里两套口径并存。
 ///
 /// 刷新粒度沿用**粗粒度**的 60s（docs/13「已知限制」14）：清单里最小单位是分钟，
 /// 1 分钟粒度足够，也**未监听 `NSSystemClockDidChange`**——系统的时钟 / 时区变更最多 60s 内
@@ -400,6 +579,10 @@ private struct ProgressModuleView: View {
 }
 
 /// 清单的一行：图标 + 标签 + 进度条 + 剩余量 + 百分比；悬停时在下方补起止时刻。
+///
+/// **死代码（p7 / T3 追加，D-10）**：语义已由工作日口径取代（p7）；重挂面向前需按新语义重写
+/// （见 `ProgressModuleView` 的那一条）。它今天只被**同样未挂 surface** 的 `ProgressModuleView`
+/// 引用，`ProgressText` 的三条文案出口也只被这一对引用。
 ///
 /// 每行自带 `@State` 悬停标志，因此行必须是一个独立的 View（`ForEach` 里共享不了 `@State`）。
 private struct ProgressScopeRow: View {
@@ -457,9 +640,12 @@ private struct ProgressScopeRow: View {
 /// 一旦被手动开回（`moduleEnableOverrides`）就在关闭态常驻。撤销口径见文件头注与 manifest 的
 /// `surfaces`：**折叠态不再由本模块承担**，展开态的剩余量清单不受影响。
 
-// MARK: - 文案出口
+// MARK: - 文案出口（未挂载旧视图用）
 
-/// 模块内所有动态文案 / 数值的唯一出口（06 §3.3 R5：视图内不写字面量文案）。
+/// 旧展开视图（`ProgressModuleView` / `ProgressScopeRow`）的动态文案 / 数值出口
+/// （06 §3.3 R5：视图内不写字面量文案）。**挂屏的首页块不再走这里**——它的文案出口是
+/// `WorkdayRowText`（工作日口径，p7 / T3）；本枚举的三条只被那两个**已不挂 surface**的视图引用
+/// （保留下来的原因见它们的注释）。
 ///
 /// 百分比与剩余量都**先拼成 String 再给 `Text`**——走 `Text(_: String)` 的 verbatim 重载，
 /// 不会把 `%lld%%` / `%@` 这类形态当成本地化 key 去查表。
@@ -507,7 +693,10 @@ private enum ProgressText {
 
     /// `module.<shortID>.<field>` 形态的 key → 当前语言文案。
     /// 查不到时 `Bundle` 原样返回 key（不崩、也不显示空串），与 `ModuleRegistry.label(for:)` 同一口径。
-    private static func localized(_ key: String) -> String {
+    ///
+    /// **`fileprivate` 而不是 `private`**（p7 / T3）：同文件的 `WorkdayRowText` 也走这一个查表口
+    /// ——「怎么查 catalog」在模块内只有这一处（两处各写一份 `Bundle.main.localizedString` 就是漂）。
+    fileprivate static func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
     }
 }

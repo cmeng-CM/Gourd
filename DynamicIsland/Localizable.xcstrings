@@ -6,13 +6,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Time progress"
+            "value" : "Workday Stats"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "时间进度"
+            "value" : "工作日统计"
           }
         }
       }
@@ -22,13 +22,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Time progress: today, this week, this month"
+            "value" : "Workday stats: hours progress and workdays left"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "时间进度：今天 / 本周 / 本月"
+            "value" : "工作日统计：工作时长进度与剩余工作日"
           }
         }
       }
@@ -68638,13 +68638,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Compact time-progress rows on the home strip: today, this week, this month (pick more scales on the card)"
+            "value" : "Workday stats in the home block: hours progress plus workdays left this week / month"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首页块里的紧凑时间进度条：今天 / 本周 / 本月（可在卡片里勾更多尺度）"
+            "value" : "首页块里的工作日统计：工作时长进度 + 本周 / 本月剩余工作日"
           }
         }
       }
@@ -68873,6 +68873,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示的尺度"
+          }
+        }
+      }
+    },
+    "settings.modules.progress.workEnd" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Work end (hour)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下班时间（时）"
+          }
+        }
+      }
+    },
+    "settings.modules.progress.workStart" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Work start (hour)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上班时间（时）"
+          }
+        }
+      }
+    },
+    "settings.modules.progress.workdays" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workdays"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作日"
           }
         }
       }
@@ -81611,6 +81659,198 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分钟"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.1" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mon"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周一"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.2" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tue"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周二"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.3" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周三"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.4" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thu"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周四"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.5" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fri"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周五"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.6" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周六"
+          }
+        }
+      }
+    },
+    "module.progress.weekday.7" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sun"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周日"
+          }
+        }
+      }
+    },
+    "module.progress.workday.clockedOut" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off work"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已下班"
+          }
+        }
+      }
+    },
+    "module.progress.workday.leftDays" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d days left"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剩 %d 天"
+          }
+        }
+      }
+    },
+    "module.progress.workday.rest" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Day off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "休息日"
+          }
+        }
+      }
+    },
+    "module.progress.workday.toEnd" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ to end"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "距下班 %@"
+          }
+        }
+      }
+    },
+    "module.progress.workday.toStart" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ to start"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "距上班 %@"
           }
         }
       }

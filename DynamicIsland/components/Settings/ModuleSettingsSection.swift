@@ -112,6 +112,14 @@
 //  - **默认序（表为空）必须与改动前的实际渲染顺序一致**——那条口径在 `TabSelectionView` 的
 //    拼装算式与用例里钉死（本页只是**消费**同一张表：默认前三个可排行就是宿主三 tab）。
 //
+//  p7 / T3 增量（**工作日统计三行**，docs/31-home-workday-launcher.md §接口与数据形状 4 / D-08）：
+//  进度卡从一条（`visibleScopes`）扩到四条——`workStart` / `workEnd`（`.integer`，区间取
+//  `WorkdayCalendar.workHourRange`，与模块读侧的越界回落共用这一个区间）与 `workdays`
+//  （`.multiSelect`，选项 = ISO 1…7，文案 key 形如 `module.progress.weekday.<ISO>`；
+//  `multiSelectEffectiveSet` 接 `WorkdayCalendar.resolveWorkdays`——卡上勾中的一组 = 块判定用的
+//  那一组，空表 / 全坏值回落一~五）。三条口径与既有各条逐字相同（只收模块真读的键、区间取模块侧
+//  常量、不自己带默认值）。
+//
 //  p5 批次 / T5 增量（「面板组件」节收全：模块行 + **宿主行**，docs/29-home-blocks-and-panel.md
 //  §做法 机制三 / D-07、D-08）：
 //  - 面板组件节在模块行**之后**多四条**宿主行**（`hostPanelRows`：暂存器 / 终端 / 剪贴板 / 取色器）
@@ -300,7 +308,8 @@ struct ModuleSettingsSection: View {
     /// - `todos`：`[.expanded, .compact, .home]` → 折叠态中央槽位 + 首页块 + 展开面板待办页；
     /// - `notifications`：`[.expanded, .compact, .home]` → 折叠态铃铛 + 首页通知块 + 展开面板通知列表
     ///   （另有 HUD：新通知在刘海上短暂浮现，`presentHUD` 那条链，受浮层总开关控制）；
-    /// - `progress`：`[.compact, .expanded]`（**无 `home`**）→ 折叠态中央槽位 + 展开面板进度页。
+    /// - `progress`：`[.home]`（**只声明首页块**，p7 / T3 起为工作日统计）→ 首页块那几行
+    ///   （「折叠态中央槽位 + 展开面板进度页」是 p3-widgets 起已撤销的旧形态，2026-10-01 据实现更正）。
     ///
     /// 接管三块（P2 / T6）：它们的渲染点由模块拥有，且都带自己的运行期门控，因此这一行要写清
     /// 「什么时候看得到」：
@@ -337,10 +346,11 @@ struct ModuleSettingsSection: View {
     ///
     /// 三条口径（改动前先读）：
     ///
-    /// 1. **只收「模块自己真的读」的键**——八条都是模块侧现读现用的：
+    /// 1. **只收「模块自己真的读」的键**——十一条都是模块侧现读现用的：
     ///    `music.showAlbumArt`（块内画不画封面）、`launcher.iconSize` / `.density` / `.showRecents`、
     ///    `shortcuts.showOutput` / `.timeoutSeconds`、`frontapp.maxRecentApps`、
-    ///    `progress.visibleScopes`（首页块画哪几行尺度）。
+    ///    `progress.visibleScopes`（首页块画哪几行尺度）与 p7 / T3 的三条
+    ///    `progress.workStart` / `.workEnd` / `.workdays`（工作时长与工作日判定）。
     ///    **生效时机分两档**（别混为一谈）：`iconSize` / `density` / `showAlbumArt` /
     ///    `maxRecentApps`（下一次读）、`visibleScopes`（下一次 `content(for:)`，即宿主重取内容的那一帧）、
     ///    `timeoutSeconds` / `showOutput`（下一次运行）是「下一次取用时就生效」；`launcher.showRecents`
@@ -423,6 +433,43 @@ struct ModuleSettingsSection: View {
             titleKey: "settings.modules.progress.visibleScopes",
             multiSelectEffectiveSet: { raw in
                 ProgressCalculator.resolveScopes(from: raw).map(\.rawValue)
+            }
+        ),
+        // 工作日统计三行（p7 / T3，docs/31 §接口与数据形状 4 / D-08）：
+        // - 上下班时间：整点滑块，区间取 `WorkdayCalendar.workHourRange`（**单一来源**，
+        //   与模块读侧的越界判定共用这一个区间——这里一个字面量都不写）；
+        // - 工作日：多选，选项 = ISO 编号 1…7（1 = 周一），文案 key 逐条写死为
+        //   `module.progress.weekday.<ISO>`；`multiSelectEffectiveSet` 直接接模块那个公开纯函数
+        //   `WorkdayCalendar.resolveWorkdays`——卡上勾中的一组 = 块判定用的那一组
+        //   （空表 / 全坏值回落一~五，手改配置塞的野值不会变成点不掉的勾）。
+        // 模块 id 与上面那条同款写**字面量**（`ProgressModule` 没有 `moduleID` 常量）。
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.progress",
+            key: "workStart",
+            kind: .integer(range: WorkdayCalendar.workHourRange),
+            titleKey: "settings.modules.progress.workStart"
+        ),
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.progress",
+            key: "workEnd",
+            kind: .integer(range: WorkdayCalendar.workHourRange),
+            titleKey: "settings.modules.progress.workEnd"
+        ),
+        ModuleConfigControl(
+            moduleID: "com.cmeng.gourd.progress",
+            key: "workdays",
+            kind: .multiSelect(
+                options: ["1", "2", "3", "4", "5", "6", "7"],
+                titleKeys: [
+                    "module.progress.weekday.1", "module.progress.weekday.2",
+                    "module.progress.weekday.3", "module.progress.weekday.4",
+                    "module.progress.weekday.5", "module.progress.weekday.6",
+                    "module.progress.weekday.7",
+                ]
+            ),
+            titleKey: "settings.modules.progress.workdays",
+            multiSelectEffectiveSet: { raw in
+                WorkdayCalendar.resolveWorkdays(from: raw).sorted().map(String.init)
             }
         ),
     ]
@@ -934,7 +981,7 @@ struct ModuleConfigControl: Identifiable {
         var id: String { value }
     }
 
-    /// 模块 id：卡片按它命中（启动台三行、快捷指令两行、音乐 / 前台应用 / 进度各一行）。
+    /// 模块 id：卡片按它命中（启动台三行、快捷指令两行、音乐 / 前台应用各一行、进度四行）。
     let moduleID: String
     /// 该模块 manifest config 里的键名——**逐字一致**（解析用例拿 manifest 的 `properties` 对，
     /// 写错一个字就红；`ConfigHandle.set` 对 schema 之外的键也不落盘）。

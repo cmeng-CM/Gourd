@@ -72,6 +72,9 @@
 //  调休日恒上班、表外年份退化纯星期）、今天行四态与 `todayFraction` 边界、
 //  周 / 月 `spanStats` 的**手算值**（工作日占比 + 剩余工作日数，含「区间内一个工作日都没有」的
 //  除零边界）、坏配置回落默认（工作星期集合与上下班小时）。
+//  p7 / T3 工作日统计模块化——`WorkdayRowText` 的行文案矩阵（四态 → key 映射、`compactDuration`
+//  边界、`leftDays` 的 0 与正数两档、10/1 当天的现状核对）、progress manifest 的三键契约
+//  （类型 / 默认值与 `WorkdayCalendar` 常量同源）、模块三个新键的真句柄读侧（覆盖值优先 / 坏值归一）。
 //
 
 import AppKit
@@ -1230,7 +1233,7 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
-    /// `ProgressModule.manifest` 的契约：id / surfaces / icon / defaultEnabled / 三项 config
+    /// `ProgressModule.manifest` 的契约：id / surfaces / icon / defaultEnabled / 六项 config
     /// 的类型、取值与默认值；并回走一次 JSON 路径（与宿主读 descriptor 同一条路）。
     func testProgressModuleManifestMatchesContract() throws {
         let manifest = ProgressModule.manifest
@@ -1240,7 +1243,8 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(manifest.shortID, "progress")
         XCTAssertEqual(manifest.name.key, "module.progress.name")
         XCTAssertEqual(manifest.summary?.key, "module.progress.summary")
-        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "chart.pie"))
+        // p7 / T3：显示名换「工作日统计」（值在 catalog；key 不变），图标 chart.pie → briefcase
+        XCTAssertEqual(manifest.icon, IconSpec(type: "symbol", name: "briefcase"))
         XCTAssertEqual(manifest.kind, "builtin")
         // 2026-09-30（p3-widgets / T1，D-01）：纯展示改**首页块**——展开 tab 不再由本模块承担
         XCTAssertEqual(manifest.surfaces, [.home], "只声明首页块（26 §做法 机制一）")
@@ -1275,6 +1279,23 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(properties["baseCalendar"]?.type, "enum")
         XCTAssertEqual(properties["baseCalendar"]?.values, ["gregorian", "chinese"])
         XCTAssertEqual(properties["baseCalendar"]?.default, ConfigValue.string("gregorian"))
+
+        // p7 / T3 的三键（docs/31 §接口 4 / D-08）：类型、默认值与 `WorkdayCalendar` 的常量同源
+        XCTAssertEqual(properties["workStart"]?.type, "integer")
+        XCTAssertEqual(properties["workStart"]?.default, ConfigValue.int(9), "默认上班 9 点（= defaultWorkStartHour）")
+        XCTAssertEqual(properties["workEnd"]?.type, "integer")
+        XCTAssertEqual(properties["workEnd"]?.default, ConfigValue.int(18), "默认下班 18 点（= defaultWorkEndHour）")
+        XCTAssertEqual(properties["workdays"]?.type, "list")
+        XCTAssertEqual(properties["workdays"]?.itemType, "string")
+        XCTAssertEqual(
+            properties["workdays"]?.default,
+            ConfigValue.strings(["1", "2", "3", "4", "5"]),
+            "默认工作日一~五（ISO 编号；= defaultWorkdays）"
+        )
+        // 默认值直接取模块侧常量，不在 manifest 里写第二份字面量（两处必须同源）
+        XCTAssertEqual(WorkdayCalendar.defaultWorkStartHour, 9)
+        XCTAssertEqual(WorkdayCalendar.defaultWorkEndHour, 18)
+        XCTAssertEqual(WorkdayCalendar.defaultWorkdays, [1, 2, 3, 4, 5])
 
         // 字面量 manifest 也能走 JSON：编码 → `decode(from:)`（含 validate）→ 相等
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
@@ -1759,12 +1780,13 @@ final class ModuleKernelTests: XCTestCase {
             registry.homeEntries.first { $0.id == id },
             "进度声明了 home 且已放行 → 首页块名单里必须有它（order 30）"
         )
-        XCTAssertEqual(progressEntry.symbolName, "chart.pie")
+        XCTAssertEqual(progressEntry.symbolName, "briefcase")
         // 文案来自 Localizable 的 `module.progress.name`：宿主语言下解析为 en 或 zh-Hans；
         // catalog 没编进宿主 bundle 时会回退 shortID（"progress"），断言因此能抓住漏编译
+        // （p7 / T3 把显示名从「时间进度」改成「工作日统计」）
         XCTAssertTrue(
-            ["Time progress", "时间进度"].contains(progressEntry.label),
-            "块文案应已本地化（module.progress.name，p5-home-blocks / T2 从「进度」改名），实到 \(progressEntry.label)"
+            ["Workday Stats", "工作日统计"].contains(progressEntry.label),
+            "块文案应已本地化（module.progress.name，p7 / T3 从「时间进度」改名），实到 \(progressEntry.label)"
         )
         XCTAssertFalse(
             registry.tabEntries.contains { $0.id == id },
@@ -2075,6 +2097,175 @@ final class ModuleKernelTests: XCTestCase {
             .working(minutesToEnd: 360),
             "坏配置在 todayState 里也回落 (9, 18)"
         )
+    }
+
+    /// 首页块行动文案（`WorkdayRowText`，p7 / T3，docs/31 §接口与数据形状 4 / D-09）：
+    /// **四态矩阵 + 「剩 N 天」的 0 与正数两档 + `compactDuration` 边界**。
+    ///
+    /// 语言无关（本用例钉的是**结构**与**数字格式**，不钉具体译文）：四态 → 文案 key 的映射由
+    /// `todayKey` 逐条断言（最终字符串只再经一次 catalog 查表）；`compactDuration` 是纯数字格式；
+    /// `leftDays` 与 `todayTrailing` 的最终字符串只断言**实参已就位**（`contains` / 与 key 不同源）。
+    /// catalog 的**值**由 `TakeoverEnablementTests` 的解析断言与跨 catalog 一致性兜底。
+    func testWorkdayRowTrailingTextMatrix() throws {
+        // ① compactDuration 边界：整点不带 0m（`3h`）、不足小时只给分（`45m`）、0 与负数 → `0m`
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 0), "0m", "0 分钟 → 0m（T2 报告的备忘）")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: -5), "0m", "负数按 0 处理（不上负号）")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 1), "1m")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 45), "45m")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 59), "59m", "不足 60 只给分钟")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 60), "1h", "整点不带 0m")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 61), "1h1m")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 140), "2h20m", "docs/31 的样例：2 小时 20 分")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 180), "3h", "整点 3 小时")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 360), "6h", "9–18 班正午的距下班")
+        XCTAssertEqual(WorkdayRowText.compactDuration(minutes: 540), "9h", "整班时长")
+
+        // ② 四态 → （key, 实参）：key 形态逐条钉死（写错 key / 换错分支这里立刻红）
+        let rest = WorkdayRowText.todayKey(.restDay)
+        XCTAssertEqual(rest.key, "module.progress.workday.rest")
+        XCTAssertNil(rest.argument, "休息日没有插值")
+        let beforeStart = WorkdayRowText.todayKey(.beforeStart(minutes: 80))
+        XCTAssertEqual(beforeStart.key, "module.progress.workday.toStart")
+        XCTAssertEqual(beforeStart.argument, "1h20m", "实参必须已过 compactDuration")
+        let working = WorkdayRowText.todayKey(.working(minutesToEnd: 140))
+        XCTAssertEqual(working.key, "module.progress.workday.toEnd")
+        XCTAssertEqual(working.argument, "2h20m")
+        let afterEnd = WorkdayRowText.todayKey(.afterEnd)
+        XCTAssertEqual(afterEnd.key, "module.progress.workday.clockedOut")
+        XCTAssertNil(afterEnd.argument, "已下班没有插值")
+
+        // ③ 最终字符串：插值已就位、且不是 key 原样（catalog 没编进宿主 bundle 时会退化成 key）
+        let workingText = WorkdayRowText.todayTrailing(state: .working(minutesToEnd: 140))
+        XCTAssertTrue(workingText.contains("2h20m"), "距下班文案里必须有格式化后的时长，实到 \(workingText)")
+        XCTAssertNotEqual(workingText, "module.progress.workday.toEnd", "查不到 catalog 时会原样返回 key——这里必须已解析")
+        let restText = WorkdayRowText.todayTrailing(state: .restDay)
+        XCTAssertNotEqual(restText, "module.progress.workday.rest", "休息日文案必须已解析")
+        XCTAssertFalse(restText.contains("%@"), "无插值的形态不得留下格式符，实到 \(restText)")
+
+        // ④ 「剩 N 天」的 0 与正数两档：0 照写（「今天之后没有工作日了」是事实，不隐藏）
+        let leftZero = WorkdayRowText.leftDays(0)
+        XCTAssertTrue(leftZero.contains("0"), "0 天照写，实到 \(leftZero)")
+        XCTAssertNotEqual(leftZero, "module.progress.workday.leftDays", "必须已解析出 catalog 文案")
+        let leftDays = WorkdayRowText.leftDays(18)
+        XCTAssertTrue(leftDays.contains("18"), "正数档实参已就位，实到 \(leftDays)")
+        XCTAssertNotEqual(leftDays, "module.progress.workday.leftDays")
+        XCTAssertTrue(WorkdayRowText.leftDays(-3).contains("0"), "负数按 0 处理（同 compactDuration 的容错口径）")
+
+        // ⑤ 现状核对（控制器说明）：2026-10-01 是国庆放假第一天——今天行是「休息日」，
+        //    本周（周一起始 [9/28, 10/5)）剩余 = 0，本月剩余 = 18。这三条把「块上真会画什么」
+        //    与 `WorkdayCalendar` 的判定对起来（文案与判定之间不再有第二套口径）。
+        let calendar = try fixedGregorian()
+        let today = try instant(2026, 10, 1, 12, calendar: calendar)
+        XCTAssertEqual(
+            WorkdayCalendar.todayState(
+                now: today, workdays: WorkdayCalendar.defaultWorkdays,
+                workStartHour: 9, workEndHour: 18, calendar: calendar
+            ),
+            .restDay,
+            "10/1 是 2026 国庆放假日 → 今天行画「休息日」（不是倒计时）"
+        )
+        XCTAssertEqual(
+            WorkdayRowText.todayTrailing(state: .restDay),
+            WorkdayRowText.todayTrailing(state: WorkdayCalendar.todayState(
+                now: today, workdays: WorkdayCalendar.defaultWorkdays,
+                workStartHour: 9, workEndHour: 18, calendar: calendar
+            )),
+            "今天行文案由判定直出——休息日不再显示倒计时"
+        )
+        XCTAssertEqual(
+            WorkdayCalendar.spanStats(
+                scope: .week, now: today, workdays: WorkdayCalendar.defaultWorkdays,
+                workStartHour: 9, workEndHour: 18, calendar: calendar
+            ).remainingWorkdays,
+            0,
+            "国庆周的剩余工作日 = 0"
+        )
+        XCTAssertEqual(
+            WorkdayCalendar.spanStats(
+                scope: .month, now: today, workdays: WorkdayCalendar.defaultWorkdays,
+                workStartHour: 9, workEndHour: 18, calendar: calendar
+            ).remainingWorkdays,
+            18,
+            "10 月 18 个工作日全在今天之后"
+        )
+    }
+
+    /// 模块读侧的三个新键（`workdays` / `workStart` / `workEnd`，p7 / T3）：**覆盖值优先、
+    /// 取不到回落 manifest 默认**——走**真句柄**（`ModuleContextFactory.configHandle`），
+    /// probe 域用完即删，**不碰**开发机真实的 `com.cmeng.gourd.module.progress`。
+    ///
+    /// 与 `testProgressModuleScopesReadConfigOverrideThroughTheRealHandle` 同款：manifest 是
+    /// probe 自己的（键名 / 类型 / 默认值与真 manifest 逐字同形），模块是**真 `ProgressModule`**
+    /// ——读侧归一（`resolveWorkdays` / `resolveWorkHours`）因此被端到端钉住。
+    func testProgressModuleWorkdayConfigReadsThroughTheRealHandle() throws {
+        let suiteName = "com.cmeng.gourd.module.probe-workday"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)          // 前置：清掉上次运行留下的覆盖值
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let manifest = try ModuleManifest.decode(from: Data(#"""
+        {
+          "manifestVersion": 1,
+          "id": "com.cmeng.gourd.probe-workday",
+          "name": {"key": "module.progress.name"},
+          "icon": {"type": "symbol", "name": "briefcase"},
+          "version": "1.0.0",
+          "apiVersion": "1.0",
+          "kind": "builtin",
+          "surfaces": ["home"],
+          "config": {
+            "type": "object",
+            "properties": {
+              "workStart": {"type": "integer", "default": 9},
+              "workEnd": {"type": "integer", "default": 18},
+              "workdays": {"type": "list", "itemType": "string", "default": ["1", "2", "3", "4", "5"]}
+            }
+          }
+        }
+        """#.utf8))
+
+        let config = ModuleContextFactory.configHandle(for: manifest)
+        let context = ModuleContext(
+            moduleID: manifest.id,
+            host: HostInfo(appVersion: "0", apiVersion: HostInfo.currentAPIVersion, macOSVersion: "15.0"),
+            config: config,
+            logger: ModuleLogger(moduleID: manifest.id, shortID: manifest.shortID),
+            ui: StubUIHandle()
+        )
+        let module = ProgressModule(context: context)
+
+        // ① 缺覆盖值 → 真句柄回落 manifest 默认（= 出厂档）
+        XCTAssertEqual(module.workdays, [1, 2, 3, 4, 5], "缺键 → 一~五")
+        XCTAssertEqual(module.workHours.start, 9)
+        XCTAssertEqual(module.workHours.end, 18)
+
+        // ② 覆盖值优先（含默认里没有的取值）
+        XCTAssertTrue(config.set("workdays", to: ["1", "2", "3", "4", "5", "6"]))
+        XCTAssertTrue(config.set("workStart", to: 10))
+        XCTAssertTrue(config.set("workEnd", to: 19))
+        XCTAssertEqual(module.workdays, [1, 2, 3, 4, 5, 6], "覆盖值压过默认（周六上班）")
+        XCTAssertEqual(module.workHours.start, 10)
+        XCTAssertEqual(module.workHours.end, 19)
+        // 落盘类型是 `[String]` / `Int`（写错类型模块 `get` 就是 nil / 回落，这里钉住 JSON 形态）
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: try XCTUnwrap(suite.data(forKey: "workdays"))),
+            ["1", "2", "3", "4", "5", "6"]
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(Int.self, from: try XCTUnwrap(suite.data(forKey: "workStart"))),
+            10
+        )
+
+        // ③ 坏值归一在模块读侧也成立：空表 / 全坏值 → 一~五；越界 / 倒挂 → (9, 18)
+        XCTAssertTrue(config.set("workdays", to: [String]()))
+        XCTAssertEqual(module.workdays, [1, 2, 3, 4, 5], "空表 → 一~五（不留空块）")
+        XCTAssertTrue(config.set("workdays", to: ["bogus", "0", "8"]))
+        XCTAssertEqual(module.workdays, [1, 2, 3, 4, 5], "全坏值 → 一~五")
+        XCTAssertTrue(config.set("workStart", to: 30))
+        XCTAssertEqual(module.workHours.start, 9, "越界 → 回落 9（不夹到 23）")
+        XCTAssertTrue(config.set("workStart", to: 18))
+        XCTAssertTrue(config.set("workEnd", to: 9))
+        XCTAssertEqual(module.workHours.end, 18, "倒挂 → 回落 18")
     }
 
     // MARK: - 瞬时浮层 HUD（D-22）

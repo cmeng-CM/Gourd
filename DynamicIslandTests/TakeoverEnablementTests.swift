@@ -125,7 +125,7 @@
 //    `moduleEnableOverrides`（既有启用真源，**不进摘除名单**）。
 //
 //  P3 冻结批次 / T7 追加（组件页的模块配置编辑口——**允许清单**，docs/24 §做法 机制四）：
-//  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：八条清单项逐条钉死，
+//  - **清单对生产事实**（`testConfigControlAllowlistMatchesManifestsAndCatalog`）：十一条清单项逐条钉死，
 //    每条都断言「模块 id 是已注册模块」「键在 manifest 的 `config.properties` 里」「kind 与声明的
 //    `type` 一致」「文案在 zh-Hans 里解析得出」「(模块 id, 键) 不重复」——键名写错一个字即红
 //    （T7 的变异验证靶子）；
@@ -147,6 +147,14 @@
 //    （登记表里接的是模块的 `ProgressCalculator.resolveScopes`）再按选项过滤——空表 / 全坏值 →
 //    勾中的是出厂三档，不是「一个都没勾」；`toggleMultiSelect` 拒绝把最后一档也取消（不落盘）。
 //    多选漏给解析函数由允许清单用例的非空断言拦下。
+//
+//  p7 / T3 追加（进度卡的**工作日三行**，docs/31-home-workday-launcher.md §接口与数据形状 4 / D-08）：
+//  - **清单新三条**：`com.cmeng.gourd.progress.workStart` / `.workEnd`（`.integer`，区间 =
+//    `WorkdayCalendar.workHourRange`）与 `.workdays`（`.multiSelect`，选项 = ISO 1…7、文案 key =
+//    `module.progress.weekday.<ISO>`，`multiSelectEffectiveSet` 接 `WorkdayCalendar.resolveWorkdays`）；
+//    类型 / 选项 / 默认值 / 有效值解析由 `testProgressWorkdayControlsMatchManifestAndCatalog` 钉死
+//    （空表 / 全坏值 → 一~五，与块判定同一处）；
+//  - **三条 titleKey 与七条 weekday 选项 key** 在允许清单用例的 ④ 档里逐个 `XCTAssertResolves`。
 //
 //  p5-home-blocks / T5 追加（「面板组件」节的**宿主行**——模块行之外的另一半，docs/29 §做法 机制三 / D-07、D-08）：
 //  - **四条宿主行的键解析**（`testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys`）：数据源是生产表
@@ -1072,10 +1080,11 @@ final class TakeoverEnablementTests: XCTestCase {
     /// ④ 文案 key 在宿主 bundle 的 zh-Hans 里**解析得出来**（没进 catalog → 一行没有标签的控件）；
     /// ⑤ 表里 **(模块 id, 键) 不重复**（重复 = 两个控件写同一个键，是谁在生效说不清）。
     ///
-    /// 另把**八条清单项逐条钉死**（模块 id + 键名），因为「清单少了一条」在 ①~⑤ 下是**全绿**的
+    /// 另把**十一条清单项逐条钉死**（模块 id + 键名），因为「清单少了一条」在 ①~⑤ 下是**全绿**的
     /// ——少一条只是「那个键没入口」，不违反任何一条断言（§已知限制 1 点名接受：清单是滞后的，
     /// 没有自动发现机制；这里用一条显式名单把它钉住，去掉任意一条即红）。
-    ///（p5-home-blocks / T2 从七条加到**八条**：进度卡的 `visibleScopes` 多选。）
+    ///（p5-home-blocks / T2 从七条加到**八条**：进度卡的 `visibleScopes` 多选；
+    ///  p7 / T3 从八条加到**十一条**：工作日统计的 `workStart` / `workEnd` / `workdays`。）
     ///
     /// 注册用 `enabled: { _ in true }`（不读任何偏好键、不落状态）、**不调** `bootstrap()`：
     /// 本用例只看 manifest 与文案，不激活任何模块。
@@ -1101,8 +1110,11 @@ final class TakeoverEnablementTests: XCTestCase {
                 "com.cmeng.gourd.shortcuts.timeoutSeconds",
                 "com.cmeng.gourd.frontapp.maxRecentApps",
                 "com.cmeng.gourd.progress.visibleScopes",
+                "com.cmeng.gourd.progress.workStart",
+                "com.cmeng.gourd.progress.workEnd",
+                "com.cmeng.gourd.progress.workdays",
             ],
-            "八条 = docs/24 §做法 机制四 点名的七个键 + docs/29 §做法 机制二 的 visibleScopes（顺序不动，去/改任意一条都会红）"
+            "十一条 = docs/24 §做法 机制四 点名的七个键 + docs/29 §做法 机制二 的 visibleScopes + docs/31 §接口与数据形状 4 的工作日三键（顺序不动，去/改任意一条都会红）"
         )
 
         // ①②③ 数据源 = 注册表里的真 manifest（先补注册：`setUp` 的 `deactivateAll()` 把
@@ -1512,6 +1524,91 @@ final class TakeoverEnablementTests: XCTestCase {
         )
 
         XCTAssertResolves(control.titleKey)
+    }
+
+    /// **进度卡工作日三行**（p7 / T3，docs/31 §接口与数据形状 4 / D-08）：模块 id / config 键 /
+    /// 控件类型与区间 / 选项与文案 / 行标题五项对生产事实——数据源是**生产表本身**
+    /// （同 `testProgressVisibleScopesControlMatchesManifestAndCatalog` 的口径）。
+    ///
+    /// 三行各自钉死：
+    /// - `workStart` / `workEnd`：`.integer(range: WorkdayCalendar.workHourRange)`
+    ///   ——区间**单一来源**（模块读侧的越界回落与滑块共用这一个常量，这里再写一个数字即红）；
+    /// - `workdays`：`.multiSelect`，选项 = ISO 1…7、文案 key = `module.progress.weekday.<ISO>`
+    ///   （七条逐字写死，改名 / 漏一天即红），`multiSelectEffectiveSet` 接
+    ///   `WorkdayCalendar.resolveWorkdays`——卡上勾中的一组 = 块判定用的那一组
+    ///   （空表 / 全坏值 → 一~五；野值不会变成点不掉的勾）。
+    ///
+    /// 类型那一档在允许清单用例里已按 kind 分档断言（`.integer` ↔ manifest 的 `integer`、
+    /// `.multiSelect` ↔ `list`），这里把**具体取值**钉死。
+    func testProgressWorkdayControlsMatchManifestAndCatalog() throws {
+        let controls = ModuleSettingsSection.configControls.filter { $0.moduleID == "com.cmeng.gourd.progress" }
+        func control(_ key: String) throws -> ModuleConfigControl {
+            try XCTUnwrap(
+                controls.first { $0.key == key },
+                "进度卡必须有一条 `\(key)` 控件（docs/31 §接口 4 的工作日三行）"
+            )
+        }
+
+        // 上下班时间：整点滑块，区间取模块侧常量（不写第二份字面量）
+        let start = try control("workStart")
+        XCTAssertEqual(start.moduleID, ProgressModule.manifest.id, "模块 id 必须是真模块那一份字面量")
+        XCTAssertEqual(start.kind, .integer(range: WorkdayCalendar.workHourRange), "区间 = workHourRange（单一来源）")
+        XCTAssertEqual(start.titleKey, "settings.modules.progress.workStart")
+        XCTAssertResolves(start.titleKey)
+        let end = try control("workEnd")
+        XCTAssertEqual(end.kind, .integer(range: WorkdayCalendar.workHourRange))
+        XCTAssertEqual(end.titleKey, "settings.modules.progress.workEnd")
+        XCTAssertResolves(end.titleKey)
+
+        // 工作日：ISO 1…7 的七枚胶囊，文案 key 逐条钉死
+        let workdays = try control("workdays")
+        XCTAssertEqual(workdays.titleKey, "settings.modules.progress.workdays")
+        XCTAssertResolves(workdays.titleKey)
+        XCTAssertEqual(
+            workdays.multiSelectOptions.map(\.value),
+            ["1", "2", "3", "4", "5", "6", "7"],
+            "选项 = ISO 编号 1…7（1 = 周一；漏一天 / 改名即红）"
+        )
+        XCTAssertEqual(
+            workdays.multiSelectOptions.map(\.titleKey),
+            (1...7).map { "module.progress.weekday.\($0)" },
+            "文案 key 形态 `module.progress.weekday.<ISO>`"
+        )
+        for option in workdays.multiSelectOptions {
+            XCTAssertResolves(option.titleKey)
+        }
+
+        // manifest 三键：类型与默认值（workStart / workEnd 的默认值 = 模块侧常量）
+        let properties = try XCTUnwrap(ProgressModule.manifest.config?.properties)
+        XCTAssertEqual(properties["workStart"]?.type, "integer")
+        XCTAssertEqual(properties["workStart"]?.default, ConfigValue.int(WorkdayCalendar.defaultWorkStartHour))
+        XCTAssertEqual(properties["workEnd"]?.type, "integer")
+        XCTAssertEqual(properties["workEnd"]?.default, ConfigValue.int(WorkdayCalendar.defaultWorkEndHour))
+        XCTAssertEqual(properties["workdays"]?.type, "list")
+        XCTAssertEqual(properties["workdays"]?.itemType, "string")
+        XCTAssertEqual(
+            properties["workdays"]?.default,
+            ConfigValue.strings(WorkdayCalendar.defaultWorkdays.sorted().map(String.init)),
+            "默认值 = 模块侧 defaultWorkdays（ISO 一~五）"
+        )
+
+        // 多选的有效值解析：空表 / 全坏值 → 一~五；合法子集按 ISO 升序（= 选项声明顺序）
+        let config = RecordingConfigHandle(schema: ["workdays"])
+        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "缺键 → 一~五")
+        XCTAssertTrue(config.set("workdays", to: [String]()))
+        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "空表 → 一~五（与块判定同一处）")
+        XCTAssertTrue(config.set("workdays", to: ["bogus", "0", "8"]))
+        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "全坏值 → 一~五")
+        XCTAssertTrue(config.set("workdays", to: ["7", "bogus", "6", "6"]))
+        XCTAssertEqual(
+            workdays.selectedOptions(from: config),
+            ["6", "7"],
+            "野值丢弃 + 去重 + 按选项声明顺序（= ISO 升序）"
+        )
+        // 最后一枚不许关（与尺度多选同一条既有口径）：只剩「6」时点它是拒绝、盘上不动
+        XCTAssertTrue(config.set("workdays", to: ["6"]))
+        XCTAssertFalse(workdays.toggleMultiSelect("6", config: config), "最后一枚拒绝取消")
+        XCTAssertEqual(workdays.selectedOptions(from: config), ["6"], "拒绝之后盘上一个字节没动")
     }
 
     /// **卡片与模块算的是同一组尺度**（T2 审查的 Important 的回归用例）：卡片上「勾中的那一组」
