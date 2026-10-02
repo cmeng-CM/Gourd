@@ -8,7 +8,7 @@
 
 ## 一句话方案
 
-毛玻璃档（`.frostedGlass` / `.liquidGlass`）下，首页每块不再画「块心柔光池」，改为**一层极淡的整块底（玻璃板）**：黑 **0.14**、圆角 **15pt**、**无描边**，板外一圈柔和暗影、板顶缘一丝微光——**板就是块的完整框**，因此**轴对齐意义上**内容必然落在板内（板圆角弧内区的两处越界见 §已知限制 9）；hover 保留放大/提亮并把板加深到 **0.19**。纯黑档（`.solidBlack`）白光两层**逐字不变**。
+毛玻璃档（`.frostedGlass` / `.liquidGlass`）下，首页每块不再画「块心柔光池」，改为**一层极淡的整块底（玻璃板）**：黑 **0.14**、圆角 **15pt**、**无描边**，板外一圈柔和暗影、板顶缘一丝微光——**板就是块的完整框**，因此**轴对齐意义上**内容必然落在板内（圆角弧内区的口径与 T2 后的归零见 §已知限制 9）；hover 保留放大/提亮并把板加深到 **0.19**。纯黑档（`.solidBlack`）白光两层**逐字不变**。
 
 ## 背景与目标
 
@@ -53,9 +53,9 @@
 
 | 站点 | 位置 | 说明 |
 |---|---|---|
-| **单条流格子（唯一活块站点）** | `DynamicIsland/Host/HomeStripView.swift` 的 `HomeFlowView` 格子（`.homeBlockFloat()`，`:1216`） | 紧凑块与大块（音乐 / 待办 / 前台应用 / 进度 / 通知 / 统计；镜子若在也是大块）都走这里 |
-| **日历行** | `DynamicIsland/Host/HomeCalendarRow.swift` 的根帧（`HomeCalendarRow.swift:195`） | 日历行从来不在块里（整月网格要宽度）；**只给板，不给 hover 放大/提亮**（纯展示块口径：docs/30 机制七；且它自带 `onHover`）——见 D-13；板取**「板 = 行框」**（不内缩 8pt，见 D-16） |
-| `HomeStripView` / `HomeWidgetBandView` | 同文件 `:975` / `:1105` | **死代码**（全仓库零实例化，2026-10-02 核实）——**不接板**；将来若有调用方，须同时接板（见 §已知限制 7） |
+| **单条流格子（唯一活块站点）** | `DynamicIsland/Host/HomeStripView.swift` 的 `HomeFlowView` 格子（`.homeBlockFloat()`，`:1276`） | 紧凑块与大块（音乐 / 待办 / 前台应用 / 进度 / 通知 / 统计；镜子若在也是大块）都走这里 |
+| **日历行** | `DynamicIsland/Host/HomeCalendarRow.swift` 的根帧（`HomeCalendarRow.swift:205`） | 日历行从来不在块里（整月网格要宽度）；**只给板，不给 hover 放大/提亮**（纯展示块口径：docs/30 机制七；且它自带 `onHover`）——见 D-13；板取**「板 = 行框」**（不内缩 8pt，见 D-16） |
+| `HomeStripView` / `HomeWidgetBandView` | 同文件 `:1035` / `:1165` | **死代码**（全仓库零实例化，2026-10-02 核实）——**不接板**；将来若有调用方，须同时接板（见 §已知限制 7） |
 
 日历行的板按 D-14 实测取**「板 = 行框」**（首选的内缩 8pt 会让月历题头「十月」的最左笔画落在板外 1pt，与 D-03 冲突，故走退法）——代价是日历板比上下两条流的块外缘宽 **8pt/侧**（D-16）。
 
@@ -114,7 +114,7 @@
 | D-16 | 日历行的板最终取 **「板 = 行框」**（D-14 的退法落地）：内缩 8pt 时月历题头最左笔画落在板外 1pt，D-03 优先 | agent（D-14 预授权 + 上屏证据 `glass-plate-inset8-conflict.png`） |
 | D-17 | **非交互站点只装板层**（玻璃档：板 + 顶缘微光；纯黑档：一层不装）——不装内容软影、不装 hover | agent（守 §机制二「只给板」；修复波） |
 | D-18 | 删 `glassPoolOpacity` / `glassHoverPoolOpacity`（零引用，取值仍留 `docs/31` 与 p7b 证据）；`plateIsDark` 保留（当前两档同值 true，语义为"板色"，黑档靠 α = 0 生效） | agent（修复波卫生 + 审查 Minor 8） |
-| D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素，其余 26 角 0）**本批不修**，记 §已知限制 9 | agent（终审裁定；修法属改设计/动布局） |
+| D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素）——**后由 T2 的 5pt 内容内缩减为 0**（连续圆角模型 28 角全 0；保守圆模型残 3px 属模型上界） | agent（T1 终审裁定不修；T2 落地后归零） |
 | D-20 | 首页块**内容内缩**（板比内容宽）：水平 **5pt** / 垂直 **0pt**（起点 6/4 均被实测否掉：6 破进度块 180pt 门槛、4 掉第五行），日历行只做水平；板的尺寸、位置与 8pt 间距一概不动 | 用户（原话「每个玻璃块要比内容宽一些，现在都紧挨着显示了」；板 = 块框，故只能内缩内容） |
 
 ## 接口与数据形状
@@ -176,14 +176,14 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 
 ### 4. 应用站点（逐字）
 
-活站点两处：`HomeStripView.swift` 的 `HomeFlowView` 格子（`.homeBlockFloat()`，`:1216`；`interactive` 默认 true）与 `HomeCalendarRow.swift:195`（`.homeBlockFloat(interactive: false)`，板取「板 = 行框」，见 D-16）。两个死结构（`HomeStripView` `:975` / `HomeWidgetBandView` `:1105`）不接板。
+活站点两处：`HomeStripView.swift` 的 `HomeFlowView` 格子（`.homeBlockFloat()`，`:1276`；`interactive` 默认 true）与 `HomeCalendarRow.swift:205`（`.homeBlockFloat(interactive: false)`，板取「板 = 行框」，见 D-16）。两个死结构（`HomeStripView` `:1035` / `HomeWidgetBandView` `:1165`）不接板。
 
 ### 5. 测试
 
 `DynamicIslandTests/HomeStripLayoutTests.swift`：
-- `testHomeBlockFloatMetricsStayInTheLegibleRange`（`:2151`）：黑档全部既有断言**逐字保留**（含 `idle.poolOpacity ≥ 0.08` 这类**只对黑档成立**的区间）；玻璃档分支（板 0.14 / hover 0.19 且 hover − idle ≥ 0.03、板 α ∈ 0.10…0.22、圆角 ∈ 10…20、板影半径 > 0、微光 ∈ (0, 0.2) 且 fraction ∈ (0, 1)、玻璃档 `poolOpacity == 0`、`plateIsDark == true`、`interactive == false` 时与 hover 无关）；
-- `testGlassSurfaceUsesDarkVeilEffects`（`:2253`）：玻璃档板 α > 0、hover 严格更深、内容软影三值逐字（0.22 / 9 / 1 → 0.34 / 13 / 2）、玻璃档池为 0；黑档板为 0 且 `poolOpacity == HomeBlockFloatMetrics.poolOpacity`、`poolIsDark == false`；
-- `testHomeBlockPoolRadiusNeverCrossesTheNearestEdge`（`:2295`）：保留（黑档池不变量）。
+- `testHomeBlockFloatMetricsStayInTheLegibleRange`（`:2135`）：黑档全部既有断言**逐字保留**（含 `idle.poolOpacity ≥ 0.08` 这类**只对黑档成立**的区间）；玻璃档分支（板 0.14 / hover 0.19 且 hover − idle ≥ 0.03、板 α ∈ 0.10…0.22、圆角 ∈ 10…20、板影半径 > 0、微光 ∈ (0, 0.2) 且 fraction ∈ (0, 1)、玻璃档 `poolOpacity == 0`、`plateIsDark == true`、`interactive == false` 时与 hover 无关）；
+- `testGlassSurfaceUsesDarkVeilEffects`（`:2279`）：玻璃档板 α > 0、hover 严格更深、内容软影三值逐字（0.22 / 9 / 1 → 0.34 / 13 / 2）、玻璃档池为 0；黑档板为 0 且 `poolOpacity == HomeBlockFloatMetrics.poolOpacity`、`poolIsDark == false`；
+- `testHomeBlockPoolRadiusNeverCrossesTheNearestEdge`（`:2237`）：保留（黑档池不变量）。
 
 ## 验收标准
 
@@ -205,9 +205,9 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 4. 板不透明度在**极亮桌面**（满屏白色窗口）下观感可能偏轻；反向地，**暗桌面**上绝对台阶小（实测最弱 7.7/255）——调参窗口 0.14 → 0.16/0.17。
 5. 顶缘微光在低亮度屏 / 高亮桌面下的观感需真人复核；它也会吃掉一点上缘的台阶幅度（上缘实测 11.3…17.2，弱于左/右/下缘的 13.7…29.4）。
 6. 板本身不带"可点"语义（纯展示块沿用既有口径：不做 hover 底、不加边框）。
-7. 两个死结构（`HomeStripView` / `HomeWidgetBandView`）不接板——**将来若有调用方，须同时接板**，否则会出现"有的块有板、有的没有"。
+7. 两个死结构（`HomeStripView` / `HomeWidgetBandView`）不接板——**将来若有调用方，须同时接板**，否则会出现"有的块有板、有的没有"。另外 T2 的内容内缩加在两站点共用的 `HomeBandCell` 上，死结构若复活会**自带内缩**（但无板），复活时须一并补板。
 8. 日历行与单条流块的外缘差 8pt/侧：本批取「板 = 行框」（D-16）。
-9. **圆角弧内区的两处内容越界**（D-19）：按实际形状模型（连续圆角 n=5），`行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在**板形状之外**（其余 26 角为 0）。成因：这两块的**内容本身贴着块框**（板内余量 0.0 / 0.5pt，是既有排版），而新板的 15pt 圆角把角切掉——**内容位移未变，但"内容画在板外"这一现象由本批的板形状引入**。量与视觉影响都极小（14% 黑纱上约 7.5 / 2.5 pt²）。修法（缩小圆角 / 给内容加内边距 / 把板立到内容之外）都属改设计或动布局，本批不做；D-03 的「内容 ⊆ 板」是**轴对齐口径**。
+9. **圆角弧内区的内容越界——T1 出现、T2 归零**（D-19 → D-20）：T1 上线后按实际形状模型（连续圆角 n=5）测得 `行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在板形状之外（其余 26 角为 0）——成因是这两块内容本身贴着块框（余量 0.0 / 0.5pt）而板的 15pt 圆角切角（内容位移未变，"内容画在板外"由板形状引入）。**T2 的内容内缩 5pt 把它归零**（连续圆角模型下 7/7 块、28 角全 0；保守的圆模型残 3px，是模型上界而非实测越界）。D-03 的「内容 ⊆ 板」仍是**轴对齐口径**。
 10. `effects(hovered:surface:interactive:)` 在 `interactive == false × .dark` 下返回一份**无人消费**的常驻档（含黑档白光池 0.13）——黑档的非交互站点在 modifier 里一层不装（D-17）。将来若有人复用 `effects` 画黑档非交互站点，会凭空长出白光池，需在此处挡差。
 11. 板影的有效深度（≈0.126）是**推断值**（`plateShadowOpacity × plateOpacity`），未逐像素实测。
 12. **垂直余量为 0**（D-20）：上下沿用各块既有内边距（2.5 / 4.0 / 8.5 / 0.5pt 不等）；要再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。
@@ -220,7 +220,8 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 - 代码（T1：commit `cb27903..90bb280`；T2：commit `fef3d9b1..9c44e442`）：`DynamicIsland/Host/HomeStripView.swift`（T1 常量族 + `FloatEffects` 板字段 + `effects(hovered:surface:interactive:)` + 修饰符两分支 + `homeBlockFloat(interactive:)` + 删两个死常量；T2 `HomeBlockChrome` 内容内缩 + 格子内容外层 padding）、`DynamicIsland/Host/HomeCalendarRow.swift`（T1 根帧接板 `interactive: false`；T2 水平内缩套在 `GeometryReader` 外）、`DynamicIslandTests/HomeStripLayoutTests.swift`（黑档断言逐字保留 + 玻璃档分支 + 两条用例改钉 + T2 的 `testHomeBlockContentInsetStaysInRange`（含两条**行为观测**：流站点按探针断言内容宽、日历行站点按网格宿主坐标位移断言））。
 - 常量族（9 值）：`plateOpacity 0.14` / `hoverPlateOpacity 0.19` / `plateCornerRadius 15` / `plateShadowOpacity 0.9` / `plateShadowRadius 10` / `plateShadowX 1` / `plateShadowY 2` / `plateTopHighlightOpacity 0.06` / `plateTopHighlightFraction 0.45`。
 - 证据（`.workflow/p7c-home-plates/evidence/`）：`glass-plate-full.png`、`glass-plate-closeup-{row1,row2,calendar,seam-6x,leftedge-6x}.png`、`glass-plate-inset8-conflict.png`（D-16 的上屏依据）、`black-regression.png`、`glass-plate-restored.png`、`restored-glass.txt`、`plate-measure.txt`（台阶 / 三层包含 / 板心均匀度 / 角部核验 / 去软影前后 / 日历行取法）、探针与测量脚本 `p7c-{probe,rects,ratio,measure}.py`。
-- 测试：全量单测 `Executed 502 tests, with 0 failures`（退出码 0）。
+- 测试：全量单测 `Executed 503 tests, with 0 failures`（退出码 0；终审独立复跑确认）。
+- T2 证据（`.workflow/p7c-home-plates/evidence/`）：`inset-before-full.png`、`inset-after-full.png`、`inset-black-full.png`、`inset-closeup-{row1,row2,calendar,stat-4x,leftedge-6x}.png`、`inset-startvalue-6pt-4pt-stat-3rows.png`（6pt 起点被否的上屏依据）、`inset-measure.txt`（逐块余量 / 无裁切 / 台阶复测）、`inset-rects-after.txt`、`inset-restored-glass.txt`。
 - 文档：本文档。
 
 **与计划的偏离**
@@ -232,7 +233,7 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 - hover 实际观感（需真人鼠标复核；不可合成驱动）。
 - `.liquidGlass` 档未上屏（机制同源）。
 - 极亮 / 极暗桌面下的板强度（调参窗口 0.14 → 0.16/0.17；见 §已知限制 4/5）。
-- 圆角弧内区两处内容越界（§已知限制 9，D-19：本批不修）。
+- 圆角弧内区内容越界：T1 出现、**T2 内缩 5pt 后归零**（§已知限制 9）。
 - 两个死结构未接板（§已知限制 7）。
 - 黑档非交互站点的一份无消费者 effects 常驻档（§已知限制 10）。
 - 板影有效深度为推断值、未逐像素实测（§已知限制 11）。
