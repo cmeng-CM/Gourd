@@ -438,8 +438,11 @@ struct HomeBandDroppedHint: View {
 /// 调研结论（机制七）是**不做每块的永久卡片**（Atoll 与 Nook X 都没有 per-block 容器；每块卡片
 /// 要吃 8–16pt 内边距，而宽度预算正是最紧的）。分带时期那层「整条带共用一个极淡圆角底」的
 /// 大底已撤（p6-ui-polish / docs/30 §做法 机制一 / D-02）：底把内容糊在一个大盒子里、块与块
-/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起光**（柔光池为主 + 内容辉光为辅，
-/// `homeBlockFloat()`）做。
+/// 之间不可区分，正是用户第 1 条反馈；区分改由**每块自己的浮起层**（`homeBlockFloat()`）做
+/// ——**p7b 起按底色档分两套、p7c 起玻璃档改判为「玻璃板」**：黑档仍是白光柔光池 + 白内容辉光，
+/// 玻璃档是极淡整块底（板 + 柔影 + 顶缘微光，见 `HomeBlockFloatMetrics.plateOpacity` 一族与
+/// docs/32 §做法 机制一）。**「不做卡片墙」的口径在 p7c 由用户放宽为「不加描边、可用极淡整块底」**
+/// （留痕见 docs/32 头部；本节描述的「撤掉整条带的大底」仍然成立——板是**每块一块**，不是整条带）。
 /// 「可交互的条目」仍在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有
 /// 这一处**（三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
 enum HomeBandChrome {
@@ -461,7 +464,9 @@ enum HomeBandChrome {
 ///
 /// **不再画底**（p6-ui-polish / docs/30 §做法 机制一 / D-02）：分带时期那层 `white.opacity(0.05)`
 /// 的整条大底已撤——「所有内容糊在一个大盒子里」正是用户第 1 条反馈；块与块之间的区分改由每块
-/// 的浮起光（`homeBlockFloat()`：柔光池为主 + 内容辉光为辅）做（用户本轮明说：不加区域块与边线）。
+/// 的浮起层（`homeBlockFloat()`）做：**黑档 = 白光柔光池 + 白内容辉光；玻璃档（p7c 起）= 极淡
+/// 整块底（玻璃板）**。「不加区域块与边线」是 p6 的原话，**p7c 由用户放宽为「不加描边、可用极淡
+/// 无描边整块底」**（alpha14，留痕见 docs/32 头部）——板没有描边，仍不是卡片墙。
 ///
 /// 用法只有一处（`HomeBandedHomeView` 的单条流）。容器仍画在带自己的 frame 上，因此**带的可用宽
 /// 必须先扣掉两侧的 `containerInset`**（调用方传给这条流的宽度就是扣完的）——否则 plan 按整宽
@@ -507,15 +512,18 @@ extension View {
 
 // MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02；p7b 底色档自适应，docs/31 D-22）
 
-/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻「柔光池」（块背后的
-/// 径向渐变，为主——黑档白、玻璃档黑）+ 内容辉光 / 软影（围绕内容的 `.shadow`，为辅），hover 时
-/// 两者一起加深、再叠轻微放大 / 提亮，**不加卡片底与边线**（用户本轮明确）。
+/// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一；p7b / p7c 两轮改判见下）。
+///
+/// **当前口径（p7c）**：黑档 = 白光柔光池（块背后的径向渐变）+ 白内容辉光；玻璃档 = **极淡整块底
+/// （玻璃板）** + 既有内容软影；两档的 hover 都再叠轻微放大 / 提亮。**不加描边**——p6 的原始约束是
+/// 「不加区域块与边线」，p7c 经用户**放宽为「不加描边、可用极淡整块底」**（α14，留痕见 docs/32 头部），
+/// 板因此没有 stroke / 发丝线，仍不是卡片墙。
 ///
 /// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
 /// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
 /// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块的
-/// 柔光池」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` / 池都不参与布局
-/// （邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
+/// 浮起层」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` / 底（池或板）都不
+/// 参与布局（邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
 ///
 /// **为什么黑档是白光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
 /// `Color.black`），黑 `.shadow` 在黑底上恒为零效果——静态区分与 hover「加深」都看不见。
@@ -594,7 +602,8 @@ enum HomeBlockFloatMetrics {
     /// - `.dark`（面板 `.solidBlack`）：沿用 p6/p7 的白光两层（白光柔光池 + 白色内容辉光），
     ///   **数值逐字不变**——暗底加亮是这套常量的原始前提；
     /// - `.glass`（面板 `.frostedGlass` / `.liquidGlass`，behindWindow 材质、采样屏后内容）：
-    ///   改用**黑色柔影池 + 黑色软影**——亮底减亮，与暗底加亮是同一物理的两面。
+    ///   **p7c 起是「玻璃板」**（极淡整块底 + 柔影 + 顶缘微光，`plate*` 常量族）——亮底上的区分改由
+    ///   **板缘的台阶**给出；p7b 的黑色柔影池已撤（池恒 0，见下面的常量注）。
     ///
     /// 为什么必须分档：p7 T1 已在毛玻璃底上测到白光池只贡献 ≈ **+11/255**，而玻璃底的自身起伏
     /// 就有 ±4–5/255（同一块内不同角落的本地基线可差 ≈11）——贡献被材质淹没，肉眼不可辨
@@ -613,18 +622,11 @@ enum HomeBlockFloatMetrics {
         }
     }
 
-    // 玻璃档常量（p7b；**起点值经一轮上屏调参上调**——0.10/0.18 在实测中池心对最紧的缝带读数
-    // 只到 ≈+10…+12/255，离判据（≥12）太近、抗不住玻璃底 ±4–5 的空间漂移，按计划的调参窗口
-    // 上调一档到 0.13/0.22；逐点数字与结论见 docs/31 §接口 1 与 evidence/p7b-measure.txt）。
-    //
-    // **p7c 起下面两条池常量不再被消费**（`effects(hovered:surface:interactive:)` 的玻璃档
-    // `poolOpacity` 恒 0）：块心柔光池在毛玻璃底上两轮实测都**不表达边界**（p7b 实测块心相对
-    // 本地基线 −16~−18/255、纵向平滑单谷、无台阶），已被**玻璃板**取代（docs/32 §做法 机制一）。
-    // 常量按「不做未要求的删除」留痕（docs/31 的 p7b 结论仍可回溯）。
-    /// 玻璃档柔光池中心的**黑色**不透明度（亮底减亮；起点 0.10 → 定稿 **0.13**）。**p7c 起不消费**。
-    static let glassPoolOpacity: Double = 0.13
-    /// 玻璃档 hover 的池黑不透明度（比常驻更深 = 「hover 加深」；起点 0.16 → **0.20**）。**p7c 起不消费**。
-    static let glassHoverPoolOpacity: Double = 0.20
+    // **p7c 起玻璃档不画池**：块心柔光池（p7b 的黑色柔影池：定稿 0.13 / hover 0.20，起点值经一轮
+    // 上屏调参上调的过程见 docs/31 §接口 1 与 `.workflow/p7b-glass-float/evidence/p7b-measure.txt`）
+    // 在毛玻璃底上两轮实测都**不表达边界**（p7b 实测块心相对本地基线 −16~−18/255、纵向平滑单谷、
+    // 无台阶），已被**玻璃板**取代（docs/32 §做法 机制一）——取自 p7b 的 `glassPoolOpacity` /
+    // `glassHoverPoolOpacity` 两个常量因此已删（p7b 的取值与结论仍留在 docs/31 与那份 evidence 里）。
     /// 玻璃档内容软影的黑色不透明度（起点 0.18 → **0.22**）。
     static let glassShadowOpacity: Double = 0.22
     /// 玻璃档内容软影的半径（起点 9 → 定稿仍 9；未观察到文字糊边）。
@@ -782,10 +784,16 @@ enum HomeBlockFloatMetrics {
 
 /// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容辉光（为辅），
 /// hover 时两层一起加深、再叠轻微放大 / 提亮。**p7b 起按面板底色档自适应**（docs/31 D-22）：
-/// 黑档白光两层（逐字不变）、玻璃档黑色柔影两层（柔影池 + 软影）。**p7c 起玻璃档再改判**
+/// 黑档白光两层（逐字不变）、p7b 的玻璃档黑色柔影两层。**p7c 起玻璃档再改判**
 /// （docs/32 §做法 机制一 / D-01 · D-08）：玻璃档的浮起由**块心柔光池**改为**极淡整块底（玻璃板）**
 /// ——板 = 块的完整框（同形圆角矩形黑填充 + 同形柔影 + 顶缘掩码微光），板缘因此是一条**台阶**；
 /// 池在玻璃档恒 0（不画）。黑档路径一个字节没动。
+///
+/// **`interactive` 分两种装配**（p7c / D-13 · D-14）：`true`（单条流格子）= 内容装饰（scale /
+/// brightness / compositingGroup / 内容影）+ 底（黑档池、玻璃档板）+ 顶缘微光 + hover；
+/// `false`（日历行 = 纯展示站点）= **只画板**（玻璃档）/ **一层都不装**（纯黑档不画板）——
+/// 不装内容软影、不装 hover、不装 scale / brightness（`docs/32 §做法 机制二` 对该站点的口径是
+/// 「只给板，不给 hover 放大 / 提亮」；该站点在改动前本来就没有任何浮起层）。
 ///
 /// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
 /// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
@@ -835,11 +843,23 @@ struct HomeBlockFloatModifier: ViewModifier {
         let poolColor: Color = effects.poolIsDark ? .black : .white
         let plateColor: Color = effects.plateIsDark ? .black : .white
 
-        if !interactive, surface == .dark {
-            // **纯展示站点 × 纯黑档：一层都不装**（p7c / D-06 零回归）：该站点（日历行）至今既没有
-            // 池也没有辉光，而黑档又不画板（`plateOpacity = 0`）——照「常驻档」原样消费会给它凭空
-            // 长出一圈白光池（半径 = 0.5 × 行高的短边 ≈ 116），那正是「纯黑档逐字不变」要挡的。
-            content
+        if !interactive {
+            // **纯展示站点（日历行）：只画板**（docs/32 §做法 机制二「只给板，不给 hover 放大 / 提亮」·
+            // D-13 · D-14）——不装内容软影（该站点在改动前没有任何浮起层，「只给板」就是没有软影这一层）、
+            // 不装 hover；scale / brightness 也不装（effects 的 `active` 已恒中性，这里索性不装）。
+            if surface == .dark {
+                // 纯黑档不画板（`plateOpacity = 0`）→ 该站点**一层都不装**，与改动前逐字相同
+                // （D-06 零回归：照「常驻档」原样消费会给它凭空长出一圈白光池，半径 ≈116）。
+                content
+            } else {
+                content
+                    .background {
+                        HomeBlockPlateBackground(effects: effects, color: plateColor)
+                    }
+                    .overlay {
+                        HomeBlockPlateTopHighlight(effects: effects)
+                    }
+            }
         } else {
             content
                 .scaleEffect(effects.scale)
@@ -881,23 +901,9 @@ struct HomeBlockFloatModifier: ViewModifier {
                     }
                 }
                 .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
-                .modifier(HomeBlockHoverTracking(enabled: interactive, hovered: $hovered))
-        }
-    }
-}
-
-/// 只有**交互站点**才装 `onHover`（`interactive == false` 的纯展示站点**不装**——D-13：日历行自带
-/// 一条 `onHover`（`vm.isHoveringCalendar`，面板收起手势的遮罩），两层叠加会打架；且它的 effects
-/// 与 `hovered` 无关，装了也只是白拿一个 tracking area）。
-private struct HomeBlockHoverTracking: ViewModifier {
-    let enabled: Bool
-    @Binding var hovered: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.onHover { hovered = $0 }
-        } else {
-            content
+                // `onHover` 只装在**交互站点**上（D-13：纯展示站点自带一条 `onHover`——日历行的
+                // `vm.isHoveringCalendar` 面板收起遮罩——两层叠加会打架；上面那个分支因此整段不装它）。
+                .onHover { hovered = $0 }
         }
     }
 }
@@ -1367,8 +1373,8 @@ struct HomeBandedHomeView: View {
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
             // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`；p6 起只剩横向 8pt 内边距、
-            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起光（柔光池 + 辉光）做；
-            // 日历行不包（它不是流的一部分）。
+            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起层（黑档柔光池 + 辉光、
+            // 玻璃档玻璃板，见 `homeBlockFloat()`）做；日历行不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if !plan.rows.isEmpty {
                     HomeFlowView(
