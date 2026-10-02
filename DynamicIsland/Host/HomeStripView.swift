@@ -375,7 +375,12 @@ struct HomeBandCell: View {
 
     var body: some View {
         HomeStripBlock(width: block.width) {
+            // **内容内缩**（p7c / T2 / D-20）：内容与**板缘**（= 块框）之间留出可见余量——用户
+            // 2026-10-02 反馈「每个玻璃块要比内容宽一些，现在都紧挨着显示了」。内缩加在**内容上**
+            // （`HomeStripBlock` 的 content 层），格子的 `.frame(width:height:)`、两条布局的间距与
+            // 板的矩形因此一概不动（板仍 = 块框）；取值见 `HomeBlockChrome`。
             HomeBandBlockContent(content: block.content)
+                .padding(HomeBlockChrome.contentInsets(includeVertical: true))
         }
         // 音乐块要的那条 matchedGeometry 命名空间在这里注入（D-08 / docs/20 §接口与数据形状 6）：
         // 宿主（本文件）持有折叠态播放器共享的那一条，模块拿不到它；读不到时模块用自带
@@ -458,6 +463,55 @@ enum HomeBandChrome {
 
     /// 可交互条目的 hover 底圆角（机制七：与既有 `LauncherGridCell` 同形 = 8）。
     static let hoverCornerRadius: CGFloat = 8
+}
+
+// MARK: - 内容内缩（p7c / T2 / docs/32 §决策摘要 D-20）
+
+/// 首页块**内容与板缘之间**的余量的**唯一取值处**（p7c / T2；与 `HomeBandChrome` 同风格）。
+///
+/// **为什么是内缩内容、不是放大板**（用户 2026-10-02 反馈原话「每个玻璃块要比内容宽一些，现在都
+/// 紧挨着显示了」）：板自 T1 起**等于块框**（`.frame(width:height:)`、`HomeStripView.swift` 的
+/// `HomeFlowView` 格子），而块框的宽度是布局分出来的——板往外长一圈就会吃掉块间那 8pt 缝
+/// （`HomeStripLayout.spacing` / `HomeFlowLayout` 的 `columnSpacing`），把「块与块之间有 8pt」
+/// 这条既有观感破掉。所以「板比内容宽」只能由**内容往里缩**得到：块的尺寸、位置、间距与板的矩形
+/// 一概不动，只有内容的内边距新增这一层。
+///
+/// 起点值是**估的**，上屏实测后**定档在水平 5 / 垂直 0**（T2 报告与
+/// `.workflow/p7c-home-plates/evidence/inset-measure.txt` 有逐块数据）：
+///
+/// - **水平 6 → 5**：起点 6 时进度块（用户反馈里圈的那一块）的内容区宽从 191 掉到 **179**，
+///   低于 `ProgressHomeBlockLayout.allScopesWidth`（**180**，模块自己声明的「到这个宽就排得完五档」
+///   门槛）→ 模块走「窄块退化」分支，五档只画 **3** 行，用户勾的「本季 / 今年」消失。
+///   5 时内容区 **181 ≥ 180**（五档齐），而左右余量仍 ≥ 5pt（这正是验收判据的下界）。
+///   **6 是上限**：块宽减去 12 就吃掉模块的宽度声明，这一档不是审美取舍而是**不能越过的边界**。
+/// - **垂直 4 → 0**：紧凑块只有 **96pt** 高，而进度块的五档是**按 96 紧配**的
+///   （5×14 + 4×6 = **94**，只余 2pt）——垂直内缩减掉 ≥2pt 就让第五行掉出去
+///   （实测 4pt → 4 行、更早的 8pt 档 → 3 行）。**0 不是「不做」，是这一档的唯一可行值**：
+///   纵向余量仍由各块自己的既有排版给出（统计 2.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt，改前改后一致）。
+///
+/// 改前实测余量 **0.0…1.5pt**（音乐 / 待办 / 通知 / 统计四块内容贴板缘）。
+///
+/// **与底色档无关**：内缩是**布局**（不在 `homeBlockFloat()` 的视觉层里），两档共用同一份——
+/// 纯黑档（`.solidBlack`）的内容因此同获内缩，这是**预期**（黑档的池/辉光机制逐字未动）。
+enum HomeBlockChrome {
+    /// 内容与板缘之间的**水平**余量（左右各一份）。**5 是上界**（见上面的算术：6 就吃掉进度块的宽度声明）。
+    static let contentInsetHorizontal: CGFloat = 5
+    /// 内容与板缘之间的**垂直**余量（上下各一份）。**恒 0**（见上面的算术：紧凑块 96pt 只余 2pt）。
+    static let contentInsetVertical: CGFloat = 0
+
+    /// 两个站点**共用**的内缩装配（唯一算式）：单条流格子取**带垂直**的一份，日历行取**只水平**的一份。
+    ///
+    /// 日历行为什么不做垂直内缩：它的高度 `HomeCalendarRow.rowHeight` 是**按当月周数精算**出来的
+    /// （`36N + 52`），月历网格按它精确排满——垂直再缩 4pt 会把网格的末行或题头裁掉（T2 的失败信号
+    /// 之一）。板 = 行框、行框高度不变，因此只做水平。
+    static func contentInsets(includeVertical: Bool) -> EdgeInsets {
+        EdgeInsets(
+            top: includeVertical ? contentInsetVertical : 0,
+            leading: contentInsetHorizontal,
+            bottom: includeVertical ? contentInsetVertical : 0,
+            trailing: contentInsetHorizontal
+        )
+    }
 }
 
 /// 一条带的**带级容器**（T8；p6 起**不画底**，只剩横向内边距）：高度不变（见 `containerInset`）。

@@ -1648,6 +1648,9 @@ final class HomeStripLayoutTests: XCTestCase {
     ///
     /// **T8 的数字变了**（228.5 → 223）：带级容器两侧各吃 8pt，行内可用宽 702 → 686，压缩解随之变。
     /// 断言仍是「渲染 == 规则」，不是「等于某个历史数」——变的只有代入的那一份宽度。
+    ///
+    /// **T2 起探针报的是「内容区」**（p7c / D-20）：格子 / 板矩形的分配宽与行高**逐字未变**，
+    /// 内容区各减去 `HomeBlockChrome` 的内边距（断言处按同一份生产常量算）。
     func testWidgetBandRendersTwoRowsAtNarrowPanelWidth() async {
         homeBlockSizeLog.reset()
         registerProbes([
@@ -1666,26 +1669,39 @@ final class HomeStripLayoutTests: XCTestCase {
         let ids = HomeCompactProbeModule.ids
         let compressedRowWidth: CGFloat = 223
         let expected: [CGFloat] = [compressedRowWidth, compressedRowWidth, compressedRowWidth, 300]
+        // **T2 起探针报内容区**（间距见 `assertRenderedSizesMatchFlowPlan` 的注释）：行高与分配宽
+        // 是格子（= 板矩形）的数，逐字未变；内容区再各减去两侧 / 上下内缩（同一份生产常量）。
+        let insets = HomeBlockChrome.contentInsets(includeVertical: true)
         for (index, id) in ids.enumerated() {
             let size = homeBlockSizeLog.size(of: id)
             XCTAssertEqual(
-                size.width, expected[index], accuracy: 0.5,
-                "第 \(index) 块（\(id)）应拿到行内分配宽 \(expected[index])（换行后不丢块），实到 \(size.width)"
+                size.width, expected[index] - insets.leading - insets.trailing, accuracy: 0.5,
+                "第 \(index) 块（\(id)）内容区宽 = 行内分配宽 \(expected[index]) − 两侧内缩（换行后不丢块），实到 \(size.width)"
             )
             XCTAssertEqual(
-                size.height, HomeStripView.widgetRowHeight, accuracy: 0.5,
-                "小组件带的行高恒为 \(HomeStripView.widgetRowHeight)，实到 \(size.height)"
+                size.height, HomeStripView.widgetRowHeight - insets.top - insets.bottom, accuracy: 0.5,
+                "内容区高 = 小组件带行高 \(HomeStripView.widgetRowHeight) − 上下内缩，实到 \(size.height)"
             )
         }
     }
 
     /// 渲染真值与 plan 的逐块对照：可见块 = 分配宽 + 满高；被丢的块 = 零尺寸；空白块数 == `droppedCount`。
+    ///
+    /// **T2 起探针报的是「内容区」而不是「格子」**（p7c / D-20）：探针块的内容是 `GeometryReader`，
+    /// 而内容与板缘之间多了一层内边距（`HomeBlockChrome.contentInsets(includeVertical: true)`）——
+    /// `GeometryReader` 在 padding **之内**，因此报的是「格子分到的宽高 − 两侧内缩」。**格子本身
+    /// （= plan 的分配宽、= 板矩形）逐字未变**，变的只是「内容画在哪块区域里」。下面减的是**同一份
+    /// 生产常量**（不是写死的 12 / 8），所以「被判可见却没画出来」（宽度大幅偏离 / 零尺寸）这条
+    /// 原判据仍然有效——它防的回归（`.frame(width: available, …)` 被删）会让数字差几十 pt。
     private func assertRenderedSizesMatchFlowPlan(
         _ plan: HomeFlowLayout.Plan,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
         let ids = HomeSizedProbeModule.ids
+        let insets = HomeBlockChrome.contentInsets(includeVertical: true)
+        let insetWidth = insets.leading + insets.trailing
+        let insetHeight = insets.top + insets.bottom
         // 每块的期望 = 它所在行给它的宽 + **那一行的高**（行高随行内最高块变，不再是全带一个数）。
         var expected: [Int: (width: CGFloat, height: CGFloat)] = [:]
         for row in plan.rows {
@@ -1699,13 +1715,13 @@ final class HomeStripLayoutTests: XCTestCase {
             let size = homeBlockSizeLog.size(of: id)
             if let want = expected[index] {
                 XCTAssertEqual(
-                    size.width, want.width, accuracy: 0.5,
-                    "第 \(index) 块（\(id)）应拿到它那一行分配的宽 \(want.width)，实到 \(size.width)",
+                    size.width, want.width - insetWidth, accuracy: 0.5,
+                    "第 \(index) 块（\(id)）内容区宽 = 它那一行分配的宽 \(want.width) − 两侧内缩 \(insetWidth)，实到 \(size.width)",
                     file: file, line: line
                 )
                 XCTAssertEqual(
-                    size.height, want.height, accuracy: 0.5,
-                    "第 \(index) 块（\(id)）应拿它那一行的高 \(want.height)（行高 = 行内最高块）",
+                    size.height, want.height - insetHeight, accuracy: 0.5,
+                    "第 \(index) 块（\(id)）内容区高 = 那一行的高 \(want.height) − 上下内缩 \(insetHeight)（行高 = 行内最高块），实到 \(size.height)",
                     file: file, line: line
                 )
             } else {
@@ -1860,10 +1876,13 @@ final class HomeStripLayoutTests: XCTestCase {
         // ⑤ 真渲染一遍（同一个 frame、同一份夹具）：接缝把块摆出来（不是零提案的空布局）。
         //    用带 `vm` 的那只挂载壳——这一档的 frame 放得下日历行，它会被真的构造出来。
         renderCalendarBearingHome(available: available, height: frame)
+        // T2 起探针报的是**内容区**（见 `assertRenderedSizesMatchFlowPlan`）：档高 96 是格子 / 板矩形
+        // 的数（逐字未变），内容区再减去上下两段内缩。
+        let compactInsets = HomeBlockChrome.contentInsets(includeVertical: true)
         XCTAssertEqual(
             homeBlockSizeLog.size(of: HomeCompactProbeModule.ids[0]).height,
-            HomeFlowView.compactBlockHeight,
-            "接缝在自动高度的 frame 里把紧凑块摆出来了（拿到档高 96，不是被丢成 0）"
+            HomeFlowView.compactBlockHeight - compactInsets.top - compactInsets.bottom,
+            "接缝在自动高度的 frame 里把紧凑块摆出来了（内容区高 = 档高 96 − 上下内缩，不是被丢成 0）"
         )
     }
 
@@ -2356,6 +2375,53 @@ final class HomeStripLayoutTests: XCTestCase {
                 )
             }
         }
+    }
+
+    /// **首页块内容内缩**（p7c / T2 / docs/32 §决策摘要 D-20）。
+    ///
+    /// 用户 2026-10-02 反馈「每个玻璃块要比内容宽一些，现在都紧挨着显示了」——板自 T1 起**等于块框**
+    /// （`.frame(width:height:)`），板不能往外长（会吃掉 8pt 缝），所以「板比内容宽」只能由**内容
+    /// 往里缩**得到。本用例钉三件事：
+    /// ① **水平 = 5pt 是双侧夹出来的唯一可行档**：下界是上屏判据（内容 ↔ 板缘左右余量 ≥ 5pt；
+    ///    改前实测 0.0…1.5pt，音乐 / 待办 / 通知 / 统计四块内容贴板缘），上界是**模块的宽度声明**
+    ///    ——起点 6pt 时进度块内容区 191 − 12 = **179**，低于它自己声明的
+    ///    `ProgressHomeBlockLayout.allScopesWidth`（**180** = 「到这个宽就排得完五档」），模块走
+    ///    「窄块退化」分支只画 3 行（用户勾的「本季 / 今年」消失，上屏实测）。5 时内容区 181。
+    /// ② **垂直 = 0pt**：紧凑块只有 96pt 高，而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）
+    ///    ——≥2pt 就掉第五行（上屏实测 4pt → 4 行）。纵向余量仍由各块既有排版给出。
+    /// ③ **两站点共用同一取值处**：单条流格子（`HomeBandCell`，带垂直一份）与日历行
+    ///    （`HomeCalendarRow`，**只水平**——行高按当月周数精算，垂直内缩会裁月历网格）都走
+    ///    `HomeBlockChrome.contentInsets(includeVertical:)`，两者的水平值必须**逐字相同**。
+    ///
+    /// **本用例不是上屏证据**：真实渲染里的余量由像素测量承担
+    /// （`.workflow/p7c-home-plates/evidence/inset-measure.txt`：逐块内容包围盒 ↔ 板缘余量）。
+    func testHomeBlockContentInsetStaysInRange() {
+        let horizontal = HomeBlockChrome.contentInsetHorizontal
+        let vertical = HomeBlockChrome.contentInsetVertical
+
+        XCTAssertGreaterThanOrEqual(horizontal, 5, "上屏判据：内容 ↔ 板缘左右余量 ≥ 5pt（下界）")
+        XCTAssertLessThanOrEqual(
+            horizontal, 5,
+            "上界 = 进度块的宽度声明：\(ProgressHomeBlockLayout.allScopesWidth)pt 内容宽是「五档排得完」"
+                + "的门槛，块分到 191pt 时内缩 2 × 6 就掉到 179 → 五档只画 3 行"
+        )
+        XCTAssertEqual(
+            vertical, 0,
+            "垂直内缩**恒 0**：紧凑块 96pt 而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）——"
+                + "≥2pt 就让第五行掉出去（上屏实测 4pt → 4 行）"
+        )
+
+        // 两站点共用同一取值处（唯一算式 `contentInsets(includeVertical:)`）。
+        let blocks = HomeBlockChrome.contentInsets(includeVertical: true)
+        let calendar = HomeBlockChrome.contentInsets(includeVertical: false)
+        XCTAssertEqual(blocks.leading, horizontal, "单条流格子的水平内缩 = 声明常量")
+        XCTAssertEqual(blocks.trailing, horizontal, "单条流格子的水平内缩 = 声明常量")
+        XCTAssertEqual(blocks.top, vertical, "单条流格子带垂直内缩")
+        XCTAssertEqual(blocks.bottom, vertical, "单条流格子带垂直内缩")
+        XCTAssertEqual(calendar.leading, blocks.leading, "两站点水平内缩同源（唯一取值处）")
+        XCTAssertEqual(calendar.trailing, blocks.trailing, "两站点水平内缩同源（唯一取值处）")
+        XCTAssertEqual(calendar.top, 0, "日历行不做垂直内缩（行高按当月周数精算，缩了会裁月历网格）")
+        XCTAssertEqual(calendar.bottom, 0, "日历行不做垂直内缩")
     }
 
     // MARK: - 音乐块再缩宽（p6-ui-polish / docs/30 §做法 机制二 / D-03 · D-04）

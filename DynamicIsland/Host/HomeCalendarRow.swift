@@ -177,6 +177,16 @@ struct HomeCalendarRow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // **内容内缩**（p7c / T2 / docs/32 D-20）：本行的板 = **行框**（见下方 `.homeBlockFloat`
+        // 的注释），内容与板缘之间因此也要留出与单条流块一致的余量——用户 2026-10-02 反馈
+        // 「每个玻璃块要比内容宽一些」包含本行。
+        //
+        // **只做水平**（`includeVertical: false`）：行高 `Self.rowHeight` 是按当月周数精算的
+        // （`36N + 52`），月历网格按它精确排满——垂直再缩会把网格的末行或题头裁掉；板 = 行框、
+        // 行框高度不变。内缩套在 `GeometryReader` **外面**：几何宽度因此已经是「行宽 − 两侧内缩」，
+        // 行内的宽度算式（`monthGridWidth` / 提示位坐标）与画出来的内容同源；`.frame(height:)`
+        // 只钉高度，行框宽度与板的矩形逐字不变。
+        .padding(HomeBlockChrome.contentInsets(includeVertical: false))
         .frame(height: Self.rowHeight)
         // 日历行的**玻璃板**（p7c / docs/32 §做法 机制二 · D-13 · D-14）：毛玻璃档下本行也成一「板」
         // （黑 0.14 / 圆角 15 / 无描边 + 柔影 + 顶缘微光），与上排的单条流块同一机制。
