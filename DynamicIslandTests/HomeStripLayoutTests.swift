@@ -1747,41 +1747,6 @@ final class HomeStripLayoutTests: XCTestCase {
         items.map { HomeFlowLayout.Item(min: $0.min, ideal: $0.ideal, height: HomeFlowView.largeBlockHeight) }
     }
 
-    private func assertRenderedSizesMatchPlan(
-        _ plan: HomeStripLayoutMath.Plan,
-        height: CGFloat,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let ids = HomeSizedProbeModule.ids
-        XCTAssertEqual(ids.count, plan.widths.count + plan.droppedCount, "夹具块数应与 plan 的输入块数一致", file: file, line: line)
-
-        for (index, id) in ids.enumerated() {
-            let size = homeBlockSizeLog.size(of: id)
-            if index < plan.visibleCount {
-                XCTAssertEqual(
-                    size.width, plan.widths[index], accuracy: 0.5,
-                    "第 \(index) 块（\(id)）应拿到 plan 的分配宽 \(plan.widths[index])，实到 \(size.width)（「被判可见却没画出来」= T4 的复现）",
-                    file: file, line: line
-                )
-                XCTAssertEqual(size.height, height, accuracy: 0.5, "可见块应拿满 strip 高", file: file, line: line)
-            } else {
-                XCTAssertEqual(
-                    size, .zero,
-                    "第 \(index) 块（\(id)）被 plan 丢掉 → 必须是零尺寸（显式 `.zero` 提案），实到 \(size)",
-                    file: file, line: line
-                )
-            }
-        }
-
-        let blanks = ids.filter { homeBlockSizeLog.size(of: $0) == .zero }
-        XCTAssertEqual(
-            blanks.count, plan.droppedCount,
-            "条尾 ＋\(plan.droppedCount) 与实际空白块数必须一致（实到空白 \(blanks.count) 块：\(blanks)）",
-            file: file, line: line
-        )
-    }
-
     // MARK: - 自动高度：首页真拿得到它自己那份 plan 的需求（p5-home-blocks / T6）
 
     /// **自动高度下，首页拿到的 frame ≥ 它自己那份 plan 的需求**（T6 控制器 2026-10-01 实机测量）。
@@ -2387,15 +2352,24 @@ final class HomeStripLayoutTests: XCTestCase {
     ///    ——起点 6pt 时进度块内容区 191 − 12 = **179**，低于它自己声明的
     ///    `ProgressHomeBlockLayout.allScopesWidth`（**180** = 「到这个宽就排得完五档」），模块走
     ///    「窄块退化」分支只画 3 行（用户勾的「本季 / 今年」消失，上屏实测）。5 时内容区 181。
-    /// ② **垂直 = 0pt**：紧凑块只有 96pt 高，而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）
-    ///    ——≥2pt 就掉第五行（上屏实测 4pt → 4 行）。纵向余量仍由各块既有排版给出。
-    /// ③ **两站点共用同一取值处**：单条流格子（`HomeBandCell`，带垂直一份）与日历行
-    ///    （`HomeCalendarRow`，**只水平**——行高按当月周数精算，垂直内缩会裁月历网格）都走
-    ///    `HomeBlockChrome.contentInsets(includeVertical:)`，两者的水平值必须**逐字相同**。
+    /// ② **垂直 = 0pt**：紧凑块只有 96pt 高，而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）；
+    ///    按高度档算式 `floor((H + 6) / 20)`，五档要内容高 ≥ 94，即**总内缩 ≤ 2pt（每侧 ≤ 1pt）
+    ///    仍安全**；上屏实测垂直 4pt（总 8pt）→ 第五行掉出去。取 0 是因为那 1pt 在视觉上等于零、
+    ///    却要把算式顶在 94 = 94 的边界上。纵向余量仍由各块既有排版给出。
+    /// ③ **两站点共用同一取值处**——用**渲染真值**钉两个调用点（不是把工厂的返回值再读一遍）：
+    ///    - **单条流格子**：`HomeFlowView` 的格子渲染后，探针块报出的**内容宽**必须 = 该块分到的宽 −
+    ///      `2 × contentInsetHorizontal`（探针 `GeometryReader` 在 padding 之内，报的就是内容区）；
+    ///    - **日历行**：行内的月历网格（`MonthGridView` 里那个 `NSScrollView`）在宿主坐标里的**左缘**，
+    ///      比**单独挂**同一张网格时靠右 `contentInsetHorizontal`（网格自身的水平内边距两次相同，
+    ///      差就是这一层的水平内缩 = 行内容的起点）。网格那 6pt 内边距因此不用写死在断言里。
+    ///
+    /// 调用点若把内缩写死成别的数、或挪到不该在的层（例如挪到格子 `.frame` 之外），这两条都会红。
+    /// 内缩的**左右对称**由 `contentInsets(includeVertical:)` 一处给出（同一个值喂 leading / trailing），
+    /// 钉住一侧即钉住来源；另一侧与逐块余量由上屏像素承担。
     ///
     /// **本用例不是上屏证据**：真实渲染里的余量由像素测量承担
     /// （`.workflow/p7c-home-plates/evidence/inset-measure.txt`：逐块内容包围盒 ↔ 板缘余量）。
-    func testHomeBlockContentInsetStaysInRange() {
+    func testHomeBlockContentInsetStaysInRange() async {
         let horizontal = HomeBlockChrome.contentInsetHorizontal
         let vertical = HomeBlockChrome.contentInsetVertical
 
@@ -2407,21 +2381,101 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             vertical, 0,
-            "垂直内缩**恒 0**：紧凑块 96pt 而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）——"
-                + "≥2pt 就让第五行掉出去（上屏实测 4pt → 4 行）"
+            "垂直内缩**恒 0**：紧凑块 96pt 而进度块五档按 96 紧配（5×14 + 4×6 = 94，总内缩 ≤ 2pt 才安全）"
+                + "——上屏实测 4pt 就让第五行掉出去"
         )
 
-        // 两站点共用同一取值处（唯一算式 `contentInsets(includeVertical:)`）。
-        let blocks = HomeBlockChrome.contentInsets(includeVertical: true)
-        let calendar = HomeBlockChrome.contentInsets(includeVertical: false)
-        XCTAssertEqual(blocks.leading, horizontal, "单条流格子的水平内缩 = 声明常量")
-        XCTAssertEqual(blocks.trailing, horizontal, "单条流格子的水平内缩 = 声明常量")
-        XCTAssertEqual(blocks.top, vertical, "单条流格子带垂直内缩")
-        XCTAssertEqual(blocks.bottom, vertical, "单条流格子带垂直内缩")
-        XCTAssertEqual(calendar.leading, blocks.leading, "两站点水平内缩同源（唯一取值处）")
-        XCTAssertEqual(calendar.trailing, blocks.trailing, "两站点水平内缩同源（唯一取值处）")
-        XCTAssertEqual(calendar.top, 0, "日历行不做垂直内缩（行高按当月周数精算，缩了会裁月历网格）")
-        XCTAssertEqual(calendar.bottom, 0, "日历行不做垂直内缩")
+        // ③ 站点一：单条流格子（渲染真值）。
+        registerProbes([
+            HomeWideProbeModule.self,
+            HomeNarrowAProbeModule.self,
+            HomeNarrowBProbeModule.self,
+            HomeNarrowCProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let available = Self.panelWidth770StripWidth
+        let height: CGFloat = 212
+        let plan = HomeFlowLayout.plan(
+            items: Self.flowItems(Self.syntheticFourBlockItems),
+            availableWidth: Self.bandContentWidth(forHostingWidth: available),
+            availableHeight: height,
+            calendarHeight: 0,
+            metrics: flowMetrics
+        )
+        homeBlockSizeLog.reset()
+        renderRealHomeStrip(available: available, height: height)
+
+        var observedBlocks = 0
+        for row in plan.rows {
+            for (position, blockIndex) in row.indices.enumerated() where position < row.widths.count {
+                let id = HomeSizedProbeModule.ids[blockIndex]
+                let contentWidth = homeBlockSizeLog.size(of: id).width
+                XCTAssertEqual(
+                    contentWidth, row.widths[position] - 2 * horizontal, accuracy: 0.5,
+                    "单条流站点（\(id)）：渲染出的内容宽必须 = 分到的 \(row.widths[position]) − 2 × \(horizontal)，"
+                        + "实到 \(contentWidth)——调用点没吃这个常量就会红"
+                )
+                observedBlocks += 1
+            }
+        }
+        XCTAssertGreaterThan(observedBlocks, 0, "夹具在 770pt / 212 高下必须至少摆出一块（否则这条观测是空跑）")
+
+        // ③ 站点二：日历行（渲染真值：行内月历网格的左缘 vs 单独挂同一张网格的左缘）。
+        guard let bareGridX = bareMonthGridLeadingEdge(width: 900),
+              let rowGridX = calendarGridLeadingEdge(rowWidth: 900) else {
+            XCTFail("宿主里找不到月历网格的 NSScrollView —— 站点二的观测失效（上屏像素见 evidence/inset-measure.txt）")
+            return
+        }
+        XCTAssertEqual(
+            rowGridX - bareGridX, horizontal, accuracy: 0.5,
+            "日历行站点：行内月历网格比单独挂时靠右 \(horizontal)pt（= 行内容的起点，网格自身内边距两次相消），"
+                + "实到 \(rowGridX - bareGridX)"
+        )
+    }
+
+    /// 把 `HomeCalendarRow` 单独挂进 `NSHostingView`（宽 = `rowWidth`），返回行内**月历网格**的左缘在
+    /// **宿主坐标**里的 x（找不到那个 `NSScrollView` 时返回 nil——文件里另一处同款探测的既有口径）。
+    private func calendarGridLeadingEdge(rowWidth: CGFloat) -> CGFloat? {
+        let host = NSHostingView(
+            rootView: HomeCalendarRow()
+                .frame(width: rowWidth)
+                .environmentObject(DynamicIslandViewModel())
+        )
+        host.frame = CGRect(x: 0, y: 0, width: rowWidth, height: HomeCalendarRow.rowHeight)
+        host.layoutSubtreeIfNeeded()
+        withExtendedLifetime(host) {}
+        guard let grid = firstScrollView(in: host) else { return nil }
+        return host.convert(grid.bounds, from: grid).minX
+    }
+
+    /// 同一张月历网格**单独挂**（站点二的对照基线）：它的左缘 = 网格自己的水平内边距，
+    /// 「行内 − 单独」两次相减就把那 6pt 消掉，断言的差值只剩内缩这一层。
+    private func bareMonthGridLeadingEdge(width: CGFloat) -> CGFloat? {
+        let grid = MonthGridView(
+            selectedDate: .constant(Date()),
+            scrollTarget: .constant(nil),
+            monthNavigationMovesSelection: false,
+            monthEvents: .empty,
+            onDisplayedMonthChange: { _ in },
+            showsScrollFades: false
+        )
+        .frame(width: width, height: HomeCalendarRow.rowHeight)
+        let host = NSHostingView(rootView: grid)
+        host.frame = CGRect(x: 0, y: 0, width: width, height: HomeCalendarRow.rowHeight)
+        host.layoutSubtreeIfNeeded()
+        guard let scrollView = firstScrollView(in: host) else { return nil }
+        return host.convert(scrollView.bounds, from: scrollView).minX
+    }
+
+    /// NSView 树里第一个 `NSScrollView`（`MonthGridView` 的日格网格是它——SwiftUI 里只有
+    /// `ScrollView` 这一类会落成 NSView，其余内容由宿主层直接绘制）。
+    private func firstScrollView(in host: NSView) -> NSScrollView? {
+        if let scrollView = host as? NSScrollView { return scrollView }
+        for sub in host.subviews {
+            if let found = firstScrollView(in: sub) { return found }
+        }
+        return nil
     }
 
     // MARK: - 音乐块再缩宽（p6-ui-polish / docs/30 §做法 机制二 / D-03 · D-04）
