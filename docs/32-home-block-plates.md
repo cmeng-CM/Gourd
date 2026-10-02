@@ -43,6 +43,12 @@
 
 **玻璃档的既有内容软影保留**（D-12）：p7b 给玻璃档加的内容软影（黑 0.22 / 半径 9 / y 1 → hover 0.34 / 13 / 2，经 `glow` 字段消费）**逐字不变**——它作用在**板内**的内容边缘、与板影（作用在板外的缝里）不叠加；本批只把 `.background` 的径向池换成板。**但它只装在交互站点**（D-17，见机制三）。
 
+**内容内缩（D-20）——"板比内容宽"只能靠内缩内容**：板 = 块框，所以要让板显得比内容宽一圈，做法是**块内容在板内四周留出余量**（唯一取值处 `HomeBlockChrome.contentInsetHorizontal` / `contentInsetVertical`，加在格子与日历行的内容外层）；**板的矩形、格的尺寸与 8pt 缝一概不动**。实测夹出的取值：**水平 5pt / 垂直 0pt**——起点 6/4 都不成立：
+- 6pt 时进度块（用户圈的那块）内容区 = 191 − 12 = **179pt < 180pt**（`ProgressModule` 自己声明的五档门槛）→ 五档塌成 3 行；5pt 时 181pt、余量仍有 5pt+。
+- 垂直 4pt 时紧凑块（高 96pt，五档内容需 `5×14 + 4×6 = 94pt`）掉第五行 → 取 0；**上下余量沿用各块既有内边距**（再要就得改模块行高门槛/块高，另开一批）。
+- **边界**：进度块分到宽须 **≥ 190pt**（180 + 2×5）；≤ 189pt 时它退化成 3 行。
+- 效果（上屏实测）：7/7 块内容 ↔ 板缘左右余量 **≥ 5pt**（改前 0.0…1.5pt：音乐 0.0→5.0、统计 0.5→5.5、待办/通知 0.5→5.5）；板外窄带 0 内容像素；**T1 遗留的两处角部越界随之归零**（内容离开圆角弧内区）。
+
 ### 机制二 · 应用站点（已核实：只有两处是活的）
 
 | 站点 | 位置 | 说明 |
@@ -109,6 +115,7 @@
 | D-17 | **非交互站点只装板层**（玻璃档：板 + 顶缘微光；纯黑档：一层不装）——不装内容软影、不装 hover | agent（守 §机制二「只给板」；修复波） |
 | D-18 | 删 `glassPoolOpacity` / `glassHoverPoolOpacity`（零引用，取值仍留 `docs/31` 与 p7b 证据）；`plateIsDark` 保留（当前两档同值 true，语义为"板色"，黑档靠 α = 0 生效） | agent（修复波卫生 + 审查 Minor 8） |
 | D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素，其余 26 角 0）**本批不修**，记 §已知限制 9 | agent（终审裁定；修法属改设计/动布局） |
+| D-20 | 首页块**内容内缩**（板比内容宽）：水平 **5pt** / 垂直 **0pt**（起点 6/4 均被实测否掉：6 破进度块 180pt 门槛、4 掉第五行），日历行只做水平；板的尺寸、位置与 8pt 间距一概不动 | 用户（原话「每个玻璃块要比内容宽一些，现在都紧挨着显示了」；板 = 块框，故只能内缩内容） |
 
 ## 接口与数据形状
 
@@ -127,6 +134,18 @@ static let plateTopHighlightOpacity: Double = 0.06 // 顶缘微光（掩码软�
 static let plateTopHighlightFraction: CGFloat = 0.45 // 微光在板高上的覆盖比例（自上而下到 clear）
 // 已删（D-18）：glassPoolOpacity / glassHoverPoolOpacity——玻璃档 p7c 起不画池
 ```
+
+### 1b. `HomeBlockChrome`（内容内缩；D-20）
+
+```swift
+enum HomeBlockChrome {
+    static let contentInsetHorizontal: CGFloat = 5   // 块内容与板缘的水平余量（板 = 块框，故靠内容内缩）
+    static let contentInsetVertical: CGFloat = 0     // 垂直 0：紧凑块 96pt、五档内容需 94pt，再让会掉行
+    static func contentInsets(includeVertical: Bool) -> EdgeInsets  // 两个站点共用的唯一工厂
+}
+```
+- 两处应用：`HomeFlowView` 格子（`HomeBandCell` 内容外层，`includeVertical: true`）与 `HomeCalendarRow` 根（`includeVertical: false`——月历网格按行高精确排，垂直内缩会裁）。
+- 上屏实测（`evidence/inset-measure.txt`）：左右余量 7/7 块 ≥ 5pt、无裁切/溢出、缝仍 8pt、黑档同形（布局共享，黑档内容同获内缩）。
 
 ### 2. `FloatEffects` 新增字段与两档语义
 
@@ -191,11 +210,14 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 9. **圆角弧内区的两处内容越界**（D-19）：按实际形状模型（连续圆角 n=5），`行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在**板形状之外**（其余 26 角为 0）。成因：这两块的**内容本身贴着块框**（板内余量 0.0 / 0.5pt，是既有排版），而新板的 15pt 圆角把角切掉——**内容位移未变，但"内容画在板外"这一现象由本批的板形状引入**。量与视觉影响都极小（14% 黑纱上约 7.5 / 2.5 pt²）。修法（缩小圆角 / 给内容加内边距 / 把板立到内容之外）都属改设计或动布局，本批不做；D-03 的「内容 ⊆ 板」是**轴对齐口径**。
 10. `effects(hovered:surface:interactive:)` 在 `interactive == false × .dark` 下返回一份**无人消费**的常驻档（含黑档白光池 0.13）——黑档的非交互站点在 modifier 里一层不装（D-17）。将来若有人复用 `effects` 画黑档非交互站点，会凭空长出白光池，需在此处挡差。
 11. 板影的有效深度（≈0.126）是**推断值**（`plateShadowOpacity × plateOpacity`），未逐像素实测。
+12. **垂直余量为 0**（D-20）：上下沿用各块既有内边距（2.5 / 4.0 / 8.5 / 0.5pt 不等）；要再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。
+13. **内缩与进度块门槛耦合**：进度块分到宽 ≤ 189pt 时会从五档退化成 3 行（内容区 = 宽 − 2×5 必须 ≥ 180）。块序/宽度分配一变就可能命中（`Plan` 的宽度分配改了要复核）。
+14. **内容辉光/软影随内缩内移**（D-20 的自然结果）：玻璃档的内容软影与黑档的内容辉光照的是**内容剪影**，位置随内容内移 5pt；黑档白光池按 frame 短边算、位置不变。本批未量这一层的像素差。
 
 ## 实际交付
 
 **交付物**
-- 代码（3 文件，commit `cb27903..90bb280`）：`DynamicIsland/Host/HomeStripView.swift`（常量族 + `FloatEffects` 板字段 + `effects(hovered:surface:interactive:)` + 修饰符两分支 + `homeBlockFloat(interactive:)` + 删两个死常量）、`DynamicIsland/Host/HomeCalendarRow.swift`（根帧接板，`interactive: false`）、`DynamicIslandTests/HomeStripLayoutTests.swift`（黑档断言逐字保留 + 玻璃档分支 + 两条用例改钉）。
+- 代码（T1：commit `cb27903..90bb280`；T2：commit `fef3d9b1..9c44e442`）：`DynamicIsland/Host/HomeStripView.swift`（T1 常量族 + `FloatEffects` 板字段 + `effects(hovered:surface:interactive:)` + 修饰符两分支 + `homeBlockFloat(interactive:)` + 删两个死常量；T2 `HomeBlockChrome` 内容内缩 + 格子内容外层 padding）、`DynamicIsland/Host/HomeCalendarRow.swift`（T1 根帧接板 `interactive: false`；T2 水平内缩套在 `GeometryReader` 外）、`DynamicIslandTests/HomeStripLayoutTests.swift`（黑档断言逐字保留 + 玻璃档分支 + 两条用例改钉 + T2 的 `testHomeBlockContentInsetStaysInRange`（含两条**行为观测**：流站点按探针断言内容宽、日历行站点按网格宿主坐标位移断言））。
 - 常量族（9 值）：`plateOpacity 0.14` / `hoverPlateOpacity 0.19` / `plateCornerRadius 15` / `plateShadowOpacity 0.9` / `plateShadowRadius 10` / `plateShadowX 1` / `plateShadowY 2` / `plateTopHighlightOpacity 0.06` / `plateTopHighlightFraction 0.45`。
 - 证据（`.workflow/p7c-home-plates/evidence/`）：`glass-plate-full.png`、`glass-plate-closeup-{row1,row2,calendar,seam-6x,leftedge-6x}.png`、`glass-plate-inset8-conflict.png`（D-16 的上屏依据）、`black-regression.png`、`glass-plate-restored.png`、`restored-glass.txt`、`plate-measure.txt`（台阶 / 三层包含 / 板心均匀度 / 角部核验 / 去软影前后 / 日历行取法）、探针与测量脚本 `p7c-{probe,rects,ratio,measure}.py`。
 - 测试：全量单测 `Executed 502 tests, with 0 failures`（退出码 0）。
