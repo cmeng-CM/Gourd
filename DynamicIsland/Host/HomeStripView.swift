@@ -525,19 +525,23 @@ extension View {
 /// **p7b 起按底色档分成两套**（`Surface` / docs/31 D-22）：上面这条「白光池」的论证前提是**纯黑底**
 /// ——毛玻璃底（behindWindow 材质、采样屏后内容）是**亮底**，白光池在它上面只贡献 ≈ +11/255、
 /// 被材质自身的 ±4–5 起伏淹没（p7 T1 已测到，本次复现一致；数字见 docs/31 §接口 1）。亮底上做
-/// 区分要**减亮**：玻璃档因此改用黑色柔影池 + 黑色软影——与黑档的白光两层是同一物理的两面，
-/// **绝不是描边或卡片底**（两档都是无边界径向渐变 + 柔和 `.shadow`，不变量同一条）。
+/// 区分要**减亮**：p7b 因此给玻璃档改用黑色柔影池 + 黑色软影。
+///
+/// **p7c 再改判玻璃档的机制**（docs/32 / D-01 · D-08）：黑色柔影池**同样不表达边界**（p7b 上屏实测
+/// 块心相对本地基线 −16~−18/255、纵向 ±96px 平滑单谷、**无台阶**——到块边缘已归零，缝两侧一样暗）。
+/// 玻璃档的浮起因此改成**玻璃板**（见下面 `plate*` 常量族）：极淡整块底 + 柔影 + 顶缘掩码微光，
+/// 板缘是一条**台阶**；玻璃档的 `poolOpacity` 恒 0（不画池）。黑档（`.solidBlack`）白光两层逐字不变。
 ///
 /// **brightness 的口径**：`hoverBrightness` 是「1.0 = 不改」的乘性口径（与 `hoverScale` 同形），
-/// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:surface:)`
+/// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:surface:interactive:)`
 /// 里 `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
 ///
 /// 常量是**上屏调参后的定稿值**（起点值见 docs/31 §接口与数据形状第 1 小节的留痕口径；本组先按
 /// p6 的一轮实机调参：辉光 0.05/4 → 0.08/5、hover 0.10/10 → 0.16/11；p7 再按用户「不 hover 也要
 /// 能分清区域」的反馈整组上调：辉光 0.08/5 → **0.10/6**、柔光池 0.06 → **0.13**、hover 池 0.12 →
 /// **0.20**、hover 辉光 0.16/11 → **0.20/12**，池系数放到不变量上限 **0.50**）；本文件不再有第二份。
-/// 测试钉 **`effects(hovered:surface:)` 两档 × 两底色档**（不是单钉常量）：常驻中性 + 半径 /
-/// 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
+/// 测试钉 **`effects(hovered:surface:interactive:)` 两档 × 两底色档**（不是单钉常量）：常驻中性 +
+/// 半径 / 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
 enum HomeBlockFloatMetrics {
     /// 常驻辉光的不透明度（白，低透明度 = 无填充的深度感）。
     ///
@@ -612,9 +616,14 @@ enum HomeBlockFloatMetrics {
     // 玻璃档常量（p7b；**起点值经一轮上屏调参上调**——0.10/0.18 在实测中池心对最紧的缝带读数
     // 只到 ≈+10…+12/255，离判据（≥12）太近、抗不住玻璃底 ±4–5 的空间漂移，按计划的调参窗口
     // 上调一档到 0.13/0.22；逐点数字与结论见 docs/31 §接口 1 与 evidence/p7b-measure.txt）。
-    /// 玻璃档柔光池中心的**黑色**不透明度（亮底减亮；起点 0.10 → 定稿 **0.13**）。
+    //
+    // **p7c 起下面两条池常量不再被消费**（`effects(hovered:surface:interactive:)` 的玻璃档
+    // `poolOpacity` 恒 0）：块心柔光池在毛玻璃底上两轮实测都**不表达边界**（p7b 实测块心相对
+    // 本地基线 −16~−18/255、纵向平滑单谷、无台阶），已被**玻璃板**取代（docs/32 §做法 机制一）。
+    // 常量按「不做未要求的删除」留痕（docs/31 的 p7b 结论仍可回溯）。
+    /// 玻璃档柔光池中心的**黑色**不透明度（亮底减亮；起点 0.10 → 定稿 **0.13**）。**p7c 起不消费**。
     static let glassPoolOpacity: Double = 0.13
-    /// 玻璃档 hover 的池黑不透明度（比常驻更深 = 「hover 加深」；起点 0.16 → **0.20**）。
+    /// 玻璃档 hover 的池黑不透明度（比常驻更深 = 「hover 加深」；起点 0.16 → **0.20**）。**p7c 起不消费**。
     static let glassHoverPoolOpacity: Double = 0.20
     /// 玻璃档内容软影的黑色不透明度（起点 0.18 → **0.22**）。
     static let glassShadowOpacity: Double = 0.22
@@ -628,6 +637,36 @@ enum HomeBlockFloatMetrics {
     static let glassHoverShadowRadius: CGFloat = 13
     /// 玻璃档 hover 的影 y 偏移（起点 2 → 定稿仍 2）。
     static let glassHoverShadowYOffset: CGFloat = 2
+
+    // MARK: - 玻璃板（p7c / docs/32 §做法 机制一 · §接口 1）
+
+    /// 玻璃档的「浮起」自 **p7c** 起由**块心柔光池**改判为**极淡整块底（玻璃板）**：板 = 块的完整
+    /// 框（`RoundedRectangle` 黑填充 + 同形柔影 + 顶缘掩码微光），因此**板缘就是一条台阶**——
+    /// 正是旧池缺的东西（旧池从块心向外衰减，到块边缘已归零，缝两侧一样亮）。
+    ///
+    /// **板不是描边、也不是卡片底**（守用户 p6 起的「不加边线」）：三层全是填充 / 影 / 掩码软渐变，
+    /// 没有 stroke、没有发丝线；α 由用户在 α10/α14/α18 合成预览上选定 **0.14**。
+    ///
+    /// 纯黑档（`.solidBlack`）不画板（`plateOpacity = 0`），仍走白光池 + 白辉光，**逐字不变**。
+    /// 板填充的黑不透明度（起点 = 用户选定 α14）。
+    static let plateOpacity: Double = 0.14
+    /// hover 的板不透明度（比常驻深一档 = 「hover 加深」；放大 / 提亮两档不动）。
+    static let hoverPlateOpacity: Double = 0.19
+    /// 板的圆角（面板圆角 − 内容内边距的近似；与块框同形，不参与布局）。
+    static let plateCornerRadius: CGFloat = 15
+    /// 板柔影的色不透明度（**× 板的 α** → 有效影深 ≈ 0.126）：把两块之间的缝压成一条浅谷。
+    static let plateShadowOpacity: Double = 0.9
+    /// 板柔影的半径。
+    static let plateShadowRadius: CGFloat = 10
+    /// 板柔影的 x 偏移（与 y 一起给「浮起」一个方向）。
+    static let plateShadowX: CGFloat = 1
+    /// 板柔影的 y 偏移。
+    static let plateShadowY: CGFloat = 2
+    /// 板**顶缘微光**的白不透明度（镜面高光那一笔；**掩码软渐变，不是描边**——D-05）。
+    static let plateTopHighlightOpacity: Double = 0.06
+    /// 顶缘微光在**板高**上的覆盖比例（自上而下到 `.clear`）。
+    static let plateTopHighlightFraction: CGFloat = 0.45
+
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
@@ -643,10 +682,15 @@ enum HomeBlockFloatMetrics {
     /// 五项与 SwiftUI 一一对应：`scale` → `.scaleEffect`、`brightness` → `.brightness`（**增量**）、
     /// `glowRadius`/`glowOpacity` → `.shadow(color: 档位色.opacity(glowOpacity), radius: glowRadius,
     /// y: shadowYOffset)`（黑档白辉光 + y 恒 0 = 逐字不变；玻璃档黑影 + y 1/2）、
-    /// `poolOpacity` → 柔光池径向渐变的中心色 `opacity`（黑档白、玻璃档黑，由 `poolIsDark` 选）。
+    /// `poolOpacity` → 柔光池径向渐变的中心色 `opacity`（黑档白、玻璃档黑，由 `poolIsDark` 选；
+    /// **p7c 起玻璃档恒 0** = 不画池）。
     ///
     /// 三个档位字段（p7b）：`poolIsDark` / `shadowIsDark` 给**颜色语义**（`true` = 黑/暗），
     /// `shadowYOffset` 给内容影的 y——修饰符只按它们选色与摆影，不自己写常量。
+    ///
+    /// **玻璃板字段（p7c）**：`plateOpacity` → 板的填充 α（黑档 = 0 = 不画板）、
+    /// `plateCornerRadius` → 板的圆角、`plateShadow*` → 板柔影、`plateTopHighlight*` → 顶缘微光的
+    /// 不透明度与覆盖比例（掩码软渐变）、`plateIsDark` → 板的颜色语义（本批两档都是黑板，只有 α 分档）。
     struct FloatEffects: Equatable {
         let scale: CGFloat
         let brightness: Double
@@ -659,37 +703,78 @@ enum HomeBlockFloatMetrics {
         let shadowIsDark: Bool
         /// 内容影的 y 偏移（黑档恒 0——逐字不变；玻璃档 1 / hover 2）。
         let shadowYOffset: CGFloat
+
+        // MARK: 玻璃板字段（p7c / docs/32 §接口 2）
+
+        /// 板填充的黑不透明度（玻璃档 = 板 α，hover 更深；**黑档 = 0 = 不画板**）。
+        let plateOpacity: Double
+        /// 板的圆角。
+        let plateCornerRadius: CGFloat
+        /// 板柔影的色不透明度 / 半径 / x / y（板不画时无消费者）。
+        let plateShadowOpacity: Double
+        let plateShadowRadius: CGFloat
+        let plateShadowX: CGFloat
+        let plateShadowY: CGFloat
+        /// 顶缘微光的不透明度与它在板高上的覆盖比例（掩码软渐变）。
+        let plateTopHighlightOpacity: Double
+        let plateTopHighlightFraction: CGFloat
+        /// 板的颜色语义（`true` = 黑/暗色板——两档都是「黑板」，改动点只有 α：黑档恒 0）。
+        let plateIsDark: Bool
     }
 
     /// 两档（常驻 / hover）× 底色档（暗 / 玻璃）的效果值：常驻档是**中性**（scale = 1、brightness = 0），
     /// 光的两层（柔光池 + 内容辉光）常驻可见。
     ///
     /// `surface` 只决定**光的颜色与取哪一套常量**：`.dark` 走白光两层、五个数值与 p7 定稿逐字相同；
-    /// `.glass` 走黑色柔影两层（p7b）。放大 / 提亮两档不动（`hoverScale` / `hoverBrightness` 与
-    /// 底色无关——它们作用在内容上，不是「底」）。
-    static func effects(hovered: Bool, surface: Surface) -> FloatEffects {
+    /// `.glass` 走**玻璃板**（p7c：板 + 既有内容软影；池恒 0）。放大 / 提亮两档不动
+    /// （`hoverScale` / `hoverBrightness` 与底色无关——它们作用在内容上，不是「底」）。
+    ///
+    /// **`interactive`（p7c / D-13）**：`false` 的站点（日历行——纯展示块、自带 `onHover`）拿的是
+    /// **常驻档**——effects 与 `hovered` 无关、`scale` / `brightness` 恒中性（由 `active` 一处收口）。
+    static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -> FloatEffects {
+        // 纯展示站点：hovered 不参与（`active` 恒 false）——effects 因此与 `hovered` 无关。
+        let active = interactive && hovered
         switch surface {
         case .dark:
             return FloatEffects(
-                scale: hovered ? hoverScale : 1,
-                brightness: hovered ? hoverBrightness - 1 : 0,
-                glowRadius: hovered ? hoverGlowRadius : idleGlowRadius,
-                glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity,
-                poolOpacity: hovered ? hoverPoolOpacity : poolOpacity,
+                scale: active ? hoverScale : 1,
+                brightness: active ? hoverBrightness - 1 : 0,
+                glowRadius: active ? hoverGlowRadius : idleGlowRadius,
+                glowOpacity: active ? hoverGlowOpacity : idleGlowOpacity,
+                poolOpacity: active ? hoverPoolOpacity : poolOpacity,
                 poolIsDark: false,
                 shadowIsDark: false,
-                shadowYOffset: 0
+                shadowYOffset: 0,
+                plateOpacity: 0,
+                plateCornerRadius: plateCornerRadius,
+                plateShadowOpacity: plateShadowOpacity,
+                plateShadowRadius: plateShadowRadius,
+                plateShadowX: plateShadowX,
+                plateShadowY: plateShadowY,
+                plateTopHighlightOpacity: plateTopHighlightOpacity,
+                plateTopHighlightFraction: plateTopHighlightFraction,
+                plateIsDark: true
             )
         case .glass:
             return FloatEffects(
-                scale: hovered ? hoverScale : 1,
-                brightness: hovered ? hoverBrightness - 1 : 0,
-                glowRadius: hovered ? glassHoverShadowRadius : glassShadowRadius,
-                glowOpacity: hovered ? glassHoverShadowOpacity : glassShadowOpacity,
-                poolOpacity: hovered ? glassHoverPoolOpacity : glassPoolOpacity,
+                scale: active ? hoverScale : 1,
+                brightness: active ? hoverBrightness - 1 : 0,
+                glowRadius: active ? glassHoverShadowRadius : glassShadowRadius,
+                glowOpacity: active ? glassHoverShadowOpacity : glassShadowOpacity,
+                // p7c：玻璃档**不再画柔光池**（被板取代——两轮实测证明池心池不表达边界）。
+                poolOpacity: 0,
                 poolIsDark: true,
                 shadowIsDark: true,
-                shadowYOffset: hovered ? glassHoverShadowYOffset : glassShadowYOffset
+                shadowYOffset: active ? glassHoverShadowYOffset : glassShadowYOffset,
+                plateOpacity: active ? hoverPlateOpacity : plateOpacity,
+                plateCornerRadius: plateCornerRadius,
+                plateShadowOpacity: plateShadowOpacity,
+                plateShadowRadius: plateShadowRadius,
+                plateShadowX: plateShadowX,
+                plateShadowY: plateShadowY,
+                plateTopHighlightOpacity: plateTopHighlightOpacity,
+                plateTopHighlightFraction: plateTopHighlightFraction,
+                plateIsDark: true
             )
         }
     }
@@ -697,13 +782,17 @@ enum HomeBlockFloatMetrics {
 
 /// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容辉光（为辅），
 /// hover 时两层一起加深、再叠轻微放大 / 提亮。**p7b 起按面板底色档自适应**（docs/31 D-22）：
-/// 黑档白光两层（逐字不变）、玻璃档黑色柔影两层（柔影池 + 软影）。
+/// 黑档白光两层（逐字不变）、玻璃档黑色柔影两层（柔影池 + 软影）。**p7c 起玻璃档再改判**
+/// （docs/32 §做法 机制一 / D-01 · D-08）：玻璃档的浮起由**块心柔光池**改为**极淡整块底（玻璃板）**
+/// ——板 = 块的完整框（同形圆角矩形黑填充 + 同形柔影 + 顶缘掩码微光），板缘因此是一条**台阶**；
+/// 池在玻璃档恒 0（不画）。黑档路径一个字节没动。
 ///
 /// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
 /// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
 ///
-/// 效果值一律走 `HomeBlockFloatMetrics.effects(hovered:surface:)`——本修饰符不碰常量、不写算式；
-/// 只有两处「选色」按 `FloatEffects` 的档位字段做（`poolIsDark` / `shadowIsDark` → `Color`）。
+/// 效果值一律走 `HomeBlockFloatMetrics.effects(hovered:surface:interactive:)`——本修饰符不碰常量、
+/// 不写算式；只有三处「选色」按 `FloatEffects` 的档位字段做（`poolIsDark` / `shadowIsDark` /
+/// `plateIsDark` → `Color`）。
 /// 底色档读 `Defaults[.notchPanelBackgroundStyle]`（`@Default` 是 `DynamicProperty`——设置页拨档
 /// 后这里立即重绘；同 `ParallaxMotionModifier` 先例）。**不存在第二处读这份偏好**：块的视觉只此一处。
 ///
@@ -711,63 +800,156 @@ enum HomeBlockFloatMetrics {
 /// 图标各自带影，正是 docs/30 §失败信号里「块内容被辉光糊住」的样子）；合成后整格只有一道轮廓
 /// 光（面板级阴影在 `ContentView` 里也是这么用的）。它只改绘制、不改布局。
 ///
-/// **柔光池画在 `.shadow` 之后**（`.background` 永远画在被修饰视图之下）：池因此**不参与**缩放与
-/// 提亮、也不进辉光的轮廓（辉光仍只描内容），两层各司其职；池是不参与命中的 `.background`
-/// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算且系数
-/// ≤ 0.5（最近边在 `0.5 × min(w, h)` 处）——渐变**在边缘之前就归零**，没有填充边界、没有描边、
-/// 也不留直角台阶（不是卡片底；玻璃档的暗影池共用同一条算式）。
+/// **两层底画在 `.shadow` 之后**（`.background` / `.overlay` 永远画在被修饰视图之下 / 之上）：
+/// 它们因此**不参与**缩放与提亮、也不进辉光的轮廓（辉光仍只描内容）；两层都不参与命中
+/// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。
+/// - **黑档**：池的 `endRadius` 用**格子的**短边算且系数 ≤ 0.5（最近边在 `0.5 × min(w, h)` 处）
+///   ——渐变**在边缘之前就归零**，没有填充边界、没有描边、也不留直角台阶（不是卡片底）。
+/// - **玻璃档（p7c）**：板刻意**与块框同框**（不内缩）——这正是「台阶」的来源；板不进命中、
+///   不改尺寸，内容的包围盒因此必然落在板内（D-03）。
 ///
 /// **池的渐变自 p7 起是三停**（`0 → poolOpacity`、`0.6 → poolOpacity × 0.35`、`1 → .clear`，见
 /// docs/31 §做法 机制一）：两停时亮度到尾巴才塌，三停把中段压平、尾段拉长，光晕更软更长（仍到
-/// 全透明归零，不出现边界）。**两档共用这三停**，只换颜色（黑档白、玻璃档黑）。
+/// 全透明归零，不出现边界）。**p7c 起这三停只有黑档用**（玻璃档的 `poolOpacity` 恒 0 = 不画池）。
 struct HomeBlockFloatModifier: ViewModifier {
+    /// 是否**装 `onHover`**（`false` = 纯展示站点：effects 与 hover 无关、不装 hover——D-13，日历行用）。
+    let interactive: Bool
+
     @State private var hovered = false
     /// 面板底色档（p7b / docs/31 D-22）：经 `HomeBlockFloatMetrics.surface(for:)` 映射到效果档。
     @Default(.notchPanelBackgroundStyle) private var panelStyle
 
+    init(interactive: Bool = true) {
+        self.interactive = interactive
+    }
+
     func body(content: Content) -> some View {
         let surface = HomeBlockFloatMetrics.surface(for: panelStyle)
-        let effects = HomeBlockFloatMetrics.effects(hovered: hovered, surface: surface)
+        let effects = HomeBlockFloatMetrics.effects(
+            hovered: hovered,
+            surface: surface,
+            interactive: interactive
+        )
         // 档位着色：黑档白（`.white`，y 恒 0 = 逐字不变）、玻璃档黑（亮底减亮）。只读 effects 字段。
         let shadowColor: Color = effects.shadowIsDark ? .black : .white
         let poolColor: Color = effects.poolIsDark ? .black : .white
-        content
-            .scaleEffect(effects.scale)
-            .brightness(effects.brightness)
-            .compositingGroup()
-            .shadow(
-                color: shadowColor.opacity(effects.glowOpacity),
-                radius: effects.glowRadius,
-                y: effects.shadowYOffset
-            )
-            .background {
-                GeometryReader { geo in
-                    RadialGradient(
-                        stops: [
-                            .init(color: poolColor.opacity(effects.poolOpacity), location: 0),
-                            .init(color: poolColor.opacity(effects.poolOpacity * 0.35), location: 0.6),
-                            .init(color: .clear, location: 1),
-                        ],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: HomeBlockFloatMetrics.poolEndRadius(
-                            width: geo.size.width,
-                            height: geo.size.height
-                        )
-                    )
+        let plateColor: Color = effects.plateIsDark ? .black : .white
+
+        if !interactive, surface == .dark {
+            // **纯展示站点 × 纯黑档：一层都不装**（p7c / D-06 零回归）：该站点（日历行）至今既没有
+            // 池也没有辉光，而黑档又不画板（`plateOpacity = 0`）——照「常驻档」原样消费会给它凭空
+            // 长出一圈白光池（半径 = 0.5 × 行高的短边 ≈ 116），那正是「纯黑档逐字不变」要挡的。
+            content
+        } else {
+            content
+                .scaleEffect(effects.scale)
+                .brightness(effects.brightness)
+                .compositingGroup()
+                .shadow(
+                    color: shadowColor.opacity(effects.glowOpacity),
+                    radius: effects.glowRadius,
+                    y: effects.shadowYOffset
+                )
+                .background {
+                    if surface == .dark {
+                        // 黑档：白光柔光池（p7 定稿，逐字不变）。
+                        GeometryReader { geo in
+                            RadialGradient(
+                                stops: [
+                                    .init(color: poolColor.opacity(effects.poolOpacity), location: 0),
+                                    .init(color: poolColor.opacity(effects.poolOpacity * 0.35), location: 0.6),
+                                    .init(color: .clear, location: 1),
+                                ],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: HomeBlockFloatMetrics.poolEndRadius(
+                                    width: geo.size.width,
+                                    height: geo.size.height
+                                )
+                            )
+                        }
+                        .allowsHitTesting(false)
+                    } else {
+                        // 玻璃档：板（p7c）——同形圆角矩形黑填充 + 同形柔影。
+                        HomeBlockPlateBackground(effects: effects, color: plateColor)
+                    }
                 }
-                .allowsHitTesting(false)
-            }
-            .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
-            .onHover { hovered = $0 }
+                .overlay {
+                    // 玻璃档的顶缘微光（p7c / D-05）：掩码软渐变，**不是 stroke**。黑档不装（逐字不变）。
+                    if surface == .glass {
+                        HomeBlockPlateTopHighlight(effects: effects)
+                    }
+                }
+                .animation(.smooth(duration: HomeBlockFloatMetrics.duration), value: hovered)
+                .modifier(HomeBlockHoverTracking(enabled: interactive, hovered: $hovered))
+        }
+    }
+}
+
+/// 只有**交互站点**才装 `onHover`（`interactive == false` 的纯展示站点**不装**——D-13：日历行自带
+/// 一条 `onHover`（`vm.isHoveringCalendar`，面板收起手势的遮罩），两层叠加会打架；且它的 effects
+/// 与 `hovered` 无关，装了也只是白拿一个 tracking area）。
+private struct HomeBlockHoverTracking: ViewModifier {
+    let enabled: Bool
+    @Binding var hovered: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onHover { hovered = $0 }
+        } else {
+            content
+        }
+    }
+}
+
+/// 玻璃板的**板底**（p7c / docs/32 §做法 机制一 1–2）：同形圆角矩形黑填充（`plateOpacity`）+
+/// 同形柔影（`plateShadowOpacity` / `plateShadowRadius` / x / y）——填充**均匀**（不是径向渐变），
+/// 因此**板缘就是一条台阶**，影把两块之间的缝压成一条浅谷。**无描边**。板不进命中、不改尺寸。
+private struct HomeBlockPlateBackground: View {
+    let effects: HomeBlockFloatMetrics.FloatEffects
+    let color: Color
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: effects.plateCornerRadius, style: .continuous)
+            .fill(color.opacity(effects.plateOpacity))
+            .shadow(
+                color: .black.opacity(effects.plateShadowOpacity),
+                radius: effects.plateShadowRadius,
+                x: effects.plateShadowX,
+                y: effects.plateShadowY
+            )
+            .allowsHitTesting(false)
+    }
+}
+
+/// 玻璃板的**顶缘微光**（p7c / docs/32 §做法 机制一 3）：白 `plateTopHighlightOpacity` → `.clear`
+/// 的 `LinearGradient`（自上而下到 `plateTopHighlightFraction`）**掩码**到同形圆角矩形——「镜面
+/// 高光」的那一笔。**必须是掩码软渐变，禁止 stroke**（用户 p6 起的持续约束 / D-05）。
+private struct HomeBlockPlateTopHighlight: View {
+    let effects: HomeBlockFloatMetrics.FloatEffects
+
+    var body: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .white.opacity(effects.plateTopHighlightOpacity), location: 0),
+                .init(color: .clear, location: effects.plateTopHighlightFraction),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .mask {
+            RoundedRectangle(cornerRadius: effects.plateCornerRadius, style: .continuous)
+        }
+        .allowsHitTesting(false)
     }
 }
 
 extension View {
-    /// 首页块的浮起样式（p6 / docs/30 §做法 机制一）。唯一调用点是 `HomeFlowView` 的格子，
-    /// 套在格子的 `.frame(width:height:)` **之后**——视觉修饰不改格子尺寸。
-    func homeBlockFloat() -> some View {
-        modifier(HomeBlockFloatModifier())
+    /// 首页块的浮起样式（p6 / docs/30 §做法 机制一；p7c 起玻璃档是**玻璃板**，板 = 站点的 frame）。
+    /// 两个调用点：`HomeFlowView` 的格子（默认档，套在格子的 `.frame(width:height:)` 之后——视觉修饰
+    /// 不改格子尺寸）与 `HomeCalendarRow` 的根帧（`interactive: false`——板 = 行框，见 D-13 / D-14）。
+    func homeBlockFloat(interactive: Bool = true) -> some View {
+        modifier(HomeBlockFloatModifier(interactive: interactive))
     }
 }
 
@@ -1019,11 +1201,12 @@ struct HomeFlowView: View {
                     ForEach(Array(row.indices.enumerated()), id: \.offset) { position, blockIndex in
                         HomeBandCell(block: blocks[blockIndex], albumArtNamespace: albumArtNamespace)
                             .frame(width: row.widths[position], height: row.height, alignment: .topLeading)
-                            // 每块「浮起」（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容
-                            // 辉光（为辅），hover 时两层一起加深再叠轻微放大 / 提亮。套在 `.frame`
+                            // 每块「浮起」（p6 / docs/30 §做法 机制一；p7c 起玻璃档是**玻璃板**）：
+                            // 黑档 = 常驻柔光池（为主）+ 内容辉光（为辅）；玻璃档 = 板 + 内容软影，
+                            // hover 时一起加深再叠轻微放大 / 提亮。套在 `.frame`
                             // **之后**——判据（`hovered`）与视觉效果都只作用在格子的最终形状上，
-                            // `scaleEffect` / `shadow` / 池（不参与命中的 `.background`）都不改
-                            // 布局尺寸，邻居的位置仍由上面的 plan 定死。
+                            // `scaleEffect` / `shadow` / 底（不参与命中的 `.background` / `.overlay`）
+                            // 都不改布局尺寸，邻居的位置仍由上面的 plan 定死。
                             .homeBlockFloat()
                     }
 

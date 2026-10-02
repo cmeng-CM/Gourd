@@ -178,6 +178,19 @@ struct HomeCalendarRow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(height: Self.rowHeight)
+        // 日历行的**玻璃板**（p7c / docs/32 §做法 机制二 · D-13 · D-14）：毛玻璃档下本行也成一「板」
+        // （黑 0.14 / 圆角 15 / 无描边 + 柔影 + 顶缘微光），与上排的单条流块同一机制。
+        //
+        // `interactive: false`（D-13）：本行是**纯展示块**（docs/30 机制七）且自带一条 `onHover`
+        // （`vm.isHoveringCalendar`，面板收起手势的遮罩）——因此不装 hover、scale / brightness 恒中性。
+        //
+        // **板 = 行框**（不内缩）：D-14 优先「与单条流块外缘对齐」（板左右各内缩 8pt），但上屏实测
+        // **冲突**——月历网格自带 `.padding(.horizontal, 6)`，内缩 8pt 时左侧「十月」题头的笔画落在
+        // 板外（`evidence/plate-measure.txt` §四：内缩 8pt 时板外左缘 4pt 带内有白色内容像素
+        // x353.5…354、y270…271；退到行框后为 0）。按 D-14 的退法取行框（板因此比流块外缘宽
+        // 8pt/侧），守 D-03 的硬要求「内容必须全部落在板内」。
+        // 纯黑档下本行**一层都不画**（黑档不画板——逐字不变）。
+        .homeBlockFloat(interactive: false)
         // 首次出现时把日历数据对齐到**今天**（与 `CalendarView` / `StandaloneCalendarView` 的
         // `.onAppear` 同一条口径），并把月历滚到今天那格。
         .onAppear {
