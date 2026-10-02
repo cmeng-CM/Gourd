@@ -505,11 +505,11 @@ extension View {
     }
 }
 
-// MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02）
+// MARK: - 块级浮起（p6-ui-polish / docs/30 §做法 机制一 / D-01 · D-02；p7b 底色档自适应，docs/31 D-22）
 
 /// 首页每块「浮起」样式的**唯一取值处**（p6 / docs/30 §做法 机制一）：常驻「柔光池」（块背后的
-/// 径向渐变白光，为主）+ 内容辉光（围绕内容的浅色 `.shadow`，为辅），hover 时两者一起加深、
-/// 再叠轻微放大 / 提亮，**不加卡片底与边线**（用户本轮明确）。
+/// 径向渐变，为主——黑档白、玻璃档黑）+ 内容辉光 / 软影（围绕内容的 `.shadow`，为辅），hover 时
+/// 两者一起加深、再叠轻微放大 / 提亮，**不加卡片底与边线**（用户本轮明确）。
 ///
 /// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
 /// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
@@ -517,21 +517,27 @@ extension View {
 /// 柔光池」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` / 池都不参与布局
 /// （邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
 ///
-/// **为什么是白光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
+/// **为什么黑档是白光而不是黑影**（T1 首轮独立审查实测）：面板底色是纯黑（`ContentView` 的
 /// `Color.black`），黑 `.shadow` 在黑底上恒为零效果——静态区分与 hover「加深」都看不见。
 /// **为什么光池为主**（Checkpoint 二轮实机测量）：纯内容辉光在空区只抬 0.07–0.5/255，仍不可见，
-/// 故静态区分交给柔光池，辉光只作内容边缘的辅光。两者都是**无填充边界、无描边**的光。**无黑影项**。
+/// 故静态区分交给柔光池，辉光只作内容边缘的辅光。两者都是**无填充边界、无描边**的光。
+///
+/// **p7b 起按底色档分成两套**（`Surface` / docs/31 D-22）：上面这条「白光池」的论证前提是**纯黑底**
+/// ——毛玻璃底（behindWindow 材质、采样屏后内容）是**亮底**，白光池在它上面只贡献 ≈ +11/255、
+/// 被材质自身的 ±4–5 起伏淹没（p7 T1 已测到，本次复现一致；数字见 docs/31 §接口 1）。亮底上做
+/// 区分要**减亮**：玻璃档因此改用黑色柔影池 + 黑色软影——与黑档的白光两层是同一物理的两面，
+/// **绝不是描边或卡片底**（两档都是无边界径向渐变 + 柔和 `.shadow`，不变量同一条）。
 ///
 /// **brightness 的口径**：`hoverBrightness` 是「1.0 = 不改」的乘性口径（与 `hoverScale` 同形），
-/// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:)` 里
-/// `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
+/// 组装成**增量**才交给 `.brightness(_:)`（它的入参是增量，0 = 不改）——`effects(hovered:surface:)`
+/// 里 `- 1`，把 1.06 直接传进去会白到看不清（A1 的「块的可读性不降」）。
 ///
 /// 常量是**上屏调参后的定稿值**（起点值见 docs/31 §接口与数据形状第 1 小节的留痕口径；本组先按
 /// p6 的一轮实机调参：辉光 0.05/4 → 0.08/5、hover 0.10/10 → 0.16/11；p7 再按用户「不 hover 也要
 /// 能分清区域」的反馈整组上调：辉光 0.08/5 → **0.10/6**、柔光池 0.06 → **0.13**、hover 池 0.12 →
 /// **0.20**、hover 辉光 0.16/11 → **0.20/12**，池系数放到不变量上限 **0.50**）；本文件不再有第二份。
-/// 测试钉 **`effects(hovered:)` 两档**（不是单钉常量）：常驻中性 + 半径 / 不透明度为正，hover
-/// 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
+/// 测试钉 **`effects(hovered:surface:)` 两档 × 两底色档**（不是单钉常量）：常驻中性 + 半径 /
+/// 不透明度为正，hover 两项更大、增量落在可读区间（1.005…1.05 / 0.02…0.12）。
 enum HomeBlockFloatMetrics {
     /// 常驻辉光的不透明度（白，低透明度 = 无填充的深度感）。
     ///
@@ -571,10 +577,57 @@ enum HomeBlockFloatMetrics {
     /// `min(w, h) × factor` + **非负 guard**（GeometryReader 的尺寸理论上非负，但 0 也不该产生
     /// 负半径）——**无下界**：任何尺寸下都 ≤ `0.5 × min(w, h)`，渐变**必然在最近边之前归零**
     /// （终审修复；这条不变量由 `testHomeBlockPoolRadiusNeverCrossesTheNearestEdge` 按块高
-    /// 40 / 96 / 140 三档钉住，不只钉系数）。
+    /// 40 / 96 / 140 三档钉住，不只钉系数）。**两档共用这条算式**（p7b）：玻璃档的暗影池与黑档的
+    /// 白光池是同一个几何——只换颜色与不透明度，半径不变量不因档位而变。
     static func poolEndRadius(width: CGFloat, height: CGFloat) -> CGFloat {
         max(0, min(width, height) * poolEndRadiusFactor)
     }
+
+    // MARK: - 底色档（p7b / docs/31 §接口 1 · D-22）
+
+    /// 面板**底色档**：浮起效果按「底是暗还是亮」自适应（p7b 修复的机制核心）。
+    ///
+    /// - `.dark`（面板 `.solidBlack`）：沿用 p6/p7 的白光两层（白光柔光池 + 白色内容辉光），
+    ///   **数值逐字不变**——暗底加亮是这套常量的原始前提；
+    /// - `.glass`（面板 `.frostedGlass` / `.liquidGlass`，behindWindow 材质、采样屏后内容）：
+    ///   改用**黑色柔影池 + 黑色软影**——亮底减亮，与暗底加亮是同一物理的两面。
+    ///
+    /// 为什么必须分档：p7 T1 已在毛玻璃底上测到白光池只贡献 ≈ **+11/255**，而玻璃底的自身起伏
+    /// 就有 ±4–5/255（同一块内不同角落的本地基线可差 ≈11）——贡献被材质淹没，肉眼不可辨
+    /// （复现数字与「修复前」证据见 docs/31 §接口 1 与 `.workflow/p7b-glass-float/evidence/`）。
+    enum Surface: Equatable {
+        case dark
+        case glass
+    }
+
+    /// 面板底色档 → 浮起效果档（三档映射的唯一权威处；两个玻璃档同走 `.glass`——
+    /// 两者的材质细节不同，但「亮底减亮」的机制与取值同源）。
+    static func surface(for style: NotchPanelBackgroundStyle) -> Surface {
+        switch style {
+        case .solidBlack: return .dark
+        case .frostedGlass, .liquidGlass: return .glass
+        }
+    }
+
+    // 玻璃档常量（p7b；**起点值经一轮上屏调参上调**——0.10/0.18 在实测中池心对最紧的缝带读数
+    // 只到 ≈+10…+12/255，离判据（≥12）太近、抗不住玻璃底 ±4–5 的空间漂移，按计划的调参窗口
+    // 上调一档到 0.13/0.22；逐点数字与结论见 docs/31 §接口 1 与 evidence/p7b-measure.txt）。
+    /// 玻璃档柔光池中心的**黑色**不透明度（亮底减亮；起点 0.10 → 定稿 **0.13**）。
+    static let glassPoolOpacity: Double = 0.13
+    /// 玻璃档 hover 的池黑不透明度（比常驻更深 = 「hover 加深」；起点 0.16 → **0.20**）。
+    static let glassHoverPoolOpacity: Double = 0.20
+    /// 玻璃档内容软影的黑色不透明度（起点 0.18 → **0.22**）。
+    static let glassShadowOpacity: Double = 0.22
+    /// 玻璃档内容软影的半径（起点 9 → 定稿仍 9；未观察到文字糊边）。
+    static let glassShadowRadius: CGFloat = 9
+    /// 玻璃档内容软影的 y 偏移（起点 1，带一点「浮起」方向；**黑档恒 0，逐字不变**）。
+    static let glassShadowYOffset: CGFloat = 1
+    /// 玻璃档 hover 的影黑不透明度（起点 0.28 → **0.34**）。
+    static let glassHoverShadowOpacity: Double = 0.34
+    /// 玻璃档 hover 的影半径（起点 13 → 定稿仍 13）。
+    static let glassHoverShadowRadius: CGFloat = 13
+    /// 玻璃档 hover 的影 y 偏移（起点 2 → 定稿仍 2）。
+    static let glassHoverShadowYOffset: CGFloat = 2
     /// hover 的放大倍率（1.0 = 不改；只做视觉缩放，不动 frame）。
     static let hoverScale: CGFloat = 1.02
     /// hover 的提亮（乘性口径，1.0 = 不改；组装时减 1 成增量）。
@@ -584,39 +637,75 @@ enum HomeBlockFloatMetrics {
 
     /// 修饰符**真正消费**的那份效果值（`homeBlockFloat()` 只读它，不自己碰常量——常量到应用的
     /// 算式因此可被纯函数测试钉住：改错映射（如去掉 brightness 的 `- 1`、把两档接反）会让
-    /// `testHomeBlockFloatMetricsStayInTheLegibleRange` 变红）。
+    /// `testHomeBlockFloatMetricsStayInTheLegibleRange` 变红；档位映射改错会让
+    /// `testGlassSurfaceUsesDarkVeilEffects` 变红）。
     ///
     /// 五项与 SwiftUI 一一对应：`scale` → `.scaleEffect`、`brightness` → `.brightness`（**增量**）、
-    /// `glowRadius`/`glowOpacity` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`
-    /// （`y` 恒 0——不做 y 位移）、`poolOpacity` → 柔光池径向渐变的中心白 `opacity`。
+    /// `glowRadius`/`glowOpacity` → `.shadow(color: 档位色.opacity(glowOpacity), radius: glowRadius,
+    /// y: shadowYOffset)`（黑档白辉光 + y 恒 0 = 逐字不变；玻璃档黑影 + y 1/2）、
+    /// `poolOpacity` → 柔光池径向渐变的中心色 `opacity`（黑档白、玻璃档黑，由 `poolIsDark` 选）。
+    ///
+    /// 三个档位字段（p7b）：`poolIsDark` / `shadowIsDark` 给**颜色语义**（`true` = 黑/暗），
+    /// `shadowYOffset` 给内容影的 y——修饰符只按它们选色与摆影，不自己写常量。
     struct FloatEffects: Equatable {
         let scale: CGFloat
         let brightness: Double
         let glowRadius: CGFloat
         let glowOpacity: Double
         let poolOpacity: Double
+        /// 池的颜色语义（`true` = 黑/暗色池；`false` = 白/亮色池）。
+        let poolIsDark: Bool
+        /// 内容影（`.shadow` 那一层）的颜色语义（黑档白辉光 = `false`；玻璃档黑影 = `true`）。
+        let shadowIsDark: Bool
+        /// 内容影的 y 偏移（黑档恒 0——逐字不变；玻璃档 1 / hover 2）。
+        let shadowYOffset: CGFloat
     }
 
-    /// 两档（常驻 / hover）的效果值：常驻档是**中性**（scale = 1、brightness = 0），
+    /// 两档（常驻 / hover）× 底色档（暗 / 玻璃）的效果值：常驻档是**中性**（scale = 1、brightness = 0），
     /// 光的两层（柔光池 + 内容辉光）常驻可见。
-    static func effects(hovered: Bool) -> FloatEffects {
-        FloatEffects(
-            scale: hovered ? hoverScale : 1,
-            brightness: hovered ? hoverBrightness - 1 : 0,
-            glowRadius: hovered ? hoverGlowRadius : idleGlowRadius,
-            glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity,
-            poolOpacity: hovered ? hoverPoolOpacity : poolOpacity
-        )
+    ///
+    /// `surface` 只决定**光的颜色与取哪一套常量**：`.dark` 走白光两层、五个数值与 p7 定稿逐字相同；
+    /// `.glass` 走黑色柔影两层（p7b）。放大 / 提亮两档不动（`hoverScale` / `hoverBrightness` 与
+    /// 底色无关——它们作用在内容上，不是「底」）。
+    static func effects(hovered: Bool, surface: Surface) -> FloatEffects {
+        switch surface {
+        case .dark:
+            return FloatEffects(
+                scale: hovered ? hoverScale : 1,
+                brightness: hovered ? hoverBrightness - 1 : 0,
+                glowRadius: hovered ? hoverGlowRadius : idleGlowRadius,
+                glowOpacity: hovered ? hoverGlowOpacity : idleGlowOpacity,
+                poolOpacity: hovered ? hoverPoolOpacity : poolOpacity,
+                poolIsDark: false,
+                shadowIsDark: false,
+                shadowYOffset: 0
+            )
+        case .glass:
+            return FloatEffects(
+                scale: hovered ? hoverScale : 1,
+                brightness: hovered ? hoverBrightness - 1 : 0,
+                glowRadius: hovered ? glassHoverShadowRadius : glassShadowRadius,
+                glowOpacity: hovered ? glassHoverShadowOpacity : glassShadowOpacity,
+                poolOpacity: hovered ? glassHoverPoolOpacity : glassPoolOpacity,
+                poolIsDark: true,
+                shadowIsDark: true,
+                shadowYOffset: hovered ? glassHoverShadowYOffset : glassShadowYOffset
+            )
+        }
     }
 }
 
 /// 首页块的**浮起**样式（p6 / docs/30 §做法 机制一）：常驻柔光池（为主）+ 内容辉光（为辅），
-/// hover 时两层一起加深、再叠轻微放大 / 提亮。
+/// hover 时两层一起加深、再叠轻微放大 / 提亮。**p7b 起按面板底色档自适应**（docs/31 D-22）：
+/// 黑档白光两层（逐字不变）、玻璃档黑色柔影两层（柔影池 + 软影）。
 ///
 /// 状态（`hovered`）**就地持有**：它是纯视觉状态、没有第二处消费者（与 `HomeBlockHoverBackground`
 /// 的「状态由调用方给」不同——那条规则要按 id 区分行内条目，这条规则一格一态）。
 ///
-/// 效果值一律走 `HomeBlockFloatMetrics.effects(hovered:)`——本修饰符不碰常量、不写算式。
+/// 效果值一律走 `HomeBlockFloatMetrics.effects(hovered:surface:)`——本修饰符不碰常量、不写算式；
+/// 只有两处「选色」按 `FloatEffects` 的档位字段做（`poolIsDark` / `shadowIsDark` → `Color`）。
+/// 底色档读 `Defaults[.notchPanelBackgroundStyle]`（`@Default` 是 `DynamicProperty`——设置页拨档
+/// 后这里立即重绘；同 `ParallaxMotionModifier` 先例）。**不存在第二处读这份偏好**：块的视觉只此一处。
 ///
 /// **`compositingGroup()` 在辉光之前**：不合成的话 `.shadow` 会逐个子视图各画一道（块内的字与
 /// 图标各自带影，正是 docs/30 §失败信号里「块内容被辉光糊住」的样子）；合成后整格只有一道轮廓
@@ -626,27 +715,37 @@ enum HomeBlockFloatMetrics {
 /// 提亮、也不进辉光的轮廓（辉光仍只描内容），两层各司其职；池是不参与命中的 `.background`
 /// （`allowsHitTesting(false)`），且铺满整格 = 零布局成本。`endRadius` 用**格子的**短边算且系数
 /// ≤ 0.5（最近边在 `0.5 × min(w, h)` 处）——渐变**在边缘之前就归零**，没有填充边界、没有描边、
-/// 也不留直角台阶（不是卡片底）。
+/// 也不留直角台阶（不是卡片底；玻璃档的暗影池共用同一条算式）。
 ///
 /// **池的渐变自 p7 起是三停**（`0 → poolOpacity`、`0.6 → poolOpacity × 0.35`、`1 → .clear`，见
 /// docs/31 §做法 机制一）：两停时亮度到尾巴才塌，三停把中段压平、尾段拉长，光晕更软更长（仍到
-/// 全透明归零，不出现边界）。
+/// 全透明归零，不出现边界）。**两档共用这三停**，只换颜色（黑档白、玻璃档黑）。
 struct HomeBlockFloatModifier: ViewModifier {
     @State private var hovered = false
+    /// 面板底色档（p7b / docs/31 D-22）：经 `HomeBlockFloatMetrics.surface(for:)` 映射到效果档。
+    @Default(.notchPanelBackgroundStyle) private var panelStyle
 
     func body(content: Content) -> some View {
-        let effects = HomeBlockFloatMetrics.effects(hovered: hovered)
+        let surface = HomeBlockFloatMetrics.surface(for: panelStyle)
+        let effects = HomeBlockFloatMetrics.effects(hovered: hovered, surface: surface)
+        // 档位着色：黑档白（`.white`，y 恒 0 = 逐字不变）、玻璃档黑（亮底减亮）。只读 effects 字段。
+        let shadowColor: Color = effects.shadowIsDark ? .black : .white
+        let poolColor: Color = effects.poolIsDark ? .black : .white
         content
             .scaleEffect(effects.scale)
             .brightness(effects.brightness)
             .compositingGroup()
-            .shadow(color: .white.opacity(effects.glowOpacity), radius: effects.glowRadius)
+            .shadow(
+                color: shadowColor.opacity(effects.glowOpacity),
+                radius: effects.glowRadius,
+                y: effects.shadowYOffset
+            )
             .background {
                 GeometryReader { geo in
                     RadialGradient(
                         stops: [
-                            .init(color: .white.opacity(effects.poolOpacity), location: 0),
-                            .init(color: .white.opacity(effects.poolOpacity * 0.35), location: 0.6),
+                            .init(color: poolColor.opacity(effects.poolOpacity), location: 0),
+                            .init(color: poolColor.opacity(effects.poolOpacity * 0.35), location: 0.6),
                             .init(color: .clear, location: 1),
                         ],
                         center: .center,

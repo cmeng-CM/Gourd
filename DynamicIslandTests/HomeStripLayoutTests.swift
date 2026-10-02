@@ -68,12 +68,15 @@
 //    才在**最后一行**末尾预留，预留后这行的总宽仍不越过可用宽、且被挤掉的格也计入 `＋N`；
 //  - 「放得下几行」与「n 行要多少高度」是同一个式子的两个方向（阈值上等价，有一条用例钉住）。
 //
-//  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1；p7 / docs/31 §接口 1 调参）
-//  - 钉**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**（不是常量本身）：常驻档
-//    中性（scale 1 / brightness 增量 0）+ 柔光池与辉光常驻可见，hover 档池不透明度、辉光半径与
-//    不透明度都更大，放大 1.005…1.05、提亮增量 0.02…0.12；p7 起常驻池 ∈ 0.08…0.25、
-//    hover 与常驻池差 ≥ 0.03、effects 与声明常量逐项同源（调参后的最终值回写 docs/31 §接口 1；
-//    hover 本身驱动不出，见 docs/30 §已知限制 1）。
+//  **首页块浮起**（p6-ui-polish / docs/30 §做法 机制一 / §验收标准 A1；p7 / docs/31 §接口 1 调参；
+//    p7b 底色档自适应）
+//  - 钉**纯函数 `HomeBlockFloatMetrics.effects(hovered:surface:)` 的两档 × 两底色档输出**（不是常量
+//    本身）：`.dark`（纯黑底）常驻档中性（scale 1 / brightness 增量 0）+ 柔光池与辉光常驻可见，
+//    hover 档池不透明度、辉光半径与不透明度都更大，放大 1.005…1.05、提亮增量 0.02…0.12；p7 起
+//    常驻池 ∈ 0.08…0.25、hover 与常驻池差 ≥ 0.03、effects 与声明常量逐项同源（调参后的最终值回写
+//    docs/31 §接口 1；hover 本身驱动不出，见 docs/30 §已知限制 1）；**p7b 起** `.glass`（玻璃两档）
+//    的池与影都是黑色（亮底减亮）、hover 更深、三档映射与池半径不变量一并钉住
+//    （`testGlassSurfaceUsesDarkVeilEffects`）。
 //
 //  夹具是**本文件私有**的最小假模块：`ModuleKernelTests` 的 `RegistryFixture` / `ProbeModule`
 //  是 fileprivate（不跨文件可见），这里不复用、也不改它们的可见性。
@@ -2118,9 +2121,10 @@ final class HomeStripLayoutTests: XCTestCase {
 
     // MARK: - 首页块浮起（p6-ui-polish / docs/30 §做法 机制一 / D-02）
 
-    /// **修饰符真正消费的效果值待在可读区间**（p6 / docs/30 §验收标准 A1）。
+    /// **修饰符真正消费的效果值待在可读区间**（p6 / docs/30 §验收标准 A1；**本用例只钉 `.dark` 档**
+    /// ——p7b 起签名按底色档分岔，玻璃档由 `testGlassSurfaceUsesDarkVeilEffects` 另钉）。
     ///
-    /// 钉的是**纯函数 `HomeBlockFloatMetrics.effects(hovered:)` 的两档输出**，不是常量本身
+    /// 钉的是**纯函数 `HomeBlockFloatMetrics.effects(hovered:surface:)` 的两档输出**，不是常量本身
     /// （T1 首轮审查意见 2）：常量到应用的算式（含 brightness 的 `- 1`、两档映射的方向）改错
     /// 就会变红——例如去掉 brightness 的 `- 1`，hover 档的增量会变成 1.06 > 0.12 上界。
     ///
@@ -2135,15 +2139,17 @@ final class HomeStripLayoutTests: XCTestCase {
     /// ∈ **0.08…0.25**（p6 的 0.06 实机近不可见，下限抬到 0.08；上限 0.25 防池变「亮底」）、
     /// `hoverPoolOpacity − poolOpacity ≥ 0.03`（两档可辨差的下限）、`hoverGlowRadius > idleGlowRadius > 0`
     /// 与 `hoverGlowOpacity > idleGlowOpacity > 0`（辉光两档次序 + 常驻可见一并钉住），并补
-    /// 「`effects(hovered:)` 与声明常量同源」——修饰符只消费 effects，effects 与常量漂开就等于
+    /// 「`effects(hovered:surface:)` 与声明常量同源」——修饰符只消费 effects，effects 与常量漂开就等于
     /// 测试钉的是另一个数（p6 两档断言只钉了次序，没钉同一性）。
     ///
     /// **本用例不是 hover 行为证据**：hover 驱动不出（合成事件进不了 tracking area，docs/30
     /// §已知限制 1 / D-20），这里钉的是效果算式；上屏的 hover 观感列入「需真人鼠标复核」清单
     /// （报告 T1 §待人工验收）。
     func testHomeBlockFloatMetricsStayInTheLegibleRange() {
-        let idle = HomeBlockFloatMetrics.effects(hovered: false)
-        let hover = HomeBlockFloatMetrics.effects(hovered: true)
+        // p7b：签名按底色档分岔后**等价改写调用**（断言逐条不放宽）；本用例的档位是 `.dark`，
+        // 即 p7 定稿的那一套白光常量——玻璃档的新增断言在下一个用例里。
+        let idle = HomeBlockFloatMetrics.effects(hovered: false, surface: .dark)
+        let hover = HomeBlockFloatMetrics.effects(hovered: true, surface: .dark)
 
         // 常驻档必须是中性：静止的块不被缩放、不被提亮，只有柔光池与辉光两层光可见。
         XCTAssertEqual(idle.scale, 1, "常驻不放大")
@@ -2174,7 +2180,7 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(hover.brightness, 0.02, "hover 提亮要看得出来（增量 ≥ 0.02）")
         XCTAssertLessThanOrEqual(hover.brightness, 0.12, "再亮字就冲白了（增量 ≤ 0.12）")
 
-        // p7：`effects(hovered:)` 与声明常量**同源**——修饰符只消费 effects，两者漂开时上面的
+        // p7：`effects(hovered:surface:)` 与声明常量**同源**——修饰符只消费 effects，两者漂开时上面的
         // 档位断言的就不是真正上屏的那个数（同一性，逐项钉）。
         XCTAssertEqual(idle.glowRadius, HomeBlockFloatMetrics.idleGlowRadius, "常驻辉光半径 = 声明常量")
         XCTAssertEqual(idle.glowOpacity, HomeBlockFloatMetrics.idleGlowOpacity, "常驻辉光不透明度 = 声明常量")
@@ -2223,6 +2229,81 @@ final class HomeStripLayoutTests: XCTestCase {
             HomeBlockFloatMetrics.poolEndRadius(width: 140, height: 0), 0,
             "0 高给 0（非负 guard），不给负半径"
         )
+    }
+
+    /// **玻璃档用暗影池 + 暗影，黑档仍是白光两层**（p7b / docs/31 §验收标准 A1b · §决策摘要 D-22）。
+    ///
+    /// **本用例是回归护栏，不是复现证据**：`HomeBlockFloatModifier` 是视图修饰符，单测驱动不了
+    /// 上屏渲染；复现由像素证据承担（修复前上屏实测白光池在毛玻璃底上只贡献 ≈ +10…+11/255、
+    /// 被材质自身 ±4–5 的起伏淹没——`.workflow/p7b-glass-float/evidence/p7b-before-glass.png`
+    /// 与 `p7b-measure.txt`；旧代码上本用例因 API 不存在根本无法编译）。它防两类回归：
+    /// 玻璃档退回白光（亮底加亮 = 原缺陷）、黑档被顺手改成黑影（改动点只该是新增的玻璃档）。
+    ///
+    /// 钉四组：
+    /// ① 玻璃档的池与影**都是暗色**（含 hover 两档）——亮底减亮；黑档两层仍是白、影 y 偏移恒 0；
+    /// ② 玻璃档 hover 的池 / 影不透明度、影半径、影 y 偏移**四值都严格更深**（含「常驻必须可见」
+    ///    与「不得成黑底」两条区间）；
+    /// ③ 玻璃档 effects 与声明常量**逐项同源**（修饰符只消费 effects——漂开时上屏的不是这一组数）；
+    /// ④ `NotchPanelBackgroundStyle` 三档映射（`.solidBlack → .dark`、两个玻璃档 → `.glass`）
+    ///    与池半径不变量（两档共用同一条几何算式：块高三档都 ≤ `0.5 × min(w, h)`）。
+    ///
+    /// 黑档的既有口径一个字不放宽：白光两层与 y = 0 仍由上一个用例逐条钉住（这里只补「不暗」）。
+    func testGlassSurfaceUsesDarkVeilEffects() {
+        let glassIdle = HomeBlockFloatMetrics.effects(hovered: false, surface: .glass)
+        let glassHover = HomeBlockFloatMetrics.effects(hovered: true, surface: .glass)
+        let darkIdle = HomeBlockFloatMetrics.effects(hovered: false, surface: .dark)
+        let darkHover = HomeBlockFloatMetrics.effects(hovered: true, surface: .dark)
+
+        // ① 玻璃档：池与影都是暗色（亮底减亮）——静息与 hover 两档都不得退回白光。
+        XCTAssertTrue(glassIdle.poolIsDark, "玻璃档常驻池必须是暗色（黑）")
+        XCTAssertTrue(glassIdle.shadowIsDark, "玻璃档常驻影必须是暗色（黑）")
+        XCTAssertTrue(glassHover.poolIsDark, "玻璃档 hover 池仍是暗色")
+        XCTAssertTrue(glassHover.shadowIsDark, "玻璃档 hover 影仍是暗色")
+        // 黑档：两层仍是白（修饰符选 `Color.white`），影无 y 偏移——与 p7 定稿逐字一致。
+        XCTAssertFalse(darkIdle.poolIsDark, "黑档池仍是白色（p7 定稿不变）")
+        XCTAssertFalse(darkIdle.shadowIsDark, "黑档影 / 辉光仍是白色（p7 定稿不变）")
+        XCTAssertEqual(darkIdle.shadowYOffset, 0, "黑档影不带 y 偏移（逐字不变）")
+        XCTAssertEqual(darkHover.shadowYOffset, 0, "黑档 hover 影也不带 y 偏移")
+
+        // ② hover 严格更深：池 / 影不透明度、影半径、影 y 偏移四值都更大（两档可辨差）。
+        XCTAssertGreaterThan(glassHover.poolOpacity, glassIdle.poolOpacity, "玻璃档 hover 池更深")
+        XCTAssertGreaterThan(glassHover.glowOpacity, glassIdle.glowOpacity, "玻璃档 hover 影更深")
+        XCTAssertGreaterThan(glassHover.glowRadius, glassIdle.glowRadius, "玻璃档 hover 影半径更大")
+        XCTAssertGreaterThan(glassHover.shadowYOffset, glassIdle.shadowYOffset, "玻璃档 hover 影更沉")
+        // 常驻必须可见（0 或负值 = 暗影不存在，缺陷原样）；又都只是低透明度的一层，不该成「黑底」。
+        XCTAssertGreaterThan(glassIdle.poolOpacity, 0, "玻璃档常驻池必须可见")
+        XCTAssertGreaterThan(glassIdle.glowOpacity, 0, "玻璃档常驻影必须可见")
+        XCTAssertGreaterThan(glassIdle.glowRadius, 0, "玻璃档常驻影半径为正")
+        XCTAssertLessThanOrEqual(glassIdle.poolOpacity, 0.25, "玻璃档常驻池不该成「黑底」")
+        XCTAssertLessThanOrEqual(glassHover.poolOpacity, 0.35, "玻璃档 hover 池也不该成「黑底」")
+        XCTAssertLessThanOrEqual(glassHover.glowOpacity, 0.5, "玻璃档 hover 影是低透明度的一层，不该成「黑底」")
+
+        // ③ effects 与声明常量同源（修饰符只消费 effects，两者漂开时上屏的不是这一组数）。
+        XCTAssertEqual(glassIdle.poolOpacity, HomeBlockFloatMetrics.glassPoolOpacity, "常驻池 = 声明常量")
+        XCTAssertEqual(glassHover.poolOpacity, HomeBlockFloatMetrics.glassHoverPoolOpacity, "hover 池 = 声明常量")
+        XCTAssertEqual(glassIdle.glowOpacity, HomeBlockFloatMetrics.glassShadowOpacity, "常驻影 = 声明常量")
+        XCTAssertEqual(glassIdle.glowRadius, HomeBlockFloatMetrics.glassShadowRadius, "常驻影半径 = 声明常量")
+        XCTAssertEqual(glassIdle.shadowYOffset, HomeBlockFloatMetrics.glassShadowYOffset, "常驻影 y = 声明常量")
+        XCTAssertEqual(glassHover.glowOpacity, HomeBlockFloatMetrics.glassHoverShadowOpacity, "hover 影 = 声明常量")
+        XCTAssertEqual(glassHover.glowRadius, HomeBlockFloatMetrics.glassHoverShadowRadius, "hover 影半径 = 声明常量")
+        XCTAssertEqual(glassHover.shadowYOffset, HomeBlockFloatMetrics.glassHoverShadowYOffset, "hover 影 y = 声明常量")
+
+        // ④ 三档映射：纯黑 → .dark；两个玻璃档 → .glass（两个玻璃档机制同源、各档取值一致）。
+        XCTAssertEqual(HomeBlockFloatMetrics.surface(for: .solidBlack), .dark, "纯黑档走白光两层")
+        XCTAssertEqual(HomeBlockFloatMetrics.surface(for: .frostedGlass), .glass, "毛玻璃档走暗影两层")
+        XCTAssertEqual(HomeBlockFloatMetrics.surface(for: .liquidGlass), .glass, "液态玻璃档同走暗影两层")
+
+        // ④ 池半径不变量（两档共用同一条几何算式）：块高三档 40 / 96 / 140 都 ≤ 0.5 × min(w, h)
+        // ——暗影池仍是无边界径向渐变，渐变在最近边之前归零，不留直角台阶（不是卡片底）。
+        for height in [CGFloat(40), 96, 140] {
+            for width in [CGFloat(60), 140, 180, 250, 400] {
+                let radius = HomeBlockFloatMetrics.poolEndRadius(width: width, height: height)
+                XCTAssertLessThanOrEqual(
+                    radius, 0.5 * min(width, height),
+                    "块 \(width)×\(height)：池半径 \(radius) 必须 ≤ 最近边（暗影池同样不得留硬边）"
+                )
+            }
+        }
     }
 
     // MARK: - 音乐块再缩宽（p6-ui-polish / docs/30 §做法 机制二 / D-03 · D-04）

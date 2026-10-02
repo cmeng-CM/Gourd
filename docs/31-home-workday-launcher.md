@@ -79,6 +79,7 @@
 9. 首页静态光的观感因显示器亮度/夜览而异；验收用像素判据（块间 ≤3/255、块内 ≥10/255）替代主观评分。
 10. **拖拽抑制有 30 秒兜底窗口；释放令牌时补一次悬停复核**（终审修复波）：`onDrag` 没有「拖拽取消」回调——拖拽被取消 / 在面板外结束时，令牌靠 30 秒有界看门狗释放（正常 drop / 面板关闭 / 视图消失三条立即释放），释放时若面板仍开着就**补一次悬停复核**（`vm.shouldRecheckHover.toggle()`，同 `ShelfItemView` 拖动收尾先例）——此后按正常悬停判据收起：看门狗只是兜底定时器，不再出现「面板一直站着直到下一次悬停进出」。
 11. **右键菜单路径未验证**：格子菜单文案由 `isPinned` 决定，但它与面板根 `.contextMenu`（`ContentView.swift:1403`）的遮挡关系未知，右键固定 / 取消固定从未真人验证过（p2 起即如此）；本批固定态取证走的是应用自身读路径（`defaults write` + 重启），不是右键路径。
+12. **玻璃档的绝对亮度随屏后内容漂移**（p7b / D-22）：毛玻璃底是 behindWindow 材质、采样屏后窗口——本机实测同一行内本地基线可漂 150.5…161.6（±4–5，随壁纸 / 背后窗口起伏），因此玻璃档的区分判据按**相对同一块内本地基线的 Δ** 判定（池心暗化 ≥12/255），不承诺任何绝对亮度；夜间/深色壁纸下玻璃底变暗、暗影的可辨余量收窄，`glassPoolOpacity` 的可调窗口见 §接口 1。
 
 ## 实际交付
 
@@ -115,6 +116,7 @@
 ## 验收标准
 
 - **A1** 首页静态区分：不 hover 的截图中，相邻块之间有可辨暗缝、每块被无边界柔光包着；像素测量：块间空隙 ≤3/255、块内落光区 ≥10/255、跨格扫描无直角台阶（测量输出留 txt）；无任何描边/矩形底。
+- **A1b** 毛玻璃档静态区分（p7b，D-22）：毛玻璃底不 hover 时每块被一圈可辨**柔暗区**包着、块与块之间有可见分区；像素测量（证据 `p7b-measure.txt` + `p7b-before-glass.png` / `p7b-after-glass.png`）：池心相对本地基线**暗化 ≥12/255**、与相邻缝对比 **≥12/255**、跨格扫描平滑无台阶；目视复核（无硬边/直角边界、白字与彩色环不发糊）；**纯黑档数值与观感逐字不变**（缝 0.00 / 块内 27.9 / 峰 33，同 A1 口径），hover 两档更深由纯函数测试钉住（驱动不出，列真人复核）。
 - **A2** 浮起常量单测两枚全绿：`testHomeBlockFloatMetricsStayInTheLegibleRange`（扩展档位后）、`testHomeBlockPoolRadiusNeverCrossesTheNearestEdge`（40/96/140 三档不变）；hover 各值仍全面高于常驻。
 - **A3** 工作日判定：2026 抽查断言全过（10/1 休息、9/20 与 10/10 上班、10/8 上班、10/11 休息、2/14 上班、5/4 休息；10 月共 18 个工作日；10/12 12:00 时本月剩 14 天）；2027 无表年份按星期退化且不崩。
 - **A4** 今天行四态（休息日 / 距上班 m / 距下班 m / 已下班）与坏配置回落由纯函数测试钉住。
@@ -127,7 +129,7 @@
 
 ## 接口与数据形状
 
-### 1. 首页浮起常量（`HomeBlockFloatMetrics`，上屏调参后定稿值）
+### 1. 首页浮起常量（`HomeBlockFloatMetrics`，按面板底色档自适应；下表为**黑档**定稿值）
 
 | 常量 | 旧值（p6） | 新值（起点） | 定稿值（2026-10-01 上屏实测） |
 |---|---|---|---|
@@ -142,6 +144,30 @@
 | 上屏实测（纯黑底，判据：缝 ≤3、块内 ≥10、扫描无台阶） | — | 缝 0.00 / 块内 27.9（峰 33）/ 扫描单调归零、相邻差 ≤4 | 三条全过 → 起点值即定稿（证据 `.workflow/p7-workday-launcher/evidence/t1-static-blocks.txt`） |
 
 其余不变：`hoverScale 1.02`、`hoverBrightness 1.06`（组装时 −1）、`duration 0.2`、`poolEndRadius = max(0, min(w,h) × factor)`（无下界）。上屏调参**已完成**（2026-10-01）：首轮实测即达标（缝 **0.00**、块内 **27.9/255**、峰 **33**、跨格扫描单调归零无台阶），`poolOpacity` 停在 **0.13**（未上调到 0.18 档）——最终值即起点值；`hoverPoolOpacity > poolOpacity` 与「系数 ≤ 0.5」两条不变量未破。
+
+**p7b 起按面板底色档自适应**（2026-10-02，D-22）：`HomeBlockFloatMetrics.Surface`（`.dark` / `.glass`，
+由 `surface(for:)` 从 `NotchPanelBackgroundStyle` 映射——`.solidBlack → .dark`、
+`.frostedGlass` / `.liquidGlass → .glass`），入口 `effects(hovered:surface:)`；`FloatEffects` 增
+`poolIsDark` / `shadowIsDark` / `shadowYOffset` 三个档位字段（修饰符只按字段选色与摆影，不写常量）。
+**上表是 `.dark` 档（纯黑底）的定稿值，p7b 逐字未动**；玻璃档是新增的第二套（亮底减亮：黑色柔影池 + 黑色软影）：
+
+| 常量（玻璃档） | 起点值（p7b） | 定稿值（2026-10-02 上屏实测） |
+|---|---|---|
+| `glassPoolOpacity` | 0.10 | **0.13**（r1 起点值下最紧缝带只到 +10…+12/255，离判据 ≥12 太近 → 按调参窗口上调一档） |
+| `glassHoverPoolOpacity` | 0.16 | 0.20 |
+| `glassShadowOpacity` | 0.18 | 0.22 |
+| `glassShadowRadius` | 9 | 9 |
+| `glassShadowYOffset` | 1 | 1 |
+| `glassHoverShadowOpacity` | 0.28 | 0.34 |
+| `glassHoverShadowRadius` | 13 | 13 |
+| `glassHoverShadowYOffset` | 2 | 2 |
+| 池渐变 / 池半径 | 与黑档**同构**：三停（`0.6 → ×0.35`）、`poolEndRadius ≤ 0.5 × min(w,h)`、无下界 | 只换颜色（黑），几何不变量沿用 |
+
+**玻璃档两条判据**（2026-10-02 上屏实测，证据 `.workflow/p7b-glass-float/evidence/p7b-measure.txt` +
+`p7b-before-glass.png` / `p7b-after-glass.png`）：① 池心相对**本地基线**暗化 **≥12/255**
+（复现时白光池只贡献 +4.8…+10.3/255、玻璃底自身漂移 ±4–5；修复后实测 −17.4…−28.4，各基线口径全过）；
+② 池心与**相邻缝**对比 **≥12/255**（修复后 +15.3…+17.8，含最紧的缝带）、跨格扫描平滑无台阶。
+同批复核**黑档逐字一致**（缝 0.00 / 块内 27.9 / 峰 33，与上表定稿同值）。
 
 ### 2. 启动台分区与拖放纯函数（`LauncherRanking.swift` 追加）
 
@@ -286,3 +312,4 @@ enum WorkdayCalendar {
 | D-19 | 面板内拖拽经既有 `setAutoCloseSuppression` 令牌抑制自动收起 + 30 秒看门狗兜底 | agent | 面板级 `dragDetector` 把面板内拖拽的 targeted 进出当收起信号——合成拖拽修复前无法送达、修复后两向送达（T5 实测）。代价：取消拖拽后抑制最长存活 30 秒（正常 drop / 面板关闭 / 视图消失三条立即释放） |
 | D-20 | `resolveWorkHours` 越界一律回落默认、不夹取 | agent | 夹取会产生「有效但荒谬」的班次（如 9–23 班）；T2 审查驱动（实现 / 测试 / §接口 3 三处同步） |
 | D-21 | 本模块拖放处 `vm.dropEvent` 同步无条件置位 | agent | 异步置位赶不上当次 `!isTargeted`；代价：no-op 投放也跳过一次性收起，同既有四处口径 |
+| D-22 | 首页块浮起按**面板底色档自适应**：玻璃档（`.frostedGlass` / `.liquidGlass`）改用黑色柔影池 + 黑色软影，黑档保持白光两层不动（`Surface` / `effects(hovered:surface:)`） | agent（p7b 执行期） | 理由：**亮底减亮 / 暗底加亮是同一物理的两面**——p7 T1 已测到白光池在毛玻璃底只贡献 ≈+11/255、被材质自身 ±4–5 起伏淹没（p7b 复现 +4.8…+10.3 一致），不分档就只能对一种底色达标。代价：**两档两套常量**（`HomeBlockFloatMetrics` 与本文档 §接口 1 两处），上屏调参与判据要按档做（`testGlassSurfaceUsesDarkVeilEffects` 是回归护栏） |
