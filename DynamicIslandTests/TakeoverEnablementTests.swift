@@ -2006,6 +2006,38 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    /// **环不被块框裁掉**（2026-10-06 用户反馈「cpu 这三个上边距太小，顶部被遮盖了」的回归判据）。
+    ///
+    /// 算术：`Circle().stroke(lineWidth:)` 以路径为中心 → 环的墨迹向框外每一侧各溢出
+    /// `drawingOverhang`（主环 5/2 + 亮描边发光 2.5 = **5pt**）；而宿主给块内容的**纵向**内缩恒 0
+    /// （`HomeBlockChrome.contentInsetVertical`——那条判据出自进度块的 94/96，见 docs/32 D-20），
+    /// 于是环的框顶 = 板顶 → **不让位就被 `HomeStripBlock` 的 `.clipped()` 齐平切掉**
+    /// （上屏实测：三个环的亮描边都从板顶边 y=392px@2× 开始，且最上行是 16–18px 宽的切口弦）。所以：
+    /// ① `homeBlockTopInset ≥ drawingOverhang` 是「顶不裁」的充要条件；② 让位之后内容仍装得进紧凑块。
+    func testStatsRingsClearTheBlockTopEdge() {
+        XCTAssertEqual(StatsRingMetrics.drawingOverhang, 5, "主环描边 2.5 + 亮描边发光 2.5")
+        XCTAssertGreaterThanOrEqual(
+            StatsRingMetrics.homeBlockTopInset,
+            StatsRingMetrics.drawingOverhang,
+            "上内边距小于绘制外溢 → 环顶的描边（与整圈发光）被块框裁平，就是本次回归"
+        )
+        XCTAssertEqual(StatsRingMetrics.homeBlockTopInset, 8, "定稿值：外溢 5 + 与左右同口径的 3pt 余量")
+
+        // 让位之后仍要装进紧凑块（96pt）——上内边距不是「想加多少加多少」：
+        // 环 46 + 环与标签的间距 2（`StatsRingView` 的 VStack spacing）+ 9pt 标签行高 + 上内边距。
+        let labelLineHeight: CGFloat = 12   // 9pt 系统字体的行高上界（实测 ≈11）
+        let ringLabelSpacing: CGFloat = 2
+        let contentHeight = StatsRingMetrics.regularRingDiameter
+            + ringLabelSpacing
+            + labelLineHeight
+            + StatsRingMetrics.homeBlockTopInset
+        XCTAssertLessThanOrEqual(
+            contentHeight,
+            HomeFlowView.compactBlockHeight,
+            "上内边距把内容顶出块高只会换一种裁法；窄块退 40pt 档时内容更矮，这条上界自动成立"
+        )
+    }
+
     /// **接管键 read-through**：统计的启用真源是上游 `enableStatsFeature`，不是它自己的
     /// `defaultEnabled`——两个方向都走一遍，且**经真组合根的门**（`KernelBootstrap.enablementGate`）。
     ///

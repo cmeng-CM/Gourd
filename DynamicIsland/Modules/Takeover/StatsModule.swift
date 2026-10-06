@@ -210,6 +210,31 @@ enum StatsRingMetrics {
     /// 三个环的间距（机制八 的定值：`46 × 3 + 10 × 2 = 158`）。
     static let ringSpacing: CGFloat = 10
 
+    /// 环的**绘制外溢**：环的**墨迹比它的布局框大**——`Circle().stroke(lineWidth:)` 以**路径为中心**
+    /// 描边，主环 5pt 因此向框的每一侧各溢出 `mainLineWidth / 2`（2.5pt），亮描边的发光
+    /// （`glowRadius`）再往外 2.5pt，**合计 5pt**。
+    ///
+    /// 宿主在块框上 `.clipped()`（`HomeStripBlock`，那份裁剪是必须的：被丢块拿 `.zero` 提案时
+    /// 固定尺寸的内容仍会溢出绘制）——所以这条外溢得由模块自己让出位置，见 `homeBlockTopInset`。
+    static var drawingOverhang: CGFloat { mainLineWidth / 2 + glowRadius }
+
+    /// 首页块内容与**板上缘**之间的余量（模块侧的唯一取值处）。
+    ///
+    /// **为什么不是 0**（用户 2026-10-06 反馈「cpu 这三个上边距太小，顶部被遮盖了」）：
+    /// 宿主给块内容的**纵向**内缩恒 0（`HomeBlockChrome.contentInsetVertical`——那条判据是进度块的
+    /// 94/96 卡出来的，见 docs/32 D-20），于是环的**布局框顶 = 板顶**；而环的墨迹要比框多出
+    /// `drawingOverhang`（5pt），多出来的那截正好落在块框之外 → 被 `.clipped()` 齐平切掉。
+    /// 上屏像素实测（2026-10-06，读数见 `.workflow/p7c-home-plates/evidence/stat-top-measure.txt`）：
+    /// 三个环的亮描边都**从板顶边 y=392px 开始**（最上行宽 16–18px = 切口弦；完整时该是
+    /// 5–9px 的圆头小帽）——顶部 2.5pt 描边 + 整圈发光被裁，肉眼即「顶部被遮盖」。
+    ///
+    /// 取值 **8 = 外溢 5 + 3**：前 5pt 把墨迹整个收进框内（**不裁**），多出的 3pt 让环的**可见**
+    /// 上距（描边外缘到板缘 = 8 − 2.5 = 5.5pt）不低于 T2 那条「内容 ↔ 板缘 ≥ 5pt」的判据下界
+    /// （该判据此前只对左右成立：左右内缩 5pt，顶上是 0.5pt——见 `inset-measure.txt` 逐块表）。
+    /// 块高 96pt 而内容（环 46 + 间距 2 + 标签 ~12 + 本项 8）≈ 68pt，**余量足够**：
+    /// 这是模块自己的上边距，不是再要一次宿主级的垂直内缩。
+    static let homeBlockTopInset: CGFloat = 8
+
     /// 主环线宽（5pt）——亮描边（2pt）压在它上面，读起来像「通电的环」。
     static let mainLineWidth: CGFloat = 5
     /// 亮描边线宽（2pt）：**比主环亮**，是进度的那一笔。
@@ -323,6 +348,9 @@ enum StatsHomeBlockLayout {
 /// **形态为什么是环**（用户 2026-09-30 追加指示 / 机制八）：三行横条太占空间，环在同样信息量下
 /// 更矮、且「读数即焦点」（百分比在环心）；形态与配色对齐既有 `TodoScopeRing` 先例。
 ///
+/// **顶部让出 `homeBlockTopInset`**（2026-10-06）：环的墨迹比布局框大（描边以路径为中心 +
+/// 发光），而块内容贴板顶、宿主在块框上裁剪——不让位就被切平（该常量处有几何与上屏实测）。
+///
 /// **采样驱动**（口径 6）：块的 `.task` 里跑一个只做一件事的看门狗——`isMonitoring` 为假就
 /// `startMonitoring()`（上游 `ContentView` 在「面板打开且不在统计 tab」时会 0.1s 后停掉采样，
 /// 因为 `currentView == .stats` 已不可达；看门狗把这份驱动接过来）。块消失（`onDisappear`）
@@ -349,6 +377,10 @@ private struct StatsHomeBlockView: View {
                     )
                 }
             }
+            // **顶部让位**（`homeBlockTopInset`）：环的墨迹比布局框大 `drawingOverhang`，
+            // 而块内容贴板顶（宿主纵向内缩恒 0）——不让这 8pt 的话，环顶的描边与发光会被
+            // 块框的 `.clipped()` 切平（2026-10-06 用户反馈的那条）。
+            .padding(.top, StatsRingMetrics.homeBlockTopInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .task { await driveSampling() }

@@ -116,6 +116,7 @@
 | D-18 | 删 `glassPoolOpacity` / `glassHoverPoolOpacity`（零引用，取值仍留 `docs/31` 与 p7b 证据）；`plateIsDark` 保留（当前两档同值 true，语义为"板色"，黑档靠 α = 0 生效） | agent（修复波卫生 + 审查 Minor 8） |
 | D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素）——**后由 T2 的 5pt 内容内缩减为 0**（连续圆角模型 28 角全 0；保守圆模型残 3px 属模型上界） | agent（T1 终审裁定不修；T2 落地后归零） |
 | D-20 | 首页块**内容内缩**（板比内容宽）：水平 **5pt** / 垂直 **0pt**（起点 6/4 均被实测否掉：6 破进度块 180pt 门槛、4 掉第五行），日历行只做水平；板的尺寸、位置与 8pt 间距一概不动 | 用户（原话「每个玻璃块要比内容宽一些，现在都紧挨着显示了」；板 = 块框，故只能内缩内容） |
+| D-21 | **统计块内容在顶部让出 8pt**（`StatsRingMetrics.homeBlockTopInset`，2026-10-06 复核修复）：环的**墨迹比布局框大** `drawingOverhang = 5pt`（5pt 主环以路径为中心 → 外溢 2.5，发光再 2.5），块内容贴板顶、宿主又在块框上 `.clipped()` → 环顶的描边与发光被**齐平切掉**；修法是**模块自己**让位（不是再要一次宿主级垂直内缩——`HomeBlockChrome.contentInsetVertical` 仍是 0，进度块的 94/96 边界一字未动） | 用户（2026-10-06 原话「cpu 这三个上边距太小，顶部被遮盖了」，附截图三个环齐平切口）+ agent（取值 8 = 外溢 5 + 3：外溢保证不裁，多出的 3pt 让环的可见上距 5.5pt 不低于 T2 那条「内容 ↔ 板缘 ≥ 5pt」的判据下界） |
 
 ## 接口与数据形状
 
@@ -210,7 +211,7 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 9. **圆角弧内区的内容越界——T1 出现、T2 归零**（D-19 → D-20）：T1 上线后按实际形状模型（连续圆角 n=5）测得 `行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在板形状之外（其余 26 角为 0）——成因是这两块内容本身贴着块框（余量 0.0 / 0.5pt）而板的 15pt 圆角切角（内容位移未变，"内容画在板外"由板形状引入）。**T2 的内容内缩 5pt 把它归零**（连续圆角模型下 7/7 块、28 角全 0；保守的圆模型残 3px，是模型上界而非实测越界）。D-03 的「内容 ⊆ 板」仍是**轴对齐口径**。
 10. `effects(hovered:surface:interactive:)` 在 `interactive == false × .dark` 下返回一份**无人消费**的常驻档（含黑档白光池 0.13）——黑档的非交互站点在 modifier 里一层不装（D-17）。将来若有人复用 `effects` 画黑档非交互站点，会凭空长出白光池，需在此处挡差。
 11. 板影的有效深度（≈0.126）是**推断值**（`plateShadowOpacity × plateOpacity`），未逐像素实测。
-12. **垂直余量为 0**（D-20）：上下沿用各块既有内边距（2.5 / 4.0 / 8.5 / 0.5pt 不等）；要再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。
+12. **宿主级垂直内缩仍为 0**（D-20）：上下沿用各块既有内边距（改前实测 统计 0.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt）；要**宿主**再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。**例外是模块自己的让位**：统计块 2026-10-06 起在顶部让出 8pt（D-21——环的墨迹比布局框大 5pt，不让就被块框裁掉），那是 `StatsHomeBlockView` 自己的内边距，不是宿主的口径。
 13. **内缩与进度块门槛耦合**：进度块分到宽 ≤ 189pt 时会从五档退化成 3 行（内容区 = 宽 − 2×5 必须 ≥ 180）。块序/宽度分配一变就可能命中（`Plan` 的宽度分配改了要复核）。
 14. **内容辉光/软影随内缩内移**（D-20 的自然结果）：玻璃档的内容软影与黑档的内容辉光照的是**内容剪影**，位置随内容内移 5pt；黑档白光池按 frame 短边算、位置不变。本批未量这一层的像素差。
 
@@ -223,6 +224,18 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 - 测试：全量单测 `Executed 503 tests, with 0 failures`（退出码 0；终审独立复跑确认）。
 - T2 证据（`.workflow/p7c-home-plates/evidence/`）：`inset-before-full.png`、`inset-after-full.png`、`inset-black-full.png`、`inset-closeup-{row1,row2,calendar,stat-4x,leftedge-6x}.png`、`inset-startvalue-6pt-4pt-stat-3rows.png`（6pt 起点被否的上屏依据）、`inset-measure.txt`（逐块余量 / 无裁切 / 台阶复测）、`inset-rects-after.txt`、`inset-restored-glass.txt`。
 - 文档：本文档。
+
+**2026-10-06 复核修复（用户真人复核反馈 → D-21）**
+- 代码：`DynamicIsland/Modules/Takeover/StatsModule.swift`——`StatsRingMetrics` 新增 `drawingOverhang`
+  （= `mainLineWidth/2 + glowRadius` = 5）与 `homeBlockTopInset`（= 8）；`StatsHomeBlockView` 的三环行
+  加 `.padding(.top, homeBlockTopInset)`（宿主一行未改）。
+- 测试：`DynamicIslandTests/TakeoverEnablementTests.swift` 新增
+  `testStatsRingsClearTheBlockTopEdge`（外溢算式 5、上内边距 ≥ 外溢、定稿值 8、让位后内容仍 ≤ 紧凑块高）
+  → 全量 `Executed 504 tests, with 0 failures`。
+- 证据（同目录）：`stat-top-before.png` / `stat-top-after.png`（全幅）、
+  `stat-top-{before,after}-3x.png`、`stat-top-{before,after}-edge4x.png`、`stat-top-check.py`、
+  `stat-top-measure.txt`（读数：改前环顶墨迹 = 板顶、最上行宽 16–18px（切口）；改后距板顶 14px、
+  最上行宽 5–9px（圆头）——与常量算出的 14px 逐像素一致）。
 
 **与计划的偏离**
 1. **D-14 取「板 = 行框」退法**（口径变化 + 上屏依据见 D-16）。

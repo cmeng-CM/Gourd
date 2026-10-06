@@ -109,6 +109,8 @@
 
 尺寸：直径 46pt（宽 < 200 时退 40pt），纯函数 `StatsRingMetrics.ringDiameter(forWidth:)` 有用例钉住"220pt 最小宽下三环 + 间距 = 158 ≤ 220，不裁不溢"。
 
+**顶部让位（2026-10-06 修复）**：环的**墨迹比布局框大**——`Circle().stroke(lineWidth:)` 以路径为中心，向框外各溢出 `mainLineWidth/2`（2.5pt），亮描边的发光再 2.5pt，合计 **5pt**；而块内容贴板顶（宿主纵向内缩恒 0），宿主又在块框上 `.clipped()` → 环顶的描边与发光**被齐平切掉**（用户反馈「cpu 这三个上边距太小，顶部被遮盖了」）。修法是模块自己让出 `StatsRingMetrics.homeBlockTopInset`（**8pt** = 外溢 5 + 3）。几何、上屏读数与代价见 [32](32-home-block-plates.md) D-21。
+
 ## 备选与取舍
 
 **① 进度/统计：搬上首页 / 保留 tab / 直接删？** 搬上首页。用户两条都说"如果是只展示就改首页小组件"，且它们确实没有控件（§背景与目标 第 1/2 条）；删掉是丢功能。
@@ -139,6 +141,8 @@
 //   defaultPlacement = Placement(slot: nil, order: 50)（落在既有模块序号最大值 notifications 40 之后），
 //   defaultEnabled = Defaults.Keys.enableStatsFeature.defaultValue（false），permissions []
 //   content(.home) = StatsHomeBlockView（三环：CPU / 内存 / GPU，环心百分比、环下 9pt 标签）
+//     环的**绘制比布局框大**（`drawingOverhang` = 2.5 描边 + 2.5 发光 = 5pt）→ 块内容在**顶部**让出
+//     `homeBlockTopInset`（8pt），否则环顶被块框的 `.clipped()` 切平（2026-10-06；见 [32] D-21）
 
 // 首页分带（Host 层新纯函数 + 内核第四条钩子）
 // Kernel/ModuleTypes.swift
