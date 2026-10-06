@@ -1211,6 +1211,11 @@ private struct TodosHomeBlockView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // **让出板顶**（`HomeBlockChrome.moduleTopInset`，2026-10-06 全页体检：「今天」表头行距板缘
+        // 上屏实测只有 4.0pt）。加在 `GeometryReader` **外面**：读者看到的就是少了 5pt 的高度，
+        // 行数照它重算——让位的代价因此只会是「少画一行」，不会是把末行挤出块外。
+        // 两个真实档高（96 / 140）下行数不变（4 / 7）。
+        .padding(.top, HomeBlockChrome.moduleTopInset)
         .task { await store.refresh() }
     }
 }

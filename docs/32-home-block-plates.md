@@ -117,6 +117,7 @@
 | D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素）——**后由 T2 的 5pt 内容内缩减为 0**（连续圆角模型 28 角全 0；保守圆模型残 3px 属模型上界） | agent（T1 终审裁定不修；T2 落地后归零） |
 | D-20 | 首页块**内容内缩**（板比内容宽）：水平 **5pt** / 垂直 **0pt**（起点 6/4 均被实测否掉：6 破进度块 180pt 门槛、4 掉第五行），日历行只做水平；板的尺寸、位置与 8pt 间距一概不动 | 用户（原话「每个玻璃块要比内容宽一些，现在都紧挨着显示了」；板 = 块框，故只能内缩内容） |
 | D-21 | **统计块内容在顶部让出 8pt**（`StatsRingMetrics.homeBlockTopInset`，2026-10-06 复核修复）：环的**墨迹比布局框大** `drawingOverhang = 5pt`（5pt 主环以路径为中心 → 外溢 2.5，发光再 2.5），块内容贴板顶、宿主又在块框上 `.clipped()` → 环顶的描边与发光被**齐平切掉**；修法是**模块自己**让位（不是再要一次宿主级垂直内缩——`HomeBlockChrome.contentInsetVertical` 仍是 0，进度块的 94/96 边界一字未动） | 用户（2026-10-06 原话「cpu 这三个上边距太小，顶部被遮盖了」，附截图三个环齐平切口）+ agent（取值 8 = 外溢 5 + 3：外溢保证不裁，多出的 3pt 让环的可见上距 5.5pt 不低于 T2 那条「内容 ↔ 板缘 ≥ 5pt」的判据下界） |
+| D-22 | **其余四块同样在顶部让出 5pt**（`HomeBlockChrome.moduleTopInset`，2026-10-06 用户追加「首页的其他几个组件也看下边距的问题」的**全页体检**）：块内容顶贴板缘是同一类观感，宿主给不了垂直内缩（D-20）→ **模块自己让位**。逐块：音乐**只让封面**（控制条自带 4pt 顶部内边距，封面才是贴边的那个——整块再让 5pt 会让 91pt 的紧凑内容正好顶到 96 的块底）、待办 / 前台应用 / 通知在内容根上让 5pt（加在 `GeometryReader` **外面**，按高度算的行数/格数因此只会少画、不会溢出；两个真实档高 96 / 140 下行数不变）。**进度块（2.0pt，五档 94/96）与镜子块（0pt，内容 = 整块）没余量，不动**——它们的贴边是设计使然 | 用户（2026-10-06 原话「首页的其他几个组件也看下边距的问题」）+ agent（取值 5 = **与宿主水平内缩同值**，四边读成一套；逐块上屏读数见 `evidence/margins-all.txt`） |
 
 ## 接口与数据形状
 
@@ -142,11 +143,15 @@ static let plateTopHighlightFraction: CGFloat = 0.45 // 微光在板高上的覆
 enum HomeBlockChrome {
     static let contentInsetHorizontal: CGFloat = 5   // 块内容与板缘的水平余量（板 = 块框，故靠内容内缩）
     static let contentInsetVertical: CGFloat = 0     // 垂直 0：紧凑块 96pt、五档内容需 94pt，再让会掉行
+    static let moduleTopInset: CGFloat = 5           // **模块自愿的顶部余量**（= 水平同值；D-22）——
+                                                     // 宿主给不了垂直内缩，有余量的模块自己加在内容顶
     static func contentInsets(includeVertical: Bool) -> EdgeInsets  // 两个站点共用的唯一工厂
 }
 ```
 - 两处应用：`HomeFlowView` 格子（`HomeBandCell` 内容外层，`includeVertical: true`）与 `HomeCalendarRow` 根（`includeVertical: false`——月历网格按行高精确排，垂直内缩会裁）。
+- `moduleTopInset` 的四处应用全在模块侧（宿主一行不改）：`MusicHomeBlockView`（只给封面）、`TodosHomeBlockView` / `FrontAppHomeBlockView` / `NotificationsHomeBlockView`（内容根，且套在 `GeometryReader` 外面——行数/格数按减完的高度算）；统计块用自己的 8（D-21）。
 - 上屏实测（`evidence/inset-measure.txt`）：左右余量 7/7 块 ≥ 5pt、无裁切/溢出、缝仍 8pt、黑档同形（布局共享，黑档内容同获内缩）。
+- 2026-10-06 全页体检（`evidence/margins-all.txt`）：改前七块的上边距 0.5…8.5pt（四块 ≤ 4pt），改后四处 ≥ 5pt。
 
 ### 2. `FloatEffects` 新增字段与两档语义
 
@@ -211,7 +216,7 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 9. **圆角弧内区的内容越界——T1 出现、T2 归零**（D-19 → D-20）：T1 上线后按实际形状模型（连续圆角 n=5）测得 `行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在板形状之外（其余 26 角为 0）——成因是这两块内容本身贴着块框（余量 0.0 / 0.5pt）而板的 15pt 圆角切角（内容位移未变，"内容画在板外"由板形状引入）。**T2 的内容内缩 5pt 把它归零**（连续圆角模型下 7/7 块、28 角全 0；保守的圆模型残 3px，是模型上界而非实测越界）。D-03 的「内容 ⊆ 板」仍是**轴对齐口径**。
 10. `effects(hovered:surface:interactive:)` 在 `interactive == false × .dark` 下返回一份**无人消费**的常驻档（含黑档白光池 0.13）——黑档的非交互站点在 modifier 里一层不装（D-17）。将来若有人复用 `effects` 画黑档非交互站点，会凭空长出白光池，需在此处挡差。
 11. 板影的有效深度（≈0.126）是**推断值**（`plateShadowOpacity × plateOpacity`），未逐像素实测。
-12. **宿主级垂直内缩仍为 0**（D-20）：上下沿用各块既有内边距（改前实测 统计 0.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt）；要**宿主**再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。**例外是模块自己的让位**：统计块 2026-10-06 起在顶部让出 8pt（D-21——环的墨迹比布局框大 5pt，不让就被块框裁掉），那是 `StatsHomeBlockView` 自己的内边距，不是宿主的口径。
+12. **宿主级垂直内缩仍为 0**（D-20）：上下沿用各块既有内边距（改前实测 统计 0.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt）；要**宿主**再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。**例外是模块自己的让位**：统计块 2026-10-06 起在顶部让出 8pt（D-21——环的墨迹比布局框大 5pt，不让就被块框裁掉），2026-10-06 全页体检后又给音乐（只封面）/ 待办 / 前台应用 / 通知四块让出 5pt（D-22）——那些都是**模块自己的内边距**，不是宿主的口径（`HomeBlockChrome.contentInsetVertical` 恒 0 不变）。
 13. **内缩与进度块门槛耦合**：进度块分到宽 ≤ 189pt 时会从五档退化成 3 行（内容区 = 宽 − 2×5 必须 ≥ 180）。块序/宽度分配一变就可能命中（`Plan` 的宽度分配改了要复核）。
 14. **内容辉光/软影随内缩内移**（D-20 的自然结果）：玻璃档的内容软影与黑档的内容辉光照的是**内容剪影**，位置随内容内移 5pt；黑档白光池按 frame 短边算、位置不变。本批未量这一层的像素差。
 
@@ -236,6 +241,17 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
   `stat-top-{before,after}-3x.png`、`stat-top-{before,after}-edge4x.png`、`stat-top-check.py`、
   `stat-top-measure.txt`（读数：改前环顶墨迹 = 板顶、最上行宽 16–18px（切口）；改后距板顶 14px、
   最上行宽 5–9px（圆头）——与常量算出的 14px 逐像素一致）。
+
+**2026-10-06 全页体检（用户「首页的其他几个组件也看下边距的问题」→ D-22）**
+- 体检：7 块 + 日历的板矩形与四边余量逐块上屏量（`block-margins.py` + `margins-all.txt`）；
+  **上边距**：音乐 1.0 / 待办 4.0 / 前台应用 3.0 / 通知 2.0 / 统计 6.0 / 进度 2.0 / 镜子 1.0pt。
+- 代码：`DynamicIsland/Host/HomeStripView.swift`（`HomeBlockChrome.moduleTopInset = 5`）、
+  `MusicModule`（只给封面）、`TodosModule` / `FrontAppModule` / `NotificationsModule`（内容根，
+  套在 `GeometryReader` 外）——宿主一行未改。
+- 测试：`HomeStripLayoutTests.testModuleTopInsetMatchesTheHorizontalInset`（同值 + 下界 5pt +
+  两档高度下行数不变）→ 全量 `Executed 505 tests, with 0 failures`。
+- 上屏复测（`margins-all.png` 改前 / `margins-all-after.png` 改后）：四处 **5.5 / 9.0 / 8.0 / 7.0pt**，
+  进度与镜子不动（2.0 / 1.0，设计使然），左右与下边距逐值未变「板外 1pt 窄带 0 墨迹」。
 
 **与计划的偏离**
 1. **D-14 取「板 = 行框」退法**（口径变化 + 上屏依据见 D-16）。

@@ -297,6 +297,11 @@ private struct MusicHomeBlockView: View {
             HStack(alignment: .top, spacing: Metrics.albumArtSpacing) {
                 AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
                     .frame(width: Metrics.albumArtSide, height: Metrics.albumArtSide)
+                    // **封面让出板顶**（`HomeBlockChrome.moduleTopInset`，2026-10-06 全页体检）：
+                    // 控制条自带 4pt 顶部内边距（`CompactMetrics.topPadding`），封面却是从内容顶起的
+                    // ——上屏实测它的墨迹顶距板缘只有 0.5pt（贴边）。**只给封面让**：整块再让 5pt 的话，
+                    // 紧凑档内容 91 + 5 = 96 会正好顶到块底（96），不留余量。
+                    .padding(.top, HomeBlockChrome.moduleTopInset)
                 MusicControlsView(density: .compact)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

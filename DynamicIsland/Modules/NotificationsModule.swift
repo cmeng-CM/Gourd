@@ -1438,6 +1438,10 @@ private struct NotificationsHomeBlockView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // **让出板顶**（`HomeBlockChrome.moduleTopInset`，2026-10-06 全页体检：「通知 · 最近 N 条」
+        // 那一行距板缘上屏实测只有 2.0pt）。行数固定 ≤ 3（`NotificationsHomeBlockLayout.listedItems`），
+        // 不按高度算——让位只是把三行整体下移，96pt 档下三行仍装得下（实测内容 ≈57pt）。
+        .padding(.top, HomeBlockChrome.moduleTopInset)
         // 与展开 tab 同口径：每次出现取一次数（首页块只在展开面板里存在，面板一开就是它出现的时刻）。
         // 不新建定时器：增量仍由模块的 AX 通道 / 文件事件 / 60s 兜底轮询推进。
         .task { await store.refreshAll() }

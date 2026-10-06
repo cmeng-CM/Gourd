@@ -189,6 +189,10 @@ private struct FrontAppHomeBlockView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // **让出板顶**（`HomeBlockChrome.moduleTopInset`，2026-10-06 全页体检：当前应用那一行距板缘
+        // 上屏实测只有 3.0pt）。加在 `GeometryReader` **外面**：格数按「已经少了 5pt 的高度」算，
+        // 让位只会少画、不会溢出。两个真实档高（96 / 140）下网格行数不变（2 / 3）。
+        .padding(.top, HomeBlockChrome.moduleTopInset)
     }
 
     // MARK: 上半：当前应用

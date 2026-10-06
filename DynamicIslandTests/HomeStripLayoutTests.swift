@@ -2434,6 +2434,27 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
+    /// **模块自愿的顶部余量**（2026-10-06 全页体检后的修复，与统计块 D-21 同源思路）。
+    ///
+    /// 宿主给不了垂直内缩（`contentInsetVertical` 恒 0，见上面那条用例），但**内容顶贴板缘**的块
+    /// 看着就是「顶被压住」——有纵向余量的模块把 `moduleTopInset` 加在自己内容顶部。三条口径：
+    /// ① 与水平内缩**同值**（四边读起来是一套）；② 下界 5pt（T2 的「内容 ↔ 板缘 ≥ 5pt」判据）；
+    /// ③ 让位之后，那几块**按分到的高度算行数/格数**的算术仍成立——两个真实档高 96 / 140 下
+    /// 行数不变（值见各模块常量注释：待办 4 / 7、前台应用 2 / 3）。
+    func testModuleTopInsetMatchesTheHorizontalInset() {
+        XCTAssertEqual(
+            HomeBlockChrome.moduleTopInset, HomeBlockChrome.contentInsetHorizontal,
+            "顶部余量取水平内缩同值——四边要读成一套"
+        )
+        XCTAssertGreaterThanOrEqual(HomeBlockChrome.moduleTopInset, 5, "上屏判据：内容 ↔ 板缘余量 ≥ 5pt")
+
+        let inset = HomeBlockChrome.moduleTopInset
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 96 - inset), 4, "待办：96 档仍是 4 行")
+        XCTAssertEqual(TodosHomeBlockLayout.rowCount(fittingHeight: 140 - inset), 7, "待办：140 档仍是 7 行")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 96 - inset), 2, "前台应用：96 档仍是 2 行格")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 140 - inset), 3, "前台应用：140 档仍是 3 行格")
+    }
+
     /// 把 `HomeCalendarRow` 单独挂进 `NSHostingView`（宽 = `rowWidth`），返回行内**月历网格**的左缘在
     /// **宿主坐标**里的 x（找不到那个 `NSScrollView` 时返回 nil——文件里另一处同款探测的既有口径）。
     private func calendarGridLeadingEdge(rowWidth: CGFloat) -> CGFloat? {
