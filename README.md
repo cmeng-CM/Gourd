@@ -9,7 +9,7 @@
 ## 与 Atoll 的关系
 
 - **代码来路**：应用工程 fork 自 [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0），基线锁定 tag **`v2.3.3-beta.3`**（commit `c7305ec`）；上游完整历史保留在 `main`，季度同步走原生 `git merge`。
-- **改了哪些**：改名与重打包（产品名 **壶中天 / Gourd**、Bundle ID `com.cmeng.gourd`、产物 `Gourd-<版本>.dmg`）；版本号改为自有序列（本版本 **0.1.0**）；加模块化内核与自建模块（启动台 / 农历 / 工作日统计 / 待办 / 快捷指令 / 通知 / 前台应用）；设置重新分组、界面中文化、默认值收敛。**上游功能一个未删**——不需要的用「默认关」表达。
+- **改了哪些**：改名与重打包（产品名 **壶中天 / Gourd**、Bundle ID `com.cmeng.gourd`；本地产物 `dist/壶中天-<版本>.dmg`，Release 附件用 ASCII 名 `Gourd-<版本>.dmg`）；版本号改为自有序列（本版本 **0.1.0**）；加模块化内核与自建模块（启动台 / 农历 / 工作日统计 / 待办 / 快捷指令 / 通知 / 前台应用）；设置重新分组、界面中文化、默认值收敛。**上游功能一个未删**——不需要的用「默认关」表达。
 - **改的时间**：首次修改 **2026-09-27**，后续改动见 git 历史与 [CHANGELOG.md](CHANGELOG.md) 顶部的自有变更段。
 - **与上游的关系**：`Atoll` 仅用于指明代码来源。**本项目与 Atoll 项目及其维护者无隶属关系，也未获其背书**（nominative use；见 [TRADEMARKS](TRADEMARKS)）。
 
