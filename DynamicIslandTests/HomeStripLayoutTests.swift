@@ -116,13 +116,14 @@ final class HomeStripLayoutTests: XCTestCase {
     /// 像素反推 ≈703，两个口径都在同一档——这里取常量链的口径）。
     private static let panelWidth770StripWidth: CGFloat = 702
 
-    /// 一条带在**带级容器内边距扣完之后**的可用宽（T8 / docs/26 §做法 机制七）。
+    /// 一条带在**带级容器扣完**之后的可用宽。
     ///
-    /// T8 起两带各包一层带级容器：容器底画在带的 frame 上，内容左右各缩
-    /// `HomeBandChrome.containerInset`（8）——因此**渲染真值用例挂在托管视图上的宽度**（= 面板可用宽）
-    /// 与**接缝真正喂给两条带的那个宽度**差 16pt。plan 必须按后者算，否则比的是两份不同输入的答案。
+    /// T8 起两带各包一层带级容器（内容左右各缩 8pt）；**2026-10-07 / D-23 起容器连同内边距一并撤除**
+    /// （容器自 p6 起就不画底了，那道内缩是它最后的遗留；用户反馈「大背景框和里面组件的边距有点大」）
+    /// ——**接缝喂给流的宽度 = 容器宽**，本函数因此是恒等映射：它仍在，是给这些用例留一个
+    /// 「口径变了只改一处」的把手。
     private static func bandContentWidth(forHostingWidth width: CGFloat) -> CGFloat {
-        max(0, width - HomeBandChrome.containerInset * 2)
+        max(0, width)
     }
 
     /// **尺寸反馈那一族的样本输入**（合成四块，**不是生产声明**）：一块 300/420 + 三块 180/240
@@ -1577,10 +1578,10 @@ final class HomeStripLayoutTests: XCTestCase {
         // 锚：先把「这道题该是什么答案」钉住（数值变了要有人复核，而不是被断言静默吸收）
         XCTAssertEqual(available, 702, "770pt 面板的 strip 可用宽 = 770 − 两侧各 34（docs/17 §接口与数据形状 6）")
         XCTAssertEqual(
-            bandWidth, 702 - HomeBandChrome.containerInset * 2,
-            "T8：带级容器两侧各吃 8pt——带内可用宽 = 可用宽 − 16"
+            bandWidth, 702,
+            "docs/32 D-23：带级容器已撤（连同横向 8pt 内边距）——带内可用宽 = 容器宽"
         )
-        XCTAssertEqual(plan.rowsNeeded, 2, "四块（音乐档 300/420 + 三个 180/240）在 686 下铺两行")
+        XCTAssertEqual(plan.rowsNeeded, 2, "四块（音乐档 300/420 + 三个 180/240）在 702 下铺两行")
         XCTAssertEqual(
             plan.visibleCount, 2,
             "高度 212 只放得下第一行那两块（行高 \(HomeFlowView.largeBlockHeight) + 缝 8 + 同样一行 > 212）"
@@ -1639,15 +1640,17 @@ final class HomeStripLayoutTests: XCTestCase {
 
     /// **小组件带真的换行、一块都不丢**（渲染真值，T7 / 用户原话那条）。
     ///
-    /// 4 个紧凑块在 770pt 面板（可用 702，**带内可用 686**）下**排成两行**：第一行三块各拿规则 ② 的
-    /// 压缩宽 223（`686` 下 `180×3 + 2×8 = 556 ≤ 686 < 240×3 + 16 = 736`，可压缩量 180、缺口 50 →
-    /// `180 + 60 × (1 − 50/180) = 223.33` → 落 0.5pt 网格 = 223），第二行的统计单块走规则 ① 拿它的
-    /// ideal 300；四块都拿到尺寸（没有一块是零尺寸），行高恒为 96。**改动前它们是「一条 strip 装
-    /// 四块」**：规则 ③ 从尾部丢到只剩两块（`t2-default-width-all-blocks.png` 那一档的实测就是
-    /// 「6 块里第 6 块被丢」）——换行让第四块看得见，这正是本批的验收点。
+    /// 4 个紧凑块在 770pt 面板（可用 702，**带内可用也就是 702**——D-23 起带级容器撤除）下**排成
+    /// 两行**：第一行三块各拿规则 ② 的压缩宽 228.5（`702` 下 `180×3 + 2×8 = 556 ≤ 702 < 240×3 + 16 = 736`，
+    /// 可压缩量 180、缺口 34 → `180 + 60 × (1 − 34/180) = 228.67` → 落 0.5pt 网格 = 228.5），
+    /// 第二行的统计单块走规则 ① 拿它的 ideal 300；四块都拿到尺寸（没有一块是零尺寸），行高恒为 96。
+    /// **改动前它们是「一条 strip 装四块」**：规则 ③ 从尾部丢到只剩两块
+    /// （`t2-default-width-all-blocks.png` 那一档的实测就是「6 块里第 6 块被丢」）——换行让第四块看得见，
+    /// 这正是本批的验收点。
     ///
-    /// **T8 的数字变了**（228.5 → 223）：带级容器两侧各吃 8pt，行内可用宽 702 → 686，压缩解随之变。
-    /// 断言仍是「渲染 == 规则」，不是「等于某个历史数」——变的只有代入的那一份宽度。
+    /// **T8 的数字变过一次**（228.5 → 223）：带级容器两侧各吃 8pt，行内可用宽 702 → 686；
+    /// **D-23 又变回 228.5**（容器撤除，可用宽回到 702）。断言仍是「渲染 == 规则」，
+    /// 不是「等于某个历史数」——变的只有代入的那一份宽度。
     ///
     /// **T2 起探针报的是「内容区」**（p7c / D-20）：格子 / 板矩形的分配宽与行高**逐字未变**，
     /// 内容区各减去 `HomeBlockChrome` 的内边距（断言处按同一份生产常量算）。
@@ -1667,7 +1670,7 @@ final class HomeStripLayoutTests: XCTestCase {
         renderBandedWidgets(available: available, height: 400)
 
         let ids = HomeCompactProbeModule.ids
-        let compressedRowWidth: CGFloat = 223
+        let compressedRowWidth: CGFloat = 228.5
         let expected: [CGFloat] = [compressedRowWidth, compressedRowWidth, compressedRowWidth, 300]
         // **T2 起探针报内容区**（间距见 `assertRenderedSizesMatchFlowPlan` 的注释）：行高与分配宽
         // 是格子（= 板矩形）的数，逐字未变；内容区再各减去两侧 / 上下内缩（同一份生产常量）。
@@ -2352,10 +2355,11 @@ final class HomeStripLayoutTests: XCTestCase {
     ///    ——起点 6pt 时进度块内容区 191 − 12 = **179**，低于它自己声明的
     ///    `ProgressHomeBlockLayout.allScopesWidth`（**180** = 「到这个宽就排得完五档」），模块走
     ///    「窄块退化」分支只画 3 行（用户勾的「本季 / 今年」消失，上屏实测）。5 时内容区 181。
-    /// ② **垂直 = 0pt**：紧凑块只有 96pt 高，而进度块五档按 96 紧配（5×14 + 4×6 = 94，只余 2pt）；
-    ///    按高度档算式 `floor((H + 6) / 20)`，五档要内容高 ≥ 94，即**总内缩 ≤ 2pt（每侧 ≤ 1pt）
-    ///    仍安全**；上屏实测垂直 4pt（总 8pt）→ 第五行掉出去。取 0 是因为那 1pt 在视觉上等于零、
-    ///    却要把算式顶在 94 = 94 的边界上。纵向余量仍由各块既有排版给出。
+    /// ② **垂直 = 0pt**（宿主这一份）：紧凑块只有 96pt 高，而进度块五档按 96 紧配；**D-23 起顶部
+    ///    留白由模块自己装**（`HomeBlockChrome.contentInsetTop*`，见 `testHomeBlockContentTopInsets`）
+    ///    ——进度块为此把行距 6 → 5 腾出 4pt（5×14 + 4×5 + 5 = 95 ≤ 96）。宿主这一层仍不动垂直：
+    ///    它不认识"首行是图形还是文字"，一刀切就把统计块（已经让了 8pt）顶到 13pt。纵向余量其余
+    ///    仍由各块既有排版给出。
     /// ③ **两站点共用同一取值处**——用**渲染真值**钉两个调用点（不是把工厂的返回值再读一遍）：
     ///    - **单条流格子**：`HomeFlowView` 的格子渲染后，探针块报出的**内容宽**必须 = 该块分到的宽 −
     ///      `2 × contentInsetHorizontal`（探针 `GeometryReader` 在 padding 之内，报的就是内容区）；
@@ -2381,8 +2385,8 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             vertical, 0,
-            "垂直内缩**恒 0**：紧凑块 96pt 而进度块五档按 96 紧配（5×14 + 4×6 = 94，总内缩 ≤ 2pt 才安全）"
-                + "——上屏实测 4pt 就让第五行掉出去"
+            "宿主这一层的垂直内缩**恒 0**（D-23 起顶部留白由模块自装：进度块行距 6 → 5 后"
+                + "5×14 + 4×5 + 5 = 95 ≤ 96，见 `testHomeBlockContentTopInsets`）"
         )
 
         // ③ 站点一：单条流格子（渲染真值）。
@@ -2431,6 +2435,58 @@ final class HomeStripLayoutTests: XCTestCase {
             rowGridX - bareGridX, horizontal, accuracy: 0.5,
             "日历行站点：行内月历网格比单独挂时靠右 \(horizontal)pt（= 行内容的起点，网格自身内边距两次相消），"
                 + "实到 \(rowGridX - bareGridX)"
+        )
+    }
+
+    /// **内容顶部内缩一族**（2026-10-07 / docs/32 D-22）。
+    ///
+    /// 用户原话「除了 cpu 和镜像，其他组件的内容和背景玻璃块区域的上部分都挨的太近了，按照 cpu 那几个的
+    /// 上边距修改下」——参照物是统计块的 8pt（D-21，环的墨迹外溢 5 + 3）。三条取值都指向同一个
+    /// **可见结果**：首行内容的**墨迹上缘**落在板顶下 **≈7pt**（统计块环顶的上屏读数，
+    /// `.workflow/p7d-top-margins/evidence/` 有改前 / 改后逐块读数）。**墨迹 ≠ 内容框**（文字行自带
+    /// 行首留白），所以三个数不相等——本用例钉的是「取值变化必须是有意的」+ 三处高度账目。
+    func testHomeBlockContentTopInsets() {
+        XCTAssertEqual(
+            HomeBlockChrome.contentInsetTopGraphics, 7,
+            "图形起始块（音乐封面 / 前台应用图标）：墨迹 = 内容框上缘 → 7 就是可见留白"
+        )
+        XCTAssertEqual(
+            HomeBlockChrome.contentInsetTopText, 5,
+            "11pt 文字（进度 / 通知）：行首自带 +2.0pt 留白 → 5 让墨迹落在 7.0"
+        )
+        XCTAssertEqual(
+            HomeBlockChrome.contentInsetTopListHeader, 4,
+            "待办表头（10pt 字在 16pt 行里居中）：行首自带 +3.5pt → 4 让墨迹落在 7.5（这一类没有更小的整数）"
+        )
+        XCTAssertGreaterThan(
+            HomeBlockChrome.contentInsetTopGraphics, HomeBlockChrome.contentInsetTopText,
+            "图形块的取值必须大于文字块：前者的墨迹就是内容框上缘，后者自带行首留白"
+        )
+
+        // 高度账目：内缩之后内容仍在块里（块壳 `.clipped()` 会把越界裁成「半个字」，这是失败信号）
+        XCTAssertLessThanOrEqual(
+            5 * ProgressHomeBlockLayout.rowHeight + 4 * ProgressHomeBlockLayout.rowSpacing
+                + HomeBlockChrome.contentInsetTopText,
+            HomeFlowView.compactBlockHeight,
+            "进度五行 + 行距 + 上留白必须 ≤ 紧凑块高（96）——行距 6 → 5 腾的就是这 4pt"
+        )
+        let todosInLargeRow = TodosHomeBlockLayout.rowCount(
+            fittingHeight: HomeFlowView.largeBlockHeight - HomeBlockChrome.contentInsetTopListHeader
+        )
+        XCTAssertEqual(todosInLargeRow, 7, "待办在 140 高的行里（含镜子的那一行）上留白后仍画 7 行")
+        XCTAssertLessThanOrEqual(
+            TodosHomeBlockLayout.headerHeight + TodosHomeBlockLayout.listSpacing
+                + CGFloat(todosInLargeRow) * TodosHomeBlockLayout.rowHeight
+                + HomeBlockChrome.contentInsetTopListHeader,
+            HomeFlowView.largeBlockHeight,
+            "待办（表头 + 4 + 7 行 + 上留白）不得越出 140"
+        )
+        XCTAssertEqual(
+            TodosHomeBlockLayout.rowCount(
+                fittingHeight: HomeFlowView.compactBlockHeight - HomeBlockChrome.contentInsetTopListHeader
+            ),
+            TodosHomeBlockLayout.rowCount(fittingHeight: HomeFlowView.compactBlockHeight),
+            "上留白不吃行数：96 高的行里（没有大块时）行数与内缩前一致"
         )
     }
 

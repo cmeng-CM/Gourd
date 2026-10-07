@@ -172,7 +172,11 @@ enum HomeBandChrome {
     // ~~static let containerCornerRadius: CGFloat = 12~~
     // ↑ **2026-10-01 p6 改判：这两个常量已删除**（整条带的大底撤掉，改每块柔光池——
     //   见 [30](30-ui-polish-and-shelf.md) §做法 机制一）
-    static let containerInset: CGFloat = 8          // **只做横向**：纵向 0（见 §已知限制 6；p6 起不变）
+    // ~~static let containerInset: CGFloat = 8~~   // 只做横向（纵向 0，见 §已知限制 6）
+    // ↑ **2026-10-07 复核修复（[32](32-home-block-plates.md) D-23）：连同 `HomeBandContainerChrome` /
+    //   `homeBandContainer()` 一并删除**——用户反馈「大背景框和里面组件的边距有点大」，流的块左缘
+    //   因此与日历行对齐（354.5 → 346.5）
+
     static let hoverOpacity: Double = 0.06
     static let hoverCornerRadius: CGFloat = 8
 }
@@ -180,7 +184,7 @@ enum HomeBandChrome {
 // ~~小组件带行高 96~~ **2026-10-01 改判（p5-home-blocks / T1 · T2 · T3）：96 现在是「紧凑档」的块高**
 // （`HomeFlowView.compactBlockHeight`，出处是「形态 → 档高」表）；旧分带渲染器（`HomeBandedLayout` / `HomeVerticalFit` /
 // `widgetRowHeight`）已不在生产路径（[28](28-home-layout-redesign.md) 的单条流接手）。这一档里装的块本批都改过：
-// 待办不再画三环、进度行高 14 + 行距 6（96 高放得下五行）、音乐紧凑条六项预算 95。详见 [29](29-home-blocks-and-panel.md) §实际交付。
+// 待办不再画三环、进度行高 14 + 行距 6（96 高放得下五行；**行距 2026-10-07 由 [32](32-home-block-plates.md) D-22 收到 5**——腾 4pt 给内容顶部内缩）、音乐紧凑条六项预算 95。详见 [29](29-home-blocks-and-panel.md) §实际交付。
 
 // 面板顺序（新键）
 Defaults.Keys.panelOrder: [String: Int]      // 键 = 模块 id，值 = 面板组的序号；缺键 = 用户未表达
@@ -229,7 +233,7 @@ enum ProgressHomeBlockLayout {
 }
 ```
 
-> ~~`twoRowWidth = 220`（≥220 → 2 行）~~ **2026-10-01 改判（p5-home-blocks / D-21 · D-20）：宽度档门槛改成 `allScopesWidth = 180`（= 模块声明的最小宽；`twoRowWidth` 已删）**，行数由「宽度档 × **高度档**」取小者定，并新增 `rowHeight = 14` / `rowSpacing = 6` / `barHeight = 6`（96 高的块放得下五行——本批实测宿主真分配的块宽是 180.5…240，旧门槛 220 在多数面板宽下会把块压成 1–2 行，默认三档都上不全）。详见 [29](29-home-blocks-and-panel.md) §接口与数据形状。
+> ~~`twoRowWidth = 220`（≥220 → 2 行）~~ **2026-10-01 改判（p5-home-blocks / D-21 · D-20）：宽度档门槛改成 `allScopesWidth = 180`（= 模块声明的最小宽；`twoRowWidth` 已删）**，行数由「宽度档 × **高度档**」取小者定，并新增 `rowHeight = 14` / `rowSpacing = 6`（**2026-10-07 → 5**，见 [32](32-home-block-plates.md) D-22）/ `barHeight = 6`（96 高的块放得下五行——本批实测宿主真分配的块宽是 180.5…240，旧门槛 220 在多数面板宽下会把块压成 1–2 行，默认三档都上不全）。详见 [29](29-home-blocks-and-panel.md) §接口与数据形状。
 
 **文件**（实际改动到的；新增文件带 Gourd 版权头）：
 `DynamicIsland/Modules/ProgressModule.swift`、`create DynamicIsland/Modules/Takeover/StatsModule.swift`、
@@ -319,7 +323,9 @@ enum ProgressHomeBlockLayout {
 **实现期补充（2026-09-30 回写，按代码与实测落）**：
 
 6. **带级容器的内边距纵向为 0**（横向真 8）：默认档（1154×630）的高度预算 `日历行 294 + 缝 8 + 主块带最小 152 + 缝 8 + 小组件带 96 = 558`，可用高 ≈562——只剩 **4pt**；纵向真 padding 要 32pt，只能从「默认档先丢日历行」或「主块带掉到最小可用高之下（音乐封面被切）」里出。实现取「**横向真 8、纵向 0**」，纵向呼吸靠带内自然余量；容器高度 = 带高度，因此四档取值、`.clipped()` 与零提案三条硬约束一字未动。
-   **2026-10-01 p6 改判**：本条预算是分带时代的数（日历行 294、主块带 152），已随单条流与 p5 / p6 失效（现为日历行 `36N + 52`、大块档 140）；**结论「横向真 8、纵向 0」本身不变**（`containerInset` 仍在用），容器**不再画底**（见本文件 §机制七 的改判与 [30](30-ui-polish-and-shelf.md) §做法 机制一）。
+   **2026-10-01 p6 改判**：本条预算是分带时代的数（日历行 294、主块带 152），已随单条流与 p5 / p6 失效（现为日历行 `36N + 52`、大块档 140）；容器**不再画底**（见本文件 §机制七 的改判与 [30](30-ui-polish-and-shelf.md) §做法 机制一）。
+   **2026-10-07 再改判（[32](32-home-block-plates.md) D-23）**：**横向的 8pt 也撤了**（连同常量与修饰符一并删除），
+   流的块与日历行左缘对齐、面板内容两侧留白统一 15pt——「纵向 0」的结论不复存在，因为横向这一维也归零了。
 7. ~~**小组件带的行高是宿主常量 96pt**（`HomeStripView.widgetRowHeight`），**不是统计块的高度**~~ **2026-10-01 改判（p5-home-blocks / T1 · T2 · T3）：96 现在是「紧凑档」的块高**（`HomeFlowView.compactBlockHeight`，「形态 → 档高」表里的声明值）——[28](28-home-layout-redesign.md) 的单条流接手后两条带与 `widgetRowHeight` 已不在生产路径。**读数口径不变**：用户看到的「一块占 96pt」是**声明档高**（块内容自己没占满，不是被拉伸）。当时那两组实测数仍是有效读数（统计块内容 74.5 → 59pt 布局高 / 64.8 → 58pt 墨迹高）；本批装进这一档的块都改过：待办**不再画三环**（三环口径随 T1 撤销，`TodoScopeRing` 一族保留不挂 surface）、进度行高 14 + 行距 6（96 高放得下五行）、音乐紧凑条六项预算 95。详见 [29](29-home-blocks-and-panel.md) §实际交付。
 8. **进度的展开清单视图保留但不挂 surface**：文件里多约 70 行不被任何 surface 渲染的代码（外加热度为它服务的两个私有出口）——这是**有意留的**（可逆：把 `.expanded` 加回 `surfaces` 与 `content(for:)` 两处即复原），将来清理时要知道它不是遗漏。
 9. **枚举型 config 键的写入格式有两套，写错会静默回落默认值**（实现期为此烧掉约 20 分钟）：`Defaults` 库对**声明了 `Codable` 的枚举**走 `CodableBridge`——序列化成 **JSON 字符串（带引号）**、读时走 `Value(jsonString:)`；对**没有 `Codable` 的枚举**（如 `TimerDisplayMode`）走 `RawRepresentableBridge`——**裸串**即可。同一个应用里两种格式并存：`clipboardDisplayMode` 要写 `'"separateTab"'`，`timerDisplayMode` 写 `popover`。写错格式时**解不出来 → 静默回落默认**，屏上表现就是「改了没反应」；取证时按枚举的声明面挑格式。
@@ -365,7 +371,7 @@ enum ProgressHomeBlockLayout {
 | D-12 | 小组件带行高取 **96pt 定值** | agent（执行期） | 默认档 `294 + 8 + 152 + 8 + 96 = 558 ≤ 562` 才留得住日历行；96 是「不挤掉日历行」约束下的最高一档。代价：面板高 < ≈626 时两行小组件带把日历行挤掉；`.widgetsOnly` 档富余高度留在带尾（§已知限制 7）。改这个数就是改跨任务常量与阈值用例。**2026-10-01 改判（p5-home-blocks）：分带渲染器已不在生产路径，96 现在是「紧凑档」的块高**（`HomeFlowView.compactBlockHeight`，见 §已知限制 7 的改判；[29](29-home-blocks-and-panel.md) 起 96 不再由「不挤掉日历行」的预算推出来） |
 | D-13 | 四档定名 `both` / `noCalendar` / `widgetsOnly` / `none`；**删掉旧 `.calendarOnly` 档** | agent（执行期） | 机制六 里 `stripWidgetsOnly` 与 `widgetsOnly` 两个名字描述同一档，按语义取后者；四档链里日历行是第一个让位的，没有「只剩日历行」这一档（旧档在生产高度下从来不画日历行，行为等价）。代价：合成分支（可用高 < 152 却画日历行）没了，将来面板能更矮时要重新加档 |
 | D-14 | **空带不进取舍**：没有大块 / 没有紧凑块时，四档退化成旧三档 | agent（执行期） | 这是「只有音乐的旧配置逐字不变」的保证——调用方按「有没有块」传 `mainBandMinimumHeight = 0` / `widgetRowHeight = 0`。代价：纯函数多一层「0 表示不存在」的约定，传错 0 会让一条带静默消失 |
-| D-15 | 带级容器**只做横向内边距 8，纵向 0** | agent（执行期） | 默认档高度预算只剩 4pt，纵向真 padding 会先丢日历行或把音乐块压到最小可用高之下（§已知限制 6）。代价：容器与内容在纵向可能贴边；要「四周都是 8」得先动行高 / 让位顺序 |
+| D-15 | 带级容器**只做横向内边距 8，纵向 0**（**2026-10-07 由 [32](32-home-block-plates.md) D-23 撤销：横向 8 也删了**） | agent（执行期） | 默认档高度预算只剩 4pt，纵向真 padding 会先丢日历行或把音乐块压到最小可用高之下（§已知限制 6）。代价：容器与内容在纵向可能贴边；要「四周都是 8」得先动行高 / 让位顺序。**D-23 起用户改判：这道横向内缩本身也偏大，撤掉后与日历行对齐** |
 | D-16 | 块级 hover **收敛成一条规则**（`HomeBandChrome` 是唯一取值处），通知首页块的行补 hover、启动台那一格留作唯一例外 | agent（执行期） | 三处原来各写一套浓度（0.18+r5 / 0.08+r6 / 0.06+r6），不收敛就没有「一条规则」；通知首页块的行可点却无反馈，与同一带内的前台应用格不一致。代价：严格讲「一条规则」有一处例外（启动台 0.09，属另一个 surface）——要统一只需换那一行的 `.background(...)` |
 | D-17 | 统计的**采样驱动放模块侧**：块 `.task` 里 1s 看门狗 + `onDisappear` 停 | agent（执行期） | 上游 `startMonitoring()` 原挂在「展开面板停在统计 tab」，tab 摘掉后该路径不可达；不改上游就只能由模块自己拉（与上游同一功率档）。代价：块可见期间每 1s 读一次布尔量；隐含依赖「块真的会消失」（§实际交付 遗留项 1） |
 | D-18 | 统计的 `defaultPlacement.order` 取 **50**、`config` 登记**四键**（真源键 + 三个图表可见性登记键）、环心字号取 **11pt** | agent（执行期） | order 50 = 现有模块序号最大值（notifications 40）+ 10，老用户那条 strip 的前几块一位不动；三个图表键仍是上游设置页里活的键（完整图的可见性来源），登记后卡片会如实出现「由上游设置管理」；11pt 是「读数即焦点又不压环带」的那一档（12pt 会压到 5pt 环带）。代价：order 50 是本批最可能被改的数字；登记键在 tab 摘掉后与面板无关，若认为该删，从 manifest 的 `config` 删三条即可（用例键集合断言同步一行） |

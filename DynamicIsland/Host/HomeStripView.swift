@@ -451,12 +451,11 @@ struct HomeBandDroppedHint: View {
 /// 「可交互的条目」仍在 hover 时给淡底——条目自己的 hover 状态由各自模块持有，**形状与浓度只有
 /// 这一处**（三个调用点：前台应用格子 / 通知条目 / 待办条目——收敛前它们是 0.18+r5、0.08+r6、0.06+r6）。
 enum HomeBandChrome {
-    /// 带级容器给内容的**横向**内边距（机制七：8）。
-    ///
-    /// **纵向刻意不做**（T8 的边界裁定，p6 起仍然成立）：单条流的可用高本来就紧，纵向真内边距
-    /// 只能从「先丢一行块」里出；横向上这 8pt 是实打实的（内容宽度因此少 16pt），容器高度
-    /// = 流的高度（零布局成本）。
-    static let containerInset: CGFloat = 8
+    // **横向内边距已撤**（2026-10-07 / docs/32 D-23）：T8 起带级容器给内容左右各 8pt，底自 p6 起就不画了
+    // （当时 `HomeBandContainerChrome` 只剩这道内边距，本次连同它一并删除）。用户 2026-10-07 反馈「首页本身的大背景框
+    // 区域和里面的组件的边距有点大」——流的块因此外移 8pt，与日历行（从来不吃这道内缩）左缘对齐，
+    // 面板内容四周的可见留白统一成 15pt（上 14 / 左右 15，见 docs/32 §D-24 的上屏读数）。
+    // 机制连同常量一并删除（不留恒 0 的死旋钮）：`HomeBandedHomeView` 直接把整幅可用宽喂给流。
 
     /// 可交互条目的 hover 底浓度（机制七：0.06）。
     static let hoverOpacity: Double = 0.06
@@ -467,7 +466,8 @@ enum HomeBandChrome {
 
 // MARK: - 内容内缩（p7c / T2 / docs/32 §决策摘要 D-20）
 
-/// 首页块**内容与板缘之间**的余量的**唯一取值处**（p7c / T2；与 `HomeBandChrome` 同风格）。
+/// **「内容四周内缩」一族常量的唯一取值处**（与 `HomeBandChrome` 同风格）：左右下三面由宿主装配、
+/// 上面由各模块自装（原因见下）。
 ///
 /// **为什么是内缩内容、不是放大板**（用户 2026-10-02 反馈原话「每个玻璃块要比内容宽一些，现在都
 /// 紧挨着显示了」）：板自 T1 起**等于块框**（`.frame(width:height:)`、`HomeStripView.swift` 的
@@ -486,17 +486,26 @@ enum HomeBandChrome {
 ///   **边界是算出来的**：模块要 180pt 内容宽，所以进度块的**分到宽必须 ≥ 180 + 2 × 内缩**——
 ///   5pt 对应 **≥ 190**（今天 191，只剩 1pt 余量）；分到宽落到 **≤ 189** 时它会退化成 3 行
 ///   （这是**既有**行为：内缩把这条门槛从 180 抬到了 190）。
-/// - **垂直 4 → 0**：紧凑块只有 **96pt** 高，而进度块的五档是**按 96 紧配**的
-///   （5×14 + 4×6 = **94**，只余 2pt）。按模块的高度档算式（`floor((H + 6) / 20)`）五档要求内容高
-///   **≥ 94**，即**总内缩 ≤ 2pt（每侧 ≤ 1pt）仍然安全**；上屏实测垂直内缩 4pt（总 8pt）→ 第五行掉出去。
+/// - **垂直 4 → 0**（**宿主这一份**；2026-10-07 / docs/32 D-22 起顶部留白改由模块自装，见本节末）：
+///   紧凑块只有 **96pt** 高，而进度块的五档当时是**按 96 紧配**的（5×14 + 4×6 = **94**，只余 2pt）。
+///   按模块的高度档算式（`floor((H + 6) / 20)`）五档要求内容高 **≥ 94**，即**总内缩 ≤ 2pt
+///   （每侧 ≤ 1pt）仍然安全**；上屏实测垂直内缩 4pt（总 8pt）→ 第五行掉出去。
 ///   取 **0** 而不是 1pt：省下的那 1pt 在视觉上等于零，却要把算式顶在 `94 = 94` 的边界上，不值当。
-///   纵向余量仍由各块自己的既有排版给出（统计 2.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt，
-///   改前改后**逐值相同**）。
 ///
 /// 改前实测余量 **0.0…1.5pt**（音乐 / 待办 / 通知 / 统计四块内容贴板缘）。
 ///
 /// **与底色档无关**：内缩是**布局**（不在 `homeBlockFloat()` 的视觉层里），两档共用同一份——
 /// 纯黑档（`.solidBlack`）的内容因此同获内缩，这是**预期**（黑档的池/辉光机制逐字未动）。
+///
+/// **2026-10-07 增补：上面这一维**（docs/32 D-22）。用户原话「除了 cpu 和镜像，其他组件的内容和背景玻璃块
+/// 区域的上部分都挨的太近了，按照 cpu 那几个的上边距修改下」——统计块的 8pt（D-21）成了参照，
+/// 其余各块的内容此前是**贴板顶**的（上屏实测 0.0…3.5pt 的墨迹余量）。三条取值都指向同一个
+/// **可见结果**：块内首行内容的**墨迹上缘**落在板顶下 **≈7pt**（= 统计块环顶的实测值，
+/// `.workflow/p7d-top-margins/evidence/` 有改前逐块读数）。
+/// **墨迹 ≠ 内容框**：文字行自带行首留白（11pt 行 +2、10pt 居中表头行 +3.5），图形（封面 / 图标）
+/// 的墨迹就是内容框上缘——三类因此取值不同，判据是「改后上屏读数一致」，不是「常量相等」。
+/// 代价一处：进度块的行距 6 → 5（腾出 4pt 给上留白，五行仍在 96 里），见
+/// `ProgressHomeBlockLayout.rowSpacing`。
 enum HomeBlockChrome {
     /// 内容与板缘之间的**水平**余量（左右各一份）。**当前档位下的上界**（进度块分到 191pt 时 6 就把它
     /// 顶到模块 180pt 门槛之下——见上面的算术；分到宽 ≥ 190 是 5pt 成立的前提）。
@@ -510,6 +519,10 @@ enum HomeBlockChrome {
     /// 日历行为什么不做垂直内缩：它的高度 `HomeCalendarRow.rowHeight` 是**按当月周数精算**出来的
     /// （`36N + 52`），月历网格按它精确排满——垂直再缩 4pt 会把网格的末行或题头裁掉（T2 的失败信号
     /// 之一）。板 = 行框、行框高度不变，因此只做水平。
+    ///
+    /// **顶部不走这里**（docs/32 D-22）：`contentInsetVertical` 恒 0（进度块的高度算术不许动），各块的
+    /// 上留白由模块自己装（下面三条常量 + 统计块的 `StatsRingMetrics.homeBlockTopInset`）——
+    /// 宿主代劳就无法按「首行是图形还是文字」分开取值。
     static func contentInsets(includeVertical: Bool) -> EdgeInsets {
         EdgeInsets(
             top: includeVertical ? contentInsetVertical : 0,
@@ -518,24 +531,22 @@ enum HomeBlockChrome {
             trailing: contentInsetHorizontal
         )
     }
-}
 
-/// 一条带的**带级容器**（T8；p6 起**不画底**，只剩横向内边距）：高度不变（见 `containerInset`）。
-///
-/// **不再画底**（p6-ui-polish / docs/30 §做法 机制一 / D-02）：分带时期那层 `white.opacity(0.05)`
-/// 的整条大底已撤——「所有内容糊在一个大盒子里」正是用户第 1 条反馈；块与块之间的区分改由每块
-/// 的浮起层（`homeBlockFloat()`）做：**黑档 = 白光柔光池 + 白内容辉光；玻璃档（p7c 起）= 极淡
-/// 整块底（玻璃板）**。「不加区域块与边线」是 p6 的原话，**p7c 由用户放宽为「不加描边、可用极淡
-/// 无描边整块底」**（alpha14，留痕见 docs/32 头部）——板没有描边，仍不是卡片墙。
-///
-/// 用法只有一处（`HomeBandedHomeView` 的单条流）。容器仍画在带自己的 frame 上，因此**带的可用宽
-/// 必须先扣掉两侧的 `containerInset`**（调用方传给这条流的宽度就是扣完的）——否则 plan 按整宽
-/// 分配、内容却画在窄了 16pt 的区域里，右缘会溢出一截。
-private struct HomeBandContainerChrome: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, HomeBandChrome.containerInset)
-    }
+    // MARK: - 内容顶部内缩（docs/32 D-22；模块自装，三条常量各按「首行是什么」）
+
+    /// 图形起始的块（音乐的小封面 36 / 前台应用的应用图标 28）：墨迹 = 内容框上缘 → 取 7。
+    ///
+    /// 7 的来源是**上屏读数**：统计块的环顶墨迹（同一探针、同一判据）落在板顶下 **7.0pt**
+    /// （`.workflow/p7d-top-margins/evidence/`），这两块取 7 后与它逐值一致。
+    static let contentInsetTopGraphics: CGFloat = 7
+
+    /// 文字起始的块（进度清单的首行 / 通知的表头与行）：11pt 文字在 14pt 行里自带 **+2.0pt** 行首
+    /// 留白（上屏实测）→ 取 5 让墨迹同样落在 7.0pt。
+    static let contentInsetTopText: CGFloat = 5
+
+    /// 待办块的**表头行**（`TodoHomeHeader`，10pt 字 + 细进度条在 16pt 行里居中）：自带的行首留白是
+    /// **+3.5pt**（上屏实测）→ 取 4 让墨迹落在 7.5pt（这一类没有更小的整数可取）。
+    static let contentInsetTopListHeader: CGFloat = 4
 }
 
 /// 可交互条目的 **hover 底**（T8 的唯一一条 hover 规则，机制七）。
@@ -558,12 +569,6 @@ struct HomeBlockHoverBackground: ViewModifier {
 }
 
 extension View {
-    /// 把这条带包进带级容器（T8；p6 起容器**不画底**、只剩横向 8pt 内边距——见
-    /// `HomeBandContainerChrome`）。单条流一次，别用在日历行上。
-    func homeBandContainer() -> some View {
-        modifier(HomeBandContainerChrome())
-    }
-
     /// 可交互条目的 hover 底（T8 的唯一一条规则）。调用方传自己的 hover 状态。
     func homeBlockHoverBackground(isHovered: Bool) -> some View {
         modifier(HomeBlockHoverBackground(isHovered: isHovered))
@@ -581,7 +586,8 @@ extension View {
 ///
 /// 调研结论（机制一）：Apple 当前的层级语言是「界面元素浮起并区分其下内容」（HIG），macOS 26 的
 /// 浮起件用**柔影**而不是描边；同类 notch 应用（boring.notch / NotchNook / Alcove）也无一使用
-/// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（`homeBandContainer()` 不再画底）+ 每块的
+/// 卡片边框或 3D。因此静态区分靠「撤掉整条带的大底（T8 的带级容器自 p6 起不再画底，docs/32 D-23 连同
+/// 它仅剩的横向内边距一并删除）+ 每块的
 /// 浮起层」，hover 只做**视觉**提升——`scaleEffect` / `brightness` / `shadow` / 底（池或板）都不
 /// 参与布局（邻居不被挤开，docs/30 §失败信号里「hover 时布局跳动」那条的判据就是它）。
 ///
@@ -1351,10 +1357,9 @@ struct HomeBandedHomeView: View {
         let blocks = catalog.blocks
 
         GeometryReader { geometry in
-            // **流的可用宽 = 容器内边距扣完之后的那一份**（T8；p6 起容器只剩这道内边距）：
-            // 内容在容器里两侧各缩 `containerInset`，所以喂给纯函数的宽度必须先扣掉 16pt
-            // ——否则 plan 按整宽分配、内容却画在窄了 16pt 的区域里，右缘会溢出一截。
-            let bandWidth = max(0, geometry.size.width - HomeBandChrome.containerInset * 2)
+            // **流的可用宽 = 整幅容器宽**（docs/32 D-23 起）：T8 的带级容器横向 8pt 已撤（容器自 p6 起
+            // 就不画底了，这道内边距是它最后的遗留）——流的块因此与日历行左缘对齐，见 `HomeBandChrome`。
+            let bandWidth = max(0, geometry.size.width)
             let items = blocks.map {
                 HomeFlowLayout.Item(
                     min: $0.width.min,
@@ -1432,9 +1437,9 @@ struct HomeBandedHomeView: View {
             let _ = writeHomeContentHeight(heldPanelHeight - PanelAutoHeight.homeVerticalPadding)
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
-            // 流那一块包一层**带级容器**（T8 的 `homeBandContainer()`；p6 起只剩横向 8pt 内边距、
-            // 不画底，见 `HomeBandContainerChrome`）——分界改由每块的浮起层（黑档柔光池 + 辉光、
-            // 玻璃档玻璃板，见 `homeBlockFloat()`）做；日历行不包（它不是流的一部分）。
+            // 流**不再包带级容器**（docs/32 D-23：那道横向 8pt 内边距已撤，两行的左缘因此都落在内容区左缘，
+            // 与日历行一致）——分界由每块的浮起层做（黑档柔光池 + 辉光、玻璃档玻璃板，见
+            // `homeBlockFloat()`）；日历行同样不包（它不是流的一部分）。
             VStack(spacing: HomeCalendarRow.rowSpacing) {
                 if !plan.rows.isEmpty {
                     HomeFlowView(
@@ -1444,7 +1449,6 @@ struct HomeBandedHomeView: View {
                         columnSpacing: Self.flowMetrics.columnSpacing
                     )
                     .frame(height: plan.heightUsed, alignment: .topLeading)
-                    .homeBandContainer()
                 }
 
                 if showCalendar, plan.showsCalendarRow {

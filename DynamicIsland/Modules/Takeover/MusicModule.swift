@@ -301,10 +301,15 @@ private struct MusicHomeBlockView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：不再让封面贴着玻璃板的顶缘（改前上屏读数
+            // 0.0pt）——7pt 让封面上缘的可见留白与前台的图标 / 统计块的环顶同档，见 `HomeBlockChrome`。
+            .padding(.top, HomeBlockChrome.contentInsetTopGraphics)
         } else {
             // 紧凑档的密度由 `MusicControlsView.CompactMetrics` 给（D-17）：标准档内容 ≈127pt，
             // 在 96 里控制三键整行被裁（T3 阶段 Checkpoint 上屏实测）。
+            // 标题行同样让出上留白（与带封面那一支同源，两块形态的顶缘才对得上）。
             MusicControlsView(density: .compact)
+                .padding(.top, HomeBlockChrome.contentInsetTopText)
         }
     }
 

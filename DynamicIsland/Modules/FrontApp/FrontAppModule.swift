@@ -185,8 +185,16 @@ private struct FrontAppHomeBlockView: View {
             let apps = store.switcherApps
             VStack(alignment: .leading, spacing: FrontAppGridBudget.rowSpacing) {
                 currentRow
-                grid(apps, fitting: proxy.size)
+                // 排版预算扣掉**内容顶部内缩**（D-23）：图标上缘因此落在板顶下 7pt，
+                // 预算按「真正拿到的高度」算，行数不会多算一行再被块壳裁掉。
+                grid(apps, fitting: CGSize(
+                    width: proxy.size.width,
+                    height: proxy.size.height - HomeBlockChrome.contentInsetTopGraphics
+                ))
             }
+            // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：改前当前应用那一行贴着板顶（上屏读数 0.0pt），
+            // 7pt 与统计块的环顶同档（见 `HomeBlockChrome` 的三条常量）。
+            .padding(.top, HomeBlockChrome.contentInsetTopGraphics)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }

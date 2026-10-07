@@ -214,7 +214,7 @@
 - **2026-10-01 改判：数值自 p7 起以 [31](31-home-workday-launcher.md) §接口与数据形状 1 为准**（0.10/6、0.13、0.20/12、0.20、系数 0.50、三停渐变）。
 - 柔光池（**静态区分的主力**）：`poolOpacity 0.06`（hover `0.12`）、池半径经 `HomeBlockFloatMetrics.poolEndRadius(width:height:) = max(0, min(w,h) × 0.45)`（~~`max(48, min(w,h)×0.45)`~~ **2026-10-01 终审修复改判：去掉 48 下界**——min(w,h)<96 时 48 > 半短边，渐变在最近边之前不归零=变相底板；用例对 40/96/140 三档钉「有效半径 ≤ 0.5×min」。径向渐变到全透明；**系数必须 ≤0.5**——格子最近边在 `0.5 × min(w,h)` 处，系数 0.7 时边缘残留 28.6%、形成直角台阶；T1 三轮重审 0.7 → **0.45**）。池挂在块的 `.background`（`.shadow` 之后、`allowsHitTesting(false)`）：不参与缩放/提亮、也不进辉光轮廓，不参与命中、零布局成本。**纯辉光在空区只抬 0.07–0.5/255（Checkpoint 二轮实测），静态区分以池为主、辉光为辅。**
 - 应用链（逐字）：`.scaleEffect` → `.brightness` → `.compositingGroup()` → `.shadow(color: .white.opacity(glowOpacity), radius: glowRadius)`（`y` 恒 0——不做位移）→ `.background { GeometryReader { RadialGradient } }` → `.animation(.smooth(duration:), value: hovered)`；`hovered` 由 `.onHover` 就地持有。
-- `homeBandContainer()`：**去掉 `.background(...)`**（保留横向 8pt 内边距 `HomeBandChrome.containerInset`）；`HomeBandChrome.containerOpacity` / `containerCornerRadius` 两个常量已删除；行级 `hoverOpacity 0.06` / `hoverCornerRadius 8` 保留（`homeBlockHoverBackground(isHovered:)` 的唯一取值处）。
+- `homeBandContainer()`：**去掉 `.background(...)`**（当时保留横向 8pt 内边距 `HomeBandChrome.containerInset`；**后者连同整个修饰符于 2026-10-07 由 [32](32-home-block-plates.md) D-23 删除**）；`HomeBandChrome.containerOpacity` / `containerCornerRadius` 两个常量已删除；行级 `hoverOpacity 0.06` / `hoverCornerRadius 8` 保留（`homeBlockHoverBackground(isHovered:)` 的唯一取值处）。
 
 **机制二（音乐）**
 

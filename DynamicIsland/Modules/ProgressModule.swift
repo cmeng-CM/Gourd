@@ -29,7 +29,8 @@
 //  - **首页块（`home`，本模块今天唯一声明的 surface）= 紧凑清单**：一行一个尺度（图标 + 标签 +
 //    细进度条 + **行动文案**——不再是百分比，见下面「行语义」）。**能画几行由块自己的尺寸定**
 //    （`ProgressHomeBlockLayout`：宽度档与高度档取小者），不缩字、不滚动——96 高的紧凑块里
-//    五行放得下（5×14 + 4×6 = 94），因此默认三档（今天 / 本周 / 本月）与勾上的第四、第五档
+//    五行 + 内容顶部内缩放得下（5×14 + 4×5 = 90，再让出 5pt 上留白 = 95 ≤ 96），因此默认三档
+//    （今天 / 本周 / 本月）与勾上的第四、第五档
 //    **都会上屏**；再放不下就按声明顺序只画前几个。
 //    **块宽由宿主声明**（`homeBlockWidth` = 180 / 240），模块不参与「我在首页占多宽」的决策
 //    （D-11 口径），只按放置后的尺寸分档。
@@ -297,7 +298,7 @@ final class ProgressModule: GourdModule {
 /// **两条档位各自管什么**（改动前先读）——**两条都只答「最多几行」这一个数**（`Int`），
 /// 「画面上的哪几行」永远是拿这个数去截**用户当前那一组尺度**（`visibleScopes` 的解析结果）的**前缀**，
 /// 不是「总能画全的固定三种」：
-/// - **高度档**是真正的刹车：96 高的紧凑块里五行放得下（5×14 + 4×6 = 94），多出来的尺度画不下
+/// - **高度档**是真正的刹车：96 高的紧凑块里五行 + 内容顶部内缩放得下（5×14 + 4×5 + 5 = 95），多出来的尺度画不下
 ///   就按那一组的先后截断——这保证了「块内不出现半个字」（块壳 `.clipped()` 会把溢出裁掉，
 ///   算错就是失败信号「块内被裁出半个字」）；
 /// - **宽度档**只在两种退化情形出手：**非有限宽**（NaN / ±∞，取不到真值）→ **1 行**；
@@ -313,9 +314,13 @@ enum ProgressHomeBlockLayout {
     /// **20pt**，不钉住它行高就不是 14（行会互相压），高度档的算术也就不成立了。
     static let rowHeight: CGFloat = 14
 
-    /// 行与行的间距。取 6 的理由只有一条：**96 高的紧凑块里五行放得下**（5×14 + 4×6 = 94 ≤ 96）
+    /// 行与行的间距。取 5 的理由只有一条：**96 高的紧凑块里五行 + 内容顶部内缩放得下**
+    /// （5×14 + 4×5 = 90，再让出 `HomeBlockChrome.contentInsetTopText`（5）＝ **95 ≤ 96**）
     /// ——「勾满五档」在屏上是五行都在，而不是「勾了第五个没反应」。
-    static let rowSpacing: CGFloat = 6
+    ///
+    /// 2026-10-07 由 6 收到 5（D-23）：行距 6 的算术（94 + 上留白）放不下 5pt 的顶部内缩，
+    /// 收 1pt 正好腾出 4pt；收到 4 会白剩 3pt、行也更挤，不值当。
+    static let rowSpacing: CGFloat = 5
 
     /// 细进度条的高度（观感值，与行高分开：条钉住后一行的高度才是确定的 14）。
     static let barHeight: CGFloat = 6
@@ -393,7 +398,9 @@ private struct ProgressHomeBlockView: View {
                 let rows = ProgressHomeBlockLayout.listedScopes(
                     scopes,
                     forWidth: proxy.size.width,
-                    height: proxy.size.height
+                    // **扣掉内容顶部内缩再算行数**（D-23）：按真正拿到的高度算，五行 + 上留白
+                    // 一起过 96pt 这条线（`ProgressHomeBlockLayout` 的行距 6 → 5 就是为它腾的地方）。
+                    height: proxy.size.height - HomeBlockChrome.contentInsetTopText
                 )
 
                 VStack(alignment: .leading, spacing: ProgressHomeBlockLayout.rowSpacing) {
@@ -407,6 +414,10 @@ private struct ProgressHomeBlockView: View {
                         )
                     }
                 }
+                // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：改前首行贴着板顶（上屏读数 2.0pt）——
+                // 5pt 是「11pt 文字的行首留白 +2.0pt」的反推值，墨迹因此落在板顶下 7pt（与统计块同档，
+                // 见 `HomeBlockChrome`）。
+                .padding(.top, HomeBlockChrome.contentInsetTopText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }

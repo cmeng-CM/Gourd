@@ -1190,10 +1190,14 @@ private struct TodosHomeBlockView: View {
         GeometryReader { proxy in
             // 行数与行形态都在**同一层**算：高度决定画几行，宽度只决定行的形态（D-02）。
             let tier = TodosHomeBlockLayout.listTier(forWidth: proxy.size.width)
+            // **扣掉内容顶部内缩再算行数**（D-23）：内缩把可用高减少了 `contentInsetTopListHeader`，
+            // 按剩下的高度算，最后一行不会被块壳 `.clipped()` 裁成半个字。
             let content = TodosHomeBlockLayout.todayContent(
                 todayItems: summary.today.items,
                 hasFullAccess: store.hasFullAccess,
-                rowCount: TodosHomeBlockLayout.rowCount(fittingHeight: proxy.size.height)
+                rowCount: TodosHomeBlockLayout.rowCount(
+                    fittingHeight: proxy.size.height - HomeBlockChrome.contentInsetTopListHeader
+                )
             )
 
             VStack(alignment: .leading, spacing: TodosHomeBlockLayout.listSpacing) {
@@ -1209,6 +1213,9 @@ private struct TodosHomeBlockView: View {
                     EmptyView()
                 }
             }
+            // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：改前表头贴着板顶（上屏读数 3.5pt 的行首留白
+            // 之外再无余量）——4pt 是「表头墨迹落在板顶下 7.5pt」的反推值，见 `HomeBlockChrome`。
+            .padding(.top, HomeBlockChrome.contentInsetTopListHeader)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .task { await store.refresh() }

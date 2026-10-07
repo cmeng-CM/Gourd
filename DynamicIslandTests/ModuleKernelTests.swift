@@ -1096,7 +1096,7 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(
             ProgressHomeBlockLayout.listedScopes(five, forWidth: 240, height: 96),
             five,
-            "96 高的块里五档全画（5×14 + 4×6 = 94 ≤ 96）"
+            "96 高的块里五档全画（5×14 + 4×5 = 90，配内容顶部内缩 5 仍 ≤ 96，D-23）"
         )
         // 高度档更小 → 按声明顺序只画前 N 个
         XCTAssertEqual(
@@ -1310,12 +1310,16 @@ final class ModuleKernelTests: XCTestCase {
     /// 宽度档：到声明最小宽（180）就够画全部五档（宽度不是行数的真实约束），更窄是退化态、
     /// 非有限数退到 1；高度档：`floor((高 + 行距) / (行高 + 行距))`，钳 `0…5`。
     ///
-    /// **96 高的紧凑块要放得下五档**（5×14 + 4×6 = 94）——这是「勾满五档在屏上是五行都在」
-    /// 的算术前提（D-04 的「三行填满 96」是旧版口径，本批改判，见 T2 报告 §候选决策）。
+    /// **96 高的紧凑块要放得下五档 + 内容顶部内缩**（5×14 + 4×5 + 5 = 95，D-23 起行距 6 → 5）——
+    /// 这是「勾满五档在屏上是五行都在」的算术前提（D-04 的「三行填满 96」是旧版口径，本批改判，
+    /// 见 T2 报告 §候选决策；顶部留白见 `HomeBlockChrome.contentInsetTopText`）。
     func testProgressHomeBlockLayoutRowTiers() {
         // 行高 / 行距 / 条高：三个数一起决定高度档与画出来的东西
         XCTAssertEqual(ProgressHomeBlockLayout.rowHeight, 14, "11pt 文字的自然行高（实测 14pt）")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowSpacing, 6, "取 6 的唯一理由：96 高的块里五行放得下")
+        XCTAssertEqual(
+            ProgressHomeBlockLayout.rowSpacing, 5,
+            "取 5 的唯一理由：96 高的块里五行 + 内容顶部内缩放得下（5×14 + 4×5 + 5 = 95，D-23）"
+        )
         XCTAssertEqual(ProgressHomeBlockLayout.barHeight, 6, "进度条钉在 6pt（`.linear` 默认 20pt，不钉住行高就不是 14）")
         XCTAssertEqual(
             ProgressHomeBlockLayout.allScopesWidth,
@@ -1339,11 +1343,11 @@ final class ModuleKernelTests: XCTestCase {
             "非有限数一律不当宽度用（±∞ 同 NaN）"
         )
 
-        // ② 高度档：边界逐个钉（pitch = 14 + 6 = 20；N 行占 20N − 6）
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 96), 5, "紧凑块（96）放得下五档（94 ≤ 96）")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 94), 5, "恰好放得下五行 → 仍是五行")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 93.9), 4, "差一点就是四行（不赌半个字）")
-        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 74), 4, "恰好四行 → 四行")
+        // ② 高度档：边界逐个钉（pitch = 14 + 5 = 19；N 行占 19N − 5）
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 96), 5, "紧凑块（96）放得下五档（95 ≤ 96）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 90), 5, "恰好放得下五行（90）→ 仍是五行")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 89.9), 4, "差一点就是四行（不赌半个字）")
+        XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 74), 4, "四行及以上 → 四行")
         XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 54), 3, "恰好三行 → 三行（A4 的那一档）")
         XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 34), 2, "恰好两行 → 两行")
         XCTAssertEqual(ProgressHomeBlockLayout.rowLimit(forHeight: 14), 1, "恰好一行 → 一行")

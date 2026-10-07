@@ -1437,6 +1437,12 @@ private struct NotificationsHomeBlockView: View {
                 row(item)
             }
         }
+        // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：加在**内容上、frame 之前**（frame 之内才算块内布局——
+        // 加在 frame 之后会让整框高出块 5pt 挂在块外）。改前表头贴着板顶（上屏读数 2.0pt）；
+        // 5pt 是「11pt 文字的行首留白 +2.0pt」的反推值，墨迹因此落在板顶下 7pt（与统计块同档，
+        // 见 `HomeBlockChrome`）。本块行数**固定 3、不按块高分档**（见 `NotificationsHomeBlockLayout`），
+        // 内缩不动行数；三行 + 表头约 65pt，96 里本来就宽裕（改前下余量就有 29.5pt）。
+        .padding(.top, HomeBlockChrome.contentInsetTopText)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // 与展开 tab 同口径：每次出现取一次数（首页块只在展开面板里存在，面板一开就是它出现的时刻）。
         // 不新建定时器：增量仍由模块的 AX 通道 / 文件事件 / 60s 兜底轮询推进。

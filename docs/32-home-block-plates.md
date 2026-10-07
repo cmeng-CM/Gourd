@@ -117,6 +117,8 @@
 | D-19 | 圆角弧内区的两处内容越界（音乐块左上 15 / 通知块左上 5 个内容像素）——**后由 T2 的 5pt 内容内缩减为 0**（连续圆角模型 28 角全 0；保守圆模型残 3px 属模型上界） | agent（T1 终审裁定不修；T2 落地后归零） |
 | D-20 | 首页块**内容内缩**（板比内容宽）：水平 **5pt** / 垂直 **0pt**（起点 6/4 均被实测否掉：6 破进度块 180pt 门槛、4 掉第五行），日历行只做水平；板的尺寸、位置与 8pt 间距一概不动 | 用户（原话「每个玻璃块要比内容宽一些，现在都紧挨着显示了」；板 = 块框，故只能内缩内容） |
 | D-21 | **统计块内容在顶部让出 8pt**（`StatsRingMetrics.homeBlockTopInset`，2026-10-06 复核修复）：环的**墨迹比布局框大** `drawingOverhang = 5pt`（5pt 主环以路径为中心 → 外溢 2.5，发光再 2.5），块内容贴板顶、宿主又在块框上 `.clipped()` → 环顶的描边与发光被**齐平切掉**；修法是**模块自己**让位（不是再要一次宿主级垂直内缩——`HomeBlockChrome.contentInsetVertical` 仍是 0，进度块的 94/96 边界一字未动） | 用户（2026-10-06 原话「cpu 这三个上边距太小，顶部被遮盖了」，附截图三个环齐平切口）+ agent（取值 8 = 外溢 5 + 3：外溢保证不裁，多出的 3pt 让环的可见上距 5.5pt 不低于 T2 那条「内容 ↔ 板缘 ≥ 5pt」的判据下界） |
+| D-22 | **其余五块内容在顶部内缩**（2026-10-07）：音乐 / 前台应用 / 待办 / 进度 / 通知各按「**首行墨迹上缘落在板顶下 ≈7pt**」反推取值——图形起始的块（封面 / 图标）**7**、11pt 文字起始的块（进度 / 通知）**5**、待办表头（10pt 字居中行）**4**（三条常量 `HomeBlockChrome.contentInsetTopGraphics / .contentInsetTopText / .contentInsetTopListHeader`，**模块自装**——宿主的 `contentInsetVertical` 仍是 0）。代价一处：进度块行距 6 → **5**（腾 4pt，5×14 + 4×5 + 5 = 95 ≤ 96，五行仍在） | 用户（2026-10-07 原话「除了 cpu 和镜像，其他组件的内容和背景玻璃块区域的上部分都挨的太近了，按照 cpu 那几个的上边距修改下」，附两张圈图：行1 顶带 + 行2 顶带；排除统计块（已让 8）与镜子（画面 = 圆、贴满板））+ agent（取值与判据见 `evidence/top-margins-measure.txt`：改前 0.0 / 0.0 / 3.5 / 2.0 / 2.0 → 改后 7.0 / 7.0 / 7.5 / 7.0 / 7.0，统计块的 7.0 为参照） |
+| D-23 | **撤掉带级容器的横向 8pt 内边距**（2026-10-07；`HomeBandChrome.containerInset` 与 `HomeBandContainerChrome` / `homeBandContainer()` 一并删除，不留恒 0 的死旋钮）：T8 起容器给内容左右各 8pt，底自 p6 起就不画了——那道内缩是它最后的遗留。撤后流的块左缘 **354.5 → 346.5**，与日历行（从来不吃这道内缩）**左缘对齐**；面板内容两侧留白统一到 **15pt**（上仍 14、行 1 右缘 15.5、日历行左右 15） | 用户（2026-10-07 原话「首页本身的大背景框区域和里面的组件的边距有点大」，圈的是面板玻璃到块两侧的整条空带）+ agent（**行 2 右缘会从 30 变 38**——三块声明宽合计 796 < 819，按「富余不拉伸」（D-02）余量留行尾；见 §已知限制 15） |
 
 ## 接口与数据形状
 
@@ -136,17 +138,24 @@ static let plateTopHighlightFraction: CGFloat = 0.45 // 微光在板高上的覆
 // 已删（D-18）：glassPoolOpacity / glassHoverPoolOpacity——玻璃档 p7c 起不画池
 ```
 
-### 1b. `HomeBlockChrome`（内容内缩；D-20）
+### 1b. `HomeBlockChrome`（内容内缩；D-20 · D-22）
 
 ```swift
 enum HomeBlockChrome {
     static let contentInsetHorizontal: CGFloat = 5   // 块内容与板缘的水平余量（板 = 块框，故靠内容内缩）
     static let contentInsetVertical: CGFloat = 0     // 垂直 0：紧凑块 96pt、五档内容需 94pt，再让会掉行
     static func contentInsets(includeVertical: Bool) -> EdgeInsets  // 两个站点共用的唯一工厂
+
+    // 顶部这一维由模块自装（D-22，2026-10-07）：三条取值都指向「首行墨迹上缘落在板顶下 ≈7pt」
+    static let contentInsetTopGraphics: CGFloat = 7      // 音乐（封面 36）/ 前台应用（图标 28）——墨迹 = 内容框上缘
+    static let contentInsetTopText: CGFloat = 5          // 进度 / 通知——11pt 行自带 +2.0 行首留白
+    static let contentInsetTopListHeader: CGFloat = 4    // 待办表头——10pt 字在 16pt 行里居中，自带 +3.5
 }
 ```
-- 两处应用：`HomeFlowView` 格子（`HomeBandCell` 内容外层，`includeVertical: true`）与 `HomeCalendarRow` 根（`includeVertical: false`——月历网格按行高精确排，垂直内缩会裁）。
+- 两处应用（水平）：`HomeFlowView` 格子（`HomeBandCell` 内容外层，`includeVertical: true`）与 `HomeCalendarRow` 根（`includeVertical: false`——月历网格按行高精确排，垂直内缩会裁）。
 - 上屏实测（`evidence/inset-measure.txt`）：左右余量 7/7 块 ≥ 5pt、无裁切/溢出、缝仍 8pt、黑档同形（布局共享，黑档内容同获内缩）。
+- **顶部内缩的应用点（D-22）**：`MusicHomeBlockView`（两支都装）· `FrontAppHomeBlockView`（装 + 网格预算扣掉它）· `TodosHomeBlockView`（装 + 行数按扣掉后的高度算）· `ProgressHomeBlockView`（装 + 高度档扣掉它；行距 6 → 5）· `NotificationsHomeBlockView`（装；行数固定 3 不受影响）。统计块仍走自己的 8（D-21）；镜子与日历行不装。
+- **横向那条已撤（D-23）**：`HomeBandChrome.containerInset`（8）与 `HomeBandContainerChrome` / `homeBandContainer()` 删除，`HomeBandedHomeView` 把整幅可用宽直接喂给流（`bandWidth = geometry.size.width`）。
 
 ### 2. `FloatEffects` 新增字段与两档语义
 
@@ -211,9 +220,11 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 9. **圆角弧内区的内容越界——T1 出现、T2 归零**（D-19 → D-20）：T1 上线后按实际形状模型（连续圆角 n=5）测得 `行1·音乐块左上` 15 个、`行2·通知块左上` 5 个内容像素落在板形状之外（其余 26 角为 0）——成因是这两块内容本身贴着块框（余量 0.0 / 0.5pt）而板的 15pt 圆角切角（内容位移未变，"内容画在板外"由板形状引入）。**T2 的内容内缩 5pt 把它归零**（连续圆角模型下 7/7 块、28 角全 0；保守的圆模型残 3px，是模型上界而非实测越界）。D-03 的「内容 ⊆ 板」仍是**轴对齐口径**。
 10. `effects(hovered:surface:interactive:)` 在 `interactive == false × .dark` 下返回一份**无人消费**的常驻档（含黑档白光池 0.13）——黑档的非交互站点在 modifier 里一层不装（D-17）。将来若有人复用 `effects` 画黑档非交互站点，会凭空长出白光池，需在此处挡差。
 11. 板影的有效深度（≈0.126）是**推断值**（`plateShadowOpacity × plateOpacity`），未逐像素实测。
-12. **宿主级垂直内缩仍为 0**（D-20）：上下沿用各块既有内边距（改前实测 统计 0.5 / 待办 4.0 / 前台 8.5 / 音乐 0.5pt）；要**宿主**再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。**例外是模块自己的让位**：统计块 2026-10-06 起在顶部让出 8pt（D-21——环的墨迹比布局框大 5pt，不让就被块框裁掉），那是 `StatsHomeBlockView` 自己的内边距，不是宿主的口径。
+12. **宿主级垂直内缩仍为 0**（D-20）：上下沿用各块既有内边距；要**宿主**再加垂直余量必须先改模块的行高门槛或块高——不在本批范围。**顶部留白一律走「模块自己让位」**：统计块 8pt（D-21——环的墨迹比布局框大 5pt，不让就被块框裁掉），其余五块 7 / 5 / 4（D-22，2026-10-07——三条常量在 `HomeBlockChrome`，装在各模块自己的视图上；宿主那一刀切会把统计块顶到 13pt）。
 13. **内缩与进度块门槛耦合**：进度块分到宽 ≤ 189pt 时会从五档退化成 3 行（内容区 = 宽 − 2×5 必须 ≥ 180）。块序/宽度分配一变就可能命中（`Plan` 的宽度分配改了要复核）。
 14. **内容辉光/软影随内缩内移**（D-20 的自然结果）：玻璃档的内容软影与黑档的内容辉光照的是**内容剪影**，位置随内容内移 5pt；黑档白光池按 frame 短边算、位置不变。本批未量这一层的像素差。
+15. **行 2（进度 / 通知 / 统计）右侧空 38pt**（D-23 的连带）：三块的**声明宽**合计 240 + 240 + 300 + 2×8 = 796 < 819（内容宽），按「**富余不拉伸**」（D-02，用户原话「不能强硬拉伸」）余量留**行尾**；撤掉带级容器的 8pt 后整行左移，右缘因此从 30 变 38。改前那条 30 里本来就有 8pt 是容器内缩，视觉上"能对齐"是巧合。要对齐只有两条路：① 放宽某个块的声明宽（改它自己的内部布局）；② 允许拉伸（用户明确否过）。**行 1 与日历行不受影响**（行 1 的块填满内容宽）。
+16. **日历行内容顶 4.5pt**（未动）：比 D-22 之后的组件块低约 2.5pt；本批只做用户圈中的组件块，日历行要不要一并让位另议。
 
 ## 实际交付
 
@@ -237,6 +248,26 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
   `stat-top-measure.txt`（读数：改前环顶墨迹 = 板顶、最上行宽 16–18px（切口）；改后距板顶 14px、
   最上行宽 5–9px（圆头）——与常量算出的 14px 逐像素一致）。
 
+**2026-10-07 复核修复（用户反馈两条 → D-22 · D-23）**
+- 代码：`Host/HomeStripView.swift`（`HomeBlockChrome` 三条顶部内缩常量 + 删 `containerInset` /
+  `HomeBandContainerChrome` / `homeBandContainer()`、`bandWidth` 改整幅可用宽）、
+  `Modules/Takeover/MusicModule.swift`、`Modules/FrontApp/FrontAppModule.swift`（另扣网格预算高度）、
+  `Modules/TodosModule.swift`（另行数高度）、`Modules/ProgressModule.swift`（另高度档 + **行距 6 → 5**）、
+  `Modules/NotificationsModule.swift`（行数固定，只装内缩）。
+- 测试：`HomeStripLayoutTests` 新增 `testHomeBlockContentTopInsets`（三条取值 + 进度 / 待办的高度账目
+  +「上留白不吃行数」），`testWidgetBandRendersTwoRowsAtNarrowPanelWidth` 的压缩宽 **223 → 228.5**
+  （带内可用宽回 702），`bandContentWidth(forHostingWidth:)` 改恒等映射，`testHomeBlockContentInsetStaysInRange`
+  与 `ModuleKernelTests.testProgressHomeBlockLayoutRowTiers`（`rowSpacing` 5、pitch 19、
+  边界 90/89.9）随动 → 全量 **`Executed 505 tests, with 0 failures`**（退出码 0）。
+- 证据（`.workflow/p7d-top-margins/evidence/`）：`top-before-full.png` / `top-after-full.png`、
+  `top-row1-{before,after}.png` / `top-row2-{before,after}.png`（同裁剪框对照条）、
+  `crop-row2-right-{before,after}.png`（行 2 右缘 30 → 38）、`top-margins-measure.txt`
+  （逐块读数与面板 / 行带几何）、探针 `p7d-measure.py` / `p7d-blocks.py`。
+- 上屏读数（`max(RGB)>205` 的 3×3 判据，逻辑 pt）：内容顶 ↔ 板顶 **0.0 → 7.0（音乐）/ 0.0 → 7.0
+  （前台应用，按同一条竖扫的 Δ=+7.0 核实）/ 3.5 → 7.5（待办）/ 2.0 → 7.0（进度）/ 2.0 → 7.0（通知）**，
+  统计块 7.0 未动（参照）；外层留白 **左 23 → 15、行 1 右 24 → 15.5、日历行 15 未动**，
+  行 2 右 30 → 38（§已知限制 15）。
+
 **与计划的偏离**
 1. **D-14 取「板 = 行框」退法**（口径变化 + 上屏依据见 D-16）。
 2. 实现中一度引入的 `plateHorizontalInset` 参数**已删除**（恒 0、无消费者）。
@@ -250,3 +281,5 @@ static func effects(hovered: Bool, surface: Surface, interactive: Bool = true) -
 - 两个死结构未接板（§已知限制 7）。
 - 黑档非交互站点的一份无消费者 effects 常驻档（§已知限制 10）。
 - 板影有效深度为推断值、未逐像素实测（§已知限制 11）。
+- **行 2 右侧空 38pt**（§已知限制 15）：D-23 的连带；要对齐须动声明宽或拉伸（都被否过）。
+- **日历行内容顶 4.5pt**（§已知限制 16）：本批未动，要不要与组件块对齐待定。

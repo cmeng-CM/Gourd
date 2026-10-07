@@ -274,7 +274,7 @@ static func resolveScopes(from raw: [String]) -> [Scope]              // 空表 
 var scopes: [ProgressCalculator.Scope]     // internal（T2 起；原 private）：context.config.get("visibleScopes", as: [String].self) ?? []
 enum ProgressHomeBlockLayout {
     static let rowHeight: CGFloat = 14         // 11pt 文字的自然行高（实测）
-    static let rowSpacing: CGFloat = 6         // 5×14 + 4×6 = 94 ≤ 96：96 高的块放得下五档
+    static let rowSpacing: CGFloat = 5         // 5×14 + 4×5 + 5（顶部内缩）= 95 ≤ 96：五档 + 上留白都在（[32](32-home-block-plates.md) D-22 由 6 收到 5）
     static let barHeight: CGFloat = 6          // 细条（把 .linear 的默认 20 压下来）
     static let allScopesWidth: CGFloat = 180   // 宽度档门槛（= 模块声明的最小宽；twoRowWidth = 220 已删）
     static func rowLimit(forWidth width: CGFloat) -> Int    // 非有限 → 1；≥180 → 5；更窄的有限宽（含 0）→ 3
