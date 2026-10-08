@@ -14,6 +14,9 @@ set -euo pipefail
 if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Gourd Local"'; then
   echo "✅ 已存在 \"Gourd Local\" 签名身份，无需重复配置。"
   security find-identity -v -p codesigning | grep '"Gourd Local"'
+  echo
+  echo "提醒：这张身份的私钥做过离线备份了吗？没备份请补一次（钥匙串访问 → 该身份 → 右键 → 导出 .p12）。"
+  echo "      私钥丢失后重建会生成同名新证书 = 换了签名身份，所有用户的 TCC 授权与登录项会整体重置。"
   exit 0
 fi
 
@@ -37,3 +40,9 @@ security add-trusted-cert -r trustRoot -p codeSign "$work/cert.pem"
 echo
 security find-identity -v -p codesigning | grep '"Gourd Local"'
 echo "✅ 完成。运行 sh tools/build.sh --install 安装一次，逐个授权后，后续升级不再弹授权。"
+echo
+echo "⚠️  请立刻离线备份这张证书的私钥（做一次就够，但千万别漏）："
+echo "    钥匙串访问 → 选「Gourd Local」这条身份（含私钥）→ 右键 → 导出 → 存成 .p12，"
+echo "    密码存进密码管理器，.p12 放密码管理器附件或加密备份里（不要进仓库）。"
+echo "    原因：出厂包靠这张证书的「证书 + Bundle ID」记忆用户授权。私钥丢了、或本脚本在身份"
+echo "    缺失时重新生成一张同名新证书，签名身份就变了——所有用户的 TCC 授权与登录项会整体重置。"

@@ -12,7 +12,9 @@
 #   - 构建产物（DerivedData 里）固定叫 Gourd.app，TEST_HOST 依赖该路径；
 #     对外安装与 DMG staging 才改名为「壶中天.app」（见 --install / --dmg）；
 #   - 签名优先用稳定身份 "Gourd Local"（tools/setup-signing.sh 生成），
-#     TCC 授权跨构建保留；无则退回 ad-hoc；
+#     TCC 授权跨构建保留；无则退回 ad-hoc（--dmg 会因此中止，见下）；
+#   - --dmg 有发布门禁：必须用稳定身份签 + 通过 codesign --verify --deep --strict，
+#     并打印 DMG 的 SHA256（贴进 Release 正文用）。发布流程见 docs/33-release-process.md；
 #   - DerivedData 固定在 ~/Library/Developer/Xcode/Gourd（勿用 /tmp，Xcode 27 会挂起）；
 #   - 打包全程本机完成，不依赖 GitHub。
 
@@ -51,6 +53,17 @@ else
   echo "签名身份：ad-hoc（提示：运行 tools/setup-signing.sh 生成稳定身份）"
 fi
 
+# 发布门禁一：--dmg 的产物是给对外分发的，不允许 ad-hoc。
+# ad-hoc 没有稳定签名身份——在别人机器上更容易被 Gatekeeper 直接判「已损坏」（连放行按钮都不给），
+# 且签名身份一换，所有老用户的 TCC 授权与登录项会整体重置一次。
+if [ "$do_dmg" = true ] && [ "$sign_identity" = "-" ]; then
+  echo
+  echo "中止：--dmg 的产物用于对外分发，必须用稳定身份 \"Gourd Local\" 签名。"
+  echo "      先运行 sh tools/setup-signing.sh 生成身份，再重新打包。"
+  echo "      （只装本机请换 sh tools/build.sh --install，那条路不拦。）"
+  exit 1
+fi
+
 # 落地副本的产品名收尾：Info.plist 的 CFBundleName 由 PRODUCT_NAME 生成
 # （INFOPLIST_KEY_CFBundleName 不生效），所以只能在落地副本上改，再按原身份重签。
 # 重签用同一张证书 + 同一 bundle id + 原 entitlements，TCC 与登录项的「证书 + bundle id」记忆不变；
@@ -61,6 +74,20 @@ stamp_product_name() {
     || plutil -insert CFBundleName -string "壶中天" "$target/Contents/Info.plist"
   codesign --force --options runtime --preserve-metadata=identifier,entitlements \
     --sign "$sign_identity" "$target"
+}
+
+# 发布门禁二：出厂前自校验签名完整性。要查的是**嵌套代码**——Sparkle 的 Updater.app 与两个
+# XPC 服务、Lottie、helpers，任一层签坏了，别人拿到的就是「已损坏」；
+# 而本机因为没隔离标记照样能跑，光在本机试是发现不了的。
+verify_signature() {
+  target="$1"
+  if codesign --verify --deep --strict "$target" 2>/dev/null; then
+    echo "签名校验通过：codesign --verify --deep --strict"
+  else
+    echo "中止：$target 未通过 codesign --verify --deep --strict——"
+    codesign --verify --deep --strict --verbose=2 "$target" || true
+    exit 1
+  fi
 }
 
 xcodebuild build \
@@ -122,10 +149,14 @@ if [ "$do_dmg" = true ]; then
   stage="$(mktemp -d)"
   ditto "$app" "$stage/壶中天.app"
   stamp_product_name "$stage/壶中天.app"
+  verify_signature "$stage/壶中天.app"
   ln -s /Applications "$stage/Applications"
   rm -f "$out/Gourd-$ver.dmg"
   hdiutil create -volname "壶中天" -srcfolder "$stage" -ov -format UDZO "$out/壶中天-$ver.dmg" >/dev/null
   rm -rf "$stage"
   echo "===== DMG ====="
   echo "$out/壶中天-$ver.dmg"
+  echo "===== SHA256（贴进 Release 正文）====="
+  shasum -a 256 "$out/壶中天-$ver.dmg"
+  echo "发布步骤见 docs/33-release-process.md（附件改用 ASCII 名 Gourd-$ver.dmg 上传）"
 fi

@@ -816,6 +816,9 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = DynamicIsland/DynamicIsland.entitlements;
+				// Modified for Gourd (2026-10-08): 出厂包不带 get-task-allow（调试权限，任何进程都能附加；
+				// 也是 Apple 公证的硬性拒收项）。Debug 保留注入以便调试。
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				// Modified for Gourd (2026-09-27): stable local identity (tools/setup-signing.sh) — TCC grants survive rebuilds
 				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
@@ -863,7 +866,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				// Modified for Gourd (2026-10-08): 对外声明 macOS 26 起（与 README、用户手册口径一致）。
+				// 代码对 26 专属 API 有守卫、Debug 仍按 14.6 编译，但只在 26+ 上验证过——
+				// 宁可让旧系统在启动前就被挡下，也别让人装上再崩。
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd;
 				PRODUCT_MODULE_NAME = Gourd;
