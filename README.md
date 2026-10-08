@@ -9,7 +9,7 @@
 ## 与 Atoll 的关系
 
 - **代码来路**：应用工程 fork 自 [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0），基线锁定 tag **`v2.3.3-beta.3`**（commit `c7305ec`）；上游完整历史保留在 `main`，季度同步走原生 `git merge`。
-- **改了哪些**：改名与重打包（产品名 **壶中天 / Gourd**、Bundle ID `com.cmeng.gourd`；本地产物 `dist/壶中天-<版本>.dmg`，Release 附件用 ASCII 名 `Gourd-<版本>.dmg`）；版本号改为自有序列（本版本 **0.1.1**）；加模块化内核与自建模块（启动台 / 农历 / 工作日统计 / 待办 / 快捷指令 / 通知 / 前台应用）；设置重新分组、界面中文化、默认值收敛。**上游功能一个未删**——不需要的用「默认关」表达。
+- **改了哪些**：改名与重打包（产品名 **壶中天 / Gourd**、Bundle ID `com.cmeng.gourd`；本地产物 `dist/壶中天-<版本>.dmg`，Release 附件用 ASCII 名 `Gourd-<版本>.dmg`）；版本号改为自有序列（本版本 **0.1.0**）；加模块化内核与自建模块（启动台 / 农历 / 工作日统计 / 待办 / 快捷指令 / 通知 / 前台应用）；设置重新分组、界面中文化、默认值收敛。**上游功能一个未删**——不需要的用「默认关」表达。
 - **改的时间**：首次修改 **2026-09-27**，后续改动见 git 历史与 [CHANGELOG.md](CHANGELOG.md) 顶部的自有变更段。
 - **与上游的关系**：`Atoll` 仅用于指明代码来源。**本项目与 Atoll 项目及其维护者无隶属关系，也未获其背书**（nominative use；见 [TRADEMARKS](TRADEMARKS)）。
 
@@ -29,7 +29,7 @@
 
 要求 **macOS 26（Tahoe）及以上**、**Apple 芯片（arm64）**。
 
-**方式一 · DMG**（推荐给使用者）：到 [Releases](../../releases) 下载 `Gourd-0.1.1.dmg`，打开后把「壶中天」拖进「应用程序」。
+**方式一 · DMG**（推荐给使用者）：到 [Releases](../../releases) 下载 `Gourd-0.1.0.dmg`，打开后把「壶中天」拖进「应用程序」。
 
 应用**未公证**（本项目不付费走 Apple 开发者计划），所以第一次打开会被 Gatekeeper 拦下——**放行一次即可，之后不再拦**：
 
@@ -45,7 +45,7 @@
 curl -fsSL https://raw.githubusercontent.com/cmeng-CM/Gourd/main/install.sh | bash
 ```
 
-脚本只做五件事：判断架构 → 下载 → 校验 SHA256 → 拷进「应用程序」→ 清理；不写系统目录、不改系统设置。全文就在上面那个链接里，可以**先读再跑**。装指定版本：`| bash -s -- v0.1.1`。
+脚本只做五件事：判断架构 → 下载 → 校验 SHA256 → 拷进「应用程序」→ 清理；不写系统目录、不改系统设置。全文就在上面那个链接里，可以**先读再跑**。装指定版本：`| bash -s -- v0.1.0`。
 
 **方式三 · 自己构建**（需要 Xcode；全程本机完成，不依赖 GitHub）：
 
