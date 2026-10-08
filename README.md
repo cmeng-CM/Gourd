@@ -27,13 +27,31 @@
 
 ## 安装
 
-**方式一 · DMG**（推荐）：到 [Releases](../../releases) 下载 `Gourd-0.1.0.dmg`，打开后把「壶中天」拖进「应用程序」。第一次打开若被 Gatekeeper 拦下，右键 → **打开**。
+要求 **macOS 26（Tahoe）及以上**、**Apple 芯片（arm64）**。
 
-**方式二 · 自己构建**（需要 Xcode；全程本机完成，不依赖 GitHub）：
+**方式一 · DMG**（推荐给使用者）：到 [Releases](../../releases) 下载 `Gourd-0.1.0.dmg`，打开后把「壶中天」拖进「应用程序」。
+
+应用**未公证**（本项目不付费走 Apple 开发者计划），所以第一次打开会被 Gatekeeper 拦下——**放行一次即可，之后不再拦**：
+
+1. 双击「壶中天」，出现「无法打开，因为 Apple 无法验证其是否包含恶意软件」这类提示时点**完成**；
+2. 打开**系统设置 → 隐私与安全性**，往下滚到「安全性」一栏，会看到刚被拦下的应用，点**仍要打开**；
+3. 输入密码确认，再双击一次就进去了。
+
+> 第 1 步不能跳：只有先试过一次、被拦下，「仍要打开」按钮才会出现在系统设置里。
+
+**方式二 · 命令行**（装完不弹任何提示）：从浏览器下载的包会被打上隔离标记，`curl` 不会——这条路绕开了上面整段。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cmeng-CM/Gourd/main/install.sh | bash
+```
+
+脚本只做五件事：判断架构 → 下载 → 校验 SHA256 → 拷进「应用程序」→ 清理；不写系统目录、不改系统设置。全文就在上面那个链接里，可以**先读再跑**。装指定版本：`| bash -s -- v0.1.0`。
+
+**方式三 · 自己构建**（需要 Xcode；全程本机完成，不依赖 GitHub）：
 
 ```bash
 sh tools/build.sh --install     # 构建并装到 /Applications/壶中天.app
-sh tools/build.sh --dmg         # 或在 dist/ 产出 Gourd-0.1.0.dmg
+sh tools/build.sh --dmg         # 或在 dist/ 产出 DMG
 ```
 
 应用是**菜单栏小工具**（没有 Dock 图标）：启动后看屏幕顶部（刘海 / 刘海位），鼠标悬停即展开。
@@ -46,8 +64,8 @@ sh tools/build.sh --dmg         # 或在 dist/ 产出 Gourd-0.1.0.dmg
 | [用户手册 · 设置参考](docs/guide/settings.md) | **每一项设置**是什么、默认值、互斥与灰显条件（逐页列举） |
 | [用户手册 · 组件页与各模块](docs/guide/modules.md) | 总控台怎么用；每个模块默认开不开、出现在哪、能配什么 |
 | [用户手册 · 快捷键](docs/guide/shortcuts.md) / [常见问题](docs/guide/faq.md) | 默认键一览；装好之后最容易遇到的坑 |
-| [开发文档 docs/00~32](docs/00-decisions.md) | **贡献者 / 未来的自己**：ADR、架构、模块协议、各批次的设计记录与已知限制（不是给使用者看的） |
-| [发布自检清单 docs/25](docs/25-release-smoke.md) | 打开发包前跑一遍（给发布者） |
+| [开发文档 docs/00~33](docs/00-decisions.md) | **贡献者 / 未来的自己**：ADR、架构、模块协议、各批次的设计记录与已知限制（不是给使用者看的） |
+| [发布自检清单 docs/25](docs/25-release-smoke.md) / [发布流程 docs/33](docs/33-release-process.md) | 打开发包前跑一遍；打包 → 上传 → Release 的完整步骤（给发布者） |
 
 ## 常见问题（选摘）
 
@@ -60,7 +78,7 @@ sh tools/build.sh --dmg         # 或在 dist/ 产出 Gourd-0.1.0.dmg
 ## 贡献
 
 - 提 issue / PR 都欢迎；提交信息请写清「改了什么、为什么、怎么验证的」。
-- 动代码前先看 [docs/00-decisions.md](docs/00-decisions.md)（12 条 ADR）与 [docs/01-architecture.md](docs/01-architecture.md)；模块相关改动读 [docs/06-module-protocol.md](docs/06-module-protocol.md) 与 [docs/07-config-and-events.md](docs/07-config-and-events.md)。
+- 动代码前先看 [docs/00-decisions.md](docs/00-decisions.md)（13 条 ADR）与 [docs/01-architecture.md](docs/01-architecture.md)；模块相关改动读 [docs/06-module-protocol.md](docs/06-module-protocol.md) 与 [docs/07-config-and-events.md](docs/07-config-and-events.md)。
 - 本地门禁：`xcodebuild test … -only-testing:DynamicIslandTests` 全绿 + `sh tools/build.sh` 能出包。
 
 ## 归属与致谢
