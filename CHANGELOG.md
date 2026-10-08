@@ -5,6 +5,37 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [未发布]
+
+发布与安装路线（v0.1.0 之后）。决策与实测依据见 [ADR-0013](docs/00-decisions.md)，
+完整发布步骤见 [docs/33-release-process.md](docs/33-release-process.md)。
+
+### 新增
+
+- **命令行安装** `install.sh`：`curl -fsSL .../main/install.sh | bash`。curl 取包不带 quarantine
+  隔离标记，装完首启不弹 Gatekeeper；脚本先校验 Release 的 `SHA256SUMS` 再安装，校验不过时中止且不落任何文件。
+- **发布流程文档** [docs/33](docs/33-release-process.md)：打包 → 改名 + 校验和 → 打标签 → 建 Release 的完整步骤，含 Release 正文模板与发布后自检。
+
+### 变更
+
+- **Release 包的签名与系统声明**（`DynamicIsland.xcodeproj`）：
+  - Release 配置加 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`——出厂包不再带 `get-task-allow`
+    （调试权限，任何进程可附加；同时也是 Apple 公证的硬性拒收项）。Debug 保留注入以便调试。
+  - Release 的 `MACOSX_DEPLOYMENT_TARGET` 由 `14.6` 提到 `26.0`，与 README / 用户手册的
+    「macOS 26 起」口径一致，避免旧系统装得上却跑不起来。
+- **打包脚本发布门禁**（`tools/build.sh`）：`--dmg` 时若签名身份退化成 ad-hoc 则**拒绝出包**
+  （ad-hoc 在别人机器上更容易被判「已损坏」，且会重置老用户的 TCC 授权与登录项）；
+  出厂前对 staging 副本跑 `codesign --verify --deep --strict`，并打印 DMG 的 SHA256。
+- **安装说明改准**（README、用户手册、FAQ）：删除「右键 → 打开」——macOS 15 起 Apple 移除了这个
+  绕过入口，而本应用要求 macOS 26；统一改为「双击被拦 → 系统设置 → 隐私与安全性 → 仍要打开」。
+  同时写明应用只出 arm64、未公证属既定事实。
+
+### 说明
+
+- **未公证是既定前提**（不付费走 Apple 开发者计划）：做不到「下载双击就开」，
+  零成本的上限是「拦一次 + 说明写清楚」，或走命令行安装。
+- `Gourd Local` 签名身份一旦更换，全体用户的 TCC 授权与登录项会重置——私钥需离线备份。
+
 ## [0.1.0] - 2026-09-30
 
 第一个冻结的自用版。本仓库是 [Atoll](https://github.com/Ebullioscopic/Atoll) 的**修改版本**

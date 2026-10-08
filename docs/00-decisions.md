@@ -278,3 +278,42 @@
 - 仍不做的缩减为 3 项：照片浏览、番茄钟、AI agent 状态面板；逐字歌词 + 简繁转换不在本轮（若用起来觉得缺再单独提）。
 - 新增功能的详细设计（数据源/关键 API/配置项/权限/降级/工作量）见 [09](09-features-and-mechanisms.md) §5。
 - **待你选定的唯一硬前置**：Bundle ID 前缀（反写域名）。说明与同生态实例见 [09](09-features-and-mechanisms.md) §8.3——**已定：`com.cmeng.gourd`**（Debug 加 `.dev`）。它同时决定模块 id 的保留前缀，需一并定。
+
+---
+
+## ADR-0013：不付费公证——安装摩擦由「说明写准 + 命令行安装」承担
+
+**状态**：已采纳（2026-10-08）
+
+**背景**：项目面向所有人开源分发，但签名路线是自签证书 `Gourd Local` + 不公证、不付费 Apple 开发者计划。对**已发布的 v0.1.0** 逐项实测（2026-10-08）：
+
+| 核验项 | 结果 |
+|---|---|
+| DMG 自身 | `code object is not signed at all`；无公证票据；`spctl` 判 rejected |
+| 应用签名 | `Authority=Gourd Local`、`TeamIdentifier=not set`——自签，非 Apple 签发的 Developer ID |
+| 签名完整性 | `codesign --verify --deep --strict` 通过（所以别人看到的是「无法验证开发者」，不是「已损坏」） |
+| Apple 自带发布前检查 | `syspolicy_check distribution` 报 **Fatal：Notary Ticket Missing** |
+| 本机为何「没问题」 | 钥匙串用户域把 `Gourd Local` 标了「代码签名」信任（`dump-trust-settings` 里的 Cert 6）——**这条信任只在开发机上有**，别人的机器没有 |
+| Gatekeeper 何时拦 | 只在包带 `com.apple.quarantine` 隔离标记时拦。`curl` 落盘不带该标记（实测只有 `com.apple.provenance`）；Homebrew cask **反而会主动打上**（源码 `Quarantining ...`，来源写 "Homebrew Cask"），所以 brew 救不了 |
+
+另外发现 `com.apple.security.get-task-allow = true` 被注入进了出厂包（Xcode 的 base entitlements），而它是 Apple 公证的硬性拒收项。
+
+**决策**：**不付费**。安装摩擦由两件事承担，两者都零成本：
+
+1. **DMG 路径**：安装说明写准放行步骤——双击被拦 →**系统设置 → 隐私与安全性 → 仍要打开**；删掉「右键 → 打开」。
+2. **命令行安装**（[install.sh](../install.sh)）：`curl` 取包（不带隔离标记）→ 校验 `SHA256SUMS` → 装进「应用程序」。这条路首启无任何提示。
+
+配套的三件必做：
+
+- 出厂包**去掉 `get-task-allow`**（Release 配 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`）；它同时是将来公证的前置条件。
+- `tools/build.sh --dmg` 加**发布门禁**：必须用稳定身份签（无身份时拒绝出包，不再静默退 ad-hoc）+ 出厂前 `codesign --verify --deep --strict` 自校验（查嵌套代码——本机没隔离标记，嵌套签名坏了照样能跑，本地试不出来）。
+- **`Gourd Local` 私钥离线备份**：签名身份一换，全体用户的 TCC 授权与登录项整体重置；它现在是「全员权限不重置」的锚点。
+
+发布流程据此成文：[docs/33-release-process.md](33-release-process.md)。
+
+**后果**：
+
+- **「下载双击就开」做不到**；零成本的上限是「拦一次 + 说明清楚」或「走命令行无提示」。已如实写进 README、用户手册与 Release 正文。
+- **别指望免费公证**：Apple 的费用豁免只面向非营利 / 教育 / 政府机构，个人开源项目不在内。
+- 将来若付 $99/年，路线是：Developer ID 重签（含内嵌 framework / helper / XPC）→ `notarytool` 公证 → `stapler staple`；届时**新增一条 ADR 修订本条目**，不要改这里。要注意换签名身份会让现有用户的授权重算一次。
+- 应用只出 **arm64**，Intel 机器不支持——已在安装说明与 `install.sh` 前置检查里挡掉。
