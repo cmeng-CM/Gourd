@@ -350,6 +350,20 @@ public final class ModuleRegistry: ObservableObject {
 
     // MARK: - 接管查询（docs/20 §接口与数据形状 2）
 
+    /// 该模块**此刻在展开面板的 tab 条上有没有位置**（`GourdModule.isTabVisible()` 的转发；
+    /// 未注册的模块按 `true`——与 `tabEntries` 的缺省口径一致）。
+    ///
+    /// 与 `tabEntries` 的差别是**不看启用状态**：设置页按它把「面板组件」节的行分成两节
+    /// （有位置可排的带 ↑↓、没有位置的进「功能组件」只有开关），而**关掉的模块那一行仍留在
+    /// 原来那一节**（「关掉的组件必须还在名单里」，见 `ModuleSettingsSection.panelRows`）。
+    /// 今天唯一的差别出现在计时器：`timerDisplayMode ≠ .tab` 时它的 tab 不存在（`isTabVisible()`
+    /// 重写过），于是它的卡片落进「功能组件」、不再挂一个没用的 ↑↓。
+    ///
+    /// **每次读现问一次**（不缓存，与 `takeoverEnableKey(for:)` 同一条口径）。
+    public func hasPanelTabPlacement(for id: String) -> Bool {
+        moduleTypes[id]?.isTabVisible() ?? true
+    }
+
     /// 该模块的**启用真源**键（docs/20 §做法 机制一）：非 nil = 接管模块，组合根的启用门
     /// 直接读它；nil = 未注册 / 非接管模块。
     ///

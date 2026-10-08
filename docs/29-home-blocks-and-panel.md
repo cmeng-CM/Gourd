@@ -693,3 +693,20 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 **为什么箭头在笔记行、槽位却是剪贴板**：面板上就只有**一条**「笔记 / 剪贴板」tab（`TabSelectionView.slots` 的 `clipboard:` 槽；label 按 `enableNotes` 在 Notes / Clipboard 之间切，`separateTab` 档位下还是同一槽的左右两半）。一条槽一个 ↑↓，而**位置对用户有意义的那一行是笔记**（他的 tab 就叫笔记）；剪贴板的位置在标题栏图标行、根本没得排（`notchTab` 档位）。
 
 **用例**：`sortableHostRows` / `switchOnlyHostRows` 各钉一条；`clipboard` 槽位的持有行按「哪一行带 `panelTab == .clipboard`」断言（不认键名——键名刻意不动）。全量 **507 条 0 失败**。
+
+### 2026-10-08 · p8e：计时器按「有没有 tab 位置」落进「功能组件」节
+
+**用户**：「计时器也应该属于功能组件」。
+
+**判据**：一条行该不该有 ↑↓，看它**此刻在面板 tab 条上有没有位置**——不是看它是不是模块。计时器是唯一的特例：它的展开面板 tab **只在「计时器控制显示为 = 标签页」时存在**（`TimerModule.isTabVisible()` 重写为 `timerDisplayMode == .tab`，docs/20 §机制五），所以在 `popover` / 别的档位下它本来就没有位置可排（用户当前档位正是 `popover`）。
+
+**改法**：
+
+| 落点 | 改动 |
+|---|---|
+| `ModuleRegistry` | 新增 `hasPanelTabPlacement(for:)`（`isTabVisible()` 的转发；未注册按 `true`，与 `tabEntries` 缺省一致）。**不看启用状态**——关掉的模块那一行仍留在原节（「关掉的组件必须还在名单里」），否则用户一关开关行就在两节之间跳 |
+| `ModuleSettingsSection` | 面板组件的模块行拆成 `tabPlacedPanelRows`（进「面板组件」、带 ↑↓）/ `tablessPanelRows`（进「功能组件」）；`panelSectionRows` 的可排名单只用前者 |
+| `ModuleSettingsCard` | `isFirst/isLast/moveUp/moveDown` 四个参数收成一个可选 `order: OrderButtons?`——`nil` = **整组箭头不画**（不是画两个禁用的：死箭头比没有更坏，与取色器行同一条先例） |
+| 脚注 | 两节脚注各补一句：计时器非标签页档在「功能组件」、拨到标签页后卡片回到「面板组件」并带上 ↑↓；「面板组件」那句「模块行」改成「**有 tab 的**模块行」 |
+
+**上屏**：本轮未做（验证时用户正在用机器；设置窗在其 App 非前台时会隐藏、像素拿不到，且不注入合成事件）。判据由用例钉住（真计时器模块走两个档位），分节渲染吃同一条判据。**用例 508 条 0 失败**。

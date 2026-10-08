@@ -2305,6 +2305,39 @@ final class TakeoverEnablementTests: XCTestCase {
         )
     }
 
+    /// **计时器的分节判据**（2026-10-08 用户：「计时器也应该属于功能组件」）：它的展开面板 tab 只在
+    /// 「计时器控制显示为 = 标签页」时存在（`TimerModule.isTabVisible()` 重写过），因此在**非标签页档**
+    /// 它的卡片落进「功能组件」节（只有开关、不挂 ↑↓）、拨回标签页档就回到「面板组件」节（带 ↑↓）。
+    ///
+    /// 判据是注册表那条投影 `hasPanelTabPlacement(for:)`——**纯配置口径、不看启用状态**：关掉的模块
+    /// 那一行仍留在原节（「关掉的组件必须还在名单里」），否则用户一关开关那一行就会在两节之间跳。
+    ///
+    /// 这里只钉判据（分节渲染吃的是同一条：`panelSectionRows` 取 `tabPlacedPanelRows`、
+    /// `featuresSection` 取 `tablessPanelRows`），并用真模块类型（计时器）走一遍两个档位。
+    func testTimerCardBelongsToFeatureComponentsUnlessItsTabIsShown() async {
+        let keys = [Defaults.Keys.timerDisplayMode.name]
+        let snapshot = snapshotValues(of: keys)
+        defer { restoreValues(snapshot, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        registry.register([TimerModule.self], enabled: { _ in true })
+
+        Defaults[.timerDisplayMode] = .tab
+        XCTAssertTrue(
+            registry.hasPanelTabPlacement(for: TimerModule.moduleID),
+            "标签页档：面板上真有一条计时器 tab → 可排（留在「面板组件」节）"
+        )
+        Defaults[.timerDisplayMode] = .popover
+        XCTAssertFalse(
+            registry.hasPanelTabPlacement(for: TimerModule.moduleID),
+            "非标签页档（本机当前档位）：tab 不存在 → 落进「功能组件」节（只有开关）"
+        )
+        XCTAssertTrue(
+            registry.hasPanelTabPlacement(for: "com.cmeng.gourd.not-registered"),
+            "未注册的 id 按 true（与 `tabEntries` 的缺省口径一致）——没注册不等于「没有位置」"
+        )
+    }
+
     /// **登记的键都真的在用**（T5 验收：「宿主行键解析」与「登记的键真的在用」两半里的后一半）：
     /// 四条宿主键必须落在两个消费方视图**真的在读**的门槛键名单里——
     /// `TabSelectionView.hostPanelGateKeys`（左列三条 tab）∪ `DynamicIslandHeader.hostPanelGateKeys`

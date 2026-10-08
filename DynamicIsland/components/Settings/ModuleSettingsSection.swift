@@ -594,6 +594,22 @@ struct ModuleSettingsSection: View {
             .map(surfaceRow)
     }
 
+    /// 面板组件的模块行里**有位置可排**的那些（判据 `registry.hasPanelTabPlacement`，纯配置口径、
+    /// 不看启用状态）：进「面板组件」节、带 ↑↓。
+    private var tabPlacedPanelRows: [SurfaceRow] {
+        panelRows.filter { registry.hasPanelTabPlacement(for: $0.id) }
+    }
+
+    /// 面板组件的模块行里**没有位置可排**的那些（今天只有一档：`timerDisplayMode ≠ .tab` 时的
+    /// **计时器**——它的展开面板 tab 只在「计时器控制显示为 = 标签页」时存在，`isTabVisible()` 重写过）：
+    /// 进「功能组件」节、只有开关（2026-10-08 用户：「计时器也应该属于功能组件」）。
+    ///
+    /// **只看配置、不看启用状态**：关掉的模块那一行仍留在「面板组件」节（「关掉的组件必须还在
+    /// 名单里」，见 `panelRows`），否则用户一关开关行就跳节。
+    private var tablessPanelRows: [SurfaceRow] {
+        panelRows.filter { !registry.hasPanelTabPlacement(for: $0.id) }
+    }
+
     /// 「面板组件」节**可排名单**里的一行（p6-ui-polish / T9）：**模块行 + 宿主三 tab 行**
     /// （见 `panelSectionRows`）。取色器行**不是可排行**（它不是面板 tab），因此不属于本枚举——
     /// 它由 `surfaceSection` 单独渲染在名单之后（只有开关、没有 ↑↓）。
@@ -615,17 +631,18 @@ struct ModuleSettingsSection: View {
     /// 按**当前有效序**渲染——算式是 `panelMovableIDs`（唯一一份：`PanelTabSequence.orderedIDs`
     /// → `ModuleRegistry.panelRank`），与 `TabSelectionView` 的面板条**同一张表**。
     ///
-    /// 名单成员仍是**全量 manifest**（含未启用，见 `panelRows`）+ 三条宿主 tab；**取色器不在名单里**
-    /// （`hostPanelRows` 里 `panelTab == nil` 的那一行，渲染在节末、没有 ↑↓）。
+    /// 名单成员 = **有位置可排的**模块行（`tabPlacedPanelRows`：全量 manifest 里声明 `.expanded`
+    /// 且 `hasPanelTabPlacement` 的那些，含未启用）+ 三个可排宿主槽位；**没有位置的模块行**
+    /// （计时器在非标签页档）与**只有开关的宿主行**（剪贴板 / 取色器）都渲染在「功能组件」节。
     /// 默认（`panelOrder` 空）：宿主三行排在最前（默认序为负，见 `PanelHostTab`）——
     /// 「设置页前三行宿主行有 ↑↓」就是这一条。
     private var panelSectionRows: [PanelSectionRow] {
         var rowsByID: [String: PanelSectionRow] = [:]
-        for row in panelRows { rowsByID[row.id] = .module(row) }
+        for row in tabPlacedPanelRows { rowsByID[row.id] = .module(row) }
         for row in Self.hostPanelRows {
             if let tab = row.panelTab { rowsByID[tab.id] = .hostTab(row, tab) }
         }
-        let moduleEntries = panelRows.map { PanelTabSequence.Entry(id: $0.id, defaultOrder: $0.defaultOrder) }
+        let moduleEntries = tabPlacedPanelRows.map { PanelTabSequence.Entry(id: $0.id, defaultOrder: $0.defaultOrder) }
         return Self.panelMovableIDs(moduleEntries: moduleEntries, panelOrder: panelOrder)
             .compactMap { rowsByID[$0] }
     }
@@ -641,10 +658,12 @@ struct ModuleSettingsSection: View {
                         registry: registry,
                         manifest: surfaceRow.manifest,
                         group: group,
-                        isFirst: index == 0,
-                        isLast: index == rows.count - 1,
-                        moveUp: { move(surfaceRow.id, in: group, direction: .up) },
-                        moveDown: { move(surfaceRow.id, in: group, direction: .down) }
+                        order: OrderButtons(
+                            isFirst: index == 0,
+                            isLast: index == rows.count - 1,
+                            moveUp: { move(surfaceRow.id, in: group, direction: .up) },
+                            moveDown: { move(surfaceRow.id, in: group, direction: .down) }
+                        )
                     )
                 case .hostTab(let hostRow, let tab):
                     HostSurfaceRowView(
@@ -673,20 +692,32 @@ struct ModuleSettingsSection: View {
         }
     }
 
-    /// **「功能组件」节**（2026-10-08 用户要求：「像剪贴板、取色器这些不能移动的，增加一个『功能组件』
-    /// 项，只有开启关闭的设置」）：面板上那几个**只有开关、没有 ↑↓** 的元素。
+    /// **「功能组件」节**（2026-10-08 用户两轮要求：「像剪贴板、取色器这些不能移动的，增加一个
+    /// 『功能组件』项，只有开启关闭的设置」+「**计时器也应该属于功能组件**」）：面板上那几个
+    /// **只有开关、没有 ↑↓** 的元素。
     ///
-    /// 判据就是 `switchOnlyHostRows`（`panelTab == nil`）——**一张表两处渲染**：可排的进「面板组件」
-    /// 节（带箭头），不可排的进本节（只有开关）。它们不在面板 tab 条上（剪贴板的图标档与取色器都在
-    /// 标题栏），所以没有位置可排——给箭头就是「拖了没用」。
+    /// 两条来源（一张表 + 一条投影判据，都不在这里另写 filter）：
+    /// - `switchOnlyHostRows`——只带开关的宿主行（剪贴板 / 取色器：它们不在 tab 条上，剪贴板的
+    ///   图标档与取色器都在标题栏）；
+    /// - `tablessPanelRows`——**没有位置可排的模块行**（今天只有一档：`timerDisplayMode ≠ .tab`
+    ///   时的计时器——它的 tab 只在「计时器控制显示为 = 标签页」时存在）。卡片照旧（开关 + 配置行
+    ///   + 「效果 / 出现位置」），只是**不挂箭头**。
     ///
     /// 不是 `ModuleSurfaceGroup` 的第三个 case：那一族枚举是**模块 surface** 的词汇（`.home` /
-    /// `.expanded`），本节装的是宿主元素、不读 manifest（硬塞一个 case 会让 `hasOtherSurface` /
-    /// `isOn` 那几个纯函数多一条没有意义的分支）。
+    /// `.expanded`），本节装的是宿主元素与「今天没有 tab 的模块」，两类的开关口径都与那一族不同
+    /// （硬塞一个 case 会让 `hasOtherSurface` / `isOn` 那几个纯函数多一条没有意义的分支）。
     private var featuresSection: some View {
         Section {
             ForEach(Self.switchOnlyHostRows) { row in
                 HostSurfaceRowView(row: row)
+            }
+            // 没有位置可排的模块行（计时器那一档）：卡片照旧、`order` 不传 → 整组箭头不画。
+            ForEach(tablessPanelRows) { row in
+                ModuleSettingsCard(
+                    registry: registry,
+                    manifest: row.manifest,
+                    group: .panel
+                )
             }
         } header: {
             Text(LocalizedStringKey("settings.modules.group.features"))
@@ -1567,11 +1598,9 @@ private struct ModuleSettingsCard: View {
     let manifest: ModuleManifest
     /// 本卡片在哪一节（决定：开关读哪张摘除名单、写哪个顺序键、上移 / 下移重排哪一份名单）。
     let group: ModuleSurfaceGroup
-    /// 本节里的位置（两端置灰那两个按钮）。
-    let isFirst: Bool
-    let isLast: Bool
-    let moveUp: () -> Void
-    let moveDown: () -> Void
+    /// 上移 / 下移按钮的装配（**nil = 这一行没有位置可排，整组箭头不画**——「功能组件」节里的
+    /// 模块卡就是这一档，见 `ModuleSettingsSection.tablessPanelRows`）。
+    var order: OrderButtons? = nil
 
     /// 本节的**摘除名单**（两节的开关各读各自的那一张；`@Default` 是 `DynamicProperty`，
     /// 写盘即重绘本卡片——另一个面那一节的卡也会重绘，因为读的是同一个键的两条路）。
@@ -1650,7 +1679,18 @@ private struct ModuleSettingsCard: View {
             // 上移 / 下移：**在本节里**重排这一行（写本节的顺序键，见 `move(_:in:direction:)`）。
             // 按钮形态与文案沿用既有那条顺序行的口径（`Move Up` / `Move Down`，`borderless` +
             // 两端置灰），**不引入拖拽**（docs/26 §明确不做）；与可排宿主行共用 `OrderButtons`。
-            OrderButtons(isFirst: isFirst, isLast: isLast, moveUp: moveUp, moveDown: moveDown)
+            //
+            // **`order == nil` = 这一行没有位置可排**（2026-10-08：计时器在非标签页档落进
+            // 「功能组件」节）——那时**整组箭头不画**，不是画两个禁用的（死箭头比没有更坏，
+            // 与取色器行同一条先例）。
+            if let order {
+                OrderButtons(
+                    isFirst: order.isFirst,
+                    isLast: order.isLast,
+                    moveUp: order.moveUp,
+                    moveDown: order.moveDown
+                )
+            }
 
             Toggle(isOn: toggle) {
                 Text(ModuleRegistry.label(for: manifest))
