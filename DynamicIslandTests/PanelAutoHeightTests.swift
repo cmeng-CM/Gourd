@@ -81,6 +81,11 @@
 //  判据 `showsSideLyricsHomeLayout(...)` 与键映射 `homePanelTabKey(showsSideLyricsLayout:)`
 //  两处都由用例直接钉住；标准路径（首页键 + 接缝写的那份值）逐字不变。
 //
+//  **笔记页两支的账本键**（p8b-notes-height，2026-10-08）：**列表档**（卡片网格，有自然高）走
+//  `PanelContentHeight.notesTab`（进测量名单 → 面板贴卡片）；**编辑 / 分栏档**（`TextEditor` /
+//  两栏并排，都是「填满可用高」的形状）走 `notesFixedTab`（名单外 → 回落手动值）。
+//  键映射 `notesPanelTabKey(for:)` 由用例直接钉住。
+//
 //  **hover 退出 × 面板自己动**（p6-ui-polish 回归修复：「切日历页不再塌回关闭态」）：
 //  auto 高度切页会在指针底下把面板缩短，SwiftUI 的 `.onHover(false)` 与隐藏态轮询都会把它
 //  读成「指针离开面板」——判据 `shouldHonorHoverExit` 拿**面板与指针最后一次接触**时的窗口
@@ -858,9 +863,10 @@ final class PanelAutoHeightTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
-    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6、T8）：内容随条数 / 格子数 / 月周数变
-    /// 的那几页——四个模块页 + **架子**（宿主页，T6 进名单）+ **日历**（模块页，T8 进名单）；
-    /// 另外两页刻意不在里面，逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
+    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6、T8 + 2026-10-08 p8b）：内容随条数 /
+    /// 格子数 / 月周数 / 卡片行数变的那几页——四个模块页 + **架子**（宿主页，T6 进名单）+ **日历**
+    /// （模块页，T8 进名单）+ **笔记页列表档**（p8b 进名单）；另外几页刻意不在里面（`timer` / 终端 /
+    /// 笔记页的编辑与分栏档），逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
     func testMeasuredTabListIsTheCountDrivenPages() {
         XCTAssertEqual(
             PanelContentHeight.measuredTabs,
@@ -874,8 +880,12 @@ final class PanelAutoHeightTests: XCTestCase {
                 // p6-ui-polish / T8：左栏固定格高月网格（36N + 52）+ 右栏在其高内滚动 —— 高是当月周数
                 // 的函数（旧版面「自己的高是面板高的函数」已不成立，见名单里的注释）。
                 CalendarModule.moduleID,
+                // 2026-10-08 p8b-notes-height：笔记页**列表档**的卡片网格 —— 高是卡片行数的函数。
+                // 同一页的编辑 / 分栏档没有自然高（`TextEditor` 填满 + 内滚），走 `notesFixedTab`
+                // （**不在名单里**）回落手动值；两档的键由 `notesPanelTabKey(for:)` 分派。
+                PanelContentHeight.notesTab,
             ],
-            "名单 = 内容随条数 / 格子数 / 月周数变的那几页（多一个 / 少一个都要连理由一起改）"
+            "名单 = 内容随条数 / 格子数 / 月周数 / 卡片行数变的那几页（多一个 / 少一个都要连理由一起改）"
         )
         XCTAssertEqual(PanelContentHeight.hysteresis, 8, "滞回阈值 = 8pt（docs/29 §做法 机制六）")
 
@@ -885,9 +895,12 @@ final class PanelAutoHeightTests: XCTestCase {
             PanelContentHeight.isMeasuredTab(PanelContentHeight.homeTab),
             "首页有算出来的那一份，不走测量"
         )
-        // 未覆盖的两页：计时器（`.frame` 吃面板高 + 250 的 per-tab 下限）、终端（整块填满，没有自然高）。
+        // 未覆盖的几页：计时器（`.frame` 吃面板高 + 250 的 per-tab 下限）、终端（整块填满，没有自然高）、
+        // 侧歌词档首页（没有自己的内容高）、笔记页的编辑 / 分栏档（`TextEditor` / 两栏并排，都是填满形状）。
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("com.cmeng.gourd.timer"))
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("terminal"))
+        XCTAssertFalse(PanelContentHeight.isMeasuredTab(PanelContentHeight.sideLyricsHomeTab))
+        XCTAssertFalse(PanelContentHeight.isMeasuredTab(PanelContentHeight.notesFixedTab))
     }
 
     /// **日历进测量名单**（p6-ui-polish / T8，docs/30 §做法 §机制六 / §接口与数据形状）。
@@ -1670,6 +1683,57 @@ final class PanelAutoHeightTests: XCTestCase {
         // 切回标准路径：首页槽照常当班（逐字不变的那一条）。
         ledger.selectTab(homePanelTabKey(showsSideLyricsLayout: false))
         XCTAssertEqual(ledger.current, 400, "标准路径仍读首页那一份")
+    }
+
+    // MARK: - 笔记页的两档两键（p8b-notes-height）
+
+    /// **列表档贴内容、编辑 / 分栏档固定**（2026-10-08 用户拍板：「列表自动贴合，编辑固定即可」）。
+    ///
+    /// 与 `sideLyricsHomeTab` 同一个坑的第二例：一个页面两种形态、账本只有一个槽。判据只认
+    /// `NotesLayoutState`（`.editor` = 正在编辑某条 / 新建；`.split` = 剪贴板 + 笔记并排，只在
+    /// 「剪贴板显示方式 = `separateTab`」那一档出现）——**列表档**走 `notesTab`（名单内 → 探针
+    /// 上报 → 面板贴卡片网格），其余两档走 `notesFixedTab`（名单外 → `current` = nil → 尺寸层
+    /// 回落手动值；320 / 260 仍是它们各自的下限，见 `calculateRequiredNotchSize`）。
+    func testNotesListLayoutIsMeasuredWhileEditorAndSplitFallBackToTheManualHeight() {
+        // ① 键映射（`ContentView.swift` 的文件级函数）。
+        XCTAssertEqual(notesPanelTabKey(for: .list), PanelContentHeight.notesTab)
+        XCTAssertEqual(notesPanelTabKey(for: .editor), PanelContentHeight.notesFixedTab)
+        XCTAssertEqual(
+            notesPanelTabKey(for: .split), PanelContentHeight.notesFixedTab,
+            "分栏档两侧都是「填满可用高」的形状 → 同样回落手动值（本机档位下不可达，键先钉住）"
+        )
+        XCTAssertTrue(PanelContentHeight.isMeasuredTab(PanelContentHeight.notesTab), "列表档要在测量名单里")
+        XCTAssertFalse(
+            PanelContentHeight.isMeasuredTab(PanelContentHeight.notesFixedTab),
+            "固定档没人上报（探针只在列表档挂——判据在 `NotchNotesView` 的 `isCurrent` 里）"
+        )
+
+        // ② 账本行为：列表档量出 520 → 切编辑档 → 值被清掉（回落手动值，不是借用 520）→ 切回来
+        //    一步到位（缓存里那 520，不先落手动值——与 `heightCache` 的既有口径一致）。
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        ledger.selectTab(notesPanelTabKey(for: .list))
+        ledger.report(520, for: PanelContentHeight.notesTab)
+        XCTAssertEqual(ledger.current, 520, "列表档：卡片网格量出来的高当班")
+
+        ledger.selectTab(notesPanelTabKey(for: .editor))
+        XCTAssertNil(ledger.current, "编辑档：没有值 → 尺寸层回落手动值")
+        XCTAssertEqual(ledger.heightCache[PanelContentHeight.notesTab], 520, "列表档的量值留着（按页缓存）")
+
+        ledger.selectTab(notesPanelTabKey(for: .list))
+        XCTAssertEqual(ledger.current, 520, "切回列表档：一步到位（读缓存）")
+
+        // ③ **为什么探针的闸门必须有档位那一条**（把隐含约定写成断言）：账本条款 ③ 是「换 tab
+        //    无条件接受」，而编辑档切换的过渡里旧列表还活着——它只要量到新尺寸，这一条就会把它的
+        //    上报收下（下面这行就是那条路）。闸门（`NotchNotesView` 的
+        //    `coordinator.notesLayoutState == .list`）因此不是可选的。
+        ledger.selectTab(notesPanelTabKey(for: .editor))
+        XCTAssertNil(ledger.current)
+        ledger.report(700, for: PanelContentHeight.notesTab)
+        XCTAssertEqual(ledger.current, 700, "条款 ③：旧列表若还能上报，编辑档就会拿到列表的高")
+        XCTAssertEqual(ledger.activeTab, PanelContentHeight.notesTab)
     }
 
     // MARK: - hover 退出 × 面板自己动（p6-ui-polish 回归修复：「切日历页不再塌回关闭态」）

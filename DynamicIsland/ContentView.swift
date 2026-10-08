@@ -295,6 +295,23 @@ func homePanelTabKey(showsSideLyricsLayout: Bool) -> String {
     showsSideLyricsLayout ? PanelContentHeight.sideLyricsHomeTab : PanelContentHeight.homeTab
 }
 
+/// 笔记页 tab 的**高度账本键**（2026-10-08 p8b-notes-height）——与 `homePanelTabKey` 同形、
+/// 同一个坑的第二例：**一个页面有两种形态，账本只有一个槽**。
+///
+/// - **列表档**（`NoteListView`：头部 + 卡片网格）有自然高（卡片行数）→ 走 `notesTab`，
+///   探针在 `NotchNotesView` 里用同一个常量挂上，面板贴卡片；
+/// - **编辑档**（`TextEditor` 填满 + 内滚）与**分栏档**（左剪贴板 + 右笔记，`separateTab`
+///   档位下才出现）都没有自然高 → 走 `notesFixedTab`（**没人上报** → `current` = nil →
+///   尺寸层回落手动值；`NotesLayoutState` 的 320 / 260 仍是它们各自的下限）。
+///
+/// 判据只认 `NotesLayoutState`（`NotchNotesView.updateLayoutState()` 是它唯一的写入口，
+/// 编辑态 = `.editor`）——**不**在这里重判 `isEditingNewNote` / `selectedNoteId`（那两个是
+/// 视图私有状态，重判就是第二份口径）。
+@MainActor
+func notesPanelTabKey(for layoutState: NotesLayoutState) -> String {
+    layoutState == .list ? PanelContentHeight.notesTab : PanelContentHeight.notesFixedTab
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -1600,7 +1617,9 @@ struct ContentView: View {
         case .stats:
             return "stats"
         case .notes:
-            return "notes"
+            // 两档两键（2026-10-08 p8b-notes-height）：列表档走 `notesTab`（名单内 → 贴卡片），
+            // 编辑 / 分栏档走 `notesFixedTab`（名单外 → 回落手动值）。判据见 `notesPanelTabKey(for:)`。
+            return notesPanelTabKey(for: coordinator.notesLayoutState)
         case .clipboard:
             return "clipboard"
         case .llmUsage:

@@ -99,6 +99,24 @@ struct NotchNotesView: View {
                     .opacity(0)
                     .allowsHitTesting(false)
                 }
+                // **列表档的自然高上报**（2026-10-08 p8b-notes-height）：量的是这一页的理想高
+                // （头部 + 卡片网格），与面板当前多高无关——所以面板会贴着卡片收（少几张卡片就
+                // 矮下来），不再是「手动高度 682 站着、底下半屏空玻璃」。
+                //
+                // 闸门两条（`isCurrent`）：当班的是笔记页**且**此刻是**列表档**。第二条不是可选的：
+                // 切到编辑档时 `selectedPanelTabKey` 会换成 `notesFixedTab`（没人上报的键），而
+                // 旧列表在过渡里还活着——少了档位这一条，它的上报会被账本条款 ③「换 tab 无条件
+                // 接受」收下，编辑档就拿到了列表档的高。
+                .panelContentHeightReport(
+                    tab: PanelContentHeight.notesTab,
+                    headerHeight: PanelAutoHeight.panelHeaderHeight(
+                        effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
+                    ),
+                    isCurrent: {
+                        coordinator.currentView == .notes
+                            && coordinator.notesLayoutState == .list
+                    }
+                )
             }
         }
         .frame(maxHeight: .infinity)

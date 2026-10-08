@@ -119,6 +119,26 @@ final class PanelContentHeight: ObservableObject {
     /// 就是这个字面量，探针在 `NotchShelfView` 里用同一个常量挂上——两边不各写一份字符串）。
     static let shelfTab = "shelf"
 
+    /// **笔记页列表档**的键（2026-10-08 p8b-notes-height）。列表档 = 头部 + 卡片网格
+    /// （`NoteListView` 的 `LazyVGrid`），高是**卡片行数**的函数（与启动台 / 架子 / 日历同一类）
+    /// ——上半页的卡片少、下半屏的空玻璃因此是多余的，所以它进 `measuredTabs`：面板贴卡片。
+    ///
+    /// 与首页那一路同形：**同一页两档而账本只有一个槽位**，因此编辑 / 分栏档用
+    /// `notesFixedTab`（见下），两档的判据由 `ContentView.notesPanelTabKey(for:)` 给。
+    static let notesTab = "notes"
+
+    /// **笔记页编辑档 / 分栏档**的键：**没人上报** → `current` = nil → 尺寸层回落**手动值**。
+    ///
+    /// 为什么这两档没有自然高：编辑档是「标题行 + `TextEditor` 填满 + 字数徽标」，正文天生
+    /// 「填满可用高 + 内滚」——它没有一个「内容要多高」的答案（真按排版量文本 = 打字时面板一格格
+    /// 长高，用户 2026-10-08 明确否掉这条路，取「编辑固定」）；分栏档（`separateTab` 剪贴板档下
+    /// 才会出现，本机档位不可达）两侧同形。`NotesLayoutState` 的 240 / 260 / 320 仍是这两档的
+    /// **下限**（`calculateRequiredNotchSize` 里的 `max(基高, preferredHeight)`），本键只负责
+    /// 「别把列表档量出来的高借给编辑档」。
+    ///
+    /// 与 `sideLyricsHomeTab` 是同一条形态（同一个坑的第二例：**一个页面两支、只有一个槽**）。
+    static let notesFixedTab = "notesFixed"
+
     /// **有自然高、因此上报**的模块页（`ModuleHostView` 渲染的那几个 tab 的键 = 模块 id）
     /// 与**宿主页**（架子）。
     ///
@@ -138,6 +158,11 @@ final class PanelContentHeight: ObservableObject {
     ///   （`GeometryReader + paneHeight` 两栏填满面板高，探针按无高提案只会量到 10pt 级理想高、
     ///   面板落到手动回落值——682 空半屏）；改成自然布局后与上面几页同一口径
     ///   （docs/30 §做法 机制六）。
+    /// - `notesTab`（**笔记页的列表档**，2026-10-08 p8b-notes-height）：头部 + 卡片网格，高 =
+    ///   卡片行数的函数——与启动台 / 架子同一类。**只覆盖列表档**：同一页的编辑 / 分栏档走
+    ///   `notesFixedTab`（不在名单里、回落手动值），判据在 `ContentView.notesPanelTabKey(for:)`；
+    ///   探针的 `isCurrent` 闸门也把档位算进去（编辑档切换过渡里旧列表还活着，少了这一条它的
+    ///   上报就会被条款 ③ 无条件收下）。
     ///
     /// 另外两页（`timer` / 终端）**刻意不在名单里**，理由逐条写在文件头。
     /// 名单外的 tab 不产生值：切到它们时 `selectTab(_:)` 把量出来的那份清掉 →
@@ -152,6 +177,8 @@ final class PanelContentHeight: ObservableObject {
         // 的函数。用模块 id 常量（不写第二份字面量）：`ContentView.selectedPanelTabKey` 的
         // `.module` 分支传的就是它。
         CalendarModule.moduleID,
+        // 2026-10-08 p8b-notes-height：笔记页**列表档**（卡片网格）。键是页键（不是模块 id）。
+        notesTab,
     ]
 
     /// 这一页要不要上报（`nil` / 空串 = 还没选中模块 → 不上报）。
