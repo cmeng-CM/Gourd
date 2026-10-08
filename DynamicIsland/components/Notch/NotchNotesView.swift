@@ -1062,7 +1062,15 @@ struct NoteEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure VStack takes full space
-        .background(Color.black) // Ensure solid background
+        // **不画底色**（2026-10-08 用户反馈「背景色不对，不应该是纯黑色，应该和外观设置的一致」）：
+        // 面板底由 `ContentView.panelBackground` 按「外观 → 面板背景」三档统一画，而玻璃两档是
+        // **behindWindow** 材质（`LiquidGlassBackground` / `NSVisualEffectView`）——这里再压一层
+        // 不透明黑会把它整块盖掉，于是毛玻璃档下面唯独特写这一块是纯黑。面板内其余内容视图
+        // （剪贴板 / 计时器 / 笔记列表）本来都不画底色，这里跟上同一口径即可。
+        //
+        // 这层原本的用意是「确保不透明」，怕编辑器与列表交替时透出对方。实测那个担心不成立：
+        // 两者是 if/else + 左右分向滑入滑出（编辑器从 trailing 进、列表往 leading 出），转场中
+        // 各占半幅、不叠在一起，加上外层还有 `.clipped()`。
         .onHover { hovering in
             updateSuppression(for: hovering)
         }
