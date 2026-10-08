@@ -22,9 +22,25 @@
 **一次性准备（只做一次）**
 
 1. 生成签名身份：`sh tools/setup-signing.sh`（已有则幂等跳过）。
-2. **离线备份这张证书的私钥——漏了这一步，将来证书一丢，所有用户的授权都会重置。**
-   钥匙串访问 → 选「Gourd Local」这条**身份**（含私钥）→ 右键 → 导出 → 存成 `.p12`，
-   密码存进密码管理器；`.p12` 本身放密码管理器附件或加密备份里，**绝不进仓库**。
+2. **拿到并离线保存这张证书的私钥——漏了这一步，将来证书一丢，所有用户的授权都会重置。**
+   `setup-signing.sh` 现在会把生成的 p12 留一份在
+   `~/Library/Application Support/Gourd/signing/Gourd-Local-<日期>.p12`（权限 600），
+   把它移到密码管理器附件或加密备份里，**绝不进仓库、别留在同步盘**。
+   它的密码是脚本里的 `gourd-local-import`——只防随手读走，不是强保护。
+
+   > **为什么不能事后从钥匙串导出**：`security import` 只把私钥的使用权限授给了 `/usr/bin/codesign`
+   > （`-T` 参数），**导出**是另一种权限，任何进程想导出都会弹一次人工授权；实测在无人值守时
+   > 直接返回 `SecKeychainItemExport: User canceled the operation`，钥匙串访问里的导出项也可能
+   > 直接不可用。**所以那份落盘的 p12 才是你真正能带走的备份**，别指望临时从钥匙串抠出来。
+   >
+   > 早期身份（脚本还不落盘时生成的）想补救，只能人工授权导一次：
+   >
+   > ```bash
+   > security export -k ~/Library/Keychains/login.keychain-db -t identities -f pkcs12 \
+   >   -P '<自己设的导出密码>' -o ~/Desktop/Gourd-Local.p12
+   > ```
+   >
+   > 跑完会弹出授权框，**必须在框里输密码点允许**，命令行等不到人就会中止。
 3. 验一下当前身份在位：`security find-identity -v -p codesigning | grep '"Gourd Local"'`。
 
 ## 1. 改版本号

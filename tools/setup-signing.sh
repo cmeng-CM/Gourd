@@ -15,7 +15,12 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Gourd Local"
   echo "✅ 已存在 \"Gourd Local\" 签名身份，无需重复配置。"
   security find-identity -v -p codesigning | grep '"Gourd Local"'
   echo
-  echo "提醒：这张身份的私钥做过离线备份了吗？没备份请补一次（钥匙串访问 → 该身份 → 右键 → 导出 .p12）。"
+  echo "提醒：这份签名身份的私钥备份好了吗？"
+  echo "      备份文件默认落在 ~/Library/Application Support/Gourd/signing/ 下（若你是早点生成的，"
+  echo "      那里可能没有——因为当时脚本还不落盘）。"
+  echo "      早期身份想补救：从钥匙串导出需要一次人工授权，跑下面这条，并在弹出的授权框里输密码允许："
+  echo "        security export -k ~/Library/Keychains/login.keychain-db -t identities -f pkcs12 \\"
+  echo "          -P <自己设的导出密码> -o ~/Desktop/Gourd-Local.p12"
   echo "      私钥丢失后重建会生成同名新证书 = 换了签名身份，所有用户的 TCC 授权与登录项会整体重置。"
   exit 0
 fi
@@ -34,6 +39,14 @@ echo "② 导入登录钥匙串（允许 codesign 使用私钥）…"
 security import "$work/identity.p12" -k ~/Library/Keychains/login.keychain-db \
   -P gourd-local-import -T /usr/bin/codesign
 
+# 备份落盘：钥匙串里的私钥受 ACL 保护（上面的 -T 只授给了 codesign），
+# 事后想从钥匙串导出需要一次人工授权，不可靠。所以生成时就把 p12 留一份出来。
+backup_dir="$HOME/Library/Application Support/Gourd/signing"
+mkdir -p "$backup_dir"
+backup="$backup_dir/Gourd-Local-$(date +%Y%m%d).p12"
+cp "$work/identity.p12" "$backup"
+chmod 600 "$backup"
+
 echo "③ 开启代码签名信任（用户域，无需管理员密码）…"
 security add-trusted-cert -r trustRoot -p codeSign "$work/cert.pem"
 
@@ -41,8 +54,11 @@ echo
 security find-identity -v -p codesigning | grep '"Gourd Local"'
 echo "✅ 完成。运行 sh tools/build.sh --install 安装一次，逐个授权后，后续升级不再弹授权。"
 echo
-echo "⚠️  请立刻离线备份这张证书的私钥（做一次就够，但千万别漏）："
-echo "    钥匙串访问 → 选「Gourd Local」这条身份（含私钥）→ 右键 → 导出 → 存成 .p12，"
-echo "    密码存进密码管理器，.p12 放密码管理器附件或加密备份里（不要进仓库）。"
+echo "⚠️  私钥备份已落在："
+echo "    $backup"
+echo "    它的密码是脚本用的那个：gourd-local-import（只是防随手读走，不是强保护）。"
+echo "    请把它移到密码管理器附件或加密备份里，**不要留在同步盘、更不要进仓库**。"
 echo "    原因：出厂包靠这张证书的「证书 + Bundle ID」记忆用户授权。私钥丢了、或本脚本在身份"
 echo "    缺失时重新生成一张同名新证书，签名身份就变了——所有用户的 TCC 授权与登录项会整体重置。"
+echo "    钥匙串里那份私钥受 ACL 保护（只授给了 codesign），事后想再从钥匙串导出需要一次人工"
+echo "    授权、不一定成——所以上面这份文件才是你真正能带走的备份。"
