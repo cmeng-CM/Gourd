@@ -902,13 +902,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // 账本条款 ④ 的判据（「光标在面板 frame 内时不缩」）：接上宿主**既有**的 hover 判定
-        // （`vm.isMouseHovering()`，与 `NotchHomeView` 给首页那条路用的是同一个方法），
-        // 不另写一份面板几何。默认实现是「在外面」——不接上时账本不拦任何变化。
-        PanelContentHeight.shared.pointerInsidePanel = { [weak self] in
-            self?.vm.isMouseHovering() ?? false
-        }
-
         // 账本就绪门（p6-ui-polish / T7 机制五）：启动台在 `apps` 首轮扫描完成前**不上报**——
         // 那几帧页面上是 loading / 空态占位，量它进账本 = 首开「先塌陷再长高」三拍。
         // 判据住在模块侧（`LauncherModule.hasLoadedApps`），这里按模块 id 转发；其余页恒真

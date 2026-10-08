@@ -53,8 +53,11 @@
 //
 //  **种子与账本的往返**（T6 评审 P1）
 //  - 账本口径 = `面板高 − homeVerticalPadding`，尺寸层再 `+ homeVerticalPadding` → 对区间内的
-//    任何面板高都必须**幂等**；不幂等就是漂移源（光标在面板里时 `heldForPointer` 会把种子原样
-//    写回，每个 resize 事件推高一段）。
+//    任何面板高都必须**幂等**；不幂等就是漂移源（内容高若由「几何高 + 假设的开销」重建、而假设
+//    比真实少一段，每个 resize 事件都会偏一段）。
+//  - **2026-10-08（p8-height-smooth / ADR-0015）**：账本里存的**只有内容自己的高**——原先
+//    `heldForPointer`（光标在面板内不缩）会把「面板此刻多高」写进这个槽，切页时又被原样读回来，
+//    用户看到的是「启动台回首页、面板不退」。该规则连同 `report` 的原第 ④ 条一并删除。
 //
 //  **尺寸出口**
 //  - `openNotchSize`（`matters.swift`）在 auto 下读高度账本（`PanelContentHeight.current`）、
@@ -63,9 +66,10 @@
 //    **展开 + 非极简 + 手动档**三个条件全真时为真（auto 下拖动写的键当场没有效果）。
 //
 //  **高度账本与其它 tab 的测量**（T7 / D-12，本文件下半部分）
-//  - `report(_:for:)` 的四条款：非有限值忽略 / 同一 tab 差 < 8pt 忽略（滞回）/ 换 tab 无条件接受
-//    （判在光标规则之前）/ 同一 tab 且光标在面板内时只接受变大；
-//  - 首页那一份**权威**：量出来的值碰不到 `homeContentHeight`，`home` 键的上报被忽略；
+//  - `report(_:for:)` 的三条款：非有限值忽略 / 同一 tab 差 < 8pt 忽略（滞回）/ 换 tab 无条件接受
+//    （原第 ④ 条「光标在面板内只接受变大」已删，见上）；
+//  - 首页那一份**权威**：量出来的值碰不到 `homeContentHeight`，`home` 键的上报被忽略；写入的值
+//    真的变了且首页当班时响一声（切页后的第一份写入走**立即链**，见 `awaitsFirstHomeWrite`）；
 //  - `measuredContentHeight(naturalHeight:headerHeight:)` 的换算（自然高 + 表头 − 16）与
 //    「整页填满内容区 → 面板高是**不动点**」这条不漂移的算式；
 //  - 探针量的是**理想高**（不是摆放后的高）：`NSHostingView` 里挂真视图，换行数看上报值跟着内容走
@@ -401,39 +405,17 @@ final class PanelAutoHeightTests: XCTestCase {
         )
     }
 
-    func testPointerInsidePanelOnlyBlocksShrinking() {
-        // 光标在面板里 + 要收缩 → 保持当前（边界 ①：不把面板从光标底下抽走）。
-        XCTAssertEqual(
-            PanelAutoHeight.heldForPointer(converged: 300, currentPanelHeight: 600, pointerInsidePanel: true),
-            600
-        )
-        // 光标在面板里 + 要长高 → 长高（「只允许长高」不是「不许变」）。
-        XCTAssertEqual(
-            PanelAutoHeight.heldForPointer(converged: 700, currentPanelHeight: 600, pointerInsidePanel: true),
-            700
-        )
-        // 光标在面板外 → 照常贴合（§已知限制 1：移开鼠标后下一次重算才缩回去）。
-        XCTAssertEqual(
-            PanelAutoHeight.heldForPointer(converged: 300, currentPanelHeight: 600, pointerInsidePanel: false),
-            300
-        )
-        // 非有限值不参与比较（原样透传，不把 NaN 变成某个数）。
-        XCTAssertTrue(
-            PanelAutoHeight.heldForPointer(converged: .nan, currentPanelHeight: 600, pointerInsidePanel: true).isNaN,
-            "收敛值非有限 → 原样返回（不引入新的算术）"
-        )
-    }
+    // MARK: - 尺寸出口：auto 读账本、manual 逐字读滑块
 
-    // MARK: - 尺寸出口：auto 读持有者、manual 逐字读滑块
-
-    /// **持有者往返必须幂等**（T6 评审 P1 的护栏）：持有者写的是 `面板高 − homeVerticalPadding`，
-    /// 尺寸层读回来再 `+ homeVerticalPadding` —— 对区间内的任何面板高这两个方向必须回到同一个数。
+    /// **往返必须幂等**：账本写的口径是 `面板高 − homeVerticalPadding`，尺寸层读回来再
+    /// `+ homeVerticalPadding` —— 对区间内的任何面板高这两个方向必须回到同一个数。
     ///
-    /// 为什么这条是漂移的护栏：接缝的种子取的是**权威的当前面板高**（`openNotchSize.height`），
-    /// 光标在面板里时 `heldForPointer` 会把种子原样写回持有者；若持有者口径与 `panelHeight(...)`
-    /// 的加数不一致（例如种子由「几何高 + 假设的开销」重建、而假设比真实少一段），写回的就不是
-    /// 当前值而是「当前值 ± 那一段」，下一次重算再拿它当种子——**每个 resize 事件都推走一段**。
-    /// 这里把一致性钉在纯函数层：种子取权威值时，往返必然回到原值。
+    /// 为什么这条是漂移的护栏：接缝口径与 `panelHeight(...)` 的加数只要不一致（例如内容高由
+    /// 「几何高 + 假设的开销」重建、而假设比真实少一段），读出/写回就不是同一个值了——**每个
+    /// resize 事件都偏一段**。这里把一致性钉在纯函数层：账本存的是**内容自己的高**，往返必须闭合。
+    ///
+    /// （2026-10-08 / ADR-0015 前，这条测试同时还是「光标在面板内不缩」那条规定下「种子被原样写回」
+    /// 的护栏；那条规则已删，往返闭合本身仍然是尺寸层唯一的口径要求。）
     func testHolderPaddingRoundTripKeepsTheAuthoritativeSeedFromDrifting() {
         let panelHeights: [CGFloat] = [
             openNotchHeightRange.lowerBound,   // 下界（120）：夹取后仍在区间内
@@ -569,22 +551,17 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.report(300, for: todos)
         XCTAssertEqual(ledger.current, 300, "回落 8pt → 同样接受")
 
-        // ④ 光标在面板内：只接受变大。
-        ledger.pointerInsidePanel = { true }
+        // 原第 ④ 条（「光标在面板内只接受变大」）2026-10-08 删除（ADR-0015）：账本的槽位口径是
+        // 「这一页的自然内容高」，与面板此刻多高无关，因此**收缩照常接受**——切到矮页 / 内容变矮
+        // 就该跟着缩，没有「等移开鼠标」这一档。
         ledger.report(200, for: todos)
-        XCTAssertEqual(ledger.current, 300, "光标在面板内 → 缩小被拦（面板不从光标底下抽走）")
+        XCTAssertEqual(ledger.current, 200, "收缩照常接受（不再有「光标在面板内不缩」）")
         ledger.report(420, for: todos)
-        XCTAssertEqual(ledger.current, 420, "光标在面板内 → 变大照常接受")
+        XCTAssertEqual(ledger.current, 420, "变大同样接受")
 
-        // 光标移开：下一次上报就贴合（§已知限制 1 的「移开鼠标才贴合」）。
-        ledger.pointerInsidePanel = { false }
-        ledger.report(210, for: todos)
-        XCTAssertEqual(ledger.current, 210, "光标离开 → 缩小照常")
-
-        // ③ 换 tab 无条件接受——**判在光标规则之前**：光标还停在面板里、新页更矮，也必须换。
-        ledger.pointerInsidePanel = { true }
+        // ③ 换 tab 无条件接受（同一条链上不再有别的闸）。
         ledger.report(150, for: notifications)
-        XCTAssertEqual(ledger.current, 150, "换 tab 无条件接受（含光标在面板里那一档）")
+        XCTAssertEqual(ledger.current, 150, "换 tab 无条件接受")
         XCTAssertEqual(ledger.activeTab, notifications)
 
         // 换回来也一样（没有「记住旧页」的第二份状态：每次换页都要按新页的量值重新定）。
@@ -656,15 +633,13 @@ final class PanelAutoHeightTests: XCTestCase {
         // §已知限制 2 的形态；切页就清会变成「先跳手动值再跳量值」两次跳动）。缓存（T7 机制五）
         // 只对**量过的**页做一步到位，没量过的页没有条目，这里因此逐字不变。
         //
-        // **没量过的新页第一份上报无条件**（滞回与光标规则都不参与）：用户刚点完 tab，手还停在面板里，
-        // 新页比旧值矮也要接受——否则「切到内容短的页」在光标压着的时候永远不生效。这一档**不因
-        // 缓存而变**（T7 裁决 T7-fix 只改缓存命中那一档，见另一条用例）。
+        // **没量过的新页第一份上报无条件**（滞回不参与）：用户刚点完 tab，新页比旧值矮也要接受
+        // ——否则「切到内容短的页」要等下一次 ≥ 8pt 的变化才生效。这一档**不因缓存而变**
+        // （T7 裁决 T7-fix 只改缓存命中那一档，见另一条用例）。
         ledger.selectTab(notifications)
         XCTAssertEqual(ledger.current, 200, "名单内没量过的页：先拿上一页的数，等新页量完覆盖")
-        ledger.pointerInsidePanel = { true }
         ledger.report(150, for: notifications)
-        XCTAssertEqual(ledger.current, 150, "没缓存的页：第一份上报无条件接受（变矮 + 光标在面板里都接受）")
-        ledger.pointerInsidePanel = { false }
+        XCTAssertEqual(ledger.current, 150, "没缓存的页：第一份上报无条件接受（变矮也接受）")
 
         // **量过的页切回来一步到位**（p6-ui-polish / T7 机制五）：缓存里就有待办上一次被接受的 200，
         // 不再先落在那份 150 上再跳一次（0 次跳动，T6 的「一次跳动」再收一档）。
@@ -672,19 +647,15 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertEqual(ledger.current, 200, "量过的页：直接读 `heightCache`（不是留着的 150）")
 
         // 缓存命中的页**第一份上报回普通条款**（T7 裁决 T7-fix）：差 < 8pt 不推窗口（消微跳）；
-        // 变矮时光标在面板内按条款 ④ 拦下（移开鼠标才贴合——§已知限制 1 的既有形态）。
-        ledger.pointerInsidePanel = { true }
+        // ≥ 8pt 的变化（两个方向）照常接受——2026-10-08 起收缩方向也没有别的闸了（ADR-0015）。
         ledger.report(205, for: todos)
         XCTAssertEqual(ledger.current, 200, "缓存命中 + 首报差 5pt → 滞回拦下（不再多推一次窗口）")
         ledger.report(90, for: todos)
-        XCTAssertEqual(ledger.current, 200, "缓存命中 + 变矮 + 光标在面板内 → 条款 ④ 拦下")
-        ledger.pointerInsidePanel = { false }
-        ledger.report(90, for: todos)
-        XCTAssertEqual(ledger.current, 90, "光标离开 → 差 ≥ 8pt 的收缩照常接受")
+        XCTAssertEqual(ledger.current, 90, "缓存命中 + 变矮 110pt → 照常接受")
 
         // 第二份起回正常条款（同页微动 / 变大）。
         ledger.report(60, for: todos)
-        XCTAssertEqual(ledger.current, 60, "光标已移开 → 收缩 30pt 照常接受")
+        XCTAssertEqual(ledger.current, 60, "收缩 30pt 照常接受")
         ledger.report(95, for: todos)
         XCTAssertEqual(ledger.current, 95, "同页 +35pt → 接受")
 
@@ -711,6 +682,66 @@ final class PanelAutoHeightTests: XCTestCase {
         ledger.selectTab("")
         XCTAssertEqual(ledger.activeTab, PanelContentHeight.homeTab, "空键不进门（不改当前页）")
         XCTAssertEqual(ledger.current, 400)
+    }
+
+    /// 首页那一份的**写入规则**（2026-10-08 / p8-height-smooth）：值真的变了、且当班的是首页时响一声
+    /// `objectWillChange`（尺寸层据此跟一趟）；**切页后的第一份写入**走立即链（免防抖）——切页时
+    /// 读到的起点是「上一次离开首页时」的值，接缝重算出来的新值与它之间的差不是同一页的微动。
+    ///
+    /// 为什么需要这条链：旧写法下首页的写入**刻意不响**，靠「那五条 publisher + 打开面板后一拍」兜
+    /// ——它们都不覆盖「内容自然变化」这一档（音乐块进出 / 翻月 / 块开关），面板于是停在旧高度上
+    /// 直到下一次外部触发。用户 2026-10-08 反馈的那张「启动台回首页、底下空一大片」正是这条链缺位
+    /// 加上 `heldForPointer` 污染槽位两个原因叠出来的。
+    func testHomeHeightWriteNotifiesOnRealChangeAndArrivesThroughTheImmediateChain() {
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+
+        let todos = "com.cmeng.gourd.todos"
+        var notifications = 0
+        let cancellable = ledger.objectWillChange.sink { _ in notifications += 1 }
+
+        // 首页当班、首帧（还没有值）：nil → 400 是**切页后**的第一份写入 → 立即链。
+        ledger.selectTab(PanelContentHeight.homeTab)
+        XCTAssertEqual(notifications, 0, "第一次声明（`current` 还是 nil）→ 不响")
+        ledger.setHomeContentHeight(400)
+        XCTAssertEqual(notifications, 1, "nil → 400 → 响一次（尺寸层跟一趟）")
+        XCTAssertTrue(ledger.lastChangeWasTabSwitch, "切页后的第一份写入 → 立即链（免防抖）")
+
+        // 每帧都会写：同一个数不响，也就没有「立即推」那一拍。
+        ledger.setHomeContentHeight(400)
+        XCTAssertEqual(notifications, 1, "同一个数 → 不响")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "没通知就没有立即链那一拍")
+
+        // 亚像素抖动（< 0.5pt）：值写进去，但不动窗口。
+        ledger.setHomeContentHeight(400.2)
+        XCTAssertEqual(notifications, 1, "0.2pt 的抖动不推窗口")
+        XCTAssertEqual(ledger.current, 400.2, "值照常写进去（只是不响）")
+
+        // 同页的内容变化（≥ 0.5pt）：响，但**不抢**立即链——它走 0.15s 防抖那条既有链。
+        ledger.setHomeContentHeight(556)
+        XCTAssertEqual(notifications, 2, "同页内容变化 → 响一次")
+        XCTAssertFalse(ledger.lastChangeWasTabSwitch, "同页的内容变化走防抖链，不占立即链")
+
+        // 不当班的首页写入（切页过渡里旧首页还会再跑一次 body）：槽照常更新，但**不响**
+        // ——那时面板尺寸由新页说了算，响一声只会推一次 no-op 重算。
+        ledger.selectTab(todos)
+        XCTAssertEqual(notifications, 3, "切走：首页的 556 → 名单内没量过的页（nil）→ 响一次")
+        ledger.setHomeContentHeight(300)
+        XCTAssertEqual(ledger.homeContentHeight, 300, "不当班的首页写入照常更新自己的槽（权威）")
+        XCTAssertEqual(notifications, 3, "不当班的写入不推窗口")
+        XCTAssertEqual(ledger.activeTab, todos, "首页的写入不碰「当前页」（P2 裁决不变）")
+
+        // 切回首页：读到的还是首页槽（300），又是一次「切页那一拍」；接缝随后的第一份写入
+        // 吃到位（`awaitsFirstHomeWrite`）→ 立即链。
+        ledger.selectTab(PanelContentHeight.homeTab)
+        XCTAssertEqual(notifications, 4, "切回首页：nil → 300 → 响一次")
+        XCTAssertEqual(ledger.current, 300)
+        ledger.setHomeContentHeight(380)
+        XCTAssertEqual(notifications, 5, "接缝重算出的 380 ≠ 300 → 响一次")
+        XCTAssertTrue(ledger.lastChangeWasTabSwitch, "切页后的第一份写入 → 立即链（不是防抖链）")
+
+        withExtendedLifetime(cancellable) {}
     }
 
     /// `selectTab` 只在 `current` **真的变了**时才响 `objectWillChange`（尺寸层据此走那条既有的

@@ -132,9 +132,9 @@
 - **manual**：今天的行为——用户拖右下角 / 用外观页滑块（`openNotchHeight`），逐字不变。
 - **auto**：展开面板的高度 = **内容自然高 + 宿主内边距**，夹在 `[openNotchHeightRange.lowerBound, effectiveOpenNotchHeightUpperBound(屏高)]`（与滑块同一个上界函数，不另立一套）。首页那一份**不需要额外测量**——流的方案里已经算好 `heightUsed`（各行的行高 + 行距），加日历行与容器内边距就是答案；其它 tab（待办、通知、日历、启动台、快捷指令、计时器、暂存器、终端…）用内容上报（`onGeometryChange` → 一个宿主侧的高度账本），**带 8pt 滞回**：只在高度差超过阈值时改窗口，避免「内容一变→面板一缩→内容重排」的抖动。**上报机制在执行期改判过**（2026-10-01，见 偏离 2 / 偏离 3 · D-44 · D-45）：不是 `onGeometryChange`，改成 `Layout` 量**理想高**的探针（`PanelContentHeight`），且覆盖范围收窄成 4 页（待办 / 通知 / 启动台 / 快捷指令）——日历 / 计时器 / 暂存器 / 终端不上报、回落手动值。
 
-四个必须写下的边界：① **光标在面板里时不缩**（只允许长高）——否则鼠标停在下方会把面板从光标底下抽走；② ~~**切换 tab 时才重新取高度**，同一 tab 内容微动（如秒数跳动）不改窗口~~ **（2026-10-01 执行期改判，D-44 · D-45：同一 tab 的改动 < 8pt 不动窗口、≥ 8pt 接受——光标在面板内时只增；不是「只在切 tab 时重取高度」）**；③ **右下角的拖动把手只在 manual 模式出现**——auto 下拖动写的那个键当场没有效果，留着它就是本仓已经明确规避的「拖了没用」（`ContentView` 的极简模式隐藏把手是同一条先例）；④ **`calculateRequiredNotchSize` 里那几条 per-tab 覆盖**（计时器 / 便签 / 剪贴板 / 终端的高度下限）在 auto 下**取 `max(覆盖值, 内容高)`**——它们是某些 tab 的下限，不是上限。
+四个必须写下的边界：① ~~**光标在面板里时不缩**（只允许长高）~~ **（2026-10-08 p8-height-smooth 撤销，见 [00](00-decisions.md) ADR-0015：判据 `vm.isMouseHovering()` 就是面板 rect，而面板里的指针十有八九正压在 tab 条上——「切换这一下」因此被拦、且拦下之后没有解；「不把面板从光标底下抽走」改由 `ContentView.shouldHonorHoverExit`（D-21）兜）**；② ~~**切换 tab 时才重新取高度**，同一 tab 内容微动（如秒数跳动）不改窗口~~ **（2026-10-01 执行期改判，D-44 · D-45：同一 tab 的改动 < 8pt 不动窗口、≥ 8pt 接受；不是「只在切 tab 时重取高度」）**；③ **右下角的拖动把手只在 manual 模式出现**——auto 下拖动写的那个键当场没有效果，留着它就是本仓已经明确规避的「拖了没用」（`ContentView` 的极简模式隐藏把手是同一条先例）；④ **`calculateRequiredNotchSize` 里那几条 per-tab 覆盖**（计时器 / 便签 / 剪贴板 / 终端的高度下限）在 auto 下**取 `max(覆盖值, 内容高)`**——它们是某些 tab 的下限，不是上限。
 
-**高度怎么收敛**（首页那一份的种子口径）：内容高按**当前面板高度**算一次（`availableHeight` 用当前值），然后**双向**向不动点收敛——高于不动点就收缩、低于就长高（**不是**单向棘轮：种子低于内容高时若只许收缩，面板永远长不上去，日历行与后半行会永久不画）；夹取后不再回头改内容（避免「算出的高 → 重排 → 又算」的振荡）。唯一的单向规则是「光标在面板内时不缩」。因此首页没有滞回、但**仍有首帧一拍**，如实记在 §已知限制。
+**高度怎么收敛**（首页那一份的种子口径）：内容高按**当前面板高度**算一次（`availableHeight` 用当前值），然后**双向**向不动点收敛——高于不动点就收缩、低于就长高（**不是**单向棘轮：种子低于内容高时若只许收缩，面板永远长不上去，日历行与后半行会永久不画）；夹取后不再回头改内容（避免「算出的高 → 重排 → 又算」的振荡）。~~唯一的单向规则是「光标在面板内时不缩」~~ **（2026-10-08 撤销，ADR-0015：账本槽位的口径是「这一页的自然内容高」，不含「面板此刻多高」的任何成分——切页读到的、重开面板读到的都是内容自己的高）。因此首页没有滞回、但**仍有首帧一拍**，如实记在 §已知限制。
 > 依据：D-11 / D-12。
 
 ### 机制七 · 外观页的「恢复默认」
@@ -202,7 +202,7 @@ enum PanelAutoHeight {
     static func mergedTabHeight(override:current:mode:) -> CGFloat                   // manual 逐字替换 / auto max
     static let convergenceMaxIterations = 6; static let convergenceEpsilon: CGFloat = 0.5
     static func convergedPanelHeight(seedPanelHeight:mode:manualHeight:screenVisibleHeight:contentHeight:) -> CGFloat
-    static func heldForPointer(converged:currentPanelHeight:pointerInsidePanel:) -> CGFloat
+    // static func heldForPointer(...)   ← 2026-10-08 删除（ADR-0015：账本槽位恒为「这一页的自然内容高」）
 }
 ```
 
@@ -471,7 +471,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 
 ## 已知限制
 
-1. **自适应高度与 hover 判定共用同一个面板 frame**：内容变矮时若光标停在面板内，面板**不缩**（机制六的边界 ①）。实现取的是**粗形态**——`vm.isMouseHovering()` 按**当前**尺寸判，不预测收缩后的尺寸（精确形态要再写一份面板几何）。副作用：①「把面板从高内容切到矮内容、光标又在面板里」时看起来偏大，**要等下一次触发才贴合**（重开面板 / 偏好变化 / 切 tab——实现里**没有 hover 触发的重算**，「移开鼠标下一次重算就贴合」不成立）；②打开面板时若账本还没有值（首开）、内容又比手动值矮，面板会先按手动高度站着，直到那一拍补推（第 4 条）。
+1. **（2026-10-08 p8-height-smooth 改判，ADR-0015）旧口径「光标在面板内时面板不缩」已撤销**。旧口径的两条副作用（「切到矮内容看起来偏大、要等下一次触发才贴合」与「拦截没有解」）都不是接受，而是缺陷：判据 `vm.isMouseHovering()` 就是**面板 rect 里的指针**，点 tab 的那只手必然在里面——于是「切到矮页」被拦，账本只记「不缩」，实现里又没有 hover 触发的重算，用户看到的是「启动台回首页、面板不退、底下空一大片」（2026-10-08 用户截图）。**今天的行为**：切页 / 内容变化都**单步动画**贴到这一页的内容高（上屏实测窗口高 872 → 578 一条 244ms 的缓动、无中途台阶，见 §变更记录）；「不把面板从光标底下抽走」由 `ContentView.shouldHonorHoverExit`（D-21）兜着——面板缩走不会被读成「指针离开」。**仍然成立的半条**：打开面板时若账本还没有值（首次启动后的第一次展开），面板会先按手动高度站着，随后那一拍补推（第 4 条）。
 2. **auto 档的高度覆盖是 4/8 页**：只有**待办 / 通知 / 启动台 / 快捷指令**四页上报自然高（它们的自然高是内容条数的函数）。**日历 / 计时器 / 暂存器 / 终端的自然高是「面板」的函数**（量它们 = 把面板高喂回自己：日历每接受一次缩 12pt、一路缩到 130 的下限），因此它们在 auto 档**回落手动值**（滑块高度）——「切到日历面板变高」本批做不到，要补得单独一轮（给日历声明偏好高，或改它的 `.frame(height: maxTabContentHeight)` 结构）。计时器另有 250 的 per-tab 下限兜着。**2026-10-01 p6 改判：暂存器（T6）与日历（T8）已进测量名单**——暂存器改了版面（网格自然高）、日历拆掉了 `GeometryReader + paneHeight` 改自然高布局，两页都不再回落手动值；**计时器 / 终端仍未上报**（仍回落手动值）。实现见 [30](30-ui-polish-and-shelf.md) §做法 机制三 · 机制六 / §接口 机制三 · 机制六。
 3. **名单内的页切页有一次跳动**：切到名单内某一页时先留着上一页量出来的值（若切页就清值会「先跳手动值再跳量值」= 两次跳动），新页量完那一拍**无条件覆盖**（`awaitsFirstReport`）。首页那一份是算出来的，不受此影响。另：**从首页（或名单外的页）切进名单内的页、而那一槽还是 nil 时**（名单外的页在上一次切页时把 `measuredHeight` 清掉了、首页那一支从不写它），那一拍走的是**手动高度**——新页量出来（第一份上报无条件接受）才贴合；这也是「切页有一次跳动」的另一半根因。
 4. **首页在 auto 档仍有「首帧一拍」**：打开面板是「先定尺寸、再渲染」，首开时账本还没有值 → 回落手动高度；那一拍由 `ContentView` 打开后 ~60ms 的补推兜住（复用拖动那条实时推尺寸的既有函数）。
@@ -507,7 +507,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | A6 | 关掉暂存器行 → 面板上的暂存器 tab 消失；开回来即恢复 | 上屏截图（面板 tab 行前后各一张）+ 偏好评据 |
 | A7 | 音乐块宽度 ≤300、行高 96、默认无封面；打开封面是 40pt 小图 | 单测（`homeBlockWidth` / `homeFormFactor` / `showAlbumArt` 默认）+ 上屏截图 |
 | A8 | 自适应模式下，首页高度 = 算出来的内容高（面板不留大空白）；手动模式行为与改动前一致，且**右下角把手只在手动模式出现** | 上屏截图（两种模式各一张，量面板高度）+ 单测（高度换算纯函数） |
-| A9 | 自适应模式下光标在面板内时高度只增不减；per-tab 覆盖值（计时器等）与内容高取 `max` | 单测把**规则**钉住（`report` 条款 ④ 与 `heldForPointer` 的两组用例 + `max` 优先级的 `mergedTabHeight` 用例）；**D-12 的人工那半没有执行**——「把光标停在面板里切换内容、屏上观察高度不回缩」这一次没有跑，接线 `PanelContentHeight.shared.pointerInsidePanel = { vm.isMouseHovering() }`（`DynamicIslandApp.swift:861-863`）**未上屏验证**（终审修复轮如实记录） |
+| A9 | ~~自适应模式下光标在面板内时高度只增不减~~ **2026-10-08 改判（ADR-0015）：自适应模式下**切页 / 内容变化都单步贴到这一页的内容高**（不再有「光标在面板内只增不减」这条）；per-tab 覆盖值（计时器等）与内容高取 `max`（这一半不变） | 改判后：单测把账本的写入规则钉住（`setHomeContentHeight` 的通知与「切页后第一份写入走立即链」+ `max` 优先级的 `mergedTabHeight` 用例）+ **上屏实测**（窗口高轨迹 872 → 578 一条 244ms 缓动、无台阶；启动台 / 日历 / 待办 / 架子 / 终端 / 笔记 六页往返回到首页 578 —— 见 §变更记录 与 `.workflow/p8-height-smooth/evidence/`） |
 | A10 | 外观页「恢复默认」把 §接口与数据形状 清单里的键恢复到出厂，清单外的键**一个不动**（用 `defaults export` 逐键对） | 自动化（脚本：改乱 → 重置 → `defaults export` diff） |
 
 ---
@@ -527,7 +527,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | D-09 | 音乐块宽度 `300/420`→`240/300`、形态 `.large`→`.compact`、封面默认关 | 用户 | 用户：「音乐占比太大了，要缩小，可以不显示那个图片」 |
 | D-10 | 「大块档」高度改成**显式选定的镜子方形边长 140**（不再沿用音乐的 152，也不「实测」——镜子是 `aspectRatio(1, .fit)`、没有固有高度，实测只会量到当前档高），镜子块宽声明同步收敛为 `140/140` | agent | 152 是从音乐封面量出来的，音乐降档后这个数的来源消失；圆的直径 `= min(宽, 行高)`，档高与块宽必须同源，否则要么圆被行高卡住、要么块里留空档 |
 | D-11 | 新增 `panelHeightMode`（auto 默认 / manual）；auto = 内容自然高 + 内边距，夹在既有高度区间 | 用户 | 用户第 7 条；上界复用 `effectiveOpenNotchHeightUpperBound`，不另立一套 |
-| D-12 | 首页高度**算**（流方案直接给），其它 tab **测量**（8pt 滞回）；光标在面板内时不缩 | agent | 算的精确无跳动；测量有抖动风险，靠滞回与「不缩」两条边界兜住 |
+| D-12 | 首页高度**算**（流方案直接给），其它 tab **测量**（8pt 滞回）；~~光标在面板内时不缩~~ **（2026-10-08 撤销，ADR-0015）** | agent | 算的精确无跳动；测量有抖动风险，靠 8pt 滞回兜住（原第二条「不缩」已删——它把「面板此刻多高」写进了内容槽） |
 | D-13 | 外观页新增「恢复默认」：只重置**布局与显示**键（清单唯一），不动内容/授权类 | 用户 | 用户：「改完后想换回来，可以在外观的地方重置为系统默认」；整域重置会丢用户的东西 |
 | D-14 | 「Nook X 效果」取三条原则（一块一件事 / 块形随内容 / 面板贴内容），**不抄皮肤、不做每块卡片** | 用户 | 用户：「不是照抄，是考虑怎么在现在的功能基础上实现类似的效果」；卡片宽度预算不够（[26](26-home-widgets-and-settings.md) D-10） |
 | D-15 | **接受超限**，九任务一个工作流（超过 8 的惯例上限） | agent | 七条反馈是同一次需求且彼此耦合（音乐降档 ↔ 大块档高度 ↔ 自适应高度），拆开要用户审两遍设计、走两道门；代价 = 两道门的审阅有效性下降（计划更长、更容易被扫过），用三阶段 Checkpoint 分段核对补偿 |
@@ -574,8 +574,8 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | D-37 | 内容高探针用**内容自然高**（按 `naturalFlowBudget` 预算跑一份流方案），**不是**按当前面板高跑一次流方案 | agent | 流方案在预算里装不下的行会**整行丢掉**，拿它当内容高就是单向棘轮（面板越小 → 丢的行越多 → 算出的内容高越小 → 面板再缩，最后停在「一行都不画」的不动点）；块高是声明值，自然高本来与预算无关。代价：`contentHeight` 闭包在首页这一路是常量探针（接口形状留给测量账本用） |
 | D-38 | 面板表头高折进「内容高」（账本值 = 内容 + 表头），`panelHeight(...)` 只加 `homeVerticalPadding` | agent | 表头高随屏 / 配置变（`max(24, effectiveClosedNotchHeight)`），而 `panelHeight(...)` 的签名里没有表头参数；留成常量会在表头更高的机器上**少算**——漏算表头是唯一会掉行的方向（后果是最后一行被整行丢掉）。代价：账本值的语义是「内容 + 表头」（注释与 §已知限制 14 写明） |
 | D-39 | 高度模式的**读取点落在 `openNotchSize`**（`matters.swift`），`calculateRequiredNotchSize` 只改 per-tab 覆盖 | agent | `openNotchSize` 是「当前展开尺寸」的唯一权威源（打开面板那条与 `ContentView.dynamicNotchSize` 都读它）；只改 `calculateRequiredNotchSize` 会让 auto 档打开面板仍按手动高度画，而防抖 publisher 只在偏好变化时触发 →「首帧一拍」会变成「一直不贴合」。代价：与计划步骤 3 的字面落点不同（`calculateRequiredNotchSize` 只是经它间接读） |
-| D-40 | 光标规则取**粗形态**（`vm.isMouseHovering()` 按当前尺寸判），不用「收缩后光标会不会被甩出面板」的精确形态 | agent | 精确形态要自己再写一份面板几何（`isMouseHovering` 不认收缩后的新尺寸）；§已知限制 1 明确接受粗形态的副作用。代价：展开时鼠标就在面板里也会拦住收缩（首开时若账本还是 nil、内容又比手动值矮，面板会先按手动高度站着） |
-| D-41 | `heldForPointer` 把「不缩」表达成「面板高不低于当前值」，写回账本时按同一条换算减去内边距 | agent | 尺寸层读到的是「内容高」再加内边距还原面板高，「不缩」的结论必须按同一条换算写回去；种子取权威值后**往返幂等**有用例钉住。代价：被按住的那一拍账本值大于真实内容高（差额 = 留着的那点空白），语义靠注释兜 |
+| D-40 | ~~光标规则取**粗形态**（`vm.isMouseHovering()` 按当前尺寸判）~~ **2026-10-08 整条撤销（ADR-0015）** | agent | 旧理由：精确形态要自己再写一份面板几何（`isMouseHovering` 不认收缩后的新尺寸）。**撤销原因（诊断实证）**：粗形态判的就是**面板 rect 里的指针**——点 tab 那只手必然在里面，于是「切到矮页」被拦，拦下之后又没有解（没有 hover 触发的重算）；而它想保护的「hover 内容时面板不抽走」由 `shouldHonorHoverExit`（D-21）在**关面板**那一侧兜着。今天不判指针：槽位恒为内容自然高 |
+| D-41 | ~~`heldForPointer` 把「不缩」表达成「面板高不低于当前值」，写回账本时按同一条换算减去内边距~~ **2026-10-08 删除（ADR-0015）** | agent | 旧理由：尺寸层读到的是「内容高」再加内边距还原面板高，「不缩」的结论必须按同一条换算写回去；种子取权威值后**往返幂等**有用例钉住。**删除的直接原因（实测）**：被按住的那一拍账本值 = 面板高（差额 = 留着的那点空白），而面板高在切页过渡里可能是**别的页**的高——「启动台 → 首页」时首页槽位被写成 850（= 启动台的面板高），切回来原样读出，面板一步不退（诊断日志 `homeSeam natural=516 seed=850 held=850 written=810`） |
 | D-42 | 打开面板后**一拍再推一次窗口尺寸**（复用既有 `syncWindowSizeAfterPanelResize`） | agent | 账本由接缝的 body 写，而打开那条路是「先定尺寸、再渲染」，首开时账本还是 nil（回落手动值）；防抖 publisher 只在偏好变化时触发、打开面板不是偏好变化——不补这一拍，auto 档第一次打开就停在手动高度。代价：与「不新开第二条 resize 链」在字面上有张力（补的是一个**触发器**，链路仍是既有那条）；打开后 ~60ms 有一次尺寸贴合 |
 | D-43 | 宿主垂直开销 = **40**（四项逐项求和 16 + 12 + 4 + 8，每项带出处；阴影带 18 与面板外的顶出血 4 刻意不计） | agent | T6 评审 P2 补齐两处内边距后仍差 14pt，实机测量发现 `NotchLayout()` 里表头↔内容那道缝（平台默认 8）漏算——它落在可见黑框以内、消耗首页可用高，后果是日历行整行被丢；实测确认 18 在可见黑框之外（窗口 588 = 黑框 570 + 18），折进来就是双重计数。代价：40 是「零富余」的等式解（闭区间判据下日历行仍画），面板底部可见留白只剩 20pt；改任何一个数都要连预算一起改 |
 | D-44 | 其它 tab 的量法用 `Layout` 量**理想高**（`.unspecified` 提案），**不用** `onGeometryChange` | agent | 那几页根部是 `.frame(maxHeight: .infinity)`，摆放后的高恒等于「面板高 − 表头 − 内边距」——拿它当自然高是反馈环；且 `onGeometryChange` 要 macOS 15，本 target 的 deployment target 是 14.6。代价：探针是一个 `Layout`（**偏好屏障**，见 §已知限制 13），且在布局期写账本 |
@@ -603,3 +603,23 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 |----|------|------|------|
 | D-57 | **侧歌词档首页不吃首页的账本槽**：新键 `PanelContentHeight.sideLyricsHomeTab`（**没人上报**）→ `current` = nil → 尺寸层回落手动值；判据提成纯函数 `showsSideLyricsHomeLayout(...)`（`NotchHomeView` 与 `ContentView.selectedPanelTabKey` 共用），键映射提成 `homePanelTabKey(showsSideLyricsLayout:)` | agent | 侧歌词档（`enableLyrics` 开 + 音乐在放 + 日历关）**没有自己的内容高**——写首页那一份的接缝（`HomeBandedHomeView`）不在屏幕上；落在首页键上时 auto 档的面板高 = **上一次标准首页算出来的值 + 40**（与侧歌词无关），而 auto 下把手隐藏、滑块禁用，用户没得改。给它一个没人上报的键 = D-45 对名单外页「回落手动值」同一条口径；标准路径逐字不变（判据两处共用、键映射是纯函数，由 `testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey` 钉住）。代价：`ContentView` 为此多观察三条键（`enableLyrics` / `showCalendar` / `autoHideInactiveNotchMediaPlayer`）、`NotchHomeView` 的私有 `shouldShowMusicPlayer` 并进同一判据 |
 | D-58 | T3 两条**只在 `.workflow/` 账本里「不修并留痕」的物品进文档**：① 紧凑小封面 `AlbumArtThumbnailView`（`MusicModule.swift`）的**冗余二次 `clipShape`**（`DynamicIslandArtworkSourceView` 的 `cornerRadius` 参数已经裁过，外面又裁一次、同值；不修）；② `DynamicIslandTests/ShortcutsFrontAppTests.swift:961/964` 两处 **152 参数化样本**（旧大块档高，只作 `FrontAppGridBudget` 的**输入样本**、不是生产声明；不修） | agent | 「账本里记了、文档里没有」= 后来读文档的人看不到这两条已知状态；写进本节是为了让「知道而没修」与「漏了没修」可区分（清单另见 §实际交付 遗留 5）。代价：两条从排版噪声升级成**显式接受**的遗留 |
+
+---
+
+## 变更记录
+
+### 2026-10-08 · p8-height-smooth：账本槽位恒为「这一页的自然内容高」（ADR-0015）
+
+**触发**：用户反馈「不同面板切换的时候，自适应高度有卡顿……启动台回到首页，高度就不对」。截图 + 诊断构建（`GOURD_HEIGHT_LOG=1`）把链路钉死：首页槽位在离开期间被写成**别的页**的面板高（`homeSlot=810.0`），切回来原样读出、`heldForPointer` 再把它按住（`natural=516 seed=850 held=850 written=810`）→ 窗口一步不退（`resizeWindow→noop h=872.0`）。
+
+**改了什么**：删 `heldForPointer` 与 `report` 原条款 ④（含 `pointerInsidePanel` 注入与三处接线）；首页接缝只写收敛后的内容高；`setHomeContentHeight` 在值真的变了且首页当班时响一声（切页后的第一份写入走立即链，与模块页的 `awaitsFirstReport` 同形）。细节与代价见 [00](00-decisions.md) ADR-0015。
+
+**上屏取证**（`.workflow/p8-height-smooth/evidence/`，本地目录、不随仓库分发；关键读数抄在下表）：
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| 启动台 → 首页（面板可见高，像素差分） | 866（= 启动台的高，不退） | **572**（= 首页内容高，与首开一致） |
+| 六页往返（日历 / 待办 / 架子 / 终端 / 笔记 / 启动台 → 首页） | — | 每次都回到 **572** |
+| 切页那一下的窗口高轨迹（窗口列表 6ms 采样，`trace-window.py`） | — | 872 → 578，**一条 244ms 的缓动、无中途台阶** |
+
+**取证手法**（留给后来人）：`GOURD_HEIGHT_LOG=1 <Gourd 二进制>` 让账本 / 尺寸链把每一步打到 stderr；`trace-window.py` 用 `CGWindowListCopyWindowInfo` 按 ~6ms 采样窗口高，拿到的是**动画真实轨迹**（比截图换帧采样便宜且精确——p6 那轮的「换帧采样」受 CUA 限制没做成，这次用窗口列表绕开了）。切页驱动沿用 `.workflow/p2-home-fit/evidence/t5fix-ui/ui.swift`（合成鼠标），tab 图标 x 坐标实测为 356 / 396 / 436 / 475 / 516 / 558 / 600 / 640（1512 宽屏）。

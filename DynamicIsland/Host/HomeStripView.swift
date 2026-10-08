@@ -1346,9 +1346,6 @@ struct HomeBandedHomeView: View {
     /// 「面板高 − 表头 − 内边距」——少算表头就会让可用高比内容矮一截，最后一行被流方案整行丢掉。
     /// 所以这个数只能由知道 vm 的那一层给，不能在 `PanelAutoHeight` 里写死。
     let panelHeaderHeight: CGFloat
-    /// 光标是否停在面板里（边界 ①「不缩」的判据）：由 `NotchHomeView` 用宿主的既有 hover 判定
-    /// （`vm.isMouseHovering()`）算好传入——本视图拿不到 vm，也不该自己再写一份几何。
-    let pointerInsidePanel: Bool
 
     var body: some View {
         // 名单在本轮渲染里**只取一次**：块的 `content(for:request:)`（它同时决定「有没有块」——
@@ -1386,7 +1383,7 @@ struct HomeBandedHomeView: View {
             // 越多 → 算出来的内容高越小 → 面板再缩，越缩越少，最后停在「一行都不画」的不动点上；
             // 而块的高度是**声明值**（`HomeFlowView.blockHeight`），不随面板变，所以「内容自然高」
             // 本来就是与预算无关的一个数。收敛本身仍是双向的（见 `convergedPanelHeight`）：
-            // 种子高于它 → 收缩、低于它 → 长高，唯一单向的规则只有「光标在面板内时不缩」。
+            // 种子高于它 → 收缩、低于它 → 长高（今天没有例外规则，种子只进循环起点）。
             let hostChrome = panelHeaderHeight + PanelAutoHeight.homeVerticalPadding
             let naturalContentHeight = PanelAutoHeight.contentHeight(
                 from: HomeFlowLayout.plan(
@@ -1403,15 +1400,16 @@ struct HomeBandedHomeView: View {
                 calendarSpacing: HomeCalendarRow.rowSpacing,
                 headerHeight: panelHeaderHeight
             )
-            // 种子 = **权威的当前面板高**（`openNotchSize.height`，也就是尺寸层此刻生效的那个值），
-            // 不在这里由 `geometry.size.height + 假设的宿主开销` 反推。
+            // 收敛（夹取 + 双向）：`panelHeight(...)` 把「内容高 + 内边距」夹进既有区间。**2026-10-08
+            // 起结论不再由种子决定**——原先唯一读种子的规则（「光标在面板内不缩」，`heldForPointer`）
+            // 已删除（理由见 `PanelContentHeight` 文件头与 docs/00 ADR-0015）：光标在面板里是**悬浮
+            // 展开的常态**，那条规则把「面板此刻多高」写进了「这一页的内容高」这个槽，切页时又被
+            // 原样读回来——用户看到的正是「启动台回首页，面板不退、底下空一大片」。
             //
-            // 为什么必须取权威值（T6 评审 P1）：种子同时是 `heldForPointer` 的「当前值」——光标在
-            // 面板里（悬浮展开时必然如此）且内容变矮时，它会把**种子**原样写回账本。种子只要与
-            // 真实面板高差 Δ，写回的就是「真值 + Δ」，下一次重算又拿它当种子——**每个 resize 事件
-            // 都把面板推高 Δ，直到撞上上界**。§已知限制 1 接受的只是「看起来偏大直到移开鼠标」，
-            // 不是每次事件都长一点。`openNotchSize` 是唯一权威源（`calculateRequiredNotchSize`、
-            // 打开面板那条、`ContentView.dynamicNotchSize` 都读它），读它不引入任何新状态。
+            // 种子仍取**权威的当前面板高**（`openNotchSize.height`：尺寸层此刻生效的那个值，
+            // `calculateRequiredNotchSize` / 打开面板那条 / `ContentView.dynamicNotchSize` 同源），
+            // 不是由 `geometry.size.height + 假设的宿主开销` 反推——今天它只进收敛循环的起点，
+            // 但换个真依赖面板高的探针时这条口径仍然要对。
             let seedPanelHeight = openNotchSize.height
             let convergedPanelHeight = PanelAutoHeight.convergedPanelHeight(
                 seedPanelHeight: seedPanelHeight,
@@ -1420,21 +1418,15 @@ struct HomeBandedHomeView: View {
                 screenVisibleHeight: NSScreen.main?.visibleFrame.height,
                 contentHeight: { _ in naturalContentHeight }
             )
-            // 边界 ①（光标在面板里时不缩）在这里落地：收敛值比当前小、而光标还在面板里 → 保持当前。
-            let heldPanelHeight = PanelAutoHeight.heldForPointer(
-                converged: convergedPanelHeight,
-                currentPanelHeight: seedPanelHeight,
-                pointerInsidePanel: pointerInsidePanel
-            )
             // 写账本（`PanelContentHeight.shared`，Kernel 层）：尺寸层（`openNotchSize`）读它。
             // **两种模式都写**——auto 下它决定面板高；manual 下尺寸层不读它，但写下来模式切换那一刻
             // 的值就是新鲜的（切模式的那条 publisher 会重算窗口，见 `DynamicIslandApp`）。
-            // 账本的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它：
-            // 收敛值与被光标按住时的现值因此都能被尺寸层逐字还原（`clamp(内容 + homeVerticalPadding)`）。
+            // 账本的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它。
+            // 写进去的**只有内容自己的高**（不含任何面板现状成分）——切页 / 重开面板读回来的都是它。
             // 首页那一份是**权威**（`setHomeContentHeight`）：量出来的值（其它 tab 的上报）碰不到它。
             // `let _ =`：`ViewBuilder` 不接受 Void 类型的表达式语句（`type '()' cannot conform to 'View'`），
             // 绑定给 `_` 是声明、不是语句，这条约束因此绕开（包的 `writeHomeContentHeight` 只是语法桥）。
-            let _ = writeHomeContentHeight(heldPanelHeight - PanelAutoHeight.homeVerticalPadding)
+            let _ = writeHomeContentHeight(convergedPanelHeight - PanelAutoHeight.homeVerticalPadding)
 
             // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
             // 流**不再包带级容器**（docs/32 D-23：那道横向 8pt 内边距已撤，两行的左缘因此都落在内容区左缘，

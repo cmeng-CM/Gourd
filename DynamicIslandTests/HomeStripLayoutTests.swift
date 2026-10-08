@@ -1884,8 +1884,7 @@ final class HomeStripLayoutTests: XCTestCase {
         var body: some View {
             HomeBandedHomeView(
                 albumArtNamespace: albumArtNamespace,
-                panelHeaderHeight: 28,
-                pointerInsidePanel: false
+                panelHeaderHeight: 28
             )
             .environmentObject(viewModel)
         }
@@ -1899,17 +1898,15 @@ final class HomeStripLayoutTests: XCTestCase {
     }
 
     /// 挂载壳：接缝要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的），
-    /// p5-home-blocks / T6 起还要两样宿主事实（面板表头高 / 光标在不在面板里）——这里给**中性值**：
-    /// 表头 0（不占垂直开销）、光标在面板外（「不缩」那条边界不生效）。本文件测的是摆放与宽度，
-    /// 高度账本自己的用例在 `PanelAutoHeightTests`。
+    /// p5-home-blocks / T6 起还要一样宿主事实（面板表头高）——这里给**中性值**：表头 0（不占垂直开销）。
+    /// 本文件测的是摆放与宽度，高度账本自己的用例在 `PanelAutoHeightTests`。
     private struct HomeBandedHost: View {
         @Namespace private var albumArtNamespace
 
         var body: some View {
             HomeBandedHomeView(
                 albumArtNamespace: albumArtNamespace,
-                panelHeaderHeight: 0,
-                pointerInsidePanel: false
+                panelHeaderHeight: 0
             )
         }
     }

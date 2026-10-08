@@ -22,8 +22,9 @@
 //  docs/29 §做法 机制六 / §接口与数据形状。**两个来源、一个出口**：
 //
 //  - **首页**那一份是**算**出来的：`HomeBandedHomeView` 把流方案的 `heightUsed` + 日历行 + 缝 +
-//    表头算好后写 `setHomeContentHeight(_:)`（T6 的收敛与「光标在面板内不缩」都在那一侧做完，
-//    账本不参与、也**不覆盖**它——它只在首页那一页有效）；
+//    表头算好后写 `setHomeContentHeight(_:)`（它写进去的**只有内容自己的高**，不含任何「面板此刻
+//    多高」的成分——2026-10-08 起这是硬不变量，见下面那段注释；账本不参与换算、也**不覆盖**它
+//    ——它只在首页那一页有效）；
 //  - **其它 tab**那一份是**量**出来的：内容随条数变的模块页在根部挂
 //    `panelContentHeightReport(tab:headerHeight:isCurrent:)`（本文件下半部分），量的是这一页的
 //    **理想高**（`Layout` 的 `.unspecified` 提案，与面板当前多高**无关**——拿「摆放后的高」当自然高
@@ -34,10 +35,21 @@
 //  就是面板高（T6）。测量值进账本前按 `PanelAutoHeight.measuredContentHeight(naturalHeight:headerHeight:)`
 //  折（非首页 tab 少了 `NotchHomeView` 那一份 16pt，那里写明）。
 //
-//  **四条款**（`report(_:for:)`，docs/29 §做法 机制六 与派发片段的裁决）：
+//  **三条款**（`report(_:for:)`，docs/29 §做法 机制六 与派发片段的裁决）：
 //  ① 非有限值忽略；② **同一 tab** 的高度差 < 8pt（`hysteresis`）忽略；③ **换 tab 无条件接受**
-//  （含「光标在面板里」那一档——不然点在 tab 上的那只手永远等不到面板变矮）；
-//  ④ 同一 tab 且**光标在面板 frame 内**时只接受变大的值（不把面板从光标底下抽走，§已知限制 1）。
+//  （含「光标在面板里」那一档——不然点在 tab 上的那只手永远等不到面板变矮）。
+//
+//  **2026-10-08（p8-height-smooth）删掉了原第 ④ 条**（「同一 tab 且光标在面板 frame 内时只接受变大
+//  的值」）与首页那一侧同源的 `heldForPointer`：**槽位从此恒为「这一页的自然内容高」**，不再是
+//  「面板此刻多高」。原第 ④ 条的两个代价都不成立：
+//  - **它没在保护它对的地方**：判据 `vm.isMouseHovering()` 是**面板 rect**（`notchSize` 展开态就是
+//    面板尺寸），而面板里的指针十有八九正压在 tab 条 / 内容上——「切换这一下」因此被拦，用户看到的
+//    是「切到矮页、面板不退」（用户 2026-10-08 反馈的那张截图）；
+//  - **拦住之后没有解**：账面只写「不缩」，且**没有 hover 触发的重算**——光标留在面板里就一直是
+//    那个高（旧 §已知限制 1 / 30-8 的「移开鼠标才贴合」在这条链上并不成立）。
+//  删掉之后，尺寸层读到的永远是这一页**要**多高：切页单步到位、内容变化随时跟手。**防「把面板从
+//  光标底下抽走」的那道闸不在本文件**，在 `ContentView.shouldHonorHoverExit`（D-21：面板缩走
+//   ≠ 指针离开，判据是「与指针最后接触时的面板 rect」）。
 //
 //  **谁上报**（`measuredTabs`，逐条写理由）：
 //  待办 / 通知 / 启动台 / 快捷指令 / 架子 / 日历——前四页的内容是**行数 / 格子数**的函数（自然高与
@@ -148,19 +160,13 @@ final class PanelContentHeight: ObservableObject {
         return measuredTabs.contains(tab)
     }
 
-    /// 光标在不在面板 frame 里（条款 ④ 的判据）。**宿主注入**：`DynamicIslandApp` 接上宿主既有的
-    /// `vm.isMouseHovering()`（`NotchHomeView` 给首页那条路用的同一条判定，不另写一份几何）。
-    /// 默认「在外面」——测试与还没接上时**不拦任何变化**（比默认「在里面」保守：后者会让面板
-    /// 永远只增不减）。
-    var pointerInsidePanel: @MainActor () -> Bool = { false }
-
     /// 这一页此刻**能不能上报**（就绪门，p6-ui-polish / T7 机制五）。**宿主注入**：默认「都能」。
     ///
     /// 唯一的用例是启动台——`apps` 首轮扫描完成前页面上是 loading / 空态占位，**那不是这一页的
     /// 自然高**（进了账本 = 首开「先塌陷再长高」的三拍）。判据（扫完没有）住在模块侧
     /// （`LauncherModule.hasLoadedApps`），宿主把它按 tab 接进来；账本不认模块类型、也不存第二份
-    /// 状态，只留一个判据闭包——与 `pointerInsidePanel` 是**同一条注入形态**（默认值也一样：
-    /// 没接上时不拦任何上报，测量链条退回改动前的宽松口径）。
+    /// 状态，只留一个判据闭包（**默认值刻意取「不拦」**：没接上时测量链条退回宽松口径，
+    /// 比默认「拦住」保守——后者会把一页的量值永久挡在门外）。
     var isTabReportReady: @MainActor (String) -> Bool = { _ in true }
 
     /// 上一次**被接受**的页（`report` 的 tab、或 `selectTab(_:)` 定下来的页）。`current` 靠它二选一。
@@ -200,15 +206,26 @@ final class PanelContentHeight: ObservableObject {
     /// 差 < 8pt 的那点微跳不再推第二次窗口（「单步」目标）。
     ///
     /// 为什么需要这个位：切页时特意**保留**上一页的量值（一次跳动而不是两次），于是新页的第一份
-    /// 上报与旧值之间「看起来像同一 tab 的微动」——少了这个位，光标停在面板里时新页连变矮都做不到
-    /// （条款 ④ 拦下），滞回也会把小于 8pt 的差整个吃掉。位是**瞬时**的（消费一次即清）。
+    /// 上报与旧值之间「看起来像同一 tab 的微动」——少了这个位，滞回也会把小于 8pt 的差整个吃掉。
+    /// 位是**瞬时**的（消费一次即清）。
     private var awaitsFirstReport = false
+
+    /// 刚切到**首页**那一页（`selectTab(homeTab)` 置位，接缝的第一份写入消费）。
+    ///
+    /// 首页那一份是**算**出来的（不走上报），因此它没有 `awaitsFirstReport` 那一档的位置——但这个
+    /// 场景一模一样：切页时 `current` 取的是**上一次离开首页时**算出来的值，切回来接缝重算出来的
+    /// 新值若与它不同，那个差**不是同一页的微动**（离开期间内容变了：翻月、块开关、音乐块进出），
+    /// 该走**立即链**（免防抖）而不是等 0.15s 再动第二次。位是**瞬时**的（消费一次即清）。
+    private var awaitsFirstHomeWrite = false
 
     /// 首页**算**出来的那一份（含表头，口径见 `PanelAutoHeight.contentHeight(from:...)`）。
     ///
-    /// **权威**：只有首页那一页写它，量出来的值一律碰不到它（派发片段裁决 4）。**刻意不发通知**：
-    /// 首页的内容一变，T6 那五条 publisher 与「打开面板后一拍」已经会把窗口尺寸重算一次，
-    /// 这里再响一次就是第二条 resize 链（裁决 5）。
+    /// **权威**：只有首页那一页写它，量出来的值一律碰不到它（派发片段裁决 4）。**值真的变了且当班**
+    /// 时响一声 `objectWillChange`（见 `setHomeContentHeight(_:)`）——以前这里刻意不响（内容一变
+    /// 那五条 publisher 与「打开面板后一拍」已经会重算窗口）；今天响的理由是那两条**都不覆盖**
+    /// 「指针状态 / 内容自然变化把值改了」这一档（旧写法下它只能等到下一次外部触发，用户看到的是
+    /// 高度停在旧值上）。响的方式仍是**既有的**那一条 resize 链（订阅 → 立即链 / 防抖链），
+    /// 不新开第二条。
     ///
     /// **也不碰 `activeTab`**（T7 复核 P2）：写入方是视图 body，切 tab 的过渡里旧首页还可能再跑一次
     /// body——若它顺手把「当前页」改回首页，刚量完的模块页就被顶掉了（面板跳回上一页的高度）。
@@ -255,8 +272,11 @@ final class PanelContentHeight: ObservableObject {
         //
         // **缓存命中的页不置位**（T7 裁决 T7-fix）：豁免的存在理由只是「留着的那份属于**别的**页，
         // 拿它比出来的差不是同一页的微动」；缓存命中时起点就是这一页自己的量值，比较重新有意义——
-        // 第一份上报回普通条款（8pt 滞回 + 光标规则），免得差 < 8pt 时还多推一次窗口（微跳）。
+        // 第一份上报回普通条款（8pt 滞回），免得差 < 8pt 时还多推一次窗口（微跳）。
         awaitsFirstReport = isMeasured && cached == nil
+        // 首页那一份是**算**出来的（不走上报），它的「第一份写入」用另一个位接手同一个场景
+        // （见 `awaitsFirstHomeWrite`）。
+        awaitsFirstHomeWrite = isHome
         if let cached {
             measuredHeight = cached
         }
@@ -268,9 +288,35 @@ final class PanelContentHeight: ObservableObject {
     /// 首页那一份（`HomeBandedHomeView` 的接缝写）。T6 的持有者升级成这个槽：
     /// `nil` = 还没算过（首帧）→ 尺寸层回落手动值。
     ///
-    /// **只写槽、不改 `activeTab`**：当班与否由 `selectTab(_:)` 声明（见 `homeContentHeight` 的注释）。
+    /// **口径（2026-10-08 起是硬不变量）：这一份永远是「首页的自然内容高」**，不含「面板此刻多高」
+    /// 的任何成分——接缝不再写被光标按住的值（`heldForPointer` 已删，见文件头）。因此
+    /// 「面板高 = 内容高 + `homeVerticalPadding`」在首页这一路上是**无状态**的：切页读到的、
+    /// 下次打开读到的都是同一页内容自己的高。
+    ///
+    /// **只写槽、不改 `activeTab`**：当班与否由 `selectTab(_:)` 声明（与模块页的上报同一条纪律）。
+    /// **值真的变了且当班的是首页**时响一声 `objectWillChange`（与 `report` 的 `accept` 同一条链）：
+    /// 尺寸层据此跟一趟。不响的那两种情况各有理由——**没变**（每帧都写，绝大多数帧）与**不当班**
+    /// （切页过渡里旧首页还在跑 body：那时面板尺寸由新页说了算，这里响只会推一次 no-op 重算）。
     func setHomeContentHeight(_ height: CGFloat?) {
+        let previous = homeContentHeight
+        let wasArrival = awaitsFirstHomeWrite
+        awaitsFirstHomeWrite = false
+        lastChangeWasTabSwitch = false
         homeContentHeight = height
+        guard activeTab == Self.homeTab else { return }
+        // 差 < 0.5pt（`convergenceEpsilon`）算没变：宽度 / 字号级的小抖动不值得推一次窗口。
+        let changed: Bool = {
+            switch (previous, height) {
+            case let (.some(old), .some(new)): return abs(new - old) >= PanelAutoHeight.convergenceEpsilon
+            case (nil, .some), (.some, nil): return true
+            case (nil, nil): return false
+            }
+        }()
+        guard changed else { return }
+        // 切页那一步的第一份写入吃 `awaitsFirstHomeWrite`：它带来的差**不是**同一页的微动（切页时
+        // 留着的是上一次离开首页时的值），走立即链（免防抖），别等 0.15s 再动第二下。
+        lastChangeWasTabSwitch = wasArrival
+        objectWillChange.send()
     }
 
     /// 非首页 tab 的上报（四条款见文件头）。`height` 是**内容高口径**（含表头）——调用方按
@@ -308,10 +354,9 @@ final class PanelContentHeight: ObservableObject {
         }
 
         // 条款 ②：滞回——差 < 8pt 不改窗口。
-        guard abs(height - previous) >= Self.hysteresis else { return }
-
-        // 条款 ④：光标在面板 frame 内时只接受**变大**（不把面板从光标底下抽走）。
-        if height < previous, pointerInsidePanel() { return }
+        guard abs(height - previous) >= Self.hysteresis else {
+            return
+        }
 
         accept(height, for: tab)
     }
@@ -322,9 +367,9 @@ final class PanelContentHeight: ObservableObject {
         measuredHeight = nil
         homeContentHeight = nil
         awaitsFirstReport = false
+        awaitsFirstHomeWrite = false
         heightCache = [:]
         lastChangeWasTabSwitch = false
-        pointerInsidePanel = { false }
         isTabReportReady = { _ in true }
     }
 

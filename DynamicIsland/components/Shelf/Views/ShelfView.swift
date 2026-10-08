@@ -141,8 +141,7 @@ enum ShelfGridMetrics {
     /// 为什么用 `.adaptive` 而不是「拿 `@State` 里的视口宽自己算列数」：列数直接从
     /// **布局提案的宽**算，第一遍布局就与理想高的量法对上。挂在状态上的话，第一遍
     /// （视口宽还是 0）会按 1 列量一遍——探针把「一列堆起来」的大高报上去，账本收下；
-    /// 等宽量到再缩，又撞上「光标在面板内不缩」（条款 ④）：点着 tab 进来的那只手
-    /// 停在面板里，面板就卡在那个错的高度上（这次要修掉的「空半屏」正长这样）。
+    /// 等宽量到再缩，面板就会先停在那个错的高度上（「空半屏」正长这样）。
     static var columns: [GridItem] {
         [GridItem(.adaptive(minimum: columnWidth, maximum: columnWidth), spacing: itemSpacing)]
     }

@@ -220,6 +220,11 @@ enum PanelAutoHeight {
     /// 种子在内容之上 / 之下都不需要不同的分支（**不是**单向棘轮：只许收缩时，种子低于内容高
     /// 就永远长不上去，日历行与后半行会永久不画，docs/29 §做法 机制六 的收敛口径）。
     /// 夹取（上界 / 下界）之后**不回改内容**：本函数返回的就是结论，调用方拿它直接当面板高。
+    ///
+    /// **2026-10-08（p8-height-smooth）**：起点（种子）从那以后**不再影响结论**——原先唯一会读它的
+    /// 规则（「光标在面板内不缩」，`heldForPointer`）已删除（理由见 `PanelContentHeight` 文件头与
+    /// docs/00 ADR-0015）：本函数今天在首页那份常量探针下**一步就收敛**，留下它是为了保住
+    /// 「夹取 + 双向」这条既有语义与它的用例（换一个真的依赖面板高的探针时仍然是这套算术）。
     static func convergedPanelHeight(
         seedPanelHeight: CGFloat,
         mode: String,
@@ -239,21 +244,5 @@ enum PanelAutoHeight {
             height = next
         }
         return height
-    }
-
-    /// 唯一单向的规则：**光标在面板里时不缩**（只允许长高）——否则鼠标停在下方时会把面板从光标
-    /// 底下抽走（docs/29 §做法 机制六 边界 ①）。
-    ///
-    /// 副作用是「从高内容切到矮内容、光标又停在面板里」时看起来偏大，移开鼠标后下一次重算才贴合
-    /// （§已知限制 1，本批如实接受）。**作用范围只有首页这一路**（种子 = 当前面板高、走收敛）；
-    /// 其它 tab 的同一条规则在账本里（`PanelContentHeight.report(_:for:)`，T7）。
-    static func heldForPointer(
-        converged: CGFloat,
-        currentPanelHeight: CGFloat,
-        pointerInsidePanel: Bool
-    ) -> CGFloat {
-        guard pointerInsidePanel else { return converged }
-        guard converged.isFinite, currentPanelHeight.isFinite else { return converged }
-        return max(converged, currentPanelHeight)
     }
 }

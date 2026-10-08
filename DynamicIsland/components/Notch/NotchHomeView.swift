@@ -1012,17 +1012,18 @@ struct NotchHomeView: View {
     /// 高度取舍的判据只有一处（`HomeVerticalFit.plan`），本视图不再自己比一次高度——两处各判一次
     /// 就会有两份阈值。
     ///
-    /// **p5-home-blocks / T6 起本视图多给接缝两样宿主事实**（自适应高度要用，docs/29 §做法 机制六）：
-    /// ① 面板表头高（`max(24, vm.effectiveClosedNotchHeight)`，`NotchLayout` 就是这么给它钉的），
-    /// 接缝拿它把「面板高 → 流可用高」的差额算准；② 光标在不在面板里（`vm.isMouseHovering()`，
-    /// 宿主既有的那条 hover 判定），那是「光标在面板内时不缩」这条唯一单向规则的判据。
+    /// **p5-home-blocks / T6 起本视图给接缝一样宿主事实**（自适应高度要用，docs/29 §做法 机制六）：
+    /// 面板表头高（`max(24, vm.effectiveClosedNotchHeight)`，`NotchLayout` 就是这么给它钉的），
+    /// 接缝拿它把「面板高 → 流可用高」的差额算准。
+    ///
+    /// **2026-10-08（p8-height-smooth）撤掉第二样**（光标在不在面板里）：它只服务「光标在面板内不缩」
+    /// 那条规则，而那条规则已删（理由见 `PanelContentHeight` 文件头与 docs/00 ADR-0015）。
     private var standardHomeContent: some View {
         HomeBandedHomeView(
             albumArtNamespace: albumArtNamespace,
             panelHeaderHeight: PanelAutoHeight.panelHeaderHeight(
                 effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
-            ),
-            pointerInsidePanel: vm.isMouseHovering()
+            )
         )
     }
 
