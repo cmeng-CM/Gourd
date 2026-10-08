@@ -2276,14 +2276,27 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertTrue(rows[3].key === Defaults.Keys.enableNotes, "第四行（笔记）的键")
         XCTAssertTrue(rows[4].key === Defaults.Keys.enableColorPickerFeature, "第五行（取色器）的键")
 
-        // **笔记行的形态**（2026-10-08）：只有开关、没有 ↑↓（`panelTab == nil`）——它与剪贴板共用
-        // 面板上那一条 tab（`TabSelectionView.slots` 的 `clipboard:` 槽按 `enableNotes` 换 label 与
-        // 内容），一条槽挂两个 ↑↓ 会让同一行被两处排序。
-        XCTAssertNil(rows[3].panelTab, "笔记行不可排（与剪贴板共用一条 tab）")
+        // **↑↓ 挂在哪一行**（2026-10-08 用户：「笔记要和其他组件一样，可以上下移动」+
+        // 「像剪贴板、取色器这些不能移动的，增加一个『功能组件』项，只有开启关闭的设置」）：
+        // 可排三条 = 投送暂存 / 终端 / **笔记**；只有开关的两条 = 剪贴板 / 取色器。
+        // **注意箭头挂在笔记行上而槽位 id 仍是 `clipboard`**（那条 tab 在 `panelOrder` 里的键名：
+        // 改 id 会让既有用户的排序表整项作废）——所以下面按「哪一行带 panelTab」断言，不认键名。
         XCTAssertEqual(
-            rows.filter { $0.panelTab == nil }.map(\.id),
-            ["enableNotes", "enableColorPickerFeature"],
-            "不可排的两行：笔记（共用 tab）+ 取色器（不是面板 tab，渲染在标题栏）"
+            ModuleSettingsSection.sortableHostRows.map(\.id),
+            ["dynamicShelf", "enableTerminalFeature", "enableNotes"],
+            "可排的宿主行（带 ↑↓，进「面板组件」节）"
+        )
+        XCTAssertEqual(
+            ModuleSettingsSection.switchOnlyHostRows.map(\.id),
+            ["enableClipboardManager", "enableColorPickerFeature"],
+            "只有开关的宿主行（进「功能组件」节）"
+        )
+        XCTAssertEqual(rows[3].panelTab, .clipboard, "笔记行带箭头，槽位 id 仍是既有的 `clipboard`（不改键名=不作废老排序表）")
+        XCTAssertNil(rows[2].panelTab, "剪贴板行改成只有开关（它的位置在标题栏图标行，不在 tab 条上）")
+        XCTAssertEqual(
+            Set(ModuleSettingsSection.sortableHostRows.compactMap(\.panelTab)),
+            Set(PanelHostTab.allCases),
+            "三个可排槽位与 `PanelHostTab` 词汇表一一对应（只是箭头换了持有行）"
         )
 
         XCTAssertFalse(
@@ -2406,11 +2419,19 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(
             hostRows.compactMap(\.panelTab).map(\.id),
             ["shelf", "terminal", "clipboard"],
-            "登记表序仍是枚举表序（暂存器 / 终端 / 剪贴板）——渲染序由排序键决定，不是这一行"
+            "可排槽位仍是三个（shelf / terminal / clipboard）——2026-10-08 起 clipboard 那个槽位的箭头"
+                + "挂在**笔记行**上（键名不动 = 既有 `panelOrder` 表不作废），清单因此逐字不变"
         )
-        XCTAssertTrue(hostRows[0].key === PanelHostTab.shelf.gateKey, "暂存器：登记的是同一个键对象（.dynamicShelf）")
-        XCTAssertTrue(hostRows[1].key === PanelHostTab.terminal.gateKey, "终端：.enableTerminalFeature")
-        XCTAssertTrue(hostRows[2].key === PanelHostTab.clipboard.gateKey, "剪贴板：.enableClipboardManager")
+        // 箭头的持有行按键名找（不按下标）：持有行 = 表里唯一 `panelTab == .shelf/.terminal/.clipboard` 的那行。
+        func rowOwning(_ tab: PanelHostTab) -> HostSurfaceRow? {
+            hostRows.first { $0.panelTab == tab }
+        }
+        XCTAssertTrue(rowOwning(.shelf)?.key === PanelHostTab.shelf.gateKey, "暂存器槽位：登记的是同一个键对象（.dynamicShelf）")
+        XCTAssertTrue(rowOwning(.terminal)?.key === PanelHostTab.terminal.gateKey, "终端槽位：.enableTerminalFeature")
+        XCTAssertTrue(
+            rowOwning(.clipboard)?.key === Defaults.Keys.enableNotes,
+            "clipboard 槽位的箭头在笔记行上（剪贴板行只有开关）——槽位 id 是那条 tab 在 `panelOrder` 里的键名"
+        )
         // 2026-10-08：视图侧那份「真的在读」的名单比词汇表**多一条**——笔记（`enableNotes`）与剪贴板
         // 共用面板上那一条 tab，它有门槛、有设置行，但**没有自己的排序 id**（不进 `PanelHostTab`），
         // 因此这条断言写成「词汇表 ∪ 复合门控名单 = 视图侧名单」，两边仍然锁死。

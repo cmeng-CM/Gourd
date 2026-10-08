@@ -68770,13 +68770,47 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "These rows control which modules get their own tab in the expanded panel, and in what order — and this section is the complete list of what the panel shows: the five host rows (Shelf / Terminal / Clipboard — reorder these with the ↑↓ arrows just like the module rows; Notes shares the panel's single tab with the Clipboard, so it is switch-only and follows the Clipboard row's order; Color Picker lives in the title bar and stays switch only) plus the module rows that declare an expanded panel. A module that also has a home widget (Calendar, To-dos, Notifications) can keep its home block while its tab is switched off here — the two sections are independent. The panel's other elements are owned elsewhere: Mirror in the Home widgets section, Timer in the timer module card, the gear and the recording / Do Not Disturb / battery indicators on their own settings pages, extension tabs on the Extensions page; Usage is off by default and never appears."
+            "value" : "These rows control which modules get their own tab in the expanded panel, and in what order — this section is the complete list of the panel's tabs: the three host rows (Shelf / Terminal / Notes — reorder these with the ↑↓ arrows just like the module rows) plus the module rows that declare an expanded panel. Switch-only elements (Clipboard / Color Picker) live in the “Feature components” section below. A module that also has a home widget (Calendar, To-dos, Notifications) can keep its home block while its tab is switched off here — the two sections are independent. The panel's other elements are owned elsewhere: Mirror in the Home widgets section, Timer in the timer module card, the gear and the recording / Do Not Disturb / battery indicators on their own settings pages, extension tabs on the Extensions page; Usage is off by default and never appears."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：五条宿主行（投送暂存 / 终端 / 剪贴板——可像模块行一样用 ↑↓ 调序；笔记与剪贴板共用面板上那一条 tab，只有开关、排序跟着剪贴板那一行；取色器在标题栏、只有开关）+ 声明了展开面板的模块行。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
+            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：三条宿主行（投送暂存 / 终端 / 笔记——可像模块行一样用 ↑↓ 调序）+ 声明了展开面板的模块行；**只有开关、没有 ↑↓ 的元素在下面「功能组件」那一节**（剪贴板 / 取色器）。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
+          }
+        }
+      }
+    },
+    "settings.modules.group.features" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feature components"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "功能组件"
+          }
+        }
+      }
+    },
+    "settings.modules.group.features.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch-only elements: they have no place on the panel's tab row (the clipboard renders as a title-bar icon, and the Color Picker lives in the title bar too), so there is nothing to reorder. The Clipboard shares the panel's single Notes/Clipboard tab with Notes — with “Separate tab in Dynamic Island” both appear side by side, and that tab's position follows the Notes row."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有开关的元素：它们在面板 tab 条上没有位置（剪贴板在图标档渲染在标题栏、取色器也在标题栏），所以没有先后可排。剪贴板与笔记共用面板上那一条 tab——「显示方式 = 动态岛内独立标签页」时两者并排出现，那条 tab 的位置跟着笔记那一行。"
           }
         }
       }

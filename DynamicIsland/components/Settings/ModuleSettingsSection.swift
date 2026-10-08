@@ -208,10 +208,16 @@ struct ModuleSettingsSection: View {
 
             surfaceSection(.panel)
 
-            // **本页从 p5 / T4 起只有这两节**（D-06）：「功能」段（`featuresSection` 与 `featureCards`
+            // **「功能组件」节**（2026-10-08 用户要求）：只有开关、没有 ↑↓ 的宿主元素
+            // （剪贴板 / 取色器）——见 `featuresSection` 的注释。
+            featuresSection
+
+            // **本页从 p5 / T4 起只有两节**（D-06）：「功能」段（`featuresSection` 与 `featureCards`
             // 表）整段撤销——五张卡各自回到真正管它的那一页：终端 / 暂存器 / 剪贴板归本节「面板组件」的
             // 宿主行（T5），统计归「首页组件」的统计模块卡（同一个键），锁屏天气归锁屏设置页那一行。
             // 顺序节已被两节吸收（每行自己的上移 / 下移），不再单列一节。
+            // **2026-10-08 加第三节**：只有开关的宿主元素单列「功能组件」（T4 那句「只有两节」指的是
+            // 模块 surface 那两节，宿主元素的自持清单当时还挂在「面板组件」节末尾）。
         }
         .navigationTitle(Text(LocalizedStringKey("settings.modules.title")))
     }
@@ -258,27 +264,32 @@ struct ModuleSettingsSection: View {
             key: .enableTerminalFeature,
             panelTab: .terminal
         ),
+        // **剪贴板行**（2026-10-08 起**只有开关、没有 ↑↓**——用户：「像剪贴板、取色器这些不能移动的，
+        // 增加一个『功能组件』项，只有开启关闭的设置」）：它的位置不在面板 tab 条上——`notchTab`
+        // 档位下渲染在**标题栏图标行**（docs/30 §已知限制 5），给它 ↑↓ 是「拖了没用」。
+        //
+        // `separateTab` 档位下它与笔记**共用**面板上那一条 tab（同一槽的左右两半），那条 tab 的位置
+        // 跟着**笔记行**（见下）——两条行共用一个槽位，箭头只能挂在一处。
         HostSurfaceRow(
             id: "enableClipboardManager",
             nameKey: "Enable Clipboard Manager",
             symbolName: "doc.on.clipboard",
             key: .enableClipboardManager,
-            panelTab: .clipboard
+            panelTab: nil
         ),
-        // **笔记行**（2026-10-08 用户要求：「组件设置里面，面板组件没有笔记这项，加上」）：
-        // 它与上面三条同属**宿主行**——面板上那条 tab 由 `enableNotes` 直接门控（不经模块注册表），
-        // 开关的落点就在 `TabSelectionView.slots(clipboard:)` 的复合门槛里。
+        // **笔记行**（2026-10-08 用户要求「笔记要和其他组件一样，可以上下移动」）：
+        // 它是宿主行（面板上那条 tab 由 `enableNotes` 直接门控，不经模块注册表），**带 ↑↓**。
         //
-        // **`panelTab: nil`**（只有开关、没有 ↑↓）：笔记与剪贴板**共用面板上那一条 tab**
-        // （`slots` 的 `clipboard:` 槽按 `enableNotes` 换 label 与内容；`separateTab` 档位下
-        // 还是同一槽的左右两半），一条槽不能挂两个 ↑↓——排序跟着剪贴板那一行。
-        // 取色器那条 `nil` 的理由不同（它不是面板 tab，渲染在标题栏图标行）；两行在节末同列。
+        // **↑↓ 的槽位 id 仍是 `clipboard`**：那条 tab 在排序表里的键名就是它（`PanelHostTab.clipboard`
+        // 的 `defaultOrder` = -20），改 id 会让既有用户的 `panelOrder` 整张表里的这一项变成未知 id
+        // （排序被丢掉）——所以**只换谁拿箭头，不换键名**。tab 的 label 由 `TabSelectionView.slots`
+        // 按 `enableNotes` 决定（笔记开着时 = Notes），与这里谁拿箭头无关。
         HostSurfaceRow(
             id: "enableNotes",
             nameKey: "Enable Notes",
             symbolName: "note.text",
             key: .enableNotes,
-            panelTab: nil
+            panelTab: .clipboard
         ),
         HostSurfaceRow(
             id: "enableColorPickerFeature",
@@ -288,6 +299,18 @@ struct ModuleSettingsSection: View {
             panelTab: nil
         ),
     ]
+
+    /// **可排的宿主行**（`panelTab != nil`）：进「面板组件」节、带 ↑↓——投送暂存 / 终端 / 笔记。
+    /// 视图与用例共用这一条算式（别在视图里另写一遍 `filter`）。
+    static var sortableHostRows: [HostSurfaceRow] {
+        hostPanelRows.filter { $0.panelTab != nil }
+    }
+
+    /// **只有开关的宿主行**（`panelTab == nil`）：进「功能组件」节、没有 ↑↓——剪贴板 / 取色器
+    /// （它们不在面板 tab 条上：剪贴板的图标档与取色器都在标题栏）。
+    static var switchOnlyHostRows: [HostSurfaceRow] {
+        hostPanelRows.filter { $0.panelTab == nil }
+    }
 
     // MARK: 面板组件节的可排名单（模块行 + 宿主三 tab，p6 / T9）
 
@@ -641,18 +664,34 @@ struct ModuleSettingsSection: View {
             if group == .home {
                 HomeCalendarSettingsRow()
             }
-            // 面板组件节的**不可排行**（`panelTab == nil` 的两条：笔记与取色器）——渲染在可排名单
-            // 之后、只有开关没有 ↑↓。两条的理由不同：**取色器**不是面板 tab（渲染在标题栏图标行，
-            // docs/30 §明确不做 3 / 备选⑧）；**笔记**与剪贴板共用面板上那一条 tab（一条槽一个 ↑↓）。
-            if group == .panel {
-                ForEach(Self.hostPanelRows.filter { $0.panelTab == nil }) { row in
-                    HostSurfaceRowView(row: row)
-                }
-            }
         } header: {
             Text(LocalizedStringKey(group.titleKey))
         } footer: {
             Text(LocalizedStringKey(group.footerKey))
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// **「功能组件」节**（2026-10-08 用户要求：「像剪贴板、取色器这些不能移动的，增加一个『功能组件』
+    /// 项，只有开启关闭的设置」）：面板上那几个**只有开关、没有 ↑↓** 的元素。
+    ///
+    /// 判据就是 `switchOnlyHostRows`（`panelTab == nil`）——**一张表两处渲染**：可排的进「面板组件」
+    /// 节（带箭头），不可排的进本节（只有开关）。它们不在面板 tab 条上（剪贴板的图标档与取色器都在
+    /// 标题栏），所以没有位置可排——给箭头就是「拖了没用」。
+    ///
+    /// 不是 `ModuleSurfaceGroup` 的第三个 case：那一族枚举是**模块 surface** 的词汇（`.home` /
+    /// `.expanded`），本节装的是宿主元素、不读 manifest（硬塞一个 case 会让 `hasOtherSurface` /
+    /// `isOn` 那几个纯函数多一条没有意义的分支）。
+    private var featuresSection: some View {
+        Section {
+            ForEach(Self.switchOnlyHostRows) { row in
+                HostSurfaceRowView(row: row)
+            }
+        } header: {
+            Text(LocalizedStringKey("settings.modules.group.features"))
+        } footer: {
+            Text(LocalizedStringKey("settings.modules.group.features.footer"))
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
