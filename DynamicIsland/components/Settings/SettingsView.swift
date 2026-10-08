@@ -987,6 +987,10 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .clipboard, title: "Display Mode", keywords: ["list", "grid", "clipboard"], highlightID: SettingsTab.clipboard.highlightID(for: "Display Mode")),
             SettingsSearchEntry(tab: .clipboard, title: "History Size", keywords: ["history", "clipboard"], highlightID: SettingsTab.clipboard.highlightID(for: "History Size")),
 
+            // Notes（2026-10-08：笔记页随 ADR-0014 回到侧栏后补上搜索项——与剪贴板那一组同形，
+            // 目标页是笔记设置页；「组件」页的面板组件节里也有一行同名开关，同一个键）
+            SettingsSearchEntry(tab: .notes, title: "Enable Notes", keywords: ["notes", "memo", "笔记"], highlightID: SettingsTab.notes.highlightID(for: "Enable Notes")),
+
             // Screen Assistant
             SettingsSearchEntry(tab: .screenAssistant, title: "Enable Screen Assistant", keywords: ["screen assistant", "ai"], highlightID: SettingsTab.screenAssistant.highlightID(for: "Enable Screen Assistant")),
             SettingsSearchEntry(tab: .screenAssistant, title: "Display Mode", keywords: ["screen assistant", "mode"], highlightID: SettingsTab.screenAssistant.highlightID(for: "Display Mode")),

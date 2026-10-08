@@ -524,14 +524,17 @@ class DynamicIslandViewCoordinator: ObservableObject {
     /// 视图 id 取自「谁在读这个键」（`docs/29` §机制三那张枚举表的宿主行）：
     /// - 暂存器 `dynamicShelf` → `.shelf`（`TabSelectionView` 的 Shelf tab + 拖拽落点 `dragDetector`）；
     /// - 终端 `enableTerminalFeature` → `.terminal`；
-    /// - 剪贴板 `enableClipboardManager` → `.notes` 与 `.clipboard`（面板 tab 走 `.notes`、
-    ///   刘海图标 `notchTab` 那一路走 `.clipboard`——两条支路都是剪贴板今天的形态）；
+    /// - 剪贴板 `enableClipboardManager` → `.clipboard`（刘海图标 `notchTab` 那一路；面板 tab 走
+    ///   `.notes`，那一条的收回是下面那个**复合**条件）；
     /// - 取色器 `enableColorPickerFeature` → `.colorPicker`。
+    /// **笔记 `enableNotes` 不在这张表里**（2026-10-08 起它在设置页也有一行）：见
+    /// `compositeGatedHostKeyNames` 与 `isHostSurfaceGatedOff(.notes, …)`。
     ///
     /// **计时器不在表里**：它是模块行不是宿主行，它的收回走既有那条
     /// `handleTimerFeatureToggle()`（判据 `isTimerSurfaceSelected()`），两处不重复。
     struct HostSurfaceGate {
-        /// 门槛键——与设置页 `ModuleSettingsSection.hostPanelRows` 那四条同一批键。
+        /// 门槛键——与设置页 `ModuleSettingsSection.hostPanelRows` 同一批键（笔记那一行的端点
+        /// 在 `isHostSurfaceGatedOff(.notes, …)` 的复合分支里，不在本表）。
         let key: Defaults.Key<Bool>
         /// 该键关掉时不允许停留的视图（`ContentView` 的 `switch coordinator.currentView` 分支）。
         let views: [NotchViews]
@@ -540,16 +543,24 @@ class DynamicIslandViewCoordinator: ObservableObject {
         var id: String { key.name }
     }
 
-    /// **不是 `private`**：用例拿它与设置页那四条宿主行对键（同一个集合的两个端点）。
-    /// `.notes` **不在任何一条的 `views` 里**：它与 `.clipboard` 共用同一个视图（`NotchNotesView`
-    /// 自己按 `enableNotes` 决定画哪一半），门槛是「两个键都关着」这个**复合**条件，
-    /// 由 `isHostSurfaceGatedOff` 单独判（2026-10-08 恢复笔记时从剪贴板那条里摘出来的）。
+    /// **不是 `private`**：用例拿它与设置页那几条宿主行对键（同一个集合的两个端点）。
     static let hostSurfaceGateViews: [HostSurfaceGate] = [
         HostSurfaceGate(key: .dynamicShelf, views: [.shelf]),
         HostSurfaceGate(key: .enableTerminalFeature, views: [.terminal]),
         HostSurfaceGate(key: .enableClipboardManager, views: [.clipboard]),
         HostSurfaceGate(key: .enableColorPickerFeature, views: [.colorPicker]),
     ]
+
+    /// **没有单条 gate、由复合门控收回**的宿主键名（2026-10-08 笔记行进「面板组件」节时补）。
+    ///
+    /// 今天只有一个：`enableNotes`——它与剪贴板共用 `.notes` 这个视图，收回条件是「两个键**都**
+    /// 关着」（`isHostSurfaceGatedOff` 里那段单独判的分支），因此在 `hostSurfaceGateViews` 里
+    /// 没有条目、`.notes` 也不在任何一条的 `views` 里。
+    ///
+    /// **存在的理由**：设置页「面板组件」节的每一行都必须是「拨下去面板上真会变」的开关——
+    /// 反查用例按「行 ⊆（gate 键 ∪ 本名单）」判这件事；没有这个名单，笔记行就会被误判成
+    /// 「拨了没反应」。
+    static let compositeGatedHostKeyNames: Set<String> = [Defaults.Keys.enableNotes.name]
 
     /// 该视图是否被某个**已关掉**的宿主门槛键排除（纯函数：吃「哪些键关着」的名字集合，不读偏好
     /// ——用例拿几个字面量就能把四条映射各钉一条，与 `ModuleSurfaceGroup.hasOtherSurface` 同款）。

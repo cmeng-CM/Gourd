@@ -30,7 +30,10 @@
 //    读不到时只在面板上显示提示 + 一颗「打开系统设置」按钮（跳到隐私与安全性 → 完全磁盘访问）；
 //  - **严禁**为了触发提示去读其它受保护路径（本机实测：通知库自身被拒即可判定）。
 //
-//  ## 能力边界（09 §5.5「必须接受」，UI 上有一行 footer 明示）
+//  ## 能力边界（09 §5.5「必须接受」）
+//  UI 上只有**一行**（`capabilityHint`，页头下方、**列表非空时**才出现）：× 会真关掉系统通知 +
+//  列表最多滞后几秒；通道 / 落盘 / 改版失效那些口径留在本节与 `docs/09` §5.5，不常驻面板
+//  （2026-10-08 用户反馈：页脚那段两三行的说明要么去掉、要么改成上面一行）。
 //  ① **AX 通道能真关掉系统通知，DB 通道只能从岛上移除**（2026-09-28 加 AX 通道后收窄的口径）：
 //     浮层上的 × 命中 AX 横幅时执行「关闭」动作（`NotificationBannerObserver`），失败或没有
 //     关闭控件时退化为「仅从岛上隐藏」；展开列表的 × 默认仍是**仅从岛上移除**
@@ -125,7 +128,8 @@
 //
 //  文案走 Localizable key：`module.notifications.name` / `.summary` / `.empty` /
 //  `.needsFullDiskAccess` / `.openSettings` / `.recent` / `.justNow` / `.minutesAgo` /
-//  `.hoursAgo` / `.daysAgo` / `.readOnlyNote` / `.newNotification` / `.clearAll` / `.dismiss`（浮层 ×
+//  `.hoursAgo` / `.daysAgo` / `.capabilityHint`（能力边界一行，2026-10-08 取代了原先页脚那一整段
+//  `.readOnlyNote`）/ `.newNotification` / `.clearAll` / `.dismiss`（浮层 ×
 //  无句柄时的「关闭」）/
 //  `.closeSystemNotification`（**有句柄时浮层 × 与列表行 × 共用**的「同时关掉系统通知」）/
 //  `.removeFromList`（列表行 × 无句柄时的「从列表移除」，D-04）/
@@ -1077,7 +1081,8 @@ struct NotificationRowMetrics {
     static let body: CGFloat = 12
     /// 行内 × 关闭按钮。
     static let dismissIcon: CGFloat = 11
-    /// 脚注（只读能力边界说明）。
+    /// 能力边界行的字号（**2026-10-08 起渲染在页头下方、只在列表非空时出现**——原先在页脚、
+    /// 是一段两三行的常驻说明。常量名保留：`docs/30` 机制四 的档位表按这个名字记着这条 10pt 档）。
     static let footnote: CGFloat = 10
     /// 行内垂直内边距（3 → 4：字号变大后行距跟着松一点，行高随之变高）。
     static let rowVerticalPadding: CGFloat = 4
@@ -1100,7 +1105,8 @@ struct NotificationRowMetrics {
     static let permissionActionFontSize: CGFloat = 12
 }
 
-/// 展开面板：标题行（模块名 + 状态 + 刷新）+ 通知列表（点击整行打开对应 App **并收起刘海**）+ 能力边界说明。
+/// 展开面板：标题行（模块名 + 状态 + 刷新）+ **能力边界一行**（列表非空时）+ 通知列表
+/// （点击整行打开对应 App **并收起刘海**）。
 ///
 /// `.task` 做两件事：取一次最新数据（**不碰权限**）+ 把未读数清零（「自上次打开面板以来」）。
 private struct NotificationsModuleView: View {
@@ -1111,8 +1117,10 @@ private struct NotificationsModuleView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
+            if showsNotificationCapabilityHint(state: store.state, itemCount: store.items.count) {
+                capabilityHint
+            }
             body(for: store.state)
-            footer
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -1200,14 +1208,32 @@ private struct NotificationsModuleView: View {
         }
     }
 
-    /// 能力边界（09 §5.5「必须接受」的四条）——一行小字，别让用户以为能在岛上操作通知。
-    private var footer: some View {
-        Text(LocalizedStringKey("module.notifications.readOnlyNote"))
+    /// **能力边界一行**（2026-10-08 用户反馈：「通知的这个说明去掉，或者在上面简单描述，看哪个合适」
+    /// ——原先它是页脚的一段两三行常驻说明，空态里那面「文字墙」就是它）。
+    ///
+    /// 只说用户用得上的两件事：**× 会真的关掉系统通知**（不是只从岛上藏起来）、**列表最多滞后几秒**。
+    /// 通道口径（AX / 数据库）、落盘延迟、可能随系统改版失效——那些是工程口径，留在 `docs/09` §5.5
+    /// 与模块清单，不在面板上常驻。行内 × 的两种语义另有各自的 tooltip（`removeFromList` /
+    /// `closeSystemNotification`），悬停即见，比页面上的一段说明更靠得住。
+    ///
+    /// 显示条件见 `showsNotificationCapabilityHint(state:itemCount:)`（**只在列表真有条目时显示**）。
+    private var capabilityHint: some View {
+        Text(LocalizedStringKey("module.notifications.capabilityHint"))
             .font(.system(size: NotificationRowMetrics.footnote))
-            .foregroundStyle(.white.opacity(0.35))
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
+}
+
+/// 能力边界行**显示不显示**（纯函数，可测——与 `shouldShowScrollFadeMask` / `shouldHonorHoverExit`
+/// 同一条纪律：判据抽出来，视图只负责接上）。
+///
+/// 只有「**列表真有条目**」这一档显示：
+/// - 空态（`ok` + 0 条）不显示——那一行在空页面上没有指代对象（用户 2026-10-08 反馈的截图就是它）；
+/// - 权限引导 / 失败态不显示——那两块自己的文案已经把「为什么没有列表」说清楚了，再叠一行只会打架。
+func showsNotificationCapabilityHint(state: NotificationReadState, itemCount: Int) -> Bool {
+    state == .ok && itemCount > 0
 }
 
 /// 通知列表：一行一条，点击整行按 `bundleIdentifier` 打开对应 App，随后收起刘海。

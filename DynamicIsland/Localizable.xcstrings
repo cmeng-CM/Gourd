@@ -68770,13 +68770,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "These rows control which modules get their own tab in the expanded panel, and in what order — and this section is the complete list of what the panel shows: the four host rows (Shelf / Terminal / Clipboard — reorder these with the ↑↓ arrows just like the module rows; Color Picker lives in the title bar, is not in the sort list and stays switch only) plus the module rows that declare an expanded panel. A module that also has a home widget (Calendar, To-dos, Notifications) can keep its home block while its tab is switched off here — the two sections are independent. The panel's other elements are owned elsewhere: Mirror in the Home widgets section, Timer in the timer module card, the gear and the recording / Do Not Disturb / battery indicators on their own settings pages, extension tabs on the Extensions page; Usage is off by default and never appears."
+            "value" : "These rows control which modules get their own tab in the expanded panel, and in what order — and this section is the complete list of what the panel shows: the five host rows (Shelf / Terminal / Clipboard — reorder these with the ↑↓ arrows just like the module rows; Notes shares the panel's single tab with the Clipboard, so it is switch-only and follows the Clipboard row's order; Color Picker lives in the title bar and stays switch only) plus the module rows that declare an expanded panel. A module that also has a home widget (Calendar, To-dos, Notifications) can keep its home block while its tab is switched off here — the two sections are independent. The panel's other elements are owned elsewhere: Mirror in the Home widgets section, Timer in the timer module card, the gear and the recording / Do Not Disturb / battery indicators on their own settings pages, extension tabs on the Extensions page; Usage is off by default and never appears."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：四条宿主行（投送暂存 / 终端 / 剪贴板——可像模块行一样用 ↑↓ 调序；取色器在标题栏、只有开关，不在排序名单里）+ 声明了展开面板的模块行。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
+            "value" : "这一段管的是「要不要单独出面板 tab」以及它们的先后，**是「面板上出现什么」的全量清单**：五条宿主行（投送暂存 / 终端 / 剪贴板——可像模块行一样用 ↑↓ 调序；笔记与剪贴板共用面板上那一条 tab，只有开关、排序跟着剪贴板那一行；取色器在标题栏、只有开关）+ 声明了展开面板的模块行。同时有首页块的模块（日历 / 待办 / 通知）可以在这里单独关掉 tab 而保留首页块——**两节互不影响：这里的开关只管面板这一面**。面板上其余元素各有归属、不在这里重复：镜子在「首页组件」的镜子卡、计时器在计时器模块卡、齿轮与录屏 / 勿扰 / 电池指示器在各自设置页、扩展 tab 在扩展设置页；「用量」默认关、面板上不会出现。"
           }
         }
       }
@@ -82511,18 +82511,18 @@
         }
       }
     },
-    "module.notifications.readOnlyNote" : {
+    "module.notifications.capabilityHint" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AX channel: the HUD is live and its × really closes the system notification; a list row's × also closes it when a matching banner handle is under 10s old. DB channel: list and fallback (latency bounded by macOS flush, ~5s). Both may break after OS updates."
+            "value" : "× really closes the system notification · the list may lag a few seconds"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AX 通道：浮层实时，点 × 可真关闭系统通知；列表行的 × 在近 10 秒内有同指纹横幅句柄时也会一并真关。数据库通道：列表与降级（实时性受 macOS 落盘延迟约 5s 限制）。两条都可能随系统改版失效。"
+            "value" : "点 × 会真的关掉系统通知 · 列表最多滞后几秒"
           }
         }
       }

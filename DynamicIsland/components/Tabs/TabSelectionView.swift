@@ -405,14 +405,16 @@ struct TabSelectionView: View {
 // MARK: - 宿主门槛键（设置页「面板组件」节的宿主行反查用）
 
 extension TabSelectionView {
-    /// 本视图**真的在读**的宿主门槛键（`docs/29` §机制三的枚举表）：面板左列那三条由上游键
+    /// 本视图**真的在读**的宿主门槛键（`docs/29` §机制三的枚举表）：面板左列那几条由上游键
     /// 直接门控的 tab——暂存器 `dynamicShelf`、剪贴板 `enableClipboardManager`、终端
-    /// `enableTerminalFeature`。三个读取点就在同文件 `tabs` 里（`@Default` 的观察 + 传给
-    /// `PanelTabSequence.slots(...)` 的那个参数，一屏可及）。
+    /// `enableTerminalFeature`，以及**笔记 `enableNotes`**（2026-10-08 用户要求「面板组件加上
+    /// 笔记这项」后一并登记；读取点就是同文件 `slots(clipboard:)` 的 `notesOrClipboardTabVisible`）。
+    /// 读取点都在 `tabs` 里（`@Default` 的观察 + 传给 `PanelTabSequence.slots(...)` 的那个参数）。
     ///
-    /// **与 `PanelHostTab.gateKey` 必须是同一批键**（p6 / T9）：那份词汇表给出的 id ↔ gate 键映射
-    /// 就是面板条排序用的 id（`shelf` / `clipboard` / `terminal`），两处各写一份就会漂——
-    /// 用例按键名把两份钉在一起。
+    /// **前三条与 `PanelHostTab.gateKey` 必须是同一批键**（p6 / T9）：那份词汇表给出的 id ↔ gate 键
+    /// 映射就是面板条排序用的 id（`shelf` / `clipboard` / `terminal`），两处各写一份就会漂——
+    /// 用例按键名把两份钉在一起。**笔记不在那份词汇表里**：它与剪贴板共用一条 tab
+    /// （`slots` 的 `clipboard:` 槽），没有自己的排序 id、也没有 ↑↓。
     ///
     /// **这份名单是给用例反查的方向**：设置页「面板组件」节的宿主行表
     /// （`ModuleSettingsSection.hostPanelRows`）登记的键必须落在本名单与
@@ -425,6 +427,7 @@ extension TabSelectionView {
         .dynamicShelf,
         .enableClipboardManager,
         .enableTerminalFeature,
+        .enableNotes,
     ]
 }
 

@@ -3989,7 +3989,7 @@ final class ModuleKernelTests: XCTestCase {
             "module.notifications.minutesAgo",
             "module.notifications.hoursAgo",
             "module.notifications.daysAgo",
-            "module.notifications.readOnlyNote",
+            "module.notifications.capabilityHint",
             "module.notifications.newNotification",
             "module.notifications.clearAll",
             "module.notifications.dismiss",
@@ -4004,6 +4004,31 @@ final class ModuleKernelTests: XCTestCase {
             XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
             XCTAssertFalse(localized.isEmpty, "\(key) 解析为空串")
         }
+    }
+
+    /// **能力边界行的显示判据**（2026-10-08 用户反馈「通知的这个说明去掉，或者在上面简单描述」）：
+    /// 只在**列表真有条目**时显示——空态里那行没有指代对象（用户截图就是空态那面文字墙），
+    /// 权限引导 / 失败态各自的文案已经把「为什么没有列表」说清楚了，叠一行只会打架。
+    ///
+    /// 判据抽成纯函数（`showsNotificationCapabilityHint(state:itemCount:)`）就是为了这条用例能钉住
+    /// 三个状态 × 有/无条目；视图只负责接上（与 `shouldShowScrollFadeMask` 同一条纪律）。
+    func testNotificationCapabilityHintOnlyShowsWithRealItems() {
+        XCTAssertFalse(
+            showsNotificationCapabilityHint(state: .ok, itemCount: 0),
+            "空态不显示（截图里那面文字墙就是它，用户要求去掉/上移）"
+        )
+        XCTAssertTrue(
+            showsNotificationCapabilityHint(state: .ok, itemCount: 3),
+            "有条目时显示（此时 × 与「滞后几秒」才有指代对象）"
+        )
+        XCTAssertFalse(
+            showsNotificationCapabilityHint(state: .needsFullDiskAccess, itemCount: 3),
+            "权限引导态不显示（那块自己的文案是主入口）"
+        )
+        XCTAssertFalse(
+            showsNotificationCapabilityHint(state: .failure("库打不开"), itemCount: 3),
+            "失败态不显示（原因行已经说明）"
+        )
     }
 
     // MARK: - 通知首页块（T1：组件开关的可见效果）

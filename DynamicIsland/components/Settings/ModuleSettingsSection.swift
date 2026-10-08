@@ -265,6 +265,21 @@ struct ModuleSettingsSection: View {
             key: .enableClipboardManager,
             panelTab: .clipboard
         ),
+        // **笔记行**（2026-10-08 用户要求：「组件设置里面，面板组件没有笔记这项，加上」）：
+        // 它与上面三条同属**宿主行**——面板上那条 tab 由 `enableNotes` 直接门控（不经模块注册表），
+        // 开关的落点就在 `TabSelectionView.slots(clipboard:)` 的复合门槛里。
+        //
+        // **`panelTab: nil`**（只有开关、没有 ↑↓）：笔记与剪贴板**共用面板上那一条 tab**
+        // （`slots` 的 `clipboard:` 槽按 `enableNotes` 换 label 与内容；`separateTab` 档位下
+        // 还是同一槽的左右两半），一条槽不能挂两个 ↑↓——排序跟着剪贴板那一行。
+        // 取色器那条 `nil` 的理由不同（它不是面板 tab，渲染在标题栏图标行）；两行在节末同列。
+        HostSurfaceRow(
+            id: "enableNotes",
+            nameKey: "Enable Notes",
+            symbolName: "note.text",
+            key: .enableNotes,
+            panelTab: nil
+        ),
         HostSurfaceRow(
             id: "enableColorPickerFeature",
             nameKey: "Enable Color Picker",
@@ -626,9 +641,9 @@ struct ModuleSettingsSection: View {
             if group == .home {
                 HomeCalendarSettingsRow()
             }
-            // 面板组件的**取色器行**（p5 / T5 的四条宿主行里唯一不可排的一条）：它渲染在标题栏
-            // 图标行、不是面板 tab，因此**不进排序名单**、列在可排名单之后、只有开关没有 ↑↓
-            // （docs/30 §明确不做 3 / 备选⑧）。
+            // 面板组件节的**不可排行**（`panelTab == nil` 的两条：笔记与取色器）——渲染在可排名单
+            // 之后、只有开关没有 ↑↓。两条的理由不同：**取色器**不是面板 tab（渲染在标题栏图标行，
+            // docs/30 §明确不做 3 / 备选⑧）；**笔记**与剪贴板共用面板上那一条 tab（一条槽一个 ↑↓）。
             if group == .panel {
                 ForEach(Self.hostPanelRows.filter { $0.panelTab == nil }) { row in
                     HostSurfaceRowView(row: row)

@@ -2240,27 +2240,28 @@ final class TakeoverEnablementTests: XCTestCase {
     /// 与 `effectKeysByModuleID` / `configControls` 同一条口径）：表里把 id / 键 /
     /// 文案 key / 顺序写错，这条都会红。
     ///
-    /// 四条各自钉三件事：
-    /// - **顺序与键名**：枚举表那四条 = 暂存器 / 终端 / 剪贴板 / 取色器——面板上由上游 `Defaults`
-    ///   直接门控、不经模块注册表的 tab / 图标就这四个，顺序就是节里那四行的顺序；
+    /// 五条各自钉三件事：
+    /// - **顺序与键名**：枚举表那五条 = 暂存器 / 终端 / 剪贴板 / **笔记**（2026-10-08 进表）/
+    ///   取色器——面板上由上游 `Defaults` 直接门控、不经模块注册表的 tab / 图标就是这几个，
+    ///   顺序就是节里那几行的顺序（笔记紧挨剪贴板：两者共用面板上那一条 tab）；
     /// - **`id` 与键名同源**（id 就是上游键名），且 `key` 就是
     ///   `Defaults.Keys` 里那**一个对象**（`===`：将来谁把它换成另造的同名字面量，这条红）；
-    /// - **`nameKey` 在 zh-Hans 里解析得出**，且就是那四条上游字面量：名称写串成**另一条已存在的
-    ///   key**（比如指到 `Enable Notes`）时解析断言抓不到，字面量断言抓得到。
+    /// - **`nameKey` 在 zh-Hans 里解析得出**，且就是那几条上游字面量：名称写串成**另一条已存在的
+    ///   key** 时解析断言抓不到，字面量断言抓得到。
     ///
     /// 另有一条**刻意不在表里**的锚：用量（`enableLLMUsageFeature`）——上一批「删页留码」已裁决它
     /// 默认关、无入口、面板上不会出现（docs/26 D-08），本节重新登记一行就是与那条已定决策矛盾。
-    func testHostPanelRowsPinTheFourHostKeysAndResolveNameKeys() {
+    func testHostPanelRowsPinTheFiveHostKeysAndResolveNameKeys() {
         let rows = ModuleSettingsSection.hostPanelRows
 
         XCTAssertEqual(
             rows.map(\.id),
-            ["dynamicShelf", "enableTerminalFeature", "enableClipboardManager", "enableColorPickerFeature"],
-            "四条宿主行的顺序与键名（枚举表：暂存器 / 终端 / 剪贴板 / 取色器）"
+            ["dynamicShelf", "enableTerminalFeature", "enableClipboardManager", "enableNotes", "enableColorPickerFeature"],
+            "五条宿主行的顺序与键名（枚举表：暂存器 / 终端 / 剪贴板 / 笔记 / 取色器）"
         )
         XCTAssertEqual(
             rows.map(\.nameKey),
-            ["Enable shelf", "Enable terminal", "Enable Clipboard Manager", "Enable Color Picker"],
+            ["Enable shelf", "Enable terminal", "Enable Clipboard Manager", "Enable Notes", "Enable Color Picker"],
             "名称逐字沿用上游设置页那一项的字面量（用户在别处认识的词与这里必须是同一个 key）"
         )
 
@@ -2272,7 +2273,18 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertTrue(rows[0].key === Defaults.Keys.dynamicShelf, "第一行（暂存器）的键")
         XCTAssertTrue(rows[1].key === Defaults.Keys.enableTerminalFeature, "第二行（终端）的键")
         XCTAssertTrue(rows[2].key === Defaults.Keys.enableClipboardManager, "第三行（剪贴板）的键")
-        XCTAssertTrue(rows[3].key === Defaults.Keys.enableColorPickerFeature, "第四行（取色器）的键")
+        XCTAssertTrue(rows[3].key === Defaults.Keys.enableNotes, "第四行（笔记）的键")
+        XCTAssertTrue(rows[4].key === Defaults.Keys.enableColorPickerFeature, "第五行（取色器）的键")
+
+        // **笔记行的形态**（2026-10-08）：只有开关、没有 ↑↓（`panelTab == nil`）——它与剪贴板共用
+        // 面板上那一条 tab（`TabSelectionView.slots` 的 `clipboard:` 槽按 `enableNotes` 换 label 与
+        // 内容），一条槽挂两个 ↑↓ 会让同一行被两处排序。
+        XCTAssertNil(rows[3].panelTab, "笔记行不可排（与剪贴板共用一条 tab）")
+        XCTAssertEqual(
+            rows.filter { $0.panelTab == nil }.map(\.id),
+            ["enableNotes", "enableColorPickerFeature"],
+            "不可排的两行：笔记（共用 tab）+ 取色器（不是面板 tab，渲染在标题栏）"
+        )
 
         XCTAssertFalse(
             rows.contains { $0.id == Defaults.Keys.enableLLMUsageFeature.name },
@@ -2310,20 +2322,44 @@ final class TakeoverEnablementTests: XCTestCase {
         }
     }
 
-    /// **宿主行的另一端**（T5 修复轮 P2）：协调器那张**视图归一化**表
-    /// （`DynamicIslandViewCoordinator.hostSurfaceGateViews`）与设置页那四条宿主行必须是**同一批键**
+    /// **宿主行的另一端**（T5 修复轮 P2 + 2026-10-08 笔记行）：协调器那张**视图归一化**表
+    /// （`DynamicIslandViewCoordinator.hostSurfaceGateViews`）与设置页宿主行必须是**同一批键**
     /// ——一端是「用户能拨的开关」，另一端是「拨完把停在被关视图上的面板收回首页」，两边各写一份
-    /// 键表就会漂（枚举表已经把四条钉死，这里把两端钉在一起）。
-    func testHostSurfaceGateViewsCoverTheSameFourKeysAsTheSettingsRows() {
+    /// 键表就会漂。
+    ///
+    /// **2026-10-08 口径收窄**：笔记行进「面板组件」节（用户要求）后，两端不再是**集合相等**——
+    /// `enableNotes` 的收回端点不在 gate 表里（它与剪贴板共用 `.notes`，收回条件是「两个键**都**
+    /// 关着」那个复合判据，见 `isHostSurfaceGatedOff`）。今天的口径是：
+    /// **① 每条 gate 都得有一行**（不然开关在设置页找不到）；**② 每一行都得有收回端点**
+    /// （gate 表里的键，或 `compositeGatedHostKeyNames` 点名的那一个）——「拨了没反应」的行不许留在本节。
+    func testHostSurfaceGateViewsCoverEverySettingsRowWithAPullBackEndpoint() {
         let gates = DynamicIslandViewCoordinator.hostSurfaceGateViews
         let rows = ModuleSettingsSection.hostPanelRows
 
         XCTAssertEqual(
             gates.map(\.id),
-            rows.map(\.id),
-            "归一化表的键与顺序 = 设置页四条宿主行（暂存器 / 终端 / 剪贴板 / 取色器）"
+            ["dynamicShelf", "enableTerminalFeature", "enableClipboardManager", "enableColorPickerFeature"],
+            "归一化表的键与顺序（暂存器 / 终端 / 剪贴板 / 取色器）——笔记不在这张表里"
         )
-        XCTAssertEqual(Set(gates.map(\.key.name)), Set(rows.map(\.key.name)), "同名的键也只能是同一批")
+        let rowKeys = Set(rows.map(\.key.name))
+        for gate in gates {
+            XCTAssertTrue(rowKeys.contains(gate.id), "\(gate.id) 有收回端点却没有设置行——用户拨不到它")
+        }
+
+        // ② 每一行都有收回端点：gate 表 ∪ 复合门控名单
+        let pullBackKeys = Set(gates.map(\.key.name))
+            .union(DynamicIslandViewCoordinator.compositeGatedHostKeyNames)
+        for row in rows {
+            XCTAssertTrue(
+                pullBackKeys.contains(row.key.name),
+                "\(row.id) 在「面板组件」节但没有收回端点——关掉它面板不会从那个视图退开"
+            )
+        }
+        XCTAssertEqual(
+            DynamicIslandViewCoordinator.compositeGatedHostKeyNames,
+            [Defaults.Keys.enableNotes.name],
+            "复合门控名单今天只有 `enableNotes` 一个（它与剪贴板共用 `.notes`，两键都关才收回）"
+        )
 
         // 每条都得真的门控到视图，且**一个视图只归一条**（否则「谁关掉了它」会有两个答案）
         var seen: [String: String] = [:]
@@ -2375,17 +2411,23 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertTrue(hostRows[0].key === PanelHostTab.shelf.gateKey, "暂存器：登记的是同一个键对象（.dynamicShelf）")
         XCTAssertTrue(hostRows[1].key === PanelHostTab.terminal.gateKey, "终端：.enableTerminalFeature")
         XCTAssertTrue(hostRows[2].key === PanelHostTab.clipboard.gateKey, "剪贴板：.enableClipboardManager")
+        // 2026-10-08：视图侧那份「真的在读」的名单比词汇表**多一条**——笔记（`enableNotes`）与剪贴板
+        // 共用面板上那一条 tab，它有门槛、有设置行，但**没有自己的排序 id**（不进 `PanelHostTab`），
+        // 因此这条断言写成「词汇表 ∪ 复合门控名单 = 视图侧名单」，两边仍然锁死。
         XCTAssertEqual(
-            Set(PanelHostTab.allCases.map(\.gateKey.name)),
+            Set(PanelHostTab.allCases.map(\.gateKey.name))
+                .union(DynamicIslandViewCoordinator.compositeGatedHostKeyNames),
             Set(TabSelectionView.hostPanelGateKeys.map(\.name)),
-            "词汇表的 gate 键 = 面板条真的在读的那份门槛键名单（视图侧删了读取点就会红）"
+            "词汇表的 gate 键（+ 笔记那条复合门控键）= 面板条真的在读的那份门槛键名单"
         )
 
         // ② 取色器不在排序名单：表里那一行没有排序 id，`panelOrder` 的合法词表里也没有它的键名。
-        XCTAssertNil(hostRows[3].panelTab, "取色器不是面板 tab：没有排序 id（docs/30 §明确不做 3 / 备选⑧）")
-        XCTAssertEqual(hostRows[3].key.name, "enableColorPickerFeature")
+        // （**按键名找行**，不按下标——2026-10-08 笔记行插在它前面，下标会漂。）
+        let colorPickerRow = hostRows.first { $0.key.name == "enableColorPickerFeature" }
+        XCTAssertNotNil(colorPickerRow, "取色器行仍在表里")
+        XCTAssertNil(colorPickerRow?.panelTab, "取色器不是面板 tab：没有排序 id（docs/30 §明确不做 3 / 备选⑧）")
         XCTAssertFalse(
-            PanelHostTab.allCases.contains { $0.id == hostRows[3].key.name },
+            PanelHostTab.allCases.contains { $0.id == colorPickerRow?.key.name },
             "取色器的键名不进 `panelOrder` 的 id 词表"
         )
 
