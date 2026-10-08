@@ -5,10 +5,10 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [未发布]
+## [0.1.1] - 2026-10-08
 
-发布与安装路线（v0.1.0 之后）。决策与实测依据见 [ADR-0013](docs/00-decisions.md)，
-完整发布步骤见 [docs/33-release-process.md](docs/33-release-process.md)。
+打包与安装渠道修正：**功能面与 0.1.0 相同**，改的是出厂包的签名/系统声明、安装说明与发布流程。
+决策与实测依据见 [ADR-0013](docs/00-decisions.md)，完整发布步骤见 [docs/33-release-process.md](docs/33-release-process.md)。
 
 ### 新增
 
@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 变更
 
+- **版本号** `0.1.0` → `0.1.1`（构建号 1197 → 1198）。
 - **Release 包的签名与系统声明**（`DynamicIsland.xcodeproj`）：
   - Release 配置加 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`——出厂包不再带 `get-task-allow`
     （调试权限，任何进程可附加；同时也是 Apple 公证的硬性拒收项）。Debug 保留注入以便调试。

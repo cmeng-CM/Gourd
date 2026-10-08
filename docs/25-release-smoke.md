@@ -1,9 +1,9 @@
-# 发布冒烟清单（0.1.0）
+# 发布冒烟清单
 
 | 项 | 值 |
 |---|---|
-| 状态 | **可用**（每次出包前照着走一遍；本次冻结的产物是 0.1.0；`p3-widgets`（2026-09-30）后 S4~S14、S26 的口径已按**两条带 / 三环 / 两节**校正，并新增 S27~S32） |
-| 最后更新 | 2026-09-30（首版；`p3-widgets` 回写） |
+| 状态 | **可用**（每次出包前照着走一遍；**清单本身与版本无关**——凡涉及版本号的地方都写作「本次版本」。首版对应 0.1.0；`p3-widgets`（2026-09-30）后 S4~S14、S26 的口径已按**两条带 / 三环 / 两节**校正，并新增 S27~S32） |
+| 最后更新 | 2026-10-08（去版本号耦合，供 0.1.1 起复用；上一版 2026-09-30） |
 | 关联来源 | [24-release-freeze.md](24-release-freeze.md) §做法 机制五 / §验收标准；[21-strip-honesty.md](21-strip-honesty.md)（`＋N` 与通知 × 的语义）、[23-home-fit.md](23-home-fit.md)（五条修正与三档宽度）、[20-component-page.md](20-component-page.md)（组件页）、[22-shortcuts-and-frontapp.md](22-shortcuts-and-frontapp.md)（快捷指令与前台应用）、[19-launcher.md](19-launcher.md)（启动台）、**[26-home-widgets-and-settings.md](26-home-widgets-and-settings.md)（首页两条带 / 统计三环 / 组件两节 / 农历与节假日 / 设置重排）** |
 
 > **给谁看**：给**发布者**（我自己）——发布前在真机上照着走一遍，每条只回答「动作 → 期望 → 证据」。
@@ -15,7 +15,7 @@
 
 ## 0. 准备
 
-- **产物**：`sh tools/build.sh --install`（装 `/Applications/壶中天.app`）、`sh tools/build.sh --dmg`（出 `dist/壶中天-0.1.0.dmg`）。
+- **产物**：`sh tools/build.sh --install`（装 `/Applications/壶中天.app`）、`sh tools/build.sh --dmg`（出 `dist/壶中天-<本次版本>.dmg`；发布步骤见 [33-release-process.md](33-release-process.md)）。
 - **证据**：截图落 `.workflow/p3-freeze/evidence/`（命名 `smoke-<编号>-<短名>.png`），命令输出（`defaults read`、`log show`）原样贴进当次报告。
 - **改偏好前先备份**：`defaults export com.cmeng.gourd - > /tmp/gourd-defaults-backup.plist`；本清单任何一步都不应留下开发机没有的偏好（见末条 S26）。
 - **权限前置**（按需，缺哪个哪条就会降级而不是崩）：
@@ -31,7 +31,7 @@
 
 | # | 前置 | 动作 | 期望（可判定） | 证据 |
 |---|---|---|---|---|
-| S1 | 已 `--install`；无同名实例在跑 | 冷启动 | 刘海出现、菜单栏图标在、无崩溃；设置 → 关于里的版本**显示 0.1.0（1197）** | 截图 + `defaults read /Applications/壶中天.app/Contents/Info.plist CFBundleShortVersionString`（输出 `0.1.0`） |
+| S1 | 已 `--install`；无同名实例在跑 | 冷启动 | 刘海出现、菜单栏图标在、无崩溃；设置 → 关于里的版本**显示本次版本号** | 截图 + `defaults read /Applications/壶中天.app/Contents/Info.plist CFBundleShortVersionString`（应与 `VERSION` 文件一致） |
 | S2 | 先备份偏好域（§0）；需重放首启路径时清 `gourdFirstLaunchDefaultsApplied` 与 `enableScreenAssistant` | 干净偏好下启动一次；随后手动把屏幕助手改回开，再启动一次 | ① 首次：`enableScreenAssistant` = `false`（⌘⇧A 的悬浮面板不出现）、闸门键 `gourdFirstLaunchDefaultsApplied` = `true`；② 第二次：**不覆盖**手动改回的值（值仍为 `true`） | 两次 `defaults read com.cmeng.gourd gourdFirstLaunchDefaultsApplied` / `enableScreenAssistant` 输出 + 设置页截图；**验完 `defaults import` 还原备份** |
 | S3 | 无 | 设置窗口逐个 tab 走一遍、展开面板逐个 tab 走一遍 | 上游功能零删减：每个 tab 都能打开、内容不空白、无崩溃 | 截图（每个 tab 一张，或拼图） |
 
