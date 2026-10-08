@@ -884,6 +884,9 @@ final class PanelAutoHeightTests: XCTestCase {
                 // 同一页的编辑 / 分栏档没有自然高（`TextEditor` 填满 + 内滚），走 `notesFixedTab`
                 // （**不在名单里**）回落手动值；两档的键由 `notesPanelTabKey(for:)` 分派。
                 PanelContentHeight.notesTab,
+                // 2026-10-08 p8b-notes-height：剪贴板页（头部 + 卡片网格）—— 同一类，高是卡片行数
+                // 的函数（格高固定、列数按宽自适应）。
+                PanelContentHeight.clipboardTab,
             ],
             "名单 = 内容随条数 / 格子数 / 月周数 / 卡片行数变的那几页（多一个 / 少一个都要连理由一起改）"
         )
@@ -901,6 +904,9 @@ final class PanelAutoHeightTests: XCTestCase {
         XCTAssertFalse(PanelContentHeight.isMeasuredTab("terminal"))
         XCTAssertFalse(PanelContentHeight.isMeasuredTab(PanelContentHeight.sideLyricsHomeTab))
         XCTAssertFalse(PanelContentHeight.isMeasuredTab(PanelContentHeight.notesFixedTab))
+        // 剪贴板页**在**名单里（p8b）——键就是页键，`selectedPanelTabKey` 的 `.clipboard` 分支与
+        // `ContentView` 那个分支的探针用同一个常量。
+        XCTAssertTrue(PanelContentHeight.isMeasuredTab(PanelContentHeight.clipboardTab))
     }
 
     /// **日历进测量名单**（p6-ui-polish / T8，docs/30 §做法 §机制六 / §接口与数据形状）。

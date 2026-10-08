@@ -1621,7 +1621,7 @@ struct ContentView: View {
             // 编辑 / 分栏档走 `notesFixedTab`（名单外 → 回落手动值）。判据见 `notesPanelTabKey(for:)`。
             return notesPanelTabKey(for: coordinator.notesLayoutState)
         case .clipboard:
-            return "clipboard"
+            return PanelContentHeight.clipboardTab
         case .llmUsage:
             return "llmUsage"
         case .colorPicker:
@@ -1897,7 +1897,21 @@ struct ContentView: View {
                             case .notes:
                                 NotchNotesView()
                             case .clipboard:
+                                // **自然高上报**（2026-10-08 p8b-notes-height）：剪贴板页 = 头部 +
+                                // 卡片网格，高是卡片行数的函数（格高固定、列数按宽自适应）——复制
+                                // 两三条时面板本来就该矮下来，不该按手动高度站着留半屏空玻璃。
+                                //
+                                // 探针挂在这个**分支**上（不是视图内部）：`.separateTab` 档位下
+                                // 同一份 `NotchClipboardView` 还兼作笔记页的左半，那时当班的是笔记页
+                                // 的键——闸门一条（当班的正是剪贴板页）就够，不需要在视图里再认档位。
                                 NotchClipboardView()
+                                    .panelContentHeightReport(
+                                        tab: PanelContentHeight.clipboardTab,
+                                        headerHeight: PanelAutoHeight.panelHeaderHeight(
+                                            effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
+                                        ),
+                                        isCurrent: { coordinator.currentView == .clipboard }
+                                    )
                             case .terminal:
                                 NotchTerminalView()
                             case .extensionExperience:

@@ -139,6 +139,15 @@ final class PanelContentHeight: ObservableObject {
     /// 与 `sideLyricsHomeTab` 是同一条形态（同一个坑的第二例：**一个页面两支、只有一个槽**）。
     static let notesFixedTab = "notesFixed"
 
+    /// **剪贴板页**的键（2026-10-08 p8b-notes-height，与笔记列表同一批）。这一页 = 头部 + 卡片网格
+    /// （`ClipboardGridCard`，宽按 `minCardWidth` 自适应、格高固定）——高是**卡片行数**的函数，
+    /// 因此进 `measuredTabs`：复制了两三条时面板本来就该矮下来，不该按手动高度站着留半屏空玻璃。
+    ///
+    /// **它只在「剪贴板页」这一档下当班**：`.separateTab` 那一档里同一份视图还作为**笔记页的
+    /// 左半**出现（`NotchNotesView.showSplitView`），那时当班的是笔记页的键——探针因此挂在
+    /// `ContentView` 的 `.clipboard` 分支上（不是视图内部），闸门一条就够（`currentView == .clipboard`）。
+    static let clipboardTab = "clipboard"
+
     /// **有自然高、因此上报**的模块页（`ModuleHostView` 渲染的那几个 tab 的键 = 模块 id）
     /// 与**宿主页**（架子）。
     ///
@@ -163,6 +172,9 @@ final class PanelContentHeight: ObservableObject {
     ///   `notesFixedTab`（不在名单里、回落手动值），判据在 `ContentView.notesPanelTabKey(for:)`；
     ///   探针的 `isCurrent` 闸门也把档位算进去（编辑档切换过渡里旧列表还活着，少了这一条它的
     ///   上报就会被条款 ③ 无条件收下）。
+    /// - `clipboardTab`（**剪贴板页**，同批）：头部 + 卡片网格，高 = 卡片行数的函数（格高固定、
+    ///   列数按宽自适应）。它在 `.separateTab` 档位下还兼作笔记页的左半，但那时当班的是笔记页的键
+    ///   ——探针挂在 `ContentView` 的 `.clipboard` 分支，判据 `currentView == .clipboard` 一条即可。
     ///
     /// 另外两页（`timer` / 终端）**刻意不在名单里**，理由逐条写在文件头。
     /// 名单外的 tab 不产生值：切到它们时 `selectTab(_:)` 把量出来的那份清掉 →
@@ -179,6 +191,8 @@ final class PanelContentHeight: ObservableObject {
         CalendarModule.moduleID,
         // 2026-10-08 p8b-notes-height：笔记页**列表档**（卡片网格）。键是页键（不是模块 id）。
         notesTab,
+        // 2026-10-08 p8b-notes-height：剪贴板页（头部 + 卡片网格）——同一类。
+        clipboardTab,
     ]
 
     /// 这一页要不要上报（`nil` / 空串 = 还没选中模块 → 不上报）。

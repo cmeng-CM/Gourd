@@ -491,7 +491,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 18. **账本侧「名单外不得接受上报」只由探针门槛保证**：`report` 本身不拒名单外的键（无生产调用点——探针先过 `isMeasuredTab`），低危、无测试护栏。
 19. **两条孤儿 key 仍留在 catalog 里**：`settings.features.effect.enableNotes`、`settings.features.effect.showCalendar`——功能段已删，这两条不可达、未删除（上一批的可逆保留 / 搬家遗留）。
 20. **上锁的那一枚多选胶囊在浅色系统外观下的对比度**没有上屏证据（低置信、视觉项；深色外观无影响）。
-21. **切到名单外的页会跳到手动高度**（设计口径、非缺陷）：那一拍是「清值 → `current` = nil → 尺寸层回落手动值」，为的是不让日历拿待办量出来的高度画月历。**2026-10-08 p8b 收窄**：**笔记页的列表档已进名单**（卡片网格贴内容，实测 682 → 302），名单外只剩**计时器 / 终端**与**同一个页面的无自然高档**（笔记页的编辑档 = `TextEditor` 填满 + 内滚、分栏档 = 剪贴板 + 笔记并排——这两档走 `notesFixedTab`，回落手动值；`NotesLayoutState` 的 320 / 260 仍是它们各自的下限）。同一页两档两键的判据由 `notesPanelTabKey(for:)` 给（与首页的 `homePanelTabKey(...)` 同形）。
+21. **切到名单外的页会跳到手动高度**（设计口径、非缺陷）：那一拍是「清值 → `current` = nil → 尺寸层回落手动值」，为的是不让日历拿待办量出来的高度画月历。**2026-10-08 p8b 收窄**：**笔记页的列表档**（卡片网格贴内容，实测 682 → 302）与**剪贴板页**（头部 + 卡片网格，同批）都已进名单，名单外只剩**计时器 / 终端**与**同一个页面的无自然高档**（笔记页的编辑档 = `TextEditor` 填满 + 内滚、分栏档 = 剪贴板 + 笔记并排——这两档走 `notesFixedTab`，回落手动值；`NotesLayoutState` 的 320 / 260 仍是它们各自的下限）。同一页两档两键的判据由 `notesPanelTabKey(for:)` 给（与首页的 `homePanelTabKey(...)` 同形）。
 
 ---
 
@@ -635,6 +635,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | 1 | `PanelContentHeight` | 新增两个页键：`notesTab`（**进 `measuredTabs`**，列表档）与 `notesFixedTab`（**不在名单**，编辑 / 分栏档——没人上报 → `current` = nil → 回落手动值）。同一个坑的第二例：**一个页面两档、账本只有一个槽**（第一例是首页的 `sideLyricsHomeTab`） |
 | 2 | `ContentView` | `selectedPanelTabKey` 的 `.notes` 分支改走新的文件级纯函数 `notesPanelTabKey(for:)`（判据只认 `coordinator.notesLayoutState`——`.editor` = 编辑态；**不**在视图外重判 `isEditingNewNote` / `selectedNoteId`，那是视图私有状态） |
 | 3 | `NotchNotesView` | 笔记半页挂 `panelContentHeightReport(tab: notesTab, …)`，`isCurrent` 闸门两条：当班的是笔记页 **且** 此刻是**列表档**。第二条不是可选的——切编辑档时键会换成 `notesFixedTab`，而旧列表在过渡里还活着，少了档位这一条它的上报会被条款 ③「换 tab 无条件接受」收下（用例把这条隐含约定写成断言钉住） |
+| 4 | `PanelContentHeight` / `ContentView` | **同批第二页：剪贴板页**（用户紧接着指出「剪贴板点击后，也不是自适应尺寸」）。新增页键 `clipboardTab`（**进 `measuredTabs`**），探针挂在 **`ContentView` 的 `.clipboard` 分支**上（不是在 `NotchClipboardView` 内部）：`.separateTab` 档位下同一份视图还兼作笔记页的左半，那时当班的是笔记页的键——挂在分支上，闸门一条（当班的是剪贴板页）就够 |
 
 **上屏实测**（最终构建，窗口高 = 面板高 + 22）：
 
@@ -643,6 +644,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | 笔记列表档（4 张卡片 / 2 行） | 窗口 704（可见 682，半屏空玻璃） | **窗口 324（可见 302，贴卡片）** |
 | 点开一条 → 编辑档 | 704 | **704**（固定，逐字不变） |
 | 点「完成」→ 回列表档 | 704 | **324** |
-| 首页 / 启动台 / 回首页（回归） | 578 / 872 / 578 | **578 / 872 / 578**（不受影响） |
+| 剪贴板页（3 条 / 1 行） | 704 | **262（可见 240，贴卡片）** |
+| 首页 / 启动台 / 回首页 / 再进剪贴板（回归） | 578 / 872 / 578 / 704 | **578 / 872 / 578 / 262** |
 
-**已知限制（如实记）**：① 卡片**增删**时面板高度会跟着动（这就是「贴内容」的定义；上限仍是 850，到顶后网格自己在里面滚）；② 空态（一条笔记都没有）的理想高很小，靠 `NotesLayoutState.list` 的 **240 下限**兜着，不会缩成一条缝；③ `.split`（剪贴板 + 笔记并排）只在「剪贴板显示方式 = `separateTab`」那一档出现，本机档位（`notchTab`）下不可达——键先钉住，行为留待那一档真被启用时再上屏核（它两侧都是「填满」形状，本批按无自然高处理）。
+**已知限制（如实记）**：① 卡片**增删**时面板高度会跟着动（这就是「贴内容」的定义；上限仍是 850，到顶后网格自己在里面滚）；② 空态（一条笔记都没有）的理想高很小，靠 `NotesLayoutState.list` 的 **240 下限**兜着，不会缩成一条缝（剪贴板页同档：`calculateRequiredNotchSize` 里 `.clipboard` 也吃 240 的下限）；③ `.split`（剪贴板 + 笔记并排）只在「剪贴板显示方式 = `separateTab`」那一档出现，本机档位（`notchTab`）下不可达——键先钉住，行为留待那一档真被启用时再上屏核（它两侧都是「填满」形状，本批按无自然高处理）；④ 剪贴板页上**点一条卡片 = 复制它**（上游交互），复制会进历史 → 列表多一条 → 面板可能因此长一行；这是「贴内容」在这条链上的自然结果，8pt 滞回与 0.15s 防抖仍在。
