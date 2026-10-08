@@ -172,6 +172,31 @@ gh release create vx.y.z --repo cmeng-CM/Gourd \
 4. 再跑一次命令行安装：`curl -fsSL .../install.sh | bash` → 应安装成功且**首启无任何提示**；
 5. 顺带确认 `SHA256SUMS` 与 Release 正文里贴的值一致。
 
+## 8. 仓库保护（`main` 的规则集）
+
+`main` 上有一条 **ruleset `main-protection`**（2026-10-08 加，仓库设置 → Rules：
+
+| 规则 | 含义 |
+|---|---|
+| `deletion` | **不能删 `main`** |
+| `non_fast_forward` | **不能 force push**（历史不能被覆盖） |
+| `pull_request` | **要改 `main` 得走 PR**（要求批准数 0 —— PR 可以直接合并，不必等 review） |
+
+**bypass：仓库管理员角色（`RepositoryRole` id 5）× `always`。** 也就是**你自己照旧**能
+`git push origin main`（第 5 步一个字不用改）；这条保护管的是**将来加进来的协作者**——
+他们只能提 PR，推不动 `main`、也删不掉。
+
+两条刻意的取舍：
+
+- **tag 不在这条规则集里**：发版时「删旧 tag → 重打同一个 tag」是既定手法（第 5 步、以及 2026-10-08
+  的 v0.1.0 重发），把 `refs/tags/*` 也保护起来会把那条路堵死。
+- **不开 `required_status_checks`**：本仓库 Actions 是停用的（见下），没有可要求的检查。
+
+> 自查：`gh api repos/cmeng-CM/Gourd/rulesets --jq '.[] | {name, enforcement}'`。
+> 万一哪天这条规则把你自己拦住了（`current_user_can_bypass` 不是 `always`），
+> 到 仓库设置 → Rules 里把 bypass 改成你的账号、或临时 disable 这条规则集。
+
+
 ## 已知限制 / 不做的事
 
 - **做不到「下载双击就开」**：没有 Developer ID + 公证就没有这条路；零成本的上限就是上面两条。
