@@ -5,6 +5,16 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [未发布]
+
+### 修复
+
+- **恢复备忘录面板**（[ADR-0014](docs/00-decisions.md)）：2026-09-30 曾把上游的苹果备忘录从产品面摘掉
+  （删设置页 + 摘 tab 分支），这次按用户要求恢复。四处一起改：设置侧栏加回笔记页、面板恢复
+  「笔记 / 剪贴板共用一条 tab」的上游语义、tab 计数同步、协调器的宿主门槛改成「两个键都关着才收回」
+  的复合条件。顺带修掉摘除时留下的矛盾——`NotchNotesView` 一直在读 `enableNotes`，键其实从未真正惰性。
+  （备忘录正文是运行期数据，只在本机偏好与苹果备忘录里，不进安装包、不进仓库。）
+
 ## [0.1.1] - 2026-10-08
 
 打包与安装渠道修正：**功能面与 0.1.0 相同**，改的是出厂包的签名/系统声明、安装说明与发布流程。

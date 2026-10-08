@@ -463,17 +463,18 @@
 | 扩展 | `enableThirdPartyExtensions` 12、`enableExtensionNotchExperiences` 9（页内另外三个键的读点在扩展服务里） | 21（`ExtensionsSettings` 直接引用的两个键） | 有 | 扩展 tab / 扩展动态岛体验 | 保留 |
 | 组件 | 模块 manifest（`ModuleRegistry.manifests` 全量；键是各模块自己的启用真源，见 [14](14-module-manifests.md)） | 见各模块 | 有（开关 / 排序即时改首页块与面板 tab，T3） | 组件页即模块入口 | 保留 |
 | 关于 | `releaseName` / `updateChannel`（读点在设置目录内的 `SoftwareUpdater`） | 0 | 有（版本与更新通道） | 应用菜单 / 更新器 | 保留 |
-| **笔记** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | **无**（收尾修复摘掉 tab 分支后，拨 `enableNotes` 不再改变任何界面——键惰性；**T6 收尾又把组件页「功能」段那张卡摘了**，该键在本产品里从此没有任何可拨的入口；catalog 里那条效果行保留未删、值已改成「本版无效果」） | **入口默认不存在**：默认关、模块清单里没有它、首页块与热键都没有它——唯一入口曾是**本页自己** | **删页留码**（D-06）；**tab 分支已摘，键惰性**（收尾修复：`TabSelectionView` 那条合并分支改成只看剪贴板，`enabledStandardTabCount()` 同步，键从此不再产生任何入口） |
+| **笔记（备忘录）** | `savedNotes` 18、`enableAppleNotesSync` 12、`enableNotes` 10 | 52 | **有**（T5 删页 + 收尾摘 tab 之后曾为「无」；2026-10-08 恢复后：拨 `enableNotes` → 展开面板多一条 Notes tab，由 `NotchNotesView` 自画） | **设置 → 笔记页里的那个开关**（`SettingsTab.notes` 2026-10-08 加回 `availableTabs`）；剪贴板走 `.separateTab` 形态时也产生同一条 tab（两者共用视图：都开是「左剪贴板 + 分隔线 + 右笔记」的双栏） | **已恢复**（2026-10-08，见 [ADR-0014](00-decisions.md)）：T5 的删页与收尾的摘 tab 一并回退 |
 | **LLM 用量**（统计页里的一段，不是独立页） | `enableLLMUsageFeature` 1（`TabSelectionView` 的 Usage tab）、四个 `enable*Provider` 各 1（`UsageProvider`） | 5 | 有（同上：打开后多一个 Usage tab） | 同上（唯一入口是本页这一段自己） | **删段留码**（D-08） |
 
-**「无实际设置意义 → 删」的两处落点**（都**只摘入口**，上游代码与偏好键一个字没删）：
+**「无实际设置意义 → 删」的落点**（**只摘入口**，上游代码与偏好键一个字没删）：
 
-1. **笔记设置页**（`SettingsTab.notes`）：从 `availableTabs` 摘掉（`title` / `systemImage` / `tint` / `group` /
-   `detailView` 分支与 `NotesSettingsView` 全部原样保留，`isTabVisible` 里那一档也保留），将来把 `.notes`
-   加回数组即整页复活。**与 [26](26-home-widgets-and-settings.md) §背景与目标 表第 4 行的那处措辞
-   （那里写「本产品没有任何入口指向它」——当时严格讲不成立：`enableNotes` 打开后 `TabSelectionView`
-   会真的多出一个 Notes tab）已随收尾修复消除**：合并分支改成只看剪贴板、`enabledStandardTabCount()`
-   同步，该键从此惰性，那句话重新成立；判定结论（删）不变。
+1. **笔记设置页**（`SettingsTab.notes`）——**此项已于 2026-10-08 恢复，判定作废**。
+   当时的做法是从 `availableTabs` 摘掉（`title` / `systemImage` / `tint` / `group` / `detailView`
+   分支与 `NotesSettingsView` 全部原样保留，`isTabVisible` 里那一档也保留），收尾修复又把
+   `TabSelectionView` 那条合并分支改成只看剪贴板。两项都按「加回去即复活」的方式留了口子，
+   所以这次的恢复正是把这两处**加回原样**（外加协调器的宿主门槛表：`.notes` 与 `.clipboard`
+   共用视图，门槛改成「`enableNotes` 与 `enableClipboardManager` 都关着」的复合条件）。
+   起因为何被推翻、边界在哪，见 [ADR-0014](00-decisions.md)。
 2. **统计页的 LLM 用量段**：`Enable LLM Usage Monitor` 开关与 `LLM Providers`（Claude / Codex / Cursor /
    Antigravity）整段摘掉，连带五条搜索项一并删（否则搜索会给出"点进去什么都没有"的死建议）；
    `enableLLMUsageFeature` 与四个 provider 键、`UsageProvider`、`NotchLLMUsageView`、

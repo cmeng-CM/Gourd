@@ -2334,8 +2334,12 @@ final class TakeoverEnablementTests: XCTestCase {
                 seen["\(view)"] = gate.id
             }
         }
-        // 四条宿主键各自的视图逐个钉死（改映射必须改这条）
-        XCTAssertEqual(gates.map(\.views), [[.shelf], [.terminal], [.notes, .clipboard], [.colorPicker]])
+        // 四条宿主键各自的视图逐个钉死（改映射必须改这条）。**`.notes` 不在其中**：它与 `.clipboard`
+        // 共用同一个视图（`NotchNotesView` 自己按 `enableNotes` 决定画哪一半），门槛是
+        // 「`enableNotes` 与 `enableClipboardManager` **都**关着」这个复合条件，由
+        // `isHostSurfaceGatedOff` 单独判（2026-10-08 恢复笔记时从剪贴板那条里摘出来的）。
+        // 上面「一个视图只归一条」的循环因此仍然成立——它就不在任何一条的 `views` 里。
+        XCTAssertEqual(gates.map(\.views), [[.shelf], [.terminal], [.clipboard], [.colorPicker]])
     }
 
     /// **宿主三 tab 并入面板排序**（p6-ui-polish / T9，docs/30-ui-polish-and-shelf.md §做法 机制七 /
@@ -2528,9 +2532,19 @@ final class TakeoverEnablementTests: XCTestCase {
             DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.terminal, offKeyNames: ["enableTerminalFeature"]),
             "终端关着 → `.terminal` 不许停留"
         )
-        XCTAssertTrue(
+        // `.notes` 是笔记与剪贴板**共用**的视图，门槛是复合条件：两个键都关着才收回。
+        XCTAssertFalse(
             DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.notes, offKeyNames: ["enableClipboardManager"]),
-            "剪贴板关着 → `.notes`（面板 tab 那一路）不许停留"
+            "只关剪贴板 → `.notes` 还可能归笔记用，不许收回"
+        )
+        XCTAssertFalse(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.notes, offKeyNames: ["enableNotes"]),
+            "只关笔记 → `.notes` 还可能归剪贴板（separateTab 那一路）用，不许收回"
+        )
+        XCTAssertTrue(
+            DynamicIslandViewCoordinator.isHostSurfaceGatedOff(
+                .notes, offKeyNames: ["enableNotes", "enableClipboardManager"]),
+            "笔记与剪贴板**都**关着 → `.notes` 不许停留"
         )
         XCTAssertTrue(
             DynamicIslandViewCoordinator.isHostSurfaceGatedOff(.clipboard, offKeyNames: ["enableClipboardManager"]),
@@ -2559,8 +2573,10 @@ final class TakeoverEnablementTests: XCTestCase {
             "计时器不在本表（同键的收回走计时器自己那一处）"
         )
 
-        // ② 端到端：真协调器 + 真偏好键
+        // ② 端到端：真协调器 + 真偏好键。`enableNotes` 不在 gate 表的四条里，但 `.notes` 的门槛读它
+        // ——一并登记与压假，否则这一段的结论会随本机那个键的值漂，跑完还会把它留在测试改过的值上。
         let hostKeys = DynamicIslandViewCoordinator.hostSurfaceGateViews.map(\.id)
+            + [Defaults.Keys.enableNotes.name]
         let originals = snapshotValues(of: hostKeys)
         let surface = snapshotTimerSurface()
         defer {
@@ -2573,6 +2589,7 @@ final class TakeoverEnablementTests: XCTestCase {
         Defaults[.enableTerminalFeature] = true
         Defaults[.enableClipboardManager] = true
         Defaults[.enableColorPickerFeature] = true
+        Defaults[.enableNotes] = false
 
         coordinator.currentView = .shelf
         XCTAssertEqual(coordinator.currentView, .shelf, "前置：四个键都开着时 `.shelf` 是合法选中")
@@ -2598,7 +2615,12 @@ final class TakeoverEnablementTests: XCTestCase {
         let clipboardReset = await waitUntil { coordinator.currentView == .home }
         XCTAssertTrue(clipboardReset, "剪贴板关掉 → 当前视图（此刻是 `.home`）保持首页")
         coordinator.currentView = .notes
-        XCTAssertEqual(coordinator.currentView, .home, "剪贴板键关着 → `.notes`（面板 tab 那一路）也选不上")
+        XCTAssertEqual(coordinator.currentView, .home, "剪贴板与笔记都关着 → `.notes` 仍选不上")
+        // 笔记那一半（2026-10-08 恢复的语义）：剪贴板仍关着，只把笔记打开 → `.notes` 立刻可选
+        Defaults[.enableNotes] = true
+        coordinator.currentView = .notes
+        XCTAssertEqual(coordinator.currentView, .notes, "笔记开着 → `.notes` 选得上（不再只看剪贴板键）")
+        Defaults[.enableNotes] = false
         coordinator.currentView = .clipboard
         XCTAssertEqual(coordinator.currentView, .home, "剪贴板键关着 → `.clipboard`（刘海图标那一路）也选不上")
     }

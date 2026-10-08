@@ -78,7 +78,7 @@ sh tools/build.sh --dmg         # 或在 dist/ 产出 DMG
 ## 贡献
 
 - 提 issue / PR 都欢迎；提交信息请写清「改了什么、为什么、怎么验证的」。
-- 动代码前先看 [docs/00-decisions.md](docs/00-decisions.md)（13 条 ADR）与 [docs/01-architecture.md](docs/01-architecture.md)；模块相关改动读 [docs/06-module-protocol.md](docs/06-module-protocol.md) 与 [docs/07-config-and-events.md](docs/07-config-and-events.md)。
+- 动代码前先看 [docs/00-decisions.md](docs/00-decisions.md)（14 条 ADR）与 [docs/01-architecture.md](docs/01-architecture.md)；模块相关改动读 [docs/06-module-protocol.md](docs/06-module-protocol.md) 与 [docs/07-config-and-events.md](docs/07-config-and-events.md)。
 - 本地门禁：`xcodebuild test … -only-testing:DynamicIslandTests` 全绿 + `sh tools/build.sh` 能出包。
 
 ## 归属与致谢

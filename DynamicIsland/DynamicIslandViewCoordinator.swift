@@ -541,24 +541,38 @@ class DynamicIslandViewCoordinator: ObservableObject {
     }
 
     /// **不是 `private`**：用例拿它与设置页那四条宿主行对键（同一个集合的两个端点）。
+    /// `.notes` **不在任何一条的 `views` 里**：它与 `.clipboard` 共用同一个视图（`NotchNotesView`
+    /// 自己按 `enableNotes` 决定画哪一半），门槛是「两个键都关着」这个**复合**条件，
+    /// 由 `isHostSurfaceGatedOff` 单独判（2026-10-08 恢复笔记时从剪贴板那条里摘出来的）。
     static let hostSurfaceGateViews: [HostSurfaceGate] = [
         HostSurfaceGate(key: .dynamicShelf, views: [.shelf]),
         HostSurfaceGate(key: .enableTerminalFeature, views: [.terminal]),
-        HostSurfaceGate(key: .enableClipboardManager, views: [.notes, .clipboard]),
+        HostSurfaceGate(key: .enableClipboardManager, views: [.clipboard]),
         HostSurfaceGate(key: .enableColorPickerFeature, views: [.colorPicker]),
     ]
 
     /// 该视图是否被某个**已关掉**的宿主门槛键排除（纯函数：吃「哪些键关着」的名字集合，不读偏好
     /// ——用例拿几个字面量就能把四条映射各钉一条，与 `ModuleSurfaceGroup.hasOtherSurface` 同款）。
     static func isHostSurfaceGatedOff(_ view: NotchViews, offKeyNames: Set<String>) -> Bool {
-        hostSurfaceGateViews.contains { gate in
+        // `.notes` 是笔记与剪贴板共用的视图：只有两个键**都**关着才收回。只看剪贴板那一个键的话，
+        // 「笔记开 + 剪贴板关」的用户一进 notes tab 就会被弹回首页。
+        if view == .notes {
+            return offKeyNames.contains(Defaults.Keys.enableNotes.name)
+                && offKeyNames.contains(Defaults.Keys.enableClipboardManager.name)
+        }
+        return hostSurfaceGateViews.contains { gate in
             offKeyNames.contains(gate.key.name) && gate.views.contains(view)
         }
     }
 
     /// 此刻**关着**的宿主门槛键名（读偏好的那一半，只出现在这一处）。
+    ///
+    /// `enableNotes` 不在门禁表的四条里（它只参与 `.notes` 那个复合门槛），但必须**一并报进来**——
+    /// 否则 `isHostSurfaceGatedOff(.notes, ...)` 里那个 `contains(enableNotes)` 恒为假，笔记关掉也收不回。
     private static var hostSurfaceOffKeyNames: Set<String> {
-        Set(hostSurfaceGateViews.filter { !Defaults[$0.key] }.map(\.key.name))
+        var names = Set(hostSurfaceGateViews.filter { !Defaults[$0.key] }.map(\.key.name))
+        if !Defaults[.enableNotes] { names.insert(Defaults.Keys.enableNotes.name) }
+        return names
     }
 
     /// 当前视图被它自己的门槛键排除时收回首页——**「已经停在这个视图上，再把键关掉」那一路**

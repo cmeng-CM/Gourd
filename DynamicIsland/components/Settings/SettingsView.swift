@@ -559,6 +559,9 @@ struct SettingsView: View {
             // Efficiency（原「实用工具」+「开发者」两组的全部页；按使用频率排）
             .timer,
             .clipboard,
+            // 笔记页（2026-10-08 恢复）：`enableNotes` 是备忘录 tab 的唯一开关，页不在侧栏里
+            // 用户就没有任何地方能拨它——恢复 tab 必须连页一起恢复。
+            .notes,
             .calendar,
             .stats,
             .terminal,

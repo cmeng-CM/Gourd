@@ -222,6 +222,9 @@ struct TabSelectionView: View {
     // **当场**重绘（裸读不订阅，得等下一次别的状态变化才轮到它）。名单见文件末尾的 `hostPanelGateKeys`。
     @Default(.dynamicShelf) private var dynamicShelf
     @Default(.enableClipboardManager) private var enableClipboardManager
+    /// 备忘录总开关（笔记页里的那个）。用 `@Default` 而不是裸读：拨完必须**当场**让这条 tab
+    /// 出现或消失，裸读要等下一次别的状态变化才轮到本视图重绘。
+    @Default(.enableNotes) private var enableNotes
     @Default(.enableTerminalFeature) private var enableTerminalFeature
     /// 面板块的用户排序覆盖（p6-ui-polish / T9）：宿主三 tab 与模块 tab 共用**同一张表**
     /// （与设置页「面板组件」节、`ModuleRegistry.tabEntries` 同一个键）。用 `@Default` 而不是裸读：
@@ -267,8 +270,11 @@ struct TabSelectionView: View {
             usage: Defaults[.enableLLMUsageFeature]
                 ? TabModel(label: "Usage", icon: "chart.bar.doc.horizontal", view: .llmUsage)
                 : nil,
-            clipboard: clipboardTabVisible
-                ? TabModel(label: "Clipboard", icon: "doc.on.clipboard", view: .notes)
+            clipboard: notesOrClipboardTabVisible
+                ? TabModel(
+                    label: enableNotes ? "Notes" : "Clipboard",
+                    icon: enableNotes ? "note.text" : "doc.on.clipboard",
+                    view: .notes)
                 : nil,
             terminal: enableTerminalFeature
                 ? TabModel(label: "Terminal", icon: "apple.terminal", view: .terminal)
@@ -288,18 +294,22 @@ struct TabSelectionView: View {
         return PanelTabSequence.sequence(slots, panelOrder: panelOrder)
     }
 
-    /// 剪贴板 tab 的可见性（含形态）。**Notes / Clipboard tab 只看剪贴板**（p3-widgets 收尾修复）：
-    /// 笔记设置页已从侧栏摘掉（T5，`SettingsTab.notes` 与 `NotesSettingsView` 全保留），若这里仍认
-    /// 笔记那个总开关（`enable` + `Notes` 拼出来的上游键），置 1 的用户会看到一个既不知道是什么、
-    /// 也**无处可关**的 tab（本机该键恰好就是 1）。故条件里删掉笔记那一半、label / icon 固定为
-    /// Clipboard；笔记开关从此**惰性**（笔记代码与键一个字没删，只是不再产生任何入口）。
-    /// 与统计开关（p3-widgets / T2）同款先例：键保留、tab 分支删除。
+    /// 笔记 / 剪贴板 tab 的可见性（含形态）——**一条 tab，两个来源**（2026-10-08 恢复笔记）：
+    /// 上游原本就把备忘录与剪贴板合成一条 tab，由 `NotchNotesView` 自己按 `enableNotes` 决定画哪一半
+    /// （两个都开时是「左剪贴板 + 分隔线 + 右笔记」的双栏）。所以这里认两个条件里的任一个：
     ///
-    /// **图标模式（`clipboardDisplayMode != .separateTab`）下这条 tab 不在面板条上**（渲染的是标题栏
-    /// 那枚图标，`DynamicIslandHeader`）：`panelOrder` 里 `clipboard` 这个键因此没有接收者——
-    /// 它不影响别的项（未知 id 不参与排序），设置页那一行照旧能排（表是整表覆盖）。
-    private var clipboardTabVisible: Bool {
-        enableClipboardManager && Defaults[.clipboardDisplayMode] == .separateTab
+    /// - `enableNotes`——备忘录总开关（`SettingsTab.notes` 页里的那个）；
+    /// - `enableClipboardManager && clipboardDisplayMode == .separateTab`——剪贴板要独占这条 tab。
+    ///
+    /// 历史上这条条件曾被改成「只看剪贴板」并固定 label 为 Clipboard（`ad1c55b1`），起因是当时
+    /// 笔记设置页被摘掉、`enableNotes` 置 1 的用户会看到一个**无处可关**的 tab。现在设置页回来了
+    /// （见 `SettingsView.availableTabs`），那个理由不再成立，故恢复成上游的两来源语义。
+    ///
+    /// **图标模式（`clipboardDisplayMode != .separateTab` 且笔记关着）下这条 tab 不在面板条上**
+    /// （渲染的是标题栏那枚图标，`DynamicIslandHeader`）：`panelOrder` 里 `clipboard` 这个键因此
+    /// 没有接收者——它不影响别的项（未知 id 不参与排序），设置页那一行照旧能排（表是整表覆盖）。
+    private var notesOrClipboardTabVisible: Bool {
+        enableNotes || (enableClipboardManager && Defaults[.clipboardDisplayMode] == .separateTab)
     }
     var body: some View {
         HStack(spacing: 24) {
