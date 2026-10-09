@@ -277,8 +277,9 @@ struct TabSelectionView: View {
             clipboard: notesOrClipboardTabVisible
                 ? TabModel(
                     label: enableNotes ? "Notes" : "Clipboard",
-                    // 笔记档的字面量仍在这里（换装是下一个任务 / T4 的事）：本任务只把类型包成 `PanelIcon`。
-                    icon: enableNotes ? .symbol("note.text") : PanelIconTable.clipboard,
+                    // 两档都取自唯一图标表（docs/34 §接线清单）：笔记开 = `square.and.pencil`
+                    // （与日历那枚卡片 + 点阵的轮廓一眼可分）、笔记关 = 剪贴板档 `doc.on.clipboard`。
+                    icon: enableNotes ? PanelIconTable.notes : PanelIconTable.clipboard,
                     view: .notes)
                 : nil,
             terminal: enableTerminalFeature

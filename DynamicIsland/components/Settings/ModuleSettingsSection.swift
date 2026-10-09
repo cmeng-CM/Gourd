@@ -165,6 +165,18 @@
 //  上一批就已改成指向「首页组件」节末尾那一行**（文案本身不动），本次只把代码注释里那几处
 //  仍指向「功能段」的说法改掉（`body` 顶部与 `homeRows` 各一处）。
 //
+//  p9 批次 / T4 增量（**图标换装与改型**，docs/34-calendar-week-and-panel-icons.md §做法 机制二 /
+//  §接线清单 / §接口与数据形状）：
+//  - `HostSurfaceRow.symbolName: String` → `icon: PanelIcon`（改名 + 改型：语义从「符号名」变成
+//    「面板上那一枚图标」，自绘字形与 SF Symbol 用同一个字段表达）；`hostPanelRows` 五行取
+//    **唯一图标表**（`PanelIconTable`）：投送暂存 `.shelf`（`.airDrop` 自绘字形）、终端 / 剪贴板 /
+//    笔记 `.terminal` / `.clipboard` / `.notes`、取色器 `.symbol("eyedropper")`（它不在面板 tab
+//    条上，保持 SF Symbol）。id / 键 / `panelTab` 取值零改；
+//  - `ModuleSymbolChip.symbolName: String` → `icon: PanelIcon?`、渲染走 `PanelIconView`
+//    （字号 13 / 24×24 底 / 强调色底与圆角逐字不变）：`nil` = 不画。三个调用点一起改：宿主行
+//    `row.icon`、首页内置日历行 `.symbol("calendar")`（日历不在唯一图标表里，见 docs/34
+//    §明确不做 3）、模块行 `manifest.icon.name` 空名折 `nil`（「空名不画」口径逐字保留）。
+//
 
 import Defaults
 import SwiftUI
@@ -249,18 +261,22 @@ struct ModuleSettingsSection: View {
     ///
     /// **表不是 `private`**（与 `effectKeysByModuleID` / `configControls` 同口径）：
     /// 解析用例直接读这张表——表侧把 id / 键 / 文案 key 写错才会红。
+    ///
+    /// **图标取唯一图标表**（p9 / T4，docs/34 §接线清单 / §唯一图标来源）：四条面板元素的那一枚
+    /// 一律引用 `PanelIconTable`（投送暂存 = `.airDrop` 自绘字形、终端 / 剪贴板 / 笔记 = 各自的
+    /// `.symbol`）；取色器不在面板 tab 条上（渲染在标题栏图标行），维持 SF Symbol `.symbol("eyedropper")`。
     static let hostPanelRows: [HostSurfaceRow] = [
         HostSurfaceRow(
             id: "dynamicShelf",
             nameKey: "Enable shelf",
-            symbolName: "tray.fill",
+            icon: PanelIconTable.shelf,
             key: .dynamicShelf,
             panelTab: .shelf
         ),
         HostSurfaceRow(
             id: "enableTerminalFeature",
             nameKey: "Enable terminal",
-            symbolName: "apple.terminal",
+            icon: PanelIconTable.terminal,
             key: .enableTerminalFeature,
             panelTab: .terminal
         ),
@@ -273,7 +289,7 @@ struct ModuleSettingsSection: View {
         HostSurfaceRow(
             id: "enableClipboardManager",
             nameKey: "Enable Clipboard Manager",
-            symbolName: "doc.on.clipboard",
+            icon: PanelIconTable.clipboard,
             key: .enableClipboardManager,
             panelTab: nil
         ),
@@ -284,17 +300,20 @@ struct ModuleSettingsSection: View {
         // 的 `defaultOrder` = -20），改 id 会让既有用户的 `panelOrder` 整张表里的这一项变成未知 id
         // （排序被丢掉）——所以**只换谁拿箭头，不换键名**。tab 的 label 由 `TabSelectionView.slots`
         // 按 `enableNotes` 决定（笔记开着时 = Notes），与这里谁拿箭头无关。
+        //
+        // 图标是 `PanelIconTable.notes`（`square.and.pencil`，T4 换装）——与面板上那条 tab 的笔记档
+        // **同图**（docs/34 §验收标准 A7）。
         HostSurfaceRow(
             id: "enableNotes",
             nameKey: "Enable Notes",
-            symbolName: "note.text",
+            icon: PanelIconTable.notes,
             key: .enableNotes,
             panelTab: .clipboard
         ),
         HostSurfaceRow(
             id: "enableColorPickerFeature",
             nameKey: "Enable Color Picker",
-            symbolName: "eyedropper",
+            icon: .symbol("eyedropper"),
             key: .enableColorPickerFeature,
             panelTab: nil
         ),
@@ -934,10 +953,11 @@ struct HostSurfaceRow: Identifiable {
     let id: String
     /// 上游设置页那一项的名称字面量（**逐字沿用**，见 `hostPanelRows` 的口径 1）。
     let nameKey: String
-    /// SF Symbol：取该元素**在面板上**的那一枚（暂存器 `tray.fill`、终端 `apple.terminal`、
-    /// 剪贴板 `doc.on.clipboard`、取色器 `eyedropper`）——这一行管的就是面板元素，用户拨完开关
-    /// 看的是面板，图标因此跟面板那一枚走（不是设置页侧栏的图标）。
-    let symbolName: String
+    /// 面板图标：取该元素**在面板上**的那一枚（暂存器 / 终端 / 剪贴板 / 笔记取 `PanelIconTable`、
+    /// 取色器 `eyedropper`）——这一行管的就是面板元素，用户拨完开关看的是面板，图标因此跟面板那一枚
+    /// 走（不是设置页侧栏的图标）。**类型化后自绘字形与符号在同一个字段里表达**（p9 / T4 改型：
+    /// 原 `symbolName: String`；隔空投送那枚没有 SF Symbol，只能是自绘字形）。
+    let icon: PanelIcon
     /// 这个宿主元素的总开关——裸读写它（动态键装不上 `@Default`，与已删除的 `FeatureCard.key`
     /// 同一个理由）。
     let key: Defaults.Key<Bool>
@@ -963,7 +983,7 @@ private struct HostSurfaceRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            ModuleSymbolChip(symbolName: row.symbolName)
+            ModuleSymbolChip(icon: row.icon)
 
             Text(LocalizedStringKey(row.nameKey))
                 .fontWeight(.medium)
@@ -1513,14 +1533,16 @@ private struct ModuleConfigControlRow: View {
 
 /// 组件卡与顺序行共用的图标 chip（24×24、accent 底的圆角方块）。
 ///
-/// **取不到图标名就不画**（不画占位方框）——这是 `ModuleSettingsCard` 改动前的口径，抽出来共用，
-/// 视觉一个像素都没动。
+/// **取不到图标就不画**（不画占位方框）——这是 `ModuleSettingsCard` 改动前的口径，抽出来共用；
+/// p9 / T4 起参数是 `PanelIcon?`：`nil` = 不画（模块行那边「空名不画」的原口径由此逐字保留），
+/// 渲染统一走 `PanelIconView`（自绘字形与 SF Symbol 都是它，字号 13 / 24×24 底 / 强调色底与圆角
+/// 与改动前逐字相同）。
 private struct ModuleSymbolChip: View {
-    let symbolName: String
+    let icon: PanelIcon?
 
     var body: some View {
-        if !symbolName.isEmpty {
-            Image(systemName: symbolName)
+        if let icon {
+            PanelIconView(icon: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 24, height: 24)
@@ -1560,7 +1582,9 @@ struct HomeCalendarSettingsRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            ModuleSymbolChip(symbolName: "calendar")
+            // 日历**不在 `PanelIconTable` 里**（docs/34 §明确不做 3：日历那枚是最标准的日历表示，
+            // 本次换的是「跟它撞脸的那一枚」），按 `PanelIcon` 类型包一层即可。
+            ModuleSymbolChip(icon: .symbol("calendar"))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey(Self.nameKey))
@@ -1609,7 +1633,10 @@ private struct ModuleSettingsCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            ModuleSymbolChip(symbolName: manifest.icon.name ?? "")
+            // **「空名不画」口径逐字保留**（p9 / T4 改型）：`manifest.icon.name` 为空字符串时折成
+            // `nil`（= chip 整枚不画），与改动前的 `if !symbolName.isEmpty` 同义；模块的图标由
+            // manifest 投影而来、**不在 `PanelIconTable` 里**（见该表注释），这里只包类型。
+            ModuleSymbolChip(icon: manifest.icon.name.flatMap { $0.isEmpty ? nil : PanelIcon.symbol($0) })
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
