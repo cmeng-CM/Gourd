@@ -20,7 +20,7 @@
 //  Gourd 宿主 · 面板图标（类型 + 唯一图标表 + 隔空投送自绘字形）（p9 批次 / T3）
 //
 //  面板元素在渲染层的图标第一次有了类型：`PanelIcon`。SF Symbols **没有**隔空投送这一枚
-//  （本机 macOS 26 实测 `NSImage(systemSymbolName: "airdrop")` 为 nil），共享服务的 `.image`
+//  （本机 macOS 27 实测 `NSImage(systemSymbolName: "airdrop")` 为 nil），共享服务的 `.image`
 //  是彩色 App 图标（单色 tab 条上不同套），因此字形自绘：`AirDropGlyph`（SwiftUI `Canvas`，
 //  圆心点 + 三段同心弧、底部开口 ±35°），颜色走 `.foreground` 着色以跟随 `foregroundStyle`。
 //
@@ -35,8 +35,12 @@ enum PanelIcon: Equatable {
     case airDrop
 }
 
-/// 面板图标表（**唯一一份**图标字面量）：视图取它、用例钉它；模块 tab 的图标仍由 manifest 投影
-/// （`ModuleRegistry.tabEntries` 的 `symbolName`），不在这张表里。
+/// 面板图标表（**唯一一份**图标字面量）：视图取它、用例钉它。
+/// 表收的是**面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**——面板条上的宿主元素 =
+/// Home / 投送暂存 / 用量 / 笔记 / 剪贴板档 / 终端 / 扩展 tab 缺名回落（`extensionFallback`），
+/// 四条宿主行 = 投送暂存 / 终端 / 剪贴板 / 笔记；取色器行与首页内置日历行的 chip、以及模块 tab
+/// 与模块行（manifest 投影）走各自既有来源，不在表里（口径与 docs/34 §做法 机制二「唯一图标来源」、
+/// ADR-0017 一致）。
 enum PanelIconTable {
     static let home: PanelIcon = .symbol("house.fill")
     static let shelf: PanelIcon = .airDrop
@@ -64,6 +68,10 @@ struct AirDropGlyphMetrics {
     /// 底部开口的总跨度：`70°`（每侧 35°）。
     static let gapDegrees: CGFloat = 70
 
+    // 镜像为什么存在：**为了「视图按实例读几何」（`AirDropGlyph` 里 `AirDropGlyphMetrics().…`）
+    // 与「用例按静态常量钉几何」（`AirDropGlyphMetrics.…`）两种读法都能被断言**——沿用仓库既有
+    // 先例（`ProgressCalculator.Scope.symbolName`）：为一条能被断言的契约放开可见性，而不是为
+    // 测试改行为。
     // 两种读法等价（度量本身是常量，实例面只是「取一份度量再算几何」的读法）：
     // `AirDropGlyphMetrics.dotRadiusFactor` 与 `AirDropGlyphMetrics().dotRadiusFactor`。
     var dotRadiusFactor: CGFloat { Self.dotRadiusFactor }
