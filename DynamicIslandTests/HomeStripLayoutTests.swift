@@ -931,6 +931,25 @@ final class HomeStripLayoutTests: XCTestCase {
         }
     }
 
+    /// **静态入口的默认值与显示日历同源**（p9 / T2，docs/34 §做法 机制一）：`rowHeight(forMonth:)`
+    /// 的 `calendar:` 默认参数就是 `Calendar.gourdDisplay`（周一档）——2026-11 在周一起始下是 6 周 → 268
+    /// （周日起始是 5 周 → 232）。默认值若仍走 `.current`（本机周日起始），这条等式与 268 都会红。
+    ///
+    /// 期望值按**宿主机时区**造月首（默认参数 = 宿主机时区那一档）；GMT 夹具（`calendarRowCalendar`）
+    /// 继续只服务显式注入日历的判据。
+    func testHomeCalendarRowHeightDefaultsToTheDisplayCalendar() {
+        let november = Self.calendarRowMonth(Calendar.gourdDisplay, year: 2026, month: 11)
+        XCTAssertEqual(
+            HomeCalendarRow.rowHeight(forMonth: november),
+            HomeCalendarRow.rowHeight(forMonth: november, calendar: .gourdDisplay),
+            "默认参数 = 显式 `.gourdDisplay`（静态入口与显示日历同源）"
+        )
+        XCTAssertEqual(
+            HomeCalendarRow.rowHeight(forMonth: november), 268,
+            "2026-11 周一档 = 6 周 → 36 × 6 + 52（周日起始档是 5 周 → 232）"
+        )
+    }
+
     /// **行高下网格恰好装下整月**（p6-ui-polish / T8 tune 的结构护栏）：在 `HomeCalendarRow.rowHeight`
     /// 给定的行高里挂**真的** `MonthGridView`，量日格那个 `NSScrollView` 的视口——它必须恰好等于
     /// 「整月网格内容」= `36N − 6`（`LazyVGrid` 的 N 行 + (N−1) 道行距；T8 tune 去掉了额外的

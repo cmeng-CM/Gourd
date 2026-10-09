@@ -6603,6 +6603,118 @@ final class MonthGridLayoutTests: XCTestCase {
     }
 }
 
+// MARK: - 周起点契约（p9 / T2，docs/34 §做法 机制一 / §接口与数据形状）
+
+/// 两个日历面板（首页整宽日历行 + 展开面板日历页）的周起点**固定周一**的契约——唯一落点是
+/// `Calendar.gourdDisplay`，默认参数那一档就是它。
+///
+/// **时区前提**：本组用例刻意**不注入 `Calendar`**（走的正是默认参数 = 宿主机时区），因此期望值的
+/// `Date` 一律按**宿主机时区**的零点构造（`hostDay`）；GMT 夹具算出来的期望值在 UTC+8 上会差 8 小时
+/// 而红（`MonthGridLayoutTests` 的 GMT 夹具只服务「显式注入日历」的判据）。
+///
+/// 把 `gourdDisplay` 的 `firstWeekday` 改回 1（周日）时，②③⑥ 必须变红——这是它们存在的理由；
+/// ⑤（`firstDay(ofMonth:)` 的默认值切换）不写成用例：它的结果与周起点无关，用例钉不住「默认值改没改」
+/// ——那一条由源码检查覆盖（`DynamicIslandCalendar.swift` 里 `calendar: Calendar = .current` 只剩
+/// `EventListView.clockLabel` 一处，且那是按日粒度的时刻文案，本次不动）。
+@MainActor
+final class CalendarWeekStartTests: XCTestCase {
+
+    /// 默认档（= `Calendar.gourdDisplay`，宿主机时区）某天的零点。构造只用到年月日——与
+    /// `firstWeekday` 无关，因此这条夹具不会被「改回周日」那一行带着一起动，判据钉得死。
+    private func hostDay(year: Int, month: Int, day: Int) -> Date {
+        Calendar.gourdDisplay.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    /// 宿主机时区下的月首零点。
+    private func hostMonth(year: Int, month: Int) -> Date {
+        hostDay(year: year, month: month, day: 1)
+    }
+
+    /// 同一宿主机时区、指定 `firstWeekday` 的显式日历（两档对照用；与默认档共享时区，`Date` 可直接比较）。
+    private func hostCalendar(firstWeekday: Int) -> Calendar {
+        var calendar = Calendar.gourdDisplay
+        calendar.firstWeekday = firstWeekday
+        return calendar
+    }
+
+    /// ① 显示日历的周起点就是周一（Foundation 的 1-based 口径：`1 = 周日`、`2 = 周一`）。
+    func testDisplayCalendarStartsOnMonday() {
+        XCTAssertEqual(Calendar.gourdDisplay.firstWeekday, 2, "显示日历的周起点 = 周一")
+    }
+
+    /// ② 默认参数下 2026-10 的网格 = 9/28（周一）… 11/1（周日）、5 周；同一月份换周日起点的显式
+    /// 日历后两端各不同（9/27 … 10/31）——两档不同正是本次改动（周起点固定周一）的可观察结果。
+    func testDefaultGridOfOctober2026StartsOnMonday() throws {
+        let october = hostMonth(year: 2026, month: 10)
+        let days = MonthGridLayout.days(forMonth: october)
+        XCTAssertEqual(days.count, 35, "2026-10 = 5 周（35 格）")
+        XCTAssertEqual(try XCTUnwrap(days.first), hostDay(year: 2026, month: 9, day: 28), "首格 = 9/28（周一）")
+        XCTAssertEqual(try XCTUnwrap(days.last), hostDay(year: 2026, month: 11, day: 1), "末格 = 11/1（周日）")
+        XCTAssertEqual(MonthGridLayout.weekCount(for: october), 5, "默认参数下 2026-10 = 5 周")
+
+        // 对照：同一时区、周日起点的显式日历——两端各挪一天（9/27 … 10/31）。
+        let sundayDays = MonthGridLayout.days(forMonth: october, calendar: hostCalendar(firstWeekday: 1))
+        let sundayFirst = try XCTUnwrap(sundayDays.first)
+        let sundayLast = try XCTUnwrap(sundayDays.last)
+        XCTAssertEqual(sundayFirst, hostDay(year: 2026, month: 9, day: 27), "周日起点：首格 = 9/27（周日）")
+        XCTAssertEqual(sundayLast, hostDay(year: 2026, month: 10, day: 31), "周日起点：末格 = 10/31（周六）")
+        XCTAssertNotEqual(try XCTUnwrap(days.first), sundayFirst, "两档首格不同（周一档才是产品档）")
+        XCTAssertNotEqual(try XCTUnwrap(days.last), sundayLast, "两档末格不同（周一档才是产品档）")
+    }
+
+    /// ③ 默认参数下 2026-10 的按月窗口 = `[9/28 00:00, 11/2 00:00)`，且与网格的
+    /// `[首格, 末格 + 1 天)` **逐字一致**——「事件窗口与网格同源」的不变量（窗口一旦比网格小一节，
+    /// 网格末端那天就永远没有事件点）。
+    func testDefaultMonthWindowMatchesGridBounds() throws {
+        let october = hostMonth(year: 2026, month: 10)
+        let window = try XCTUnwrap(MonthGridLayout.monthWindow(forMonth: october))
+        XCTAssertEqual(window.start, hostDay(year: 2026, month: 9, day: 28), "窗口起点 = 网格首格（9/28 零点）")
+        XCTAssertEqual(window.end, hostDay(year: 2026, month: 11, day: 2), "窗口终点 = 末格次日零点（11/2，末尾排他）")
+
+        let gridDays = MonthGridLayout.days(forMonth: october)
+        let gridLast = try XCTUnwrap(gridDays.last)
+        XCTAssertEqual(window.start, try XCTUnwrap(gridDays.first), "窗口起点 = 网格首格（逐字同源）")
+        XCTAssertEqual(
+            window.end,
+            try XCTUnwrap(Calendar.gourdDisplay.date(byAdding: .day, value: 1, to: gridLast)),
+            "窗口终点 = 网格末格 + 1 天（逐字同源）"
+        )
+    }
+
+    /// ④ `weekdaySymbols(for:)` 的**算式**（区域无关）：显式构造的 `zh_CN` 日历按 `firstWeekday`
+    /// 旋转极短独立符号——周一起点 = 「一…日」、周日起点 = 「日…六」。
+    /// 只断言这个显式日历；**不读宿主机 `.current` 的文案**（它随 locale，换台机器就红）。
+    func testWeekdaySymbolsFormulaIsLocaleIndependent() {
+        var chineseCalendar = Calendar(identifier: .gregorian)
+        chineseCalendar.locale = Locale(identifier: "zh_CN")
+        XCTAssertEqual(
+            chineseCalendar.veryShortStandaloneWeekdaySymbols, ["日", "一", "二", "三", "四", "五", "六"],
+            "前提：zh_CN 的极短独立符号本身是系统顺序（旋转发生在 weekdaySymbols(for:) 里）"
+        )
+
+        chineseCalendar.firstWeekday = 2
+        XCTAssertEqual(
+            MonthGridLayout.weekdaySymbols(for: chineseCalendar),
+            ["一", "二", "三", "四", "五", "六", "日"],
+            "周一起点：从下标 1 开始取（旋转）"
+        )
+
+        chineseCalendar.firstWeekday = 1
+        XCTAssertEqual(
+            MonthGridLayout.weekdaySymbols(for: chineseCalendar),
+            ["日", "一", "二", "三", "四", "五", "六"],
+            "周日起点：系统顺序原样"
+        )
+    }
+
+    /// ⑥ 默认参数下 2026-11 是 6 周（周一起始；周日起始是 5 周）→ 网格高度 `36 × 6 + 52 = 268`。
+    func testDefaultNovember2026NeedsSixWeeks() {
+        let november = hostMonth(year: 2026, month: 11)
+        XCTAssertEqual(MonthGridLayout.weekCount(for: november), 6, "2026-11 周一起始 = 6 周")
+        XCTAssertEqual(MonthGridLayout.monthGridHeight(forMonth: november), 268, "36 × 6 + 52 = 268")
+    }
+}
+
 // MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）
 
 /// 日历行是**按当月周数算出的固定行高**：行高与「今日清单显示几行」是同一组数字，算错就会出现
