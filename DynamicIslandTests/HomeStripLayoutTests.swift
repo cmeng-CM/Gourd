@@ -937,12 +937,18 @@ final class HomeStripLayoutTests: XCTestCase {
     /// `.padding(.bottom, 2)`），且网格底**贴住行底**（上方两段 chrome 的余量都落在网格上方）。
     ///
     /// 视口小于内容 = 末行被裁（T8 的失败信号）；网格底离行底还有空档 = 底部可见留白又长回来。
-    /// 两侧都钉住：5 周（2026-10 / 11）与 6 周（2026-08）各量一条。量法 = 宿主视图树里的
+    /// 两侧都钉住：5 周（2026-10）与 6 周（2026-08 / 11）各量一条。量法 = 宿主视图树里的
     /// `NSScrollView`（SwiftUI 在 macOS 上的滚动实现）；找不到就 skip——换实现不算失败，
     /// 上屏像素判据仍在控制器那边。
+    ///
+    /// **夹具随产品档切到周一（2026-10-09 p9 / docs/34 §关键约束）**：视图持有的是
+    /// `Calendar.gourdDisplay`（周起点固定周一，不由外部注入），所以这里的夹具也必须是
+    /// `firstWeekday = 2`——否则量的行高与视图画的网格会差一档（2026-11 由 5 周变 6 周）。
+    /// 时区耦合照旧：本夹具按 **GMT** 造月首，而视图按**本机时区**归月，宿主机需东于 GMT
+    /// （本机 UTC+8 满足）——夹具的月首（GMT 零点）在本机时区下仍是同一天（08:00），不受影响。
     func testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight() throws {
-        let calendar = Self.calendarRowCalendar(firstWeekday: 1)
-        for (year, month, weeks) in [(2026, 10, 5), (2026, 11, 5), (2026, 8, 6)] {
+        let calendar = Self.calendarRowCalendar(firstWeekday: 2)
+        for (year, month, weeks) in [(2026, 10, 5), (2026, 11, 6), (2026, 8, 6)] {
             let monthDate = Self.calendarRowMonth(calendar, year: year, month: month)
             let rowHeight = HomeCalendarRow.rowHeight(forMonth: monthDate, calendar: calendar)
             XCTAssertEqual(rowHeight, 36 * CGFloat(weeks) + 52, "前提：\(year)-\(month) = \(weeks) 周")

@@ -60,7 +60,11 @@ struct HomeCalendarRow: View {
     static var rowHeight: CGFloat { rowHeight(forMonth: Date()) }
 
     /// 行高的**纯函数**入口（按给定月份；测试钉 2026-08 = 6 周 / 2026-10 = 5 周这类边界）。
-    static func rowHeight(forMonth month: Date, calendar: Calendar = .current) -> CGFloat {
+    ///
+    /// `calendar:` 的默认值 = **显示日历**（`Calendar.gourdDisplay`，周起点固定周一，docs/34
+    /// §做法 机制一）：静态入口 `rowHeight` 与 `HomeStripView` 的三处高度预算因此自动跟随产品档，
+    /// 不另改调用点。
+    static func rowHeight(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> CGFloat {
         MonthGridLayout.monthGridHeight(forMonth: month, calendar: calendar)
     }
 

@@ -428,6 +428,9 @@ class CalendarManager: ObservableObject {
         // 而那条链路只挂在设置页与锁屏天气小部件上、不在应用启动链上）——按它守门的话，没打开过
         // 设置页的机器上按月数据**一次都抓不到**，月历会一个点都没有。这里只读不写：授权状态本身
         // 仍由既有链路维护。（`CalendarService.events` 内部也各自按 EventKit 状态决定查哪一类。）
+        // **窗口的周起点 = 显示日历（周一）**：`monthWindow` 的 `calendar:` 默认值已指向
+        // `Calendar.gourdDisplay`（2026-10-09 p9 / docs/34 §做法 机制一），这里不写代码即自动跟随
+        // ——网格两端与抓取窗口必须同源，否则网格末端那格（周一起始时是下月 1 日）永远不会有事件点。
         guard isAuthorized(EKEventStore.authorizationStatus(for: .event)),
               let window = MonthGridLayout.monthWindow(forMonth: normalizedMonth)
         else { return }

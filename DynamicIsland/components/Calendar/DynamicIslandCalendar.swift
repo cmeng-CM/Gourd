@@ -563,12 +563,14 @@ struct MonthEventSnapshot {
 ///
 /// 首格 = **当月首日所在那一周的起点**、末格 = **当月末日所在那一周的终点**，逐日 +1 展开，
 /// 因此两端都含跨月补格（补格来自相邻月份），总天数恒为 7 的整数倍。周起点跟着
-/// `calendar.firstWeekday` 走（与 `MonthGridView` 的星期表头同一来源）。
+/// `calendar.firstWeekday` 走（与 `MonthGridView` 的星期表头同一来源）——本族函数的 `calendar:`
+/// **默认值指向 `Calendar.gourdDisplay`**（周起点固定周一，docs/34 §做法 机制一）；显式传
+/// `Calendar` 的调用点表达的正是「算式与周起点无关」，口径不变（签名一个字不改）。
 ///
 /// 不读 `Defaults`、不碰「今天」，因此可以用固定 `Calendar` + 固定月份/事件直接单测
 /// （`ModuleKernelTests` 的 `MonthGridLayoutTests`）。
 enum MonthGridLayout {
-    static func days(forMonth month: Date, calendar: Calendar = .current) -> [Date] {
+    static func days(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> [Date] {
         guard let monthInterval = calendar.dateInterval(of: .month, for: month),
               let firstWeekInterval = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start),
               let lastDay = calendar.date(byAdding: .day, value: -1, to: monthInterval.end),
@@ -594,7 +596,7 @@ enum MonthGridLayout {
     /// 「一个月最多跨 6 周」这些边界上与网格漂（2026 年 8 月 = 7/26–9/5 = 6 周即那类边界）。
     ///
     /// 取不到当月（异常日期 → 空数组）→ 0 周（调用方各自兜底，不产生负高）。
-    static func weekCount(for month: Date, calendar: Calendar = .current) -> Int {
+    static func weekCount(for month: Date, calendar: Calendar = .gourdDisplay) -> Int {
         days(forMonth: month, calendar: calendar).count / 7
     }
 
@@ -629,7 +631,7 @@ enum MonthGridLayout {
     /// 的 frame = `(6, 59, 308, 176)`）；校准后网格区 = `H − 58`、chrome = 58，末行墨迹底到行底
     /// 只剩「格内文字下方空档」（进程内位图墨迹扫描：5 周 232 高下 = 3.5pt），首页底部可见留白按
     /// 控制器同一口径应从 53 落到 ≈28。
-    static func monthGridHeight(forMonth month: Date, calendar: Calendar = .current) -> CGFloat {
+    static func monthGridHeight(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> CGFloat {
         let rows = CGFloat(weekCount(for: month, calendar: calendar))
         let gridContent = 36 * rows - 6
         return gridContent + 4 + headerChromeHeight + weekdayChromeHeight
@@ -637,7 +639,7 @@ enum MonthGridLayout {
 
     /// 某个日期所在月份的**首日零点**——按月数据的键（`MonthEventSnapshot.month` 与
     /// `MonthGridView.displayedMonth` 用它比较，`CalendarManager.updateMonthEvents` 用它去重）。
-    static func firstDay(ofMonth month: Date, calendar: Calendar = .current) -> Date {
+    static func firstDay(ofMonth month: Date, calendar: Calendar = .gourdDisplay) -> Date {
         calendar.date(from: calendar.dateComponents([.year, .month], from: month))
             ?? calendar.startOfDay(for: month)
     }
@@ -651,7 +653,7 @@ enum MonthGridLayout {
     ///
     /// 注意末端的**半开**口径：`end` 那一瞬间（末格的次日零点）不属于窗口。`DateInterval.contains`
     /// 是**闭**区间（末点也算在内），判边界时别拿它当判据（测试里显式按半开比较）。
-    static func monthWindow(forMonth month: Date, calendar: Calendar = .current) -> DateInterval? {
+    static func monthWindow(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> DateInterval? {
         let gridDays = days(forMonth: month, calendar: calendar)
         guard let first = gridDays.first,
               let last = gridDays.last,
@@ -675,7 +677,7 @@ enum MonthGridLayout {
     static func daysWithEvents(
         inMonth month: Date,
         events: [EventModel],
-        calendar: Calendar = .current
+        calendar: Calendar = .gourdDisplay
     ) -> Set<Date> {
         guard !events.isEmpty else { return [] }
 
@@ -707,12 +709,30 @@ enum MonthGridLayout {
     static func eventDays(
         forDisplayedMonth displayedMonth: Date,
         snapshot: MonthEventSnapshot,
-        calendar: Calendar = .current
+        calendar: Calendar = .gourdDisplay
     ) -> Set<Date> {
         guard let month = snapshot.month,
               calendar.isDate(month, equalTo: displayedMonth, toGranularity: .month)
         else { return [] }
         return daysWithEvents(inMonth: displayedMonth, events: snapshot.events, calendar: calendar)
+    }
+
+    /// 星期表头（极短独立符号）按 `calendar.firstWeekday` **旋转**后的顺序——从 `MonthGridView`
+    /// 的私有属性逐字抽出（D-08）：视图与用例共用同一条算式，「表头顺序」因此第一次变得可断言。
+    ///
+    /// 口径（原实现逐字搬进纯函数，行为不变）：
+    /// - `calendar.veryShortStandaloneWeekdaySymbols` 本身是**系统顺序**（本机 zh_CN = `["日","一",…,"六"]`），
+    ///   旋转从下标 `firstWeekday - 1` 开始取——`firstWeekday` 是 Foundation 的 1-based 口径
+    ///   （`1 = 周日`、`2 = 周一`），默认的 `.gourdDisplay` 档下结果 = `["一","二","三","四","五","六","日"]`；
+    /// - 空表（取不到符号的异常 locale）**原样返回**，不做任何下标运算。
+    static func weekdaySymbols(for calendar: Calendar = .gourdDisplay) -> [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        guard !symbols.isEmpty else { return symbols }
+
+        let firstWeekdayIndex = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
+        var ordered = Array(symbols[firstWeekdayIndex...])
+        ordered.append(contentsOf: symbols[..<firstWeekdayIndex])
+        return ordered
     }
 }
 
@@ -773,7 +793,9 @@ struct MonthGridView: View {
     /// 显示月份：本视图自持（翻月只动它），随选中日同步——选中日一变就跳到它所在的月份。
     @State private var displayedMonth: Date
 
-    private let calendar = Calendar.current
+    /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
+    /// 日格数据、星期表头、事件标记切片、选中 / 今天的判定都从它取数。
+    private let calendar = Calendar.gourdDisplay
 
     init(
         selectedDate: Binding<Date>,
@@ -791,16 +813,6 @@ struct MonthGridView: View {
         self.showsScrollFades = showsScrollFades
         // 初值取选中日所在月（而不是 `Date()`）：`onChange` 不会为首帧补发，初值必须自己对齐。
         _displayedMonth = State(initialValue: selectedDate.wrappedValue.startOfMonth)
-    }
-
-    private var weekdaySymbols: [String] {
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
-        guard !symbols.isEmpty else { return symbols }
-
-        let firstWeekdayIndex = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
-        var ordered = Array(symbols[firstWeekdayIndex...])
-        ordered.append(contentsOf: symbols[..<firstWeekdayIndex])
-        return ordered
     }
 
     private var monthTitle: String {
@@ -899,7 +911,8 @@ struct MonthGridView: View {
         ScrollViewReader { proxy in
             VStack(spacing: 6) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
-                    ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                    // 表头顺序由纯函数给出（D-08）：本视图不再自带那段旋转，视图与用例同一条算式。
+                    ForEach(Array(MonthGridLayout.weekdaySymbols(for: calendar).enumerated()), id: \.offset) { _, symbol in
                         Text(symbol.prefix(1))
                             .font(.caption2)
                             .fontWeight(.semibold)
@@ -1115,7 +1128,9 @@ struct StandaloneCalendarView: View {
     /// 两栏之间的间距（旧 `body` 里的局部常量逐字搬上来：几何读数去掉后它得有个具名住处）。
     private static let paneSpacing: CGFloat = 12
 
-    private let calendar = Calendar.current
+    /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
+    /// 左栏高度（`monthGridHeight`）由它算；网格本体在 `MonthGridView` 里从同一枚取数。
+    private let calendar = Calendar.gourdDisplay
 
     private var filteredEvents: [EventModel] {
         EventListView.filteredEvents(
