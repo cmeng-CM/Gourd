@@ -164,7 +164,7 @@ extension Calendar {
 // DynamicIsland/components/Calendar/DynamicIslandCalendar.swift · enum MonthGridLayout
 // 签名全部不变，只有 `calendar:` 的默认值从 `.current` 改成 `.gourdDisplay`
 static func days(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> [Date]
-static func weekCount(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> Int
+static func weekCount(for month: Date, calendar: Calendar = .gourdDisplay) -> Int
 static func monthGridHeight(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> CGFloat
 static func firstDay(ofMonth month: Date, calendar: Calendar = .gourdDisplay) -> Date
 static func monthWindow(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> DateInterval?
@@ -232,11 +232,11 @@ struct HostSurfaceRow {
 
 ## 明确不做
 
-1. **进度块「本周」的周区间不动**（docs/31 第 8 条：随系统 `firstWeekday`）。用户点的是「两个日历面板」；改了它会让「本周剩 N 天」的数字变化，那不是他要求的。**这一条要在收尾报告里单独点名**，供用户决定是否下一轮一并改。
+1. **进度块「本周」与待办模块的「本周」分桶都不动**（都随系统 `firstWeekday`：docs/31 第 8 条 + `TodoBucketing` 的 `.weekOfYear`，由 `TodosModule` 传 `autoupdatingCurrent`）。用户点的是「两个日历面板」；改了它们会让「本周剩 N 天」的数字与待办「本周」桶里的条目变化，那不是他要求的。**这两处要在收尾报告里一起点名**（2026-10-09 T1 审查补出 todos 那一处），供用户决定是否下一轮一并改。
 2. **不做「周起始日」设置项**（见 §备选与取舍 周起点·2）。
 3. **日历 tab 的图标与 `CalendarModule` 的 manifest 图标不动**（仍是 `calendar`）。
 4. **不动其余 tab 的图标**（Home / 启动台 / 通知 / 待办 / 终端 / 用量 / 扩展 / 剪贴板档的 `doc.on.clipboard`），也不动设置页侧栏的页图标。
-5. **不动 `HomeTodayListLayout.clockLabel(for:calendar:)`**（同文件里另一处 `calendar: Calendar = .current`）：它算今日清单的时刻文案（按日粒度），与周起点无关。**判据要把它排除在外**，否则「源码里不再有 `.current` 默认值」这条检查永远不成立。
+5. **不动 `EventListView.clockLabel(for:calendar:)`**（同文件里另一处 `calendar: Calendar = .current`，2026-10-09 复核：它的宿主是 `EventListView`，本节初稿写成 `HomeTodayListLayout`）：它算事件行的时刻文案（按日粒度），与周起点无关。**判据要把它排除在外**，否则「源码里不再有 `.current` 默认值」这条检查永远不成立。
 6. **`tray.fill` / `note.text` 另外三处同义落点本轮不动**（它们不是「面板元素的图标」）：`ShelfInlineLiveActivity.swift` 的折叠态投送反馈图标（描述的是「文件正落进暂存」这个动作）、`NotchNotesView.swift` 的搜索框占位图标、`MinimalisticMusicPlayerView.swift` 的 Notes 明细行图标。**收尾报告里点名**，用户要一并换再说。
 7. **不引入第三方图标资源、不抠系统私有资源**；不改 `mediaremote-adapter` 等上游件。
 8. **不动日期轮（`WheelPickerIndexMath`）与农历 / 节假日链路**：它们与「周起点」无关（按日粒度）。
