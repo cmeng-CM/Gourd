@@ -79,7 +79,7 @@
 |---|---|---|
 | 下一个日程 + 今日日程 | ✅ | EventKit `events(from:to:)` + `EKEventStoreChanged` 监听（带 debounce）。**首页日历为竖向紧凑多行（最多 5 行 + 溢出提示 `+N`），不横向滚动**；块按内容高度收缩、顶部与音乐块对齐（2026-09-29：原先是横向芯片条 + 写死 120pt，导致今日内容只有一行还要横滑、且留白很大）。**2026-09-29 晚 `p2-calendar-row` 改判**：今日清单本身仍是"竖向紧凑多行（最多 5 行 + `+N`）、不滚动"，但它已从 strip 里的一块搬到**首页下排全宽日历行的右栏**（左栏是整月网格；行高固定 294，行数由 294 − 26 = 268 算准）——"顶部与音乐块对齐"的旧形态随之作废，见 §5.8 |
 | 提醒（含勾选完成） | ✅ | EventKit `fetchReminders` + 写回 `EKReminder.isCompleted`（上游面板维持现状）；**新增的待办 `todos`（§5.7）另有自己的取数、左侧三环视图与增删**（写入 / 删除系统提醒） |
-| 月历格的第二行（农历 / 节假日） | 🆕 | **2026-09-30 落地（`p3-widgets` / T4）**：月历每天在公历数字下方多一行 9pt 次要色——**有节假日显示节假日名、否则显示农历日名**（初一显示月名如「八月初一」，闰月带「闰」前缀）；同一套数据同时供给首页日历行与日历面板（两者共用 `MonthGridView`），两个宿主都传 `showsScrollFades: false`（上下两条渐变遮罩两处都没有了）。纯函数 `LunarDayLabel` / `HolidayLookup` / `MonthCellSubtitle`（放不下就不画），细节见 §5.8 末段、设计与已知限制见 [26](26-home-widgets-and-settings.md) |
+| 月历格的第二行（农历 / 节假日） | 🆕 | **2026-09-30 落地（`p3-widgets` / T4）**：月历每天在公历数字下方多一行 9pt 次要色——**有节假日显示节假日名、否则显示农历日名**（初一显示月名如「八月初一」，闰月带「闰」前缀）；同一套数据同时供给首页日历行与日历面板（两者共用 `MonthGridView`），两个宿主都传 `showsScrollFades: false`（上下两条渐变遮罩两处都没有了）。纯函数 `LunarDayLabel` / `HolidayLookup` / `MonthCellSubtitle`（放不下就不画），细节见 §5.8 末段、设计与已知限制见 [26](26-home-widgets-and-settings.md)。**2026-10-09（p9）**：无论哪个宿主，面板日历（首页整宽日历行 + 日历页）的周起点**固定周一**——唯一落点 `Calendar.gourdDisplay`，按月取数窗口同源；隔空投送 tab 换自绘弧线字形、笔记 tab 换 `square.and.pencil`（ADR-0016 / ADR-0017，[docs/34](34-calendar-week-and-panel-icons.md)） |
 | 日程提前提醒 | ✅ | `reminderLeadTime` + 独立 Live Activity 管理器 |
 | 本地计时器 | 🔧 | `Timer.scheduledTimer` 1s tick → 上游**退出即丢状态、无 UserNotifications** → 补持久化 + 到点通知 |
 | 锁屏计时器面板 | ✅ | 用 `TimerManager.shared` |
