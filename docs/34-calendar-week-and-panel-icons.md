@@ -8,7 +8,7 @@
 
 ## 一句话方案
 
-两个日历面板（首页整宽日历行 + 展开面板日历页）的**周起点固定为周一**，唯一落点是新的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`），视图与按月取数窗口都从它取数；tab 条上「隔空投送（投送暂存）」那枚由 `tray.fill` 托盘换成**自绘的 macOS 隔空投送字形**（圆心点 + 三段同心弧、底部开口 ±35°），并把与日历 tab 撞脸的**笔记 tab 换一枚轮廓可分的字形**（`square.and.pencil`）。
+两个日历面板（首页整宽日历行 + 展开面板日历页）的**周起点固定为周一**，唯一落点是新的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`），消费点改默认值（含两处视图持有的日历）与按月取数窗口都从它取数；tab 条上「隔空投送（投送暂存）」那枚由 `tray.fill` 托盘换成**自绘的 macOS 隔空投送字形**（圆心点 + 三段同心弧、底部开口 ±35°），并把与日历 tab 撞脸的**笔记 tab 换一枚轮廓可分的字形**（`square.and.pencil`）。
 
 ## 背景与目标
 
@@ -184,7 +184,10 @@ enum PanelIcon: Equatable {
     case airDrop
 }
 
-/// 渲染层：`.symbol` → `Image(systemName:)`、`.airDrop` → `AirDropGlyph`。
+/// 渲染层：`.symbol` → `Image(systemName:)`（**不加框**——既有符号的排布逐字不变）、
+/// `.airDrop` → `AirDropGlyph().frame(width: 13, height: 13)`（交付尺寸，记 D-10）。
+/// 13×13 的判据 = **与相邻 13pt 符号视觉等高**（T3 渲图实测：字形墨迹 12.4×11.3pt，
+/// 落在实拍 tab 条图标墨迹 11–13pt 的区间内）。
 struct PanelIconView: View { let icon: PanelIcon }
 
 /// 隔空投送字形（自绘）：圆心点 + 三段同心弧、底部开口 ±35°。
@@ -196,10 +199,24 @@ struct PanelIconView: View { let icon: PanelIcon }
 /// 由 `glyph-structure.py` 的像素检查自动判定（T5 的几何断言只管开口宽度 70° 与三段半径）。
 struct AirDropGlyph: View { var body: some View { /* Canvas */ } }
 
+/// 隔空投送字形的几何度量（**四个量取值是契约**：`AirDropGlyphMetricsTests` 逐字钉，记 D-11）。
+/// 以字形**外缘半径 R** 为单位；取值出处 = 用户 2026-10-09 给的控制中心参考图（中心行 / 列亮度
+/// 扫描 + 16 倍放大下量弧端位置；与 Apple 那枚不保证逐像素一致，见 §已知限制 1）。
+struct AirDropGlyphMetrics {
+    static let dotRadiusFactor: CGFloat = 0.13                    // 圆心点半径
+    static let ringRadiusFactors: [CGFloat] = [0.33, 0.65, 0.90]  // 三段弧环心（内 → 外）
+    static let strokeFactor: CGFloat = 0.113                      // 线宽（圆头线帽）
+    static let gapDegrees: CGFloat = 70                           // 底部开口总跨度（每侧 35°）
+
+    // 四个实例只读镜像（`var dotRadiusFactor: CGFloat { Self.dotRadiusFactor }` …）：纯转发，
+    // 只为「视图按实例读几何」与「用例按静态常量钉几何」两种读法都能被断言（D-11）。
+}
+
 /// 面板图标表（唯一一份面板图标字面量）：视图取它、用例钉它。
-/// 表收的是**面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**；
-/// 取色器行与首页内置日历行的 chip 是表外的直接字面量，
-/// 模块 tab / 模块行的图标仍由 manifest 投影（`ModuleRegistry.tabEntries`）。
+/// 表收的是**面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**——面板条上的宿主元素 =
+/// Home / 投送暂存 / 用量 / 笔记 / 剪贴板档 / 终端 / 扩展 tab 缺名回落（`extensionFallback`），
+/// 四条宿主行 = 投送暂存 / 终端 / 剪贴板 / 笔记；取色器行与首页内置日历行的 chip 是表外的直接
+/// 字面量，模块 tab / 模块行的图标仍由 manifest 投影（`ModuleRegistry.tabEntries`）。
 enum PanelIconTable { … }   // 取值见 §做法 机制二「唯一图标来源」
 ```
 
@@ -245,7 +262,49 @@ struct HostSurfaceRow {
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）。
+**已实现并提交**（2026-10-09，p9 批次；本节与 §已知限制 / §决策摘要 的回写由收尾前的整体终审清单驱动）。实现批次 = `9c378bce..bc8d95b0` 的十个提交；本节的回写与其伴生的 `PanelIcon.swift` 注释对齐是随后的两次文档面提交（不改任何行为）。
+
+**改动文件清单**（`git log --oneline 9c378bce..bc8d95b0` 与 `git diff --stat 9c378bce..bc8d95b0` 逐字核对；`+` / `−` 为实现批次的行数）：
+
+| 文件 | 改动 |
+|---|---|
+| `DynamicIsland/extensions/Calendar+Display.swift`（新，+48） | `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`） |
+| `DynamicIsland/components/Calendar/DynamicIslandCalendar.swift`（+36/−21） | `MonthGridLayout` 七函数默认值 `.current` → `.gourdDisplay` + 新纯函数 `weekdaySymbols(for:)`（原 `MonthGridView.weekdaySymbols` 私有属性逐字抽出、随后删除）；`MonthGridView` / `StandaloneCalendarView` 持有的日历改 `.gourdDisplay` |
+| `DynamicIsland/Host/HomeCalendarRow.swift`（+5/−1） | `rowHeight(forMonth:calendar:)` 默认值改 `.gourdDisplay`（静态入口 `rowHeight` 与 `HomeStripView` 三处预算自动跟随；+注释） |
+| `DynamicIsland/managers/CalendarManager.swift`（+3） | `updateMonthEvents` 只补注释——`monthWindow(forMonth:)` 走默认值自动同源 |
+| `DynamicIsland/components/Tabs/PanelIcon.swift`（新，+136） | `PanelIcon` / `PanelIconTable` / `AirDropGlyphMetrics` / `AirDropGlyph` / `PanelIconView` |
+| `DynamicIsland/components/Tabs/TabSelectionView.swift`（+17/−10） | `TabModel.icon`（含 init）改 `PanelIcon` + 七条接线（含扩展 tab 缺名回落 `PanelIconTable.extensionFallback`、模块投影 `.symbol(entry.symbolName)`） |
+| `DynamicIsland/components/Tabs/TabButton.swift`（+4/−3） | `icon: PanelIcon` + 渲染点改 `PanelIconView` |
+| `DynamicIsland/components/Settings/ModuleSettingsSection.swift`（+44/−17） | `HostSurfaceRow.symbolName → icon: PanelIcon`、`hostPanelRows` 五行取表、`ModuleSymbolChip.icon: PanelIcon?` 与三个调用点（宿主行 / 首页内置日历行 / 模块行） |
+| `DynamicIslandTests/ModuleKernelTests.swift`（+151） | `CalendarWeekStartTests`（5 条：①–④、⑥；⑤ 按计划不写成用例）+ `AirDropGlyphMetricsTests`（2 条） |
+| `DynamicIslandTests/TakeoverEnablementTests.swift`（+155） | `PanelIconTests`（3 条：表七项逐字 / 五行同源 / 符号可解析） |
+| `DynamicIslandTests/HomeStripLayoutTests.swift`（+28/−3） | 渲染用例夹具随产品档切换（`firstWeekday: 2`、2026-11 → 6 周）+ 新增 `testHomeCalendarRowHeightDefaultsToTheDisplayCalendar` |
+| `docs/00-decisions.md`（+34） | ADR-0016 / ADR-0017 |
+| `docs/09-features-and-mechanisms.md`（±1） | §C 时间「月历格的第二行」一行补 p9 口径 |
+| `docs/guide/README.md`（±1） | 标签栏那句补「『文件暂存』那枚 tab 的图标是 macOS 隔空投送样式的同心弧」 |
+| `docs/guide/modules.md`（±1） | 日历节补「月历**周一起始**（表头 一…日）」 |
+| `docs/34-calendar-week-and-panel-icons.md`（+282） | 本文档（P 轮） |
+
+**交付物**（与 §做法 的两张表逐条对上）：
+
+- **周起点**：唯一落点 `Calendar.gourdDisplay`；消费点 = `MonthGridLayout` 七函数的 `calendar:` 默认值（含新纯函数 `weekdaySymbols(for:)`）+ `MonthGridView` / `StandaloneCalendarView` 持有的日历 + `HomeCalendarRow.rowHeight(forMonth:calendar:)` 默认值 + `CalendarManager.updateMonthEvents` 的按月窗口（不写代码、走 `monthWindow` 默认值）。
+- **面板图标**：tab 条「投送暂存」= `.airDrop`（自绘字形，13×13 交付尺寸）、「笔记」= `square.and.pencil`（剪贴板档 `doc.on.clipboard` 不动）；设置页三处 chip 都走 `PanelIconView`，投送暂存行与笔记行与面板**同图**（A7）。
+- **用例**：`CalendarWeekStartTests` / `PanelIconTests` / `AirDropGlyphMetricsTests`（位置与条数见上表）；渲染取证脚本 `glyph-structure.py`（像素判据，退出码 0）与渲图留档在 `.workflow/p9-calendar-week-icon/evidence/`（不入库）。
+- **长期记录**：ADR-0016 / ADR-0017；`docs/09` 一行；用户手册两处（README 标签栏、modules 日历节）。
+
+**与计划的偏离**（逐条；均为实现级，结论与边界未变）：
+
+1. `AirDropGlyphMetrics` 在四个静态常量之外**增了四个实例只读镜像**（计划只列静态常量）——为「视图按实例读几何 / 用例按静态常量钉几何」两种读法都能被断言（后记 D-11）。
+2. 扩展 tab 缺名回落的**字面形态**：实现取表内常量 `PanelIconTable.extensionFallback`（计划片段写的是内联 `"puzzlepiece.extension"`）——行为等价，扩展自带符号名仍逐字优先（T3 审查采纳）。
+3. **「唯一一份图标字面量」的口径收敛**：初稿的绝对说法已限定为「表收的是面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行」，并显式列出表外来源（取色器行、首页内置日历行的 chip、模块 tab / 模块行的 manifest 投影）——见 §做法 机制二「唯一图标来源」与 ADR-0017，与实现逐字一致。
+4. `HomeStripLayoutTests` 的渲染用例：夹具切到产品档、「月份 → 周数」表重算（计划内明定的唯一既有用例改动；环境前提记 §已知限制 8）。
+
+**遗留项**：
+
+1. **上屏观感待用户过目**：A1（两个面板表头「一…日」/ 网格首格周一）与 A5 / A6 / A7（tab 条两枚与设置行 chip 的观感）尚无「改动后」的上屏截图；本批留档的是渲图取证（字形结构像素判据、与参考图并排、13pt 交付尺寸）。上屏与观感由用户复看（计划 §不验证的部分）。
+2. **13×13 热区与 chip 等高待上屏复核**：13pt 使「投送暂存」tab 的视图宽 18 → 13pt（点击热区随之变小）；`ModuleSymbolChip` 里 `.airDrop` 与相邻 `.symbol` 不等高（矮 1.38pt、中心偏上 0.5pt）。上屏判定，必要时把 13×13 改 14×14（一行）。
+3. **todos「本周」仍随系统未改**：`TodoBucketing` 的 `.weekOfYear`（`TodosModule` 传 `autoupdatingCurrent`）与进度块「本周」（`WorkdayCalendar`，docs/31 第 8 条）都仍随系统 `firstWeekday`——§明确不做 1 点名，供用户决定是否下一轮一并改。
+4. 本文档 §接口与数据形状 的行号注释已漂移（`:966/:1563/:1612` → 实际 `:986/:1587/:1639`），本轮未动（T6-fix 披露项）。
 
 ## 已知限制
 
@@ -254,6 +313,10 @@ struct HostSurfaceRow {
 3. **面板高会随月份变**（既有行为）：周一起始下 2026-11 是 6 周 → 首页日历行 268（周日起始下 232）。docs/30 §做法 机制六 已接受该行为，本次不改。
 4. **笔记 tab 的换装是视觉裁量**（D-07）：用户点名的是隔空投送那一枚；笔记这枚换 `square.and.pencil` 是为了消掉「两枚同形」，若用户要保留原样，回滚是一行。
 5. **`HostSurfaceRow.symbolName` 改名为 `icon` 且类型变 `PanelIcon`**：这是行表字段的一次小改型，任何外部（未来）按字符串读它的代码要一起改；今天仓内只有渲染点与用例，已一并更新。
+6. **快照语义**：`Calendar.gourdDisplay` 是 `Calendar.current` 的**值拷贝**（不是 `autoupdatingCurrent`）；会话中途改系统时区 / 区域要等视图重建才跟随（周起点本就不跟随，见 D-01；改动前的 `private let calendar = Calendar.current` 是同一形态，非本次引入）。
+7. **`.symbol("")` 会画出空的 24×24 强调色底**：`ModuleSymbolChip` 只判 `nil`，不再做空串防御；今天不可达（`ModuleManifest` 解析期已拒空名 + 模块行调用点已折 `nil`），责任在调用点。
+8. **渲染用例的环境前提**：`HomeStripLayoutTests` 那条量视口的用例（`testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight`），夹具按 **GMT** 造月首、视图按本机时区归月——宿主机需**东于 GMT**（本机 UTC+8 满足）；换西半球机器会红（既有耦合，本轮沿用）。
+9. **日粒度路径仍走 `Calendar.current`**：滚动落点与月首 / 日首归一化（`HomeCalendarRow` 的滚动靶、`MonthGridView` 的 `.id` 与 `startOfMonth`）与周起点无关，本次**不动**（两枚日历同时区，日粒度结果逐字相同）。
 
 ## 验收标准
 
@@ -264,7 +327,7 @@ struct HostSurfaceRow {
 - **A5** tab 条第 8 枚（投送暂存）显示为同心弧字形：一眼可读出「圆心点 + 三段弧 + 底部开口」，非选中档灰、选中档跟随强调色；与参考图并排同构。
 - **A6** tab 条第 5 枚（笔记）不再是「圆角卡片 + 实心顶带」的轮廓，与第 4 枚（日历）一眼可分。
 - **A7** 设置页「面板组件」节的投送暂存行与笔记行 chip 与面板上那两枚**同图**。
-- **A8** 全量单测绿（`xcodebuild test … -only-testing:DynamicIslandTests`），且既有用例一条不改口径。
+- **A8** 全量单测绿（`xcodebuild test … -only-testing:DynamicIslandTests`），且除那条渲染用例（`testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight`，其夹具与月份 / 周数表随产品档切换）外，既有用例口径零改。
 - **A9** 未列入改动的图标逐字不变（Home / 启动台 / 通知 / 待办 / 终端 / 日历 / 剪贴板档）。
 
 ## 决策摘要
@@ -272,7 +335,7 @@ struct HostSurfaceRow {
 | ID | 决策 | 来源 | 理由 |
 |----|------|------|------|
 | D-01 | 面板日历的周起点**固定周一**（不再跟随系统 `firstWeekday`） | 用户 | 用户 2026-10-09：「两个日历面板，开始时间都是从周一开始」 |
-| D-02 | 周起点的唯一落点 = 新增的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`），消费点改**默认值**而不是改调用点 | agent | 一个常量只写一处；`MonthGridLayout` 签名不变，既有用例零改 |
+| D-02 | 周起点的唯一落点 = 新增的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`），消费点改**默认值**而不是改调用点 | agent | 一个常量只写一处；`MonthGridLayout` 签名不变，除那条渲染用例（`testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight`，其夹具与月份 / 周数表随产品档切换）外，既有用例口径零改 |
 | D-03 | 进度块「本周」的周区间**不动**（仍随系统自然周） | agent | 用户点的是「两个日历面板」；改了会动「剩 N 天」的数字（§明确不做 1，收尾报告点名） |
 | D-04 | 隔空投送（投送暂存）tab 的图标改为 macOS 控制中心那枚字形 | 用户 | 用户 2026-10-09：「隔空投送使用 mac 系统这种图标」+ 目标截图 |
 | D-05 | 字形**自绘**（`AirDropGlyph`，Canvas + `.foreground` 着色），不用 SF Symbol / 不用彩色 App 图标 / 不抠系统资源 | agent | 本机 macOS 27 无 `airdrop` 符号（实测 nil）；共享服务 `.image` 是彩色 App 图标（单色条上不同套） |
@@ -280,3 +343,5 @@ struct HostSurfaceRow {
 | D-07 | 与日历撞脸的**笔记 tab** 一并换成 `square.and.pencil`（tab 与设置行 chip 同改） | agent | 用户红框圈的就是日历与笔记这两枚并说「两个图片没有区别，要调整」；只换隔空投送那枚不解决他看到的那对（本次唯一视觉裁量，收尾报告点名） |
 | D-08 | `MonthGridView` 的表头旋转抽成纯函数 `MonthGridLayout.weekdaySymbols(for:)` | agent | 让「表头顺序」第一次可断言（否则它埋在视图私有属性里，回归测试钉不住） |
 | D-09 | 设置页侧栏的页图标（`SettingsTab.notes` 等）不改 | agent | docs/29 T5 的口径只把「跟面板走」钉在「面板组件」节的行 chip 上；侧栏图标是设置页的图标 |
+| D-10 | `.airDrop` 的**交付尺寸 13×13pt**（判据 = 与相邻 13pt 符号**视觉等高**；出处 = T3 渲图实测：字形墨迹 12.4×11.3pt，落在实拍 tab 条 11–13pt 区间）；`PanelIconView` 只给 `.airDrop` 加框、`.symbol` 档**不加框**（既有符号的排布逐字不变） | agent（T3 渲图实测） | 13pt 与相邻最小符号（`terminal` 11.7pt）同档；14pt 会高过 `terminal` / `notes` 一档——热区与 chip 等高待上屏复核（§实际交付 · 遗留项 2） |
+| D-11 | `AirDropGlyphMetrics` 的四个量取值（`0.13` / `[0.33, 0.65, 0.90]` / `0.113` / `70°`）是**契约**（`AirDropGlyphMetricsTests` 逐字钉）；实例只读镜像只为「视图按实例读几何、用例按静态常量钉几何」两种读法都能被断言而存在（沿用仓库既有先例：为可断言的契约放开可见性，而不是为测试改行为） | agent（T5） | 量取值来自参考图量取、不是可推导的比例——只断言「递增 / 落在某区间」会放过把比例换成别的量取值 |

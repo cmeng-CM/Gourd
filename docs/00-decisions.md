@@ -408,7 +408,7 @@ tabSwitchResize size=887.0x868.0   resizeWindow→noop h=872.0        ← 面板
 
 **背景**：用户 2026-10-09 反馈「日历和隔空投送两个图片没有区别，要调整，隔空投送使用 mac 系统这种图标」（红框圈住 tab 条上日历与笔记两枚，另附 macOS 控制中心那枚隔空投送字形截图）。三条本机 macOS 27 实测事实把「用现成的」这条路封死：① SF Symbols **没有** AirDrop 这一枚——`NSImage(systemSymbolName: "airdrop")` 本机为 `nil`（`airdrop.circle` 等变体同样没有）；② `NSSharingService(named: .sendViaAirDrop).image` 存在，但它是那枚**彩色 App 图标**（蓝色圆角方块 + 白色扇形），单色 tab 条上不同套，也无法跟随 `foregroundStyle` 的选中 / 未选中档；③ 现成波纹符号（`dot.radiowaves.left.and.right` 一类）的弧**每侧 3 条、共 6 条弧 + 圆心点**，只在**左右两个方向**张开、**没有底部开口**，与控制中心那枚「圆心点 + 三段同心弧 + 底部开口」**不同构**。
 
-**决策**：字形**自绘**——`AirDropGlyph`（SwiftUI `Canvas` + `.foreground` 着色，比例按参考图量取：点 0.13R、三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口每侧 35°）；图标第一次有类型（`enum PanelIcon { case symbol(String), airDrop }`），面板图标字面量收进 `PanelIconTable` 这一张**唯一字面量表**（视图取它、用例钉它）——**表收的是面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**（投送暂存 / 终端 / 剪贴板 / 笔记），取色器行与首页内置日历行的 chip、以及模块 tab / 模块行的图标（manifest 投影）走各自既有来源。tab 条与设置页「面板组件」节的行 chip 同图。与日历撞脸的**笔记 tab 换 `square.and.pencil`**（尖铅笔轮廓与日历的「圆角卡片 + 点阵」一眼可分；本次唯一的视觉裁量，回滚是一行）。
+**决策**：字形**自绘**——`AirDropGlyph`（SwiftUI `Canvas` + `.foreground` 着色，比例按参考图量取：点 0.13R、三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口每侧 35°）；图标第一次有类型（`enum PanelIcon { case symbol(String), airDrop }`），面板图标字面量收进 `PanelIconTable` 这一张**唯一字面量表**（视图取它、用例钉它）——**表收的是面板条上的宿主元素**（Home / 投送暂存 / 用量 / 笔记 / 剪贴板档 / 终端 / 扩展 tab 缺名回落）**+ 设置页宿主行表里引用它的四条宿主行**（投送暂存 / 终端 / 剪贴板 / 笔记），取色器行与首页内置日历行的 chip、以及模块 tab / 模块行的图标（manifest 投影）走各自既有来源。tab 条与设置页「面板组件」节的行 chip 同图。与日历撞脸的**笔记 tab 换 `square.and.pencil`**（尖铅笔轮廓与日历的「圆角卡片 + 点阵」一眼可分；本次唯一的视觉裁量，回滚是一行）。
 
 **后果**：
 
