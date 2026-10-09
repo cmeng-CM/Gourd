@@ -24,13 +24,14 @@ import SwiftUI
 
 struct TabButton: View {
     let label: String
-    let icon: String
+    /// 面板上那一枚图标（p9 T3：类型化——SF Symbol 与隔空投送自绘字形统一由 `PanelIconView` 渲染）。
+    let icon: PanelIcon
     let selected: Bool
     let onClick: () -> Void
     
     var body: some View {
         Button(action: onClick) {
-            Image(systemName: icon)
+            PanelIconView(icon: icon)
                 .contentShape(Capsule())
         }
         .buttonStyle(PlainButtonStyle())
@@ -38,7 +39,7 @@ struct TabButton: View {
 }
 
 #Preview {
-    TabButton(label: "Home", icon: "tray.fill", selected: true) {
+    TabButton(label: "Home", icon: .symbol("tray.fill"), selected: true) {
         print("Tapped")
     }
 }

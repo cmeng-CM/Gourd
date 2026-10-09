@@ -28,12 +28,14 @@ import AppKit
 struct TabModel: Identifiable {
     let id: String
     let label: String
-    let icon: String
+    /// 面板上那一枚图标（p9 T3）：SF Symbol 与自绘字形（隔空投送）用同一个类型表达，
+    /// 渲染点统一走 `PanelIconView`。取值来源见 `PanelIconTable`（唯一一份字面量）。
+    let icon: PanelIcon
     let view: NotchViews
     let experienceID: String?
     let accentColor: Color?
 
-    init(label: String, icon: String, view: NotchViews, experienceID: String? = nil, accentColor: Color? = nil) {
+    init(label: String, icon: PanelIcon, view: NotchViews, experienceID: String? = nil, accentColor: Color? = nil) {
         self.id = experienceID.map { "extension-\($0)" } ?? "system-\(view)-\(label)"
         self.label = label
         self.icon = icon
@@ -250,12 +252,14 @@ struct TabSelectionView: View {
             for payload in extensionTabPayloads {
                 guard let tab = payload.descriptor.tab else { continue }
                 let accent = payload.descriptor.accentColor.swiftUIColor
-                let iconName = tab.iconSymbolName ?? "puzzlepiece.extension"
+                // 扩展 tab 的图标：扩展自带的符号名**逐字优先**，缺名才回落到唯一图标表里的
+                // `extensionFallback`（不固定成回落常量——每个扩展的画符仍是它自己那枚）。
+                let icon = tab.iconSymbolName.map { PanelIcon.symbol($0) } ?? PanelIconTable.extensionFallback
                 extensionSlots.append((
                     id: "extension-\(payload.descriptor.id)",
                     payload: TabModel(
                         label: tab.title,
-                        icon: iconName,
+                        icon: icon,
                         view: .extensionExperience,
                         experienceID: payload.descriptor.id,
                         accentColor: accent
@@ -265,29 +269,31 @@ struct TabSelectionView: View {
         }
 
         let slots = PanelTabSequence.slots(
-            home: homeTabVisible ? TabModel(label: "Home", icon: "house.fill", view: .home) : nil,
-            shelf: dynamicShelf ? TabModel(label: "Shelf", icon: "tray.fill", view: .shelf) : nil,
+            home: homeTabVisible ? TabModel(label: "Home", icon: PanelIconTable.home, view: .home) : nil,
+            shelf: dynamicShelf ? TabModel(label: "Shelf", icon: PanelIconTable.shelf, view: .shelf) : nil,
             usage: Defaults[.enableLLMUsageFeature]
-                ? TabModel(label: "Usage", icon: "chart.bar.doc.horizontal", view: .llmUsage)
+                ? TabModel(label: "Usage", icon: PanelIconTable.usage, view: .llmUsage)
                 : nil,
             clipboard: notesOrClipboardTabVisible
                 ? TabModel(
                     label: enableNotes ? "Notes" : "Clipboard",
-                    icon: enableNotes ? "note.text" : "doc.on.clipboard",
+                    // 笔记档的字面量仍在这里（换装是下一个任务 / T4 的事）：本任务只把类型包成 `PanelIcon`。
+                    icon: enableNotes ? .symbol("note.text") : PanelIconTable.clipboard,
                     view: .notes)
                 : nil,
             terminal: enableTerminalFeature
-                ? TabModel(label: "Terminal", icon: "apple.terminal", view: .terminal)
+                ? TabModel(label: "Terminal", icon: PanelIconTable.terminal, view: .terminal)
                 : nil,
             extensions: extensionSlots,
             // 模块内核 tab（接缝 S1）：注册表投影，`experienceID` 复用为模块 id（`TabModel` 的 id
             // 由 experienceID 派生，`ForEach` 零改）。只含 active 且声明 `.expanded` 的模块；
             // 条目已按 `panelRank` 排好，`defaultOrder` 直接取投影的 `order`（同一算式，不重算）。
+            // 图标同样是投影来的符号名（不在 `PanelIconTable` 里，见该表注释）。
             modules: ModuleRegistry.shared.tabEntries.map { entry in
                 (
                     id: entry.id,
                     defaultOrder: entry.order,
-                    payload: TabModel(label: entry.label, icon: entry.symbolName, view: .module, experienceID: entry.id)
+                    payload: TabModel(label: entry.label, icon: .symbol(entry.symbolName), view: .module, experienceID: entry.id)
                 )
             }
         )
