@@ -391,7 +391,7 @@ tabSwitchResize size=887.0x868.0   resizeWindow→noop h=872.0        ← 面板
 
 **背景**：用户 2026-10-09 反馈「两个日历面板，开始时间都是从周一开始」（附展开面板日历页与首页整宽日历行两张截图，表头都是「日 一 二 三 四 五 六」，网格首格落在周日）。此前这条链路上没有任何产品口径：`MonthGridView` / `StandaloneCalendarView` 持有的日历与 `MonthGridLayout` 一族纯函数的 `calendar:` 默认参数全是 `Calendar.current`，按月取数窗口（`CalendarManager.updateMonthEvents`）走默认值同源跟随。本机 zh_CN 下 `Calendar.current.firstWeekday == 1`（周日）——这是**系统口径而非产品口径**（Foundation 的 1-based 口径：1 = 周日、2 = 周一），照抄系统等于照抄出用户要改掉的那个结果。
 
-**决策**：两个日历面板（首页整宽日历行 + 展开面板日历页）的**周起点固定周一**，唯一落点是新增的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`）。消费点全部改为从它取数——`MonthGridLayout` 七函数与 `HomeCalendarRow.rowHeight` 的 `calendar:` **默认值**、`MonthGridView` / `StandaloneCalendarView` 持有的日历、`CalendarManager.updateMonthEvents` 的按月窗口；**改默认值而不是改调用点，`MonthGridLayout` 签名一字不动**，显式注入 `Calendar` 的调用点与既有用例零改。进度块「本周」与待办模块的「本周」分桶**不动**（两者仍随系统 `firstWeekday`，见 [34](34-calendar-week-and-panel-icons.md) §明确不做 1）。
+**决策**：两个日历面板（首页整宽日历行 + 展开面板日历页）的**周起点固定周一**，唯一落点是新增的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`）。消费点全部改为从它取数——`MonthGridLayout` 七函数与 `HomeCalendarRow.rowHeight(forMonth:calendar:)` 的 `calendar:` **默认值**、`MonthGridView` / `StandaloneCalendarView` 持有的日历、`CalendarManager.updateMonthEvents` 的按月窗口；**改默认值而不是改调用点，`MonthGridLayout` 签名一字不动**，显式注入 `Calendar` 的调用点零改；既有用例除那条渲染用例（`HomeStripLayoutTests.testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight`，其夹具随产品档切换，见后果）外，其余口径零改。进度块「本周」与待办模块的「本周」分桶**不动**（两者仍随系统 `firstWeekday`，见 [34](34-calendar-week-and-panel-icons.md) §明确不做 1）。
 
 **后果**：
 
@@ -406,13 +406,13 @@ tabSwitchResize size=887.0x868.0   resizeWindow→noop h=872.0        ← 面板
 
 **状态**：已采纳（2026-10-09）
 
-**背景**：用户 2026-10-09 反馈「日历和隔空投送两个图片没有区别，要调整，隔空投送使用 mac 系统这种图标」（红框圈住 tab 条上日历与笔记两枚，另附 macOS 控制中心那枚隔空投送字形截图）。三条本机 macOS 26 实测事实把「用现成的」这条路封死：① SF Symbols **没有** AirDrop 这一枚——`NSImage(systemSymbolName: "airdrop")` 本机为 `nil`（`airdrop.circle` 等变体同样没有）；② `NSSharingService(named: .sendViaAirDrop).image` 存在，但它是那枚**彩色 App 图标**（蓝色圆角方块 + 白色扇形），单色 tab 条上不同套，也无法跟随 `foregroundStyle` 的选中 / 未选中档；③ 现成波纹符号（`dot.radiowaves.left.and.right` 一类）是左右开口、只有两条弧，与控制中心那枚「圆心点 + 三段同心弧 + 底部开口」**不同构**。
+**背景**：用户 2026-10-09 反馈「日历和隔空投送两个图片没有区别，要调整，隔空投送使用 mac 系统这种图标」（红框圈住 tab 条上日历与笔记两枚，另附 macOS 控制中心那枚隔空投送字形截图）。三条本机 macOS 27 实测事实把「用现成的」这条路封死：① SF Symbols **没有** AirDrop 这一枚——`NSImage(systemSymbolName: "airdrop")` 本机为 `nil`（`airdrop.circle` 等变体同样没有）；② `NSSharingService(named: .sendViaAirDrop).image` 存在，但它是那枚**彩色 App 图标**（蓝色圆角方块 + 白色扇形），单色 tab 条上不同套，也无法跟随 `foregroundStyle` 的选中 / 未选中档；③ 现成波纹符号（`dot.radiowaves.left.and.right` 一类）的弧**每侧 3 条、共 6 条弧 + 圆心点**，只在**左右两个方向**张开、**没有底部开口**，与控制中心那枚「圆心点 + 三段同心弧 + 底部开口」**不同构**。
 
-**决策**：字形**自绘**——`AirDropGlyph`（SwiftUI `Canvas` + `.foreground` 着色，比例按参考图量取：点 0.13R、三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口每侧 35°）；图标第一次有类型（`enum PanelIcon { case symbol(String), airDrop }`），字面量全部收进 `PanelIconTable` 这一张**唯一字面量表**（视图取它、用例钉它），tab 条与设置页「面板组件」节的行 chip 同图。与日历撞脸的**笔记 tab 换 `square.and.pencil`**（尖铅笔轮廓与日历的「圆角卡片 + 点阵」一眼可分；本次唯一的视觉裁量，回滚是一行）。
+**决策**：字形**自绘**——`AirDropGlyph`（SwiftUI `Canvas` + `.foreground` 着色，比例按参考图量取：点 0.13R、三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口每侧 35°）；图标第一次有类型（`enum PanelIcon { case symbol(String), airDrop }`），面板图标字面量收进 `PanelIconTable` 这一张**唯一字面量表**（视图取它、用例钉它）——**表收的是面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**（投送暂存 / 终端 / 剪贴板 / 笔记），取色器行与首页内置日历行的 chip、以及模块 tab / 模块行的图标（manifest 投影）走各自既有来源。tab 条与设置页「面板组件」节的行 chip 同图。与日历撞脸的**笔记 tab 换 `square.and.pencil`**（尖铅笔轮廓与日历的「圆角卡片 + 点阵」一眼可分；本次唯一的视觉裁量，回滚是一行）。
 
 **后果**：
 
 - **字形是近似、非逐像素一致**：比例来自用户给的参考图量取（原图字形 ≈30px 宽的低分辨率截图，有 ±1px 级误差），见 [34](34-calendar-week-and-panel-icons.md) §已知限制 1。
 - **用户若要回滚笔记那枚是一行**：改回 `note.text` 只需动 `PanelIconTable.notes` 一处（D-07）。
-- **三处同义图标本轮不动**：`ShelfInlineLiveActivity` 折叠态投送反馈图标、`NotchNotesView` 搜索框占位图标、`MinimalisticMusicPlayerView` Notes 明细行图标——它们不是「面板元素的图标」（[34](34-calendar-week-and-panel-icons.md) §明确不做 6）。
+- **三处同义图标本轮不动**：`ShelfInlineLiveActivity` 折叠态投送反馈图标、`NotchNotesView` 笔记页的空态提示图标（无笔记时 `note.text`、搜索无结果时 `magnifyingglass`）、`MinimalisticMusicPlayerView` Notes 明细行图标——它们不是「面板元素的图标」（[34](34-calendar-week-and-panel-icons.md) §明确不做 6）。
 - 实测记录、备选与取舍、验收标准详见 [34](34-calendar-week-and-panel-icons.md)。

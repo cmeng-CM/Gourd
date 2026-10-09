@@ -73,11 +73,11 @@ Calendar.gourdDisplay = Calendar.current，但 firstWeekday = 2（Foundation 的
 
 ### 机制二 · 面板图标：一枚自绘字形 + 一个图标类型
 
-**先定的三件事**（都在本机 macOS 26 上实测）：
+**先定的三件事**（都在本机 macOS 27 上实测）：
 
 1. SF Symbols **没有** AirDrop 这一枚——`NSImage(systemSymbolName: "airdrop")` 返回 `nil`（`airdrop.circle` 等变体同样没有）。
 2. `NSSharingService(named: .sendViaAirDrop).image` 存在，但它是那枚**彩色 App 图标**（蓝色圆角方块 + 白色扇形），tab 条是单色模板底，放上去与其余七枚不是一套。
-3. `dot.radiowaves.left.and.right` 一类现成符号的弧线是**左右**开口、且只有两条，与控制中心那枚「同心三段弧 + 底部开口」不同构。
+3. `dot.radiowaves.left.and.right` 一类现成符号的弧**每侧 3 条、共 6 条弧 + 圆心点**，只在**左右两个方向**张开、**没有底部开口**，与控制中心那枚「同心三段弧 + 底部开口」不同构。
 
 因此字形**自绘**：`AirDropGlyph`（SwiftUI `Canvas`，`.foreground` 着色 → 自动跟随 tab 的选中/未选中档）。几何按用户给的控制中心截图量取，以字形外缘半径 `R` 为单位：
 
@@ -107,7 +107,7 @@ enum PanelIcon: Equatable { case symbol(String); case airDrop }
 | 日历 tab（模块 manifest `CalendarModule`） | `calendar` | **不动**——日历那枚是最标准的日历表示，本次换的是「跟它撞脸的那一枚」 |
 | 设置页侧栏「笔记」页图标（`SettingsTab.notes`） | `note.text` | 不动——侧栏图标是**设置页**的图标，不是面板元素（docs/29 T5 只把「面板元素」的口径钉在行 chip 上） |
 
-**唯一图标来源**：表里**每个字面量都收在一处**，视图取它、用例钉它：
+**唯一图标来源**：表收的是**面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**（投送暂存 / 终端 / 剪贴板 / 笔记），每个字面量只收在一处，视图取它、用例钉它：
 
 ```swift
 // DynamicIsland/components/Tabs/PanelIcon.swift
@@ -122,7 +122,7 @@ enum PanelIconTable {
 }
 ```
 
-`TabSelectionView.slots(...)` 与 `ModuleSettingsSection.hostPanelRows` 都引用这张表（不再各自写字面量），用例直接断言表——这就是「改回 `tray.fill` 会红」的依据。**模块 tab 的图标不在这张表里**：它们由 manifest 投影（`ModuleRegistry.tabEntries` 的 `symbolName`），链路不变。
+`TabSelectionView.slots(...)` 与 `ModuleSettingsSection.hostPanelRows` 都引用这张表（不再各自写字面量），用例直接断言表——这就是「改回 `tray.fill` 会红」的依据。**表外还有两类既有来源**：取色器行（`ModuleSettingsSection.swift` 的 `.symbol("eyedropper")`）与首页内置日历行的 chip（同文件 `HomeCalendarSettingsRow` 的 `.symbol("calendar")`）是直接字面量；**模块 tab 的图标不在这张表里**：它们与模块行 chip 一样由 manifest 投影（`ModuleRegistry.tabEntries` 的 `symbolName` / `manifest.icon.name`），链路不变。
 
 **设置页 chip 的第三个调用点**（`ModuleSettingsSection` 的模块行）传的是 `manifest.icon.name ?? ""`，现状靠「空名不画」——改型后该参数是 `PanelIcon?`（`nil` = 不画），行为逐字保留。
 
@@ -136,7 +136,7 @@ enum PanelIconTable {
 
 **隔空投送字形**
 
-1. **找现成 SF Symbol**：不选。这一枚在本机 macOS 26 上不存在（实测 `nil`）。
+1. **找现成 SF Symbol**：不选。这一枚在本机 macOS 27 上不存在（实测 `nil`）。
 2. **用 `NSSharingService` 的彩色 App 图标**：不选。单色面板条上它与其余七枚不同套，且选中/未选中档无法跟随 `foregroundStyle`。
 3. **抠系统资源 / 私有 API**：不选。脆（系统版本一动路径就变），且与 ADR-0010「私有 API 收敛而非清零」的方向相反。
 4. **自绘字形（本次）**：选它。模板着色、比例可控、零依赖；代价是「近似 Apple 那枚」而不是逐像素一致（记 §已知限制）。
@@ -196,9 +196,10 @@ struct PanelIconView: View { let icon: PanelIcon }
 /// 由 `glyph-structure.py` 的像素检查自动判定（T5 的几何断言只管开口宽度 70° 与三段半径）。
 struct AirDropGlyph: View { var body: some View { /* Canvas */ } }
 
-/// 面板图标表（唯一一份字面量）：视图取它、用例钉它。
-/// 只收**宿主元素**（Home / 投送暂存 / 用量 / 笔记 / 剪贴板 / 终端 / 扩展回落）；
-/// 模块 tab 的图标仍由 manifest 投影（`ModuleRegistry.tabEntries`）。
+/// 面板图标表（唯一一份面板图标字面量）：视图取它、用例钉它。
+/// 表收的是**面板条上的宿主元素 + 设置页宿主行表里引用它的四条宿主行**；
+/// 取色器行与首页内置日历行的 chip 是表外的直接字面量，
+/// 模块 tab / 模块行的图标仍由 manifest 投影（`ModuleRegistry.tabEntries`）。
 enum PanelIconTable { … }   // 取值见 §做法 机制二「唯一图标来源」
 ```
 
@@ -237,7 +238,7 @@ struct HostSurfaceRow {
 3. **日历 tab 的图标与 `CalendarModule` 的 manifest 图标不动**（仍是 `calendar`）。
 4. **不动其余 tab 的图标**（Home / 启动台 / 通知 / 待办 / 终端 / 用量 / 扩展 / 剪贴板档的 `doc.on.clipboard`），也不动设置页侧栏的页图标。
 5. **不动 `EventListView.clockLabel(for:calendar:)`**（同文件里另一处 `calendar: Calendar = .current`，2026-10-09 复核：它的宿主是 `EventListView`，本节初稿写成 `HomeTodayListLayout`）：它算事件行的时刻文案（按日粒度），与周起点无关。**判据要把它排除在外**，否则「源码里不再有 `.current` 默认值」这条检查永远不成立。
-6. **`tray.fill` / `note.text` 另外三处同义落点本轮不动**（它们不是「面板元素的图标」）：`ShelfInlineLiveActivity.swift` 的折叠态投送反馈图标（描述的是「文件正落进暂存」这个动作）、`NotchNotesView.swift` 的搜索框占位图标、`MinimalisticMusicPlayerView.swift` 的 Notes 明细行图标。**收尾报告里点名**，用户要一并换再说。
+6. **`tray.fill` / `note.text` 另外三处同义落点本轮不动**（它们不是「面板元素的图标」）：`ShelfInlineLiveActivity.swift` 的折叠态投送反馈图标（描述的是「文件正落进暂存」这个动作）、`NotchNotesView.swift` 的笔记页空态提示图标、`MinimalisticMusicPlayerView.swift` 的 Notes 明细行图标。**收尾报告里点名**，用户要一并换再说。
 7. **不引入第三方图标资源、不抠系统私有资源**；不改 `mediaremote-adapter` 等上游件。
 8. **不动日期轮（`WheelPickerIndexMath`）与农历 / 节假日链路**：它们与「周起点」无关（按日粒度）。
 9. **不改 `MonthGridLayout` 任何函数的签名**，也不改既有用例里显式注入的 `Calendar`（唯一例外：渲染用例 `testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight` 的夹具随产品档切换，见 §背景与目标 · 关键约束）。
@@ -274,7 +275,7 @@ struct HostSurfaceRow {
 | D-02 | 周起点的唯一落点 = 新增的 `Calendar.gourdDisplay`（`Calendar.current` + `firstWeekday = 2`），消费点改**默认值**而不是改调用点 | agent | 一个常量只写一处；`MonthGridLayout` 签名不变，既有用例零改 |
 | D-03 | 进度块「本周」的周区间**不动**（仍随系统自然周） | agent | 用户点的是「两个日历面板」；改了会动「剩 N 天」的数字（§明确不做 1，收尾报告点名） |
 | D-04 | 隔空投送（投送暂存）tab 的图标改为 macOS 控制中心那枚字形 | 用户 | 用户 2026-10-09：「隔空投送使用 mac 系统这种图标」+ 目标截图 |
-| D-05 | 字形**自绘**（`AirDropGlyph`，Canvas + `.foreground` 着色），不用 SF Symbol / 不用彩色 App 图标 / 不抠系统资源 | agent | 本机 macOS 26 无 `airdrop` 符号（实测 nil）；共享服务 `.image` 是彩色 App 图标（单色条上不同套） |
+| D-05 | 字形**自绘**（`AirDropGlyph`，Canvas + `.foreground` 着色），不用 SF Symbol / 不用彩色 App 图标 / 不抠系统资源 | agent | 本机 macOS 27 无 `airdrop` 符号（实测 nil）；共享服务 `.image` 是彩色 App 图标（单色条上不同套） |
 | D-06 | 图标获得类型：`enum PanelIcon { case symbol(String), airDrop }` + `PanelIconView` 统一渲染；`TabModel.icon` / `TabButton.icon` / `HostSurfaceRow.symbolName→icon` 跟着改型 | agent | 裸字符串表达不了自绘字形；类型化后「同一面板元素同一枚图标」可断言 |
 | D-07 | 与日历撞脸的**笔记 tab** 一并换成 `square.and.pencil`（tab 与设置行 chip 同改） | agent | 用户红框圈的就是日历与笔记这两枚并说「两个图片没有区别，要调整」；只换隔空投送那枚不解决他看到的那对（本次唯一视觉裁量，收尾报告点名） |
 | D-08 | `MonthGridView` 的表头旋转抽成纯函数 `MonthGridLayout.weekdaySymbols(for:)` | agent | 让「表头顺序」第一次可断言（否则它埋在视图私有属性里，回归测试钉不住） |
