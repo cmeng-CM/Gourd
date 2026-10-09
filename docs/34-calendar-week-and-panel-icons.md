@@ -68,7 +68,7 @@ Calendar.gourdDisplay = Calendar.current，但 firstWeekday = 2（Foundation 的
 **这次连带的既有承诺**（写在这里以免下次读到时以为是漏的）：
 
 - `MonthGridLayout` 的**签名**不变、**显式传日历的调用点**一处不改——它们表达的正是「算式与周起点无关」，本次只是把默认值指向产品档。
-- 同文件里 `HomeTodayListLayout.clockLabel(for:calendar:)` 也是 `calendar: Calendar = .current`，但它算的是**今日清单的时刻文案**（按日粒度），与周起点无关，**不动**。
+- 同文件里 `EventListView.clockLabel(for:calendar:)` 也是 `calendar: Calendar = .current`，但它算的是**事件行的时刻文案**（按日粒度），与周起点无关，**不动**。
 - 唯一要跟着改的既有用例是 `HomeStripLayoutTests.testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight`（理由见 §背景与目标 · 关键约束）。
 
 ### 机制二 · 面板图标：一枚自绘字形 + 一个图标类型
