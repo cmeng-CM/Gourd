@@ -238,6 +238,17 @@
 //    （这条是 T9 的变异验证靶子：直径恒 46 → 窄档那条红）；
 //  - **分色取自面板既有的系统色家族**：CPU 青 / 内存 紫 / GPU 琥珀（不新造 hex）。
 //
+//  p9 / T5 追加（面板图标表的契约用例——`PanelIconTests` 类：docs/34 §做法 机制二「唯一图标来源」/
+//  §验收标准 A7、A9）：
+//  - **七项逐字**：`PanelIconTable` 每一档的字面量——`shelf = .airDrop`、`notes = .symbol("square.and.pencil")`
+//    是本批两处换装（改回 `tray.fill` / `note.text` 即红），其余五项 = 未改动的图标逐字不变
+//    （A9 的宿主侧一半）；
+//  - **面板与设置行同一枚**：`hostPanelRows` 五行的 `.icon` 逐个对上（四条面板元素取表里的同一常量、
+//    取色器行是内联字面量——它的渲染点在标题栏图标行、不是面板 tab，不进表）——设置页 chip 与
+//    面板 tab 同图（A7）的判据；
+//  - **符号可解析**：表里 `.symbol` 档 + `ModuleRegistry.tabEntries` 投影来的 `symbolName` 逐个
+//    `NSImage(systemSymbolName:)` 非 nil；`.airDrop` 是自绘字形、**没有符号名**，按档位分辨、不进符号表。
+//
 //  三条刻意写死的口径（改动前先读）：
 //
 //  1. **注册一律走真门 `KernelBootstrap.enablementGate(registry:)`**：用旧门
@@ -3846,5 +3857,149 @@ private final class SurfacePanelProbeB: TakeoverProbeBase {
 private final class SurfaceDualProbeModule: TakeoverProbeBase {
     override class var manifest: ModuleManifest {
         TakeoverFixture.manifest(shortID: "probe-surface-dual", surfaces: [.home, .expanded], order: 5)
+    }
+}
+
+// MARK: - 面板图标表（p9 / T5）
+
+/// **面板图标表的契约用例**（docs/34-calendar-week-and-panel-icons.md §做法 机制二「唯一图标来源」/
+/// §验收标准 A7、A9；工作流 p9 / T5）：数据源是生产表本身——`PanelIconTable` 的七项与
+/// `ModuleSettingsSection.hostPanelRows` 五行的 `.icon`（与本文件其余几条「表对表」用例同一口径，
+/// 表侧把图标写错才会红）。
+///
+/// 三层各钉一件事：
+/// - **七项逐字**（`testPanelIconTablePinsAllSevenEntriesVerbatim`）：本批的两处换装
+///   （`shelf = .airDrop`、`notes = .symbol("square.and.pencil")`）改回 `tray.fill` / `note.text` 即红；
+///   其余五项 = 「未改动的图标逐字不变」（A9 的宿主侧一半）；
+/// - **面板与设置行同一枚**（`testHostPanelRowsCarryThePanelIconOfTheirElement`）：设置页
+///   「面板组件」节的 chip 与面板 tab 同图（A7）——四条面板元素取表里的**同一常量**，
+///   取色器行是内联字面量（它的渲染点在标题栏图标行、不是面板 tab，不进表）；
+/// - **符号可解析**（`testEverySymbolThePanelBarCanShowResolves`）：面板条上可能出现的每一枚
+///   SF Symbol 都要能被系统符号表解析（写错名的那一枚在面板上只剩空白）；`.airDrop` 是自绘字形、
+///   **没有符号名**，按档位分辨、不喂给符号解析（喂了必 nil，那是判据用错不是产品有错）。
+@MainActor
+final class PanelIconTests: XCTestCase {
+
+    override func setUp() async throws {
+        try await super.setUp()
+        // 注册表是单例：前一个用例注册 / 激活过的模块会污染 `tabEntries` 投影。订阅表一起清干净
+        // （注册表空时起桥 = 只 `removeAll()`，与 `TakeoverEnablementTests` 的 setUp 同一口径）。
+        await ModuleRegistry.shared.deactivateAll()
+        KernelBootstrap.startTakeoverBridge(registry: ModuleRegistry.shared)
+    }
+
+    override func tearDown() async throws {
+        await ModuleRegistry.shared.deactivateAll()
+        KernelBootstrap.startTakeoverBridge(registry: ModuleRegistry.shared)
+        try await super.tearDown()
+    }
+
+    /// `PanelIconTable` 七项逐字：表是**唯一一份**图标字面量（视图取它、用例钉它——docs/34 §做法
+    /// 机制二）。逐条写死、不循环遍历：名字与取值绑在一行里，改错哪一档一眼能看出是哪条红。
+    func testPanelIconTablePinsAllSevenEntriesVerbatim() {
+        XCTAssertEqual(PanelIconTable.home, .symbol("house.fill"), "Home —— 未改动，逐字沿用")
+        XCTAssertEqual(
+            PanelIconTable.shelf,
+            .airDrop,
+            "投送暂存 —— 本批换装：自绘隔空投送字形（改回 `tray.fill` 即红）"
+        )
+        XCTAssertEqual(
+            PanelIconTable.usage,
+            .symbol("chart.bar.doc.horizontal"),
+            "用量 —— 未改动，逐字沿用"
+        )
+        XCTAssertEqual(
+            PanelIconTable.clipboard,
+            .symbol("doc.on.clipboard"),
+            "剪贴板档 —— 未改动，逐字沿用"
+        )
+        XCTAssertEqual(
+            PanelIconTable.notes,
+            .symbol("square.and.pencil"),
+            "笔记 —— 本批换装（改回 `note.text` 即红）"
+        )
+        XCTAssertEqual(
+            PanelIconTable.terminal,
+            .symbol("apple.terminal"),
+            "终端 —— 未改动，逐字沿用"
+        )
+        XCTAssertEqual(
+            PanelIconTable.extensionFallback,
+            .symbol("puzzlepiece.extension"),
+            "扩展 tab 的回落 —— 未改动，逐字沿用"
+        )
+    }
+
+    /// 设置页「面板组件」节五行的 `.icon` 逐个对上面板那一枚（A7）。期望表按生产表本身的 id 写：
+    /// 表里**新增一行**而没在这张口径表里补一条时，`expectedIconByRowID[row.id]` 取到 nil、断言直接红
+    /// （不会静默漏过）。
+    func testHostPanelRowsCarryThePanelIconOfTheirElement() {
+        let rows = ModuleSettingsSection.hostPanelRows
+        let expectedIconByRowID: [String: PanelIcon] = [
+            "dynamicShelf": PanelIconTable.shelf,
+            "enableTerminalFeature": PanelIconTable.terminal,
+            "enableClipboardManager": PanelIconTable.clipboard,
+            "enableNotes": PanelIconTable.notes,
+            "enableColorPickerFeature": .symbol("eyedropper"),
+        ]
+        XCTAssertEqual(
+            rows.count,
+            expectedIconByRowID.count,
+            "五行都在下面的口径表里核过图标（新增行必须补一条）"
+        )
+        for row in rows {
+            XCTAssertEqual(
+                row.icon,
+                expectedIconByRowID[row.id],
+                "\(row.id) 行的 chip 取该元素在面板上的那一枚（面板与设置行同一枚）"
+            )
+        }
+    }
+
+    /// 面板条上可能出现的每一枚 SF Symbol 都要能被系统符号表解析——两个来源：
+    ///
+    /// ① `PanelIconTable` 的 `.symbol` 档（**按档位分辨**：`.airDrop` 是自绘字形、没有符号名，
+    /// 不喂给 `NSImage(systemSymbolName:)`）；
+    /// ② 模块 tab 投影（`ModuleRegistry.tabEntries` 的 `symbolName`，模块 manifest 自带）：
+    /// 全部内置模块经真门放行后取**当下投影**逐条解析——本机偏好（`hiddenPanelModules` /
+    /// `panelOrder` / 计时器的显示方式）只影响集合的子集与顺序，不影响「在集合里的每一枚都可解析」
+    /// 这一性质。判据写法沿用 `ModuleKernelTests` 既有的符号可解析断言。
+    func testEverySymbolThePanelBarCanShowResolves() async {
+        // ① 表里的 `.symbol` 档（`.airDrop` 折出符号表，另算）。
+        let tableEntries: [(key: String, icon: PanelIcon)] = [
+            ("home", PanelIconTable.home),
+            ("shelf", PanelIconTable.shelf),
+            ("usage", PanelIconTable.usage),
+            ("clipboard", PanelIconTable.clipboard),
+            ("notes", PanelIconTable.notes),
+            ("terminal", PanelIconTable.terminal),
+            ("extensionFallback", PanelIconTable.extensionFallback),
+        ]
+        let tableSymbols = tableEntries.compactMap { entry -> (String, String)? in
+            guard case .symbol(let symbolName) = entry.icon else { return nil }
+            return (entry.key, symbolName)
+        }
+        XCTAssertEqual(tableSymbols.count, 6, "表里七项：六项是 SF Symbol、`shelf` 一项是自绘字形")
+        XCTAssertFalse(
+            tableSymbols.contains { $0.0 == "shelf" },
+            "隔空投送不走符号表：`.airDrop` 没有符号名，拿去 NSImage(systemSymbolName:) 解析必 nil"
+        )
+
+        // ② 模块 tab 投影：注册内置模块（全放行门）+ 激活，再取投影。
+        let registry = ModuleRegistry.shared
+        registry.register(KernelBootstrap.builtinModules, enabled: { _ in true })
+        await registry.bootstrap()
+        let moduleTabSymbols = registry.tabEntries.map { (key: $0.id, symbolName: $0.symbolName) }
+        XCTAssertFalse(
+            moduleTabSymbols.isEmpty,
+            "前置：全放行后模块 tab 投影不该是空表（本机若把面板模块全摘掉，这条会提示是环境问题）"
+        )
+
+        for (key, symbolName) in tableSymbols + moduleTabSymbols {
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: symbolName, accessibilityDescription: nil),
+                "\(key) 的图标 \(symbolName) 不是可解析的 SF Symbol（面板上只剩空白）"
+            )
+        }
     }
 }

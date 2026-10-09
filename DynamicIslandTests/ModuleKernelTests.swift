@@ -78,6 +78,10 @@
 //  p7 / T5 启动台两区——`LauncherStore.pin` / `.unpin` 驱动 `quickApps` / `gridApps` 的分区
 //  （上区 = **固定先后**、下区 = 剔除固定项保序）、**先落盘再刷新**、pin / unpin 的幂等
 //  （固定表走内存假体 `LauncherPins`，不碰开发机真实 `Defaults` 域）。
+//  p9 / T5 隔空投送字形几何——`AirDropGlyphMetrics` 的四个**量取值**逐字钉死（圆心点 0.13R、
+//  三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口 70°；从用户给的控制中心参考图量出，
+//  见 docs/34 §做法 机制二）；视图侧的渲染像素判据（圆心点 + 三段同心环 + 缺口在视觉正下方）
+//  在 `.workflow/p9-calendar-week-icon/evidence/glyph-structure.py`（脚本，退出码 0）。
 //
 
 import AppKit
@@ -7932,6 +7936,41 @@ final class LauncherModuleTests: XCTestCase {
         let empty = await LauncherUsageQuery.fetch(rootURLs: [], timeout: timeout)
         XCTAssertTrue(empty.isEmpty, "空根目录直接返回空表")
         XCTAssertLessThan(Date().timeIntervalSince(emptyStartedAt), 0.1, "空根目录不发起查询")
+    }
+}
+
+// MARK: - 隔空投送字形的几何（p9 / T5）
+
+/// `AirDropGlyphMetrics` 的**量取值**（从用户 2026-10-09 给的控制中心参考图量出，见
+/// `DynamicIsland/components/Tabs/PanelIcon.swift` 里该结构上方的说明与 docs/34 §做法 机制二那张表：
+/// 点 `0.13R`、三段弧环心 `0.33 / 0.65 / 0.90R`、线宽 `0.113R`、底部开口每侧 35°）。
+///
+/// **逐字钉量取值**：不写「递增 / 落在某区间」这类断言——那种断言在把比例改成别的量（例如
+/// `[0.5, 0.6, 0.7]`）时仍然是绿的，钉不住「与参考图量出来的那一组数」。本文件这一组管**常量值**
+/// 这一层；视图渲出来的结构（圆心点 + 三段同心环 + 缺口在视觉正下方）由渲染取证脚本
+/// `.workflow/p9-calendar-week-icon/evidence/glyph-structure.py` 的像素判据覆盖（脚本，退出码 0）。
+final class AirDropGlyphMetricsTests: XCTestCase {
+
+    /// 四个常量逐字：改动任何一个比例 / 角度即红。
+    func testMetricsPinTheMeasuredValuesFromTheReferenceImage() {
+        XCTAssertEqual(AirDropGlyphMetrics.dotRadiusFactor, 0.13, "圆心点半径（以字形外缘半径 R 为单位）")
+        XCTAssertEqual(
+            AirDropGlyphMetrics.ringRadiusFactors,
+            [0.33, 0.65, 0.90],
+            "三段弧的环心半径（顺序 = 从内到外）"
+        )
+        XCTAssertEqual(AirDropGlyphMetrics.strokeFactor, 0.113, "弧的线宽（圆头线帽）")
+        XCTAssertEqual(AirDropGlyphMetrics.gapDegrees, 70, "底部开口的总跨度（每侧 35°）")
+    }
+
+    /// 实例读法与静态读法**同源**（T3 给的两种读法都能编译：`AirDropGlyphMetrics.dotRadiusFactor`
+    /// 与 `AirDropGlyphMetrics().dotRadiusFactor`）——镜像属性被换成第二个来源时这条红。
+    func testInstanceMirrorReadsTheSameValues() {
+        let metrics = AirDropGlyphMetrics()
+        XCTAssertEqual(metrics.dotRadiusFactor, AirDropGlyphMetrics.dotRadiusFactor, "点半径：实例读法 = 静态读法")
+        XCTAssertEqual(metrics.ringRadiusFactors, AirDropGlyphMetrics.ringRadiusFactors, "环心半径：实例读法 = 静态读法")
+        XCTAssertEqual(metrics.strokeFactor, AirDropGlyphMetrics.strokeFactor, "线宽：实例读法 = 静态读法")
+        XCTAssertEqual(metrics.gapDegrees, AirDropGlyphMetrics.gapDegrees, "开口角度：实例读法 = 静态读法")
     }
 }
 
