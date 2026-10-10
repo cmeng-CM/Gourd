@@ -23,7 +23,8 @@ import Defaults
 import AppKit
 #endif
 
-// Lyrics are shown/hidden only via Defaults[.enableLyrics] in settings. Inline display is used in the player views.
+// 歌词行已退休（T6 / docs/35 D-03）：本档不再画歌词；`.lyrics` 槽位按钮只切「屏幕歌词
+// 悬浮层」的总开关（总开关键见下方的 `@Default`；悬浮层视图见 `LyricsOverlayView`）。
 
 struct MinimalisticMusicPlayerView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -141,11 +142,6 @@ struct MinimalisticMusicPlayerView: View {
                         .padding(.top, 4)
                 }
 
-                if enableLyrics {
-                    lyricsView
-                        .padding(.top, 10)
-                }
-
                 timerCountdownSection
 
                 reminderList
@@ -260,7 +256,6 @@ struct MinimalisticMusicPlayerView: View {
 
     private var dynamicHeightSignature: Int {
         var signature = reminderEntries.count * 10
-        if enableLyrics { signature += 1 }
         if shouldShowTimerCountdown { signature += 100 }
         if showMinimalisticBatteryIndicator { signature += 1000 }
         return signature
@@ -280,9 +275,6 @@ struct MinimalisticMusicPlayerView: View {
             height += 6 + 4          // progress bar top padding + bar
             height += 54 + 2         // controls + top padding
 
-            if enableLyrics {
-                height += 10 + 34 // lyrics padding + estimated height
-            }
             if shouldShowTimerCountdown {
                 height += minimalisticTimerCountdownBlockHeight
             }
@@ -302,9 +294,6 @@ struct MinimalisticMusicPlayerView: View {
         height += 4 + 4          // progress bar top padding + bar
         height += 54 + 2         // controls + top padding
 
-        if enableLyrics {
-            height += 10 + 34
-        }
         if shouldShowTimerCountdown {
             height += minimalisticTimerCountdownBlockHeight
         }
@@ -448,36 +437,6 @@ struct MinimalisticMusicPlayerView: View {
             .opacity(shouldShowReminderList ? 1 : 0)
             .animation(.easeInOut(duration: 0.18), value: shouldShowReminderList)
             .environmentObject(vm)
-    }
-
-    private var lyricsView: some View {
-        let line = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-        let transition: AnyTransition = .asymmetric(
-            insertion: .move(edge: .bottom).combined(with: .opacity),
-            removal: .move(edge: .top).combined(with: .opacity)
-        )
-
-        return HStack(spacing: 6) {
-            if !line.isEmpty {
-                Image(systemName: "music.note")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                    .symbolRenderingMode(.monochrome)
-
-                Text(line)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.88))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, 6)
-                    .id(line)
-                    .transition(transition)
-            }
-        }
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.smooth(duration: 0.32), value: line)
     }
     
 

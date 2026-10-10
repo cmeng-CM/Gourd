@@ -164,32 +164,6 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Observe settings + lyrics changes to dynamically resize the notch
-        let enableLyricsPublisher = Defaults.publisher(.enableLyrics).map { $0.newValue }
-
-        enableLyricsPublisher
-            .combineLatest(MusicManager.shared.$currentLyrics)
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                guard Defaults[.enableMinimalisticUI] else { return }
-                let updatedTarget = self.calculateDynamicNotchSize()
-                guard self.notchState == .open else { return }
-                guard self.notchSize != updatedTarget else { return }
-                withAnimation(.smooth) {
-                    self.notchSize = updatedTarget
-                }
-                if let delegate = AppDelegate.shared {
-                    delegate.ensureWindowSize(
-                        addShadowPadding(to: updatedTarget, isMinimalistic: Defaults[.enableMinimalisticUI]),
-                        animated: true,
-                        force: false
-                    )
-                }
-            }
-            .store(in: &cancellables)
-
         TimerManager.shared.$activeSource
             .combineLatest(TimerManager.shared.$isTimerActive)
             .receive(on: RunLoop.main)
@@ -263,14 +237,21 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
+        // 面板尺寸的重算触发（函数名里的「侧歌词」是旧档遗留；侧歌词一族已随 T5/T6 退休）。
+        // 本链保留：下面每个成员仍会改变 `calculateDynamicNotchSize()` 的输出，逐条给出处——
+        // - `showCalendar` / `showStandardMediaControls` / `showMirror`：`enabledStandardTabCount()`
+        //   （matters.swift:128）读它们 → 推荐最小宽度 → `openNotchSize.width`；
+        // - `showMirror` / `autoHideInactiveNotchMediaPlayer` / `WebcamManager.$cameraAvailable` /
+        //   `isPlaying` / `songTitle` / `artistName`：首页块的存在性判据（`MirrorModule.isVisible` /
+        //   `MusicModule.isVisible`；音乐那条经 `MusicManager.hasActiveSession`，MusicManager.swift:489）
+        //   → 块名单 → 接缝算出的自然高 → 高度账本（`PanelContentHeight.current`，matters.swift:86 读）
+        //   → `openNotchSize.height`。
+        // 已删成员：`enableLyrics`（T5/T6 后没有一条尺寸路径读它）与侧歌词档的两枚旧键（键定义同批删除）。
         Publishers.MergeMany(
-            Defaults.publisher(.enableLyrics, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.showCalendar, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.showStandardMediaControls, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.autoHideInactiveNotchMediaPlayer, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.showMirror, options: []).map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lyricsPanelWidth, options: []).map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lyricsPanelOffset, options: []).map { _ in () }.eraseToAnyPublisher(),
             MusicManager.shared.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
             MusicManager.shared.$songTitle.map { _ in () }.eraseToAnyPublisher(),
             MusicManager.shared.$artistName.map { _ in () }.eraseToAnyPublisher(),
@@ -283,6 +264,7 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
             .store(in: &cancellables)
     }
 
+    /// 由上方 `MergeMany` 链驱动（成员名单与保留理由见那里的注释）；名字里的「侧歌词」是旧档遗留。
     private func updateSideLyricsNotchSizeIfNeeded() {
         guard notchState == .open, !Defaults[.enableMinimalisticUI] else { return }
 

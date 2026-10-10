@@ -1412,12 +1412,6 @@ extension Defaults.Keys {
     /// 窗口的歌词行（docs/35 §已知限制）。
     static let enableLyrics = Key<Bool>("enableLyrics", default: false)
 
-    /// 侧歌词档的两枚旧键（docs/29 D-57 那一族）：消费点要随面板内歌词退休（T4 设置页两条滑杆 /
-    /// T5 `matters.swift` 与 `NotchHomeView`）才消失，**这里暂不动**——键定义、publisher 与残余
-    /// 一起在 T6 删，删早了编译红。
-    static let lyricsPanelWidth = Key<CGFloat>("lyricsPanelWidth", default: 280)
-    static let lyricsPanelOffset = Key<CGFloat>("lyricsPanelOffset", default: 0)
-
     static let showLiveCanvasInDynamicIsland = Key<Bool>("showLiveCanvasInDynamicIsland", default: false)
 
     // MARK: Desktop Lyrics Overlay（显示档；docs/35 §接口与数据形状）

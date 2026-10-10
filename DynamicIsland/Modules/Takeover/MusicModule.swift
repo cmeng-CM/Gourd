@@ -53,9 +53,9 @@
 //     注入（它持有那一条），本模块的块读它；**读不到时用自带的 `@Namespace` 兜底**——配对
 //     失效，但不崩、不空白（§已知限制 4）。
 //  6. **封面开关只切「块内画不画封面」**（D-06 / p5-home-blocks / T3 起是「画多大的封面」）：
-//     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView(density: .compact)` 一条
-//     （曲名（单行）+ 进度 + 控制三键——艺人行 / 歌词行按 **D-17** 留给展开面板，
-//     标准档内容 ≈127pt 在 96 里必裁），
+//     关掉（**T3 起的默认档**，D-09）走 `MusicControlsView` 一条（T6 起该视图只剩这一档）
+//     （曲名（单行）+ 进度 + 控制三键——艺人行 / 歌词行已随面板内歌词与 `regular` 档退休，
+//     T5/T6；旧标准档内容 ≈127pt 在 96 里必裁），
 //     打开则在那一条**前面**加一枚 **36pt 圆角小封面**（T2 起；T3 是 40pt）——不再是改动前那个占满整块的大封面
 //     （`MusicPlayerView` 的 `AlbumArtView` 是宽高双向贪婪的 1:1 图：块高是声明值、不由内容决定，
 //     所以它不会把行撑高，而是**在 96pt 里铺满 96 见方**，把旁边的文字与控制键挤成窄列）。
@@ -271,10 +271,10 @@ final class MusicModule: GourdModule {
 /// 一致；没人注入时（例如将来在别处渲染这个块）退回本视图自己的 `@Namespace`——同一块内的
 /// 动画仍成立，跨视图的那一对静默失效，不崩、不空白。
 ///
-/// **两档只差封面那 36pt**（`showsAlbumArt`，口径 6；T2 起，T3 是 40pt）；控制条两档都走**紧凑密度**
-/// （`MusicControlsView(density: .compact)`，D-17）：
-/// - 关（**T3 起的默认档**）→ 单独一块 `MusicControlsView(density: .compact)`：曲名（单行）+
-///   进度条 + 控制键；艺人行 / 歌词行与大内边距都留给展开面板（标准档内容 ≈127pt，96 里必裁）；
+/// **两档只差封面那 36pt**（`showsAlbumArt`，口径 6；T2 起，T3 是 40pt）；控制条两档都走**同一份紧凑实现**
+/// （`MusicControlsView`，D-17；T6 起该视图只剩这一档，旧 `density` 参数已随 `.regular` 档退休）：
+/// - 关（**T3 起的默认档**）→ 单独一块 `MusicControlsView`：曲名（单行）+
+///   进度条 + 控制键；艺人行 / 歌词行与大内边距都没有（T6；旧标准档内容 ≈127pt，96 里必裁）；
 /// - 开 → 同一条前面加一枚 36pt 圆角小封面（`AlbumArtThumbnailView`）。
 ///   **不是**改动前的 `MusicPlayerView`：它的 `AlbumArtView` 是宽高双向贪婪的 1:1 图。
 ///   注意这里的真实故障形态——**块高是声明值（形态 → 档高），宿主从不量内容**，所以那张图
@@ -297,7 +297,7 @@ private struct MusicHomeBlockView: View {
             HStack(alignment: .top, spacing: Metrics.albumArtSpacing) {
                 AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
                     .frame(width: Metrics.albumArtSide, height: Metrics.albumArtSide)
-                MusicControlsView(density: .compact)
+                MusicControlsView()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -305,10 +305,10 @@ private struct MusicHomeBlockView: View {
             // 0.0pt）——7pt 让封面上缘的可见留白与前台的图标 / 统计块的环顶同档，见 `HomeBlockChrome`。
             .padding(.top, HomeBlockChrome.contentInsetTopGraphics)
         } else {
-            // 紧凑档的密度由 `MusicControlsView.CompactMetrics` 给（D-17）：标准档内容 ≈127pt，
-            // 在 96 里控制三键整行被裁（T3 阶段 Checkpoint 上屏实测）。
+            // 整条内容高由 `MusicControlsView.CompactMetrics` 给（D-17；T6 前标准档内容 ≈127pt，
+            // 在 96 里控制三键整行被裁，T3 阶段 Checkpoint 上屏实测——那一档已退休）。
             // 标题行同样让出上留白（与带封面那一支同源，两块形态的顶缘才对得上）。
-            MusicControlsView(density: .compact)
+            MusicControlsView()
                 .padding(.top, HomeBlockChrome.contentInsetTopText)
         }
     }

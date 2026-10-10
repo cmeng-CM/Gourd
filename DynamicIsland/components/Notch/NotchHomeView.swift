@@ -155,117 +155,6 @@ struct DynamicIslandArtworkSourceView: View {
 
 // MARK: - Music Player Components
 
-struct AlbumArtView: View {
-    @ObservedObject var musicManager = MusicManager.shared
-    @ObservedObject var vm: DynamicIslandViewModel
-    @Default(.showLiveCanvasInDynamicIsland) private var showLiveCanvasInDynamicIsland
-    let albumArtNamespace: Namespace.ID
-
-    private var usesLiveCanvasArtwork: Bool {
-        showLiveCanvasInDynamicIsland && musicManager.videoArtworkURL != nil
-    }
-
-    private var albumArtCornerRadius: CGFloat {
-        Defaults[.cornerRadiusScaling]
-            ? musicManager.albumArt.size.width / musicManager.albumArt.size.height > 1.0
-                ? MusicPlayerImageSizes.cornerRadiusInset.opened / 3
-                : MusicPlayerImageSizes.cornerRadiusInset.opened
-            : musicManager.albumArt.size.width / musicManager.albumArt.size.height > 1.0
-                ? MusicPlayerImageSizes.cornerRadiusInset.closed / 3
-                : MusicPlayerImageSizes.cornerRadiusInset.closed
-    }
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if Defaults[.lightingEffect] {
-                albumArtBackground
-            }
-            albumArtButton
-        }
-    }
-
-    private var albumArtBackground: some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .background(
-                DynamicIslandArtworkSourceView(
-                    cornerRadius: albumArtCornerRadius,
-                    contentMode: .fill
-                )
-            )
-            .clipped()
-            .scaleEffect(x: 1.3, y: 1.4)
-            .rotationEffect(.degrees(92))
-            .blur(radius: 40)
-            .opacity(
-                usesLiveCanvasArtwork
-                    ? (musicManager.isPlaying ? 0.62 : 0.18)
-                    : (musicManager.isPlaying ? 0.5 : 0)
-            )
-            .shadow(
-                color: Color(nsColor: musicManager.avgColor).opacity(usesLiveCanvasArtwork ? 0.24 : 0.16),
-                radius: usesLiveCanvasArtwork ? 22 : 14,
-                x: 0,
-                y: 0
-            )
-    }
-
-    private var albumArtButton: some View {
-        ZStack {
-            Button {
-                musicManager.openMusicApp()
-            } label: {
-                ZStack(alignment:.bottomTrailing) {
-                    albumArtImage
-                    appIconOverlay
-                }
-                .albumArtFlip(angle: musicManager.flipAngle)
-                .parallax3D()
-                .padding(.bottom, -5)
-
-            }
-            .buttonStyle(PlainButtonStyle())
-            .scaleEffect(musicManager.isPlaying ? 1 : 0.85)
-            
-            albumArtDarkOverlay
-        }
-    }
-
-    private var albumArtDarkOverlay: some View {
-        Rectangle()
-            .aspectRatio(1, contentMode: .fit)
-            .foregroundColor(Color.black)
-            .opacity(musicManager.isPlaying ? 0 : 0.8)
-            .blur(radius: 50)
-    }
-
-    private var albumArtImage: some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                DynamicIslandArtworkSourceView(
-                    cornerRadius: albumArtCornerRadius,
-                    contentMode: .fit
-                )
-            }
-            .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
-        .clipped()
-    }
-
-    @ViewBuilder
-    private var appIconOverlay: some View {
-        if vm.notchState == .open && !musicManager.usingAppIconForArtwork {
-            AppIcon(for: musicManager.bundleIdentifier ?? "com.apple.Music")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 36, height: 36)
-                .offset(x: 10, y: 10)
-                .transition(.scale.combined(with: .opacity).animation(.bouncy.delay(0.3)))
-                .zIndex(2)
-        }
-    }
-}
-
 struct MusicControlsView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject var musicManager = MusicManager.shared
@@ -281,7 +170,6 @@ struct MusicControlsView: View {
     @Default(.showMediaOutputControl) private var showMediaOutputControl
     @Default(.musicSkipBehavior) private var musicSkipBehavior
     @Default(.enableLyrics) private var enableLyrics
-    @Default(.showCalendar) private var showCalendar
     private let seekInterval: TimeInterval = 10
     private let skipMagnitude: CGFloat = 6
 
@@ -297,15 +185,14 @@ struct MusicControlsView: View {
     /// 封面尺寸 / 圆角 / 进度条样式 / 按钮外观与顺序一概未动；`GeometryReader` 仍是宽度来源
     /// （只把读数上移一层，宽度换算见 `songInfo(width:)`）。
     ///
-    /// **密度档**（p5-home-blocks / T3 fix / D-17；T2 收窄）：`regular`（缺省）= 上面那套，展开面板
-    /// 逐字不变；`compact` = 首页音乐块那一档——标准档内容约 127pt，96 高的紧凑档里**控制三键整行被裁**
-    /// （T3 阶段 Checkpoint 上屏实测：AX 有元素、屏上没有）。紧凑档只留「曲名（单行）+ 进度 + 控制行」：
-    /// 艺人行 / 歌词行 / 大内边距都留给展开面板，控制行的键**五槽一档**（T2 起 `.small` = 26，
-    /// 播放键也不再单独走一档；T2 前紧凑档是播放键 `.medium` = 30 + 其余键 `HoverButton` 缺省同档），
+    /// **只剩紧凑档**（p5-home-blocks / T3 fix / D-17；T6 折叠）：本视图的唯一消费方是首页音乐块
+    /// （`MusicHomeBlockView`）——旧 `regular` 档（展开面板那套）随 `MusicPlayerView` 退休后零消费点，
+    /// 已删，`density` 参数与 `Density` 枚举一并消失。这一档只留「曲名（单行）+ 进度 + 控制行」：
+    /// 艺人行 / 歌词行 / 大内边距都没有，控制行的键**五槽一档**（T2 起 `.small` = 26，播放键同档），
     /// 各段高度见 `CompactMetrics`（唯一取值处；总和 ≤ 96 与封面档装宽度 ≤ min 由单测钉住）。
     var body: some View {
         GeometryReader { geo in
-            VStack(alignment: .leading, spacing: controlsSpacing) {
+            VStack(alignment: .leading, spacing: CompactMetrics.controlsSpacing) {
                 VStack(alignment: .leading, spacing: CompactMetrics.titleSliderSpacing) {
                     songInfo(width: max(0, geo.size.width - Self.songInfoLeadingInset))
                         .zIndex(1) // Ensure it draws above the waveform scrubber
@@ -314,7 +201,7 @@ struct MusicControlsView: View {
                 }
                 // 与原 `songInfoAndSlider` 的留白一致（`GeometryReader` 的读数比内容宽 5pt：
                 // 这段 leading 内边距在读数里已经扣掉，见上面的 `- Self.songInfoLeadingInset`）。
-                .padding(.top, topPadding)
+                .padding(.top, CompactMetrics.topPadding)
                 .padding(.leading, Self.songInfoLeadingInset)
 
                 if shouldShowControlHUDRow {
@@ -329,13 +216,7 @@ struct MusicControlsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: 密度（p5-home-blocks / T3 fix / D-17）
-
-    /// 密度档：`regular`（缺省）= 展开面板那一档，逐字不变；`compact` = 首页音乐块（96 高的紧凑条）。
-    enum Density: Equatable {
-        case regular
-        case compact
-    }
+    // MARK: 紧凑档的度量（p5-home-blocks / T3 fix / D-17；T6 起唯一档）
 
     /// 紧凑档的**高度预算**（D-17 的实现口径）：整条内容高 = 六项之和，必须
     /// ≤ `HomeFlowView.compactBlockHeight`（96）。**唯一取值处**——`body` / `musicSlider` /
@@ -346,24 +227,23 @@ struct MusicControlsView: View {
     ///
     /// 六个数的依据都是**固有高**（不是拍出来的比例）：曲名行 17 = `MarqueeText` 的
     /// `1.3 × NSFont.headline.pointSize(13)`；进度行 34 = `MusicSliderView` 的 stacked 算式
-    /// `轨道 14（max(8, 14)）+ 间距 6 + 时间行 14`；控制行 26 = `.small` 档 `HoverButton` 的边长
-    /// （T2 起；标准档的播放键 `.large` = 40、其余键 `.medium` = 30，**两档不动**）。
+    /// `轨道 14（max(8, 14)）+ 间距 6 + 时间行 14`；控制行 26 = `.small` 档 `HoverButton` 的边长（T2 起）。
     enum CompactMetrics {
-        /// 顶部内边距（标准档 10）。
+        /// 顶部内边距。
         static let topPadding: CGFloat = 4
-        /// 曲名行：单行（标准档还叠一行艺人、可能再叠一行歌词）。
+        /// 曲名行：单行。
         static let titleRowHeight: CGFloat = 17
-        /// 「曲名 ↔ 进度」的组内间距（与标准档同值 4）。
+        /// 「曲名 ↔ 进度」的组内间距。
         static let titleSliderSpacing: CGFloat = 4
         /// 进度行：`MusicSliderView`（stacked，同一份实现）的固有高。
         static let sliderRowHeight: CGFloat = 34
-        /// 「进度组 ↔ 控制行」的间距（标准档是 `VStack` 缺省 8）。
+        /// 「进度组 ↔ 控制行」的间距。
         static let controlsSpacing: CGFloat = 6
-        /// 控制键的键径（T2：30 → 26）：紧凑档里**每一个槽位**都是这一档
-        /// （播放键也从 `.large` 40 落到同一档）——真源是 `HoverButton.buttonSize(for: .small)`，
+        /// 控制键的键径（T2：30 → 26）：**每一个槽位**都是这一档
+        /// （播放键同档）——真源是 `HoverButton.buttonSize(for: .small)`，
         /// 测试把两处钉在一起（改了 `HoverButton` 的档而不动这里，装宽度算式就是假的）。
         static let controlKeyDiameter: CGFloat = 26
-        /// 控制行的键距（T2：8 → 6；**只**紧凑档收，标准档仍是 8）。
+        /// 控制行的键距（T2：8 → 6）。
         static let controlsKeySpacing: CGFloat = 6
         /// 控制行高 = 键径（一行全是同档方形键；`.none` 槽位给 `Spacer`，只占宽不占高）。
         static let controlsRowHeight: CGFloat = controlKeyDiameter
@@ -393,45 +273,14 @@ struct MusicControlsView: View {
         }
     }
 
-    /// 紧凑档的密度档位（`MusicHomeBlockView` 传 `.compact`；缺省 = 标准档）。
-    var density: Density = .regular
-
-    /// 顶部内边距（标准档 10 / 紧凑档 4）。
-    private var topPadding: CGFloat { density == .compact ? CompactMetrics.topPadding : 10 }
-
-    /// 进度行的高度（标准档 36 / 紧凑档 34）与它上方的留白（标准档 5 / 紧凑档 0）。
-    private var sliderRowHeight: CGFloat { density == .compact ? CompactMetrics.sliderRowHeight : 36 }
-    private var sliderTopPadding: CGFloat { density == .compact ? 0 : 5 }
-
-    /// 「进度组 ↔ 控制行」的间距（标准档 `VStack` 缺省 8 / 紧凑档 6）。
-    private var controlsSpacing: CGFloat { density == .compact ? CompactMetrics.controlsSpacing : 8 }
-
-    /// 「控制行里键与键的间距」（标准档 8 逐字不变 / 紧凑档 6，T2 起收这一档）。
-    private var controlKeySpacing: CGFloat { density == .compact ? CompactMetrics.controlsKeySpacing : 8 }
-
-    /// **非播放键**的尺寸档：标准档 `.medium`（30，逐字不变），紧凑档 `.small`（26，T2 新增）。
-    /// `slotView(for:)` 的**每一个**槽位都走它（媒体输出 / AirPlay 两个 picker 按钮把档位作为参数接住）——
-    /// 紧凑档里五键必须同档，装宽度算式（`CompactMetrics.albumArtRowInstallWidth`）才成立。
-    private var controlKeyScale: Image.Scale { density == .compact ? .small : .medium }
-
-    /// 播放键的尺寸档：标准档 `.large`（40），紧凑档 `.small`（26，与其余键同档）。
-    /// **仍然走同一份槽位实现**（`slotView(for:)` 用同一个 `HoverButton`）——D-17 明确不要第二套控制条。
-    private var playPauseScale: Image.Scale { density == .compact ? .small : .large }
-
-    /// 「标题 / 歌手」文字区相对音乐区块的 leading 内边距（pt）——宽度换算要用同一个值。
+    /// 「标题」文字区相对音乐区块的 leading 内边距（pt）——宽度换算要用同一个值。
     private static let songInfoLeadingInset: CGFloat = 5
 
-    /// 「标题 / 歌手」文字区：紧凑档把曲名行**钉在预算那 17pt**（`CompactMetrics.titleRowHeight`）
-    /// ——不钉的话这一行的高度由字体度量决定，`contentHeight ≤ 96` 就只是估算；标准档不加任何框，
-    /// 视图树与改动前逐字相同（艺人行也只在标准档）。
-    @ViewBuilder
+    /// 「标题」文字区：把曲名行**钉在预算那 17pt**（`CompactMetrics.titleRowHeight`）
+    /// ——不钉的话这一行的高度由字体度量决定，`contentHeight ≤ 96` 就只是估算。
     private func songInfo(width: CGFloat) -> some View {
-        if density == .compact {
-            songInfoContent(width: width)
-                .frame(height: CompactMetrics.titleRowHeight, alignment: .leading)
-        } else {
-            songInfoContent(width: width)
-        }
+        songInfoContent(width: width)
+            .frame(height: CompactMetrics.titleRowHeight, alignment: .leading)
     }
 
     private func songInfoContent(width: CGFloat) -> some View {
@@ -445,18 +294,6 @@ struct MusicControlsView: View {
                 frameWidth: width,
                 badgeHeight: 14
             )
-            // 艺人行**只在标准档**（紧凑档 96 高，装不下；D-17 把它留给展开面板）。
-            if density == .regular {
-                MarqueeText(
-                    $musicManager.artistName,
-                    font: .headline,
-                    nsFont: .headline,
-                    textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor)
-                        .ensureMinimumBrightness(factor: 0.6) : .gray,
-                    frameWidth: width
-                )
-                .fontWeight(.medium)
-            }
         }
     }
 
@@ -483,13 +320,12 @@ struct MusicControlsView: View {
                 guard !musicManager.isLiveStream else { return }
                 MusicManager.shared.seek(to: newValue)
             }
-            .padding(.top, sliderTopPadding)
-            .frame(height: sliderRowHeight)
+            .frame(height: CompactMetrics.sliderRowHeight)
         }
     }
 
     private var playbackControls: some View {
-        HStack(spacing: controlKeySpacing) {
+        HStack(spacing: CompactMetrics.controlsKeySpacing) {
             ForEach(Array(displayedSlots.enumerated()), id: \.offset) { _, slot in
                 slotView(for: slot)
             }
@@ -650,8 +486,9 @@ struct MusicControlsView: View {
         }
     }
 
-    /// 控制行的槽位（两种密度共用同一份实现；**键的尺寸档由密度定**，见 `controlKeyScale` /
-    /// `playPauseScale`——紧凑档五键同走 `.small` 26，标准档逐字沿用 `.large` 播放键 + `.medium` 其余键）。
+    /// 控制行的槽位（**键的尺寸档五槽一档**：`.small` = 26，播放键同档；真源
+    /// `HoverButton.buttonSize(for: .small)`，与 `CompactMetrics.controlKeyDiameter` 同值，
+    /// 装宽度算式（`CompactMetrics.albumArtRowInstallWidth`）由此成立）。
     @ViewBuilder
     private func slotView(for control: MusicControlButton) -> some View {
         switch control {
@@ -660,7 +497,7 @@ struct MusicControlsView: View {
         case .playPause:
             HoverButton(
                 icon: musicManager.isPlaying ? (musicManager.isLiveStream ? "stop.fill" : "pause.fill") : "play.fill",
-                scale: playPauseScale
+                scale: .small
             ) {
                 MusicManager.shared.togglePlay()
             }
@@ -700,7 +537,7 @@ struct MusicControlsView: View {
             HoverButton(
                 icon: "shuffle",
                 iconColor: musicManager.isShuffled ? brandAccentColor : .white,
-                scale: controlKeyScale
+                scale: .small
             ) {
                 MusicManager.shared.toggleShuffle()
             }
@@ -708,19 +545,19 @@ struct MusicControlsView: View {
             HoverButton(
                 icon: repeatIcon,
                 iconColor: repeatIconColor,
-                scale: controlKeyScale
+                scale: .small
             ) {
                 MusicManager.shared.toggleRepeat()
             }
         case .mediaOutput:
-            MediaOutputPickerButton(scale: controlKeyScale)
+            MediaOutputPickerButton(scale: .small)
         case .airPlay:
-            AirPlayPickerButton(scale: controlKeyScale)
+            AirPlayPickerButton(scale: .small)
         case .lyrics:
             HoverButton(
                 icon: enableLyrics ? "quote.bubble.fill" : "quote.bubble",
                 iconColor: enableLyrics ? brandAccentColor : .white,
-                scale: controlKeyScale
+                scale: .small
             ) {
                 enableLyrics.toggle()
             }
@@ -729,7 +566,7 @@ struct MusicControlsView: View {
                 HoverButton(
                     icon: presentation.iconName,
                     iconColor: presentation.isActive ? brandAccentColor : .white,
-                    scale: controlKeyScale
+                    scale: .small
                 ) {
                     toggle()
                 }
@@ -750,7 +587,7 @@ struct MusicControlsView: View {
     ) -> some View {
         HoverButton(
             icon: icon,
-            scale: controlKeyScale,
+            scale: .small,
             pressEffect: press,
             externalTriggerToken: trigger?.token,
             externalTriggerEffect: trigger?.pressEffect
@@ -781,15 +618,9 @@ struct MusicControlsView: View {
 
 struct NotchHomeView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
-    @ObservedObject var webcamManager = WebcamManager.shared
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
     @ObservedObject private var extensionNotchExperienceManager = ExtensionNotchExperienceManager.shared
-    @ObservedObject private var musicManager = MusicManager.shared
-    @Default(.showStandardMediaControls) private var showStandardMediaControls
-    @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
-    @Default(.showCalendar) private var showCalendar
-    @Default(.enableLyrics) private var enableLyrics
     let albumArtNamespace: Namespace.ID
 
     var body: some View {
@@ -856,17 +687,6 @@ struct NotchHomeView: View {
                 effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
             )
         )
-    }
-
-    private var mirrorIsVisible: Bool {
-        Defaults[.showMirror] && webcamManager.cameraAvailable && vm.notchState == .open
-    }
-
-    private var cameraPreview: some View {
-        CameraPreviewView(webcamManager: webcamManager)
-            .scaledToFit()
-            .opacity(vm.notchState == .closed ? 0 : 1)
-            .blur(radius: vm.notchState == .closed ? 20 : 0)
     }
 
     private var minimalisticOverridePayload: ExtensionNotchExperiencePayload? {
