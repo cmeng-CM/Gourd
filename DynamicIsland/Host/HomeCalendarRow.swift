@@ -21,16 +21,19 @@
 //
 //  展开面板首页从「一条 strip」改成**两排**（用户 2026-09-29 拍板）：上排仍是 strip（音乐 / 镜子 /
 //  模块块，契约逐字不变），下排是本行的**全宽日历行**——左整月网格（可翻月、今天高亮、按选中日居中）、
-//  右所选日期的今日清单（多行、不滚动）。
+//  右所选日期的今日清单（**可滚动的卡片列**：条目多于栏高时栏内滚动，P11 / T2）。
 //
 //  为什么单独一排：7 列月历需要宽度（原先日历塞在 200–260pt 的块里，格子只有约 26pt，只能显示
 //  「日期头 + 几点内容」），单独一排既给足宽度、又把月历入口补回展开面板。
 //
 //  复用而非重写（D-02）：左侧直接用 `MonthGridView`（从 `StandaloneCalendarView` 左栏抽出，同一份
-//  实现）；右侧直接用 `EventListView`（竖向紧凑多行，行数由 `HomeTodayListLayout.capacity` 按可用高度
-//  算准，自己不滚动）。本文件只负责**排版与接缝**：两栏怎么分宽、行高多少、交互接到哪条既有链路。
+//  实现）；右侧用共享卡片列 `CalendarEventCardList`（`CalendarEventCards.swift`，P11 / T2 接入）——
+//  竖向滚动、渲染**全部**条目：条目多于栏高时栏内滚动，不再有 `+N` 与容量算式（卡片高度随标题 /
+//  地点变化，定高算式算不准；D-13），全天条目合并进同一列。本文件只负责**排版与接缝**：两栏怎么
+//  分宽、行高多少、交互接到哪条既有链路。
 //
-//  规格：docs/17-nookx-adoption.md（本批改判 §做法 的结构描述：strip + 日历行）。
+//  规格：docs/17-nookx-adoption.md（本批改判 §做法 的结构描述：strip + 日历行）；
+//  卡片列口径见 docs/36-calendar-cards-and-add.md §接口与数据形状。
 //
 
 import Defaults
@@ -102,9 +105,14 @@ struct HomeCalendarRow: View {
     @State private var monthScrollTarget: Date?
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
+    /// 「显示完整事件标题」（P11 / T2）：旧紧凑行把 `lineLimit(1)` 写死，这个开关只对面板卡片
+    /// 生效；本行右栏换成共享卡片列后由宿主读同一个键传入，两处因此同源（docs/36 §背景与目标 1）。
+    @Default(.showFullEventTitles) private var showFullEventTitles
 
-    /// 与独立面板同一套过滤（已完成提醒 / 全天条目按偏好隐藏），空态判据因此也一致。
-    /// **数据源是 `calendarManager.events`（选中日那一天）**——右栏今日清单的口径。
+    /// 与独立面板同一套过滤（已完成提醒 / 全天条目按偏好隐藏），**空态判据**用（P11 / T2 起右栏
+    /// 列表本身由 `CalendarEventCardList` 按同一口径在组件内过滤；这里保留同源的一份只为
+    /// 「有没有条目」这个判断）。**数据源是 `calendarManager.events`（选中日那一天）**——右栏今日
+    /// 清单的口径。
     private var filteredEvents: [EventModel] {
         EventListView.filteredEvents(
             events: calendarManager.events,
@@ -134,8 +142,9 @@ struct HomeCalendarRow: View {
             + " " + selectedDate.formatted(.dateTime.day())
     }
 
-    /// 今日清单的可用高度 = 行高 − 表头。`collapsedHeaderHeight` 的构成里**已经含**「表头与列表
-    /// 之间的 4pt 间距」，所以不再另加（与 `CalendarView` 同一条口径）。
+    /// 今日清单的**滚动视口高度** = 行高 − 表头（P11 / T2：右栏换成滚动卡片列后，这个数不再参与
+    /// 容量算式，只钉 `CalendarEventCardList` 的视口——条目多于它时栏内滚动）。`collapsedHeaderHeight`
+    /// 的构成里**已经含**「表头与列表之间的 4pt 间距」，所以不再另加（与 `CalendarView` 同一条口径）。
     private var todayListHeight: CGFloat {
         max(0, Self.rowHeight - HomeTodayListLayout.collapsedHeaderHeight)
     }
@@ -242,7 +251,7 @@ struct HomeCalendarRow: View {
         return min(max(preferred, Self.monthGridMinWidth), upperBound)
     }
 
-    /// 右栏：表头 + 今日清单（空态走 `EmptyEventsView`），整体顶部对齐。
+    /// 右栏：表头 + 今日卡片列（空态走 `EmptyEventsView`），整体顶部对齐。
     private var todayListColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(headerText)
@@ -259,13 +268,19 @@ struct HomeCalendarRow: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)
             } else {
-                // **不滚动**：行数由 `HomeTodayListLayout.capacity` 按可用高度算准，算不准就要么截断
-                // 要么留白（与首页日历块同一条口径）。
-                EventListView(
+                // **滚动卡片列**（P11 / T2 · D-13）：渲染全部条目，条目多于栏高时**栏内滚动**——
+                // 不再有 `+N` 与容量算式（卡片高度随标题 / 地点变化，定高算式算不准）。视口高度
+                // 钉 `todayListHeight`（行高 − 表头），组件自身不设高度。
+                //
+                // 滚动手势与面板收起：本行既有 `.onHover { vm.isHoveringCalendar = $0 }`（见下方）
+                // 已覆盖整行，`ContentView` 的收起滚动判据是 `!vm.isHoveringCalendar`，因此在本列
+                // 里滚动不会把面板收起——不另加抑制逻辑。
+                CalendarEventCardList(
                     events: calendarManager.events,
                     selectedDate: selectedDate,
-                    availableHeight: todayListHeight
+                    showFullEventTitles: showFullEventTitles
                 )
+                .frame(height: todayListHeight, alignment: .top)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

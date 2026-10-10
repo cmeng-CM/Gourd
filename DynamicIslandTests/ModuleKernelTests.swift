@@ -82,6 +82,9 @@
 //  三段弧环心 0.33 / 0.65 / 0.90R、线宽 0.113R、底部开口 70°；从用户给的控制中心参考图量出，
 //  见 docs/34 §做法 机制二）；视图侧的渲染像素判据（圆心点 + 三段同心环 + 缺口在视觉正下方）
 //  在 `.workflow/p9-calendar-week-icon/evidence/glyph-structure.py`（脚本，退出码 0）。
+//  P11 / T2 首页行滚动卡片列——`CalendarEventCardList.ordered` 的展示顺序（全天在前、各自按
+//  `start` 升序、提醒与日程混排同一把尺子、空数组返回空；口径逐字沿用旧
+//  `EventListView.orderedEvents`）。
 //
 
 import AppKit
@@ -6753,6 +6756,161 @@ final class HomeCalendarRowLayoutTests: XCTestCase {
         XCTAssertEqual(six.overflowCount, 1)
         XCTAssertTrue(six.showsOverflow)
         XCTAssertLessThanOrEqual(six.contentHeight, listHeight, "「5 行 + +N」也必须放进行高里")
+    }
+}
+
+// MARK: - 首页行滚动卡片列的展示顺序（P11 / T2，docs/36 §接口与数据形状）
+
+/// `CalendarEventCardList.ordered(_:)` 的展示顺序（纯函数）——口径**逐字沿用**旧
+/// `EventListView.orderedEvents`：`partitionEvents` 后**全天在前、各自按 `start` 升序**；
+/// 提醒与日程走同一把尺子混排（旧清单本来就是一条竖列，不分「提醒一档、日程一档」）。
+///
+/// **时区前提**：夹具用固定 GMT 日历构造时刻（不读本机时区），期望值全部是同一份日历下的
+/// `Date` 比较——`ordered` 只比 `Date`，固定日历只为让夹具可复现。
+@MainActor
+final class CalendarEventCardListOrderTests: XCTestCase {
+
+    /// 固定日历：格里高利 + GMT（不受本机时区影响）+ `en_US_POSIX`（与同文件日历用例同口径）。
+    private func cardCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 1
+        return calendar
+    }
+
+    /// 2026-10 里某天某时刻（年 / 月 / 日 / 时 / 分，构造口径同同文件既有的 `gridTime`）。
+    private func cardTime(_ calendar: Calendar, day: Int, hour: Int, minute: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute))!
+    }
+
+    /// 一个条目（`CalendarModel` 用系统色；`type` 决定它是不是提醒）——构造口径照同文件既有的
+    /// `gridEvent` 夹具，本类自带一份私有副本（原夹具是别的类的私有成员，拿不到）。
+    private func cardEvent(
+        id: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool = false,
+        type: EventType = .event(.accepted)
+    ) -> EventModel {
+        EventModel(
+            id: id,
+            start: start,
+            end: end,
+            title: id,
+            location: nil,
+            notes: nil,
+            url: nil,
+            isAllDay: isAllDay,
+            type: type,
+            calendar: CalendarModel(
+                accountName: "Test",
+                id: "test.calendar",
+                title: "Test",
+                color: .systemBlue,
+                isSubscribed: false,
+                isReminder: type.isReminder
+            ),
+            participants: [],
+            timeZone: TimeZone(secondsFromGMT: 0),
+            hasRecurrenceRules: false,
+            priority: nil,
+            conferenceURL: nil
+        )
+    }
+
+    /// **全天在前**：输入刻意乱序（全天组内部也乱序、定时条目夹在中间），输出 = 全天组
+    /// （内部按 `start` 升序）+ 定时组（内部按 `start` 升序），条目不增不减。
+    /// 全天组用**跨天与单日**两条不同 `start` 的条目，全天内部才有先后可分。
+    func testOrderedPutsAllDayFirstAndSortsEachGroupByStart() {
+        let calendar = cardCalendar()
+        let timedEarly = cardEvent(
+            id: "timed-early",
+            start: cardTime(calendar, day: 1, hour: 9),
+            end: cardTime(calendar, day: 1, hour: 10)
+        )
+        // 单日全天（10/2）与跨天全天（10/1 起）：start 分别是 10/2 与 10/1。
+        let allDayShort = cardEvent(
+            id: "allday-short",
+            start: cardTime(calendar, day: 2, hour: 0),
+            end: cardTime(calendar, day: 3, hour: 0),
+            isAllDay: true
+        )
+        let timedLate = cardEvent(
+            id: "timed-late",
+            start: cardTime(calendar, day: 1, hour: 15),
+            end: cardTime(calendar, day: 1, hour: 16)
+        )
+        let allDayLong = cardEvent(
+            id: "allday-long",
+            start: cardTime(calendar, day: 1, hour: 0),
+            end: cardTime(calendar, day: 3, hour: 0),
+            isAllDay: true
+        )
+
+        let ordered = CalendarEventCardList.ordered([timedEarly, allDayShort, timedLate, allDayLong])
+
+        XCTAssertEqual(
+            ordered.map(\.id),
+            ["allday-long", "allday-short", "timed-early", "timed-late"],
+            "全天在前（全天组内部按 start 升序：10/1 的跨天条目在 10/2 的单日条目之前）、定时在后（按 start 升序）"
+        )
+        XCTAssertEqual(ordered.count, 4, "排序不增不减条目")
+    }
+
+    /// **定时按 `start` 升序**：输入 15:00、09:00、12:00（乱序）→ 输出 09:00、12:00、15:00。
+    func testOrderedSortsTimedEventsByStart() {
+        let calendar = cardCalendar()
+        let ordered = CalendarEventCardList.ordered([
+            cardEvent(id: "15:00", start: cardTime(calendar, day: 1, hour: 15), end: cardTime(calendar, day: 1, hour: 16)),
+            cardEvent(id: "09:00", start: cardTime(calendar, day: 1, hour: 9), end: cardTime(calendar, day: 1, hour: 10)),
+            cardEvent(id: "12:00", start: cardTime(calendar, day: 1, hour: 12), end: cardTime(calendar, day: 1, hour: 13)),
+        ])
+
+        XCTAssertEqual(ordered.map(\.id), ["09:00", "12:00", "15:00"], "定时条目按开始时间升序")
+    }
+
+    /// **提醒与日程混排一起排**：定时提醒按它自己的 `start` 插在两条日程之间（不做提醒 / 日程分档）；
+    /// 全天提醒落进全天组（在全部定时条目之前）。
+    func testOrderedSortsRemindersTogetherWithEvents() {
+        let calendar = cardCalendar()
+        let allDayReminder = cardEvent(
+            id: "reminder-allday",
+            start: cardTime(calendar, day: 1, hour: 0),
+            end: cardTime(calendar, day: 2, hour: 0),
+            isAllDay: true,
+            type: .reminder(completed: false)
+        )
+        let morningEvent = cardEvent(
+            id: "event-07:30",
+            start: cardTime(calendar, day: 1, hour: 7, minute: 30),
+            end: cardTime(calendar, day: 1, hour: 8, minute: 30)
+        )
+        let middayReminder = cardEvent(
+            id: "reminder-08:30",
+            start: cardTime(calendar, day: 1, hour: 8, minute: 30),
+            end: cardTime(calendar, day: 1, hour: 8, minute: 30),
+            type: .reminder(completed: true)
+        )
+        let eveningEvent = cardEvent(
+            id: "event-18:00",
+            start: cardTime(calendar, day: 1, hour: 18),
+            end: cardTime(calendar, day: 1, hour: 19)
+        )
+
+        let ordered = CalendarEventCardList.ordered([eveningEvent, middayReminder, allDayReminder, morningEvent])
+
+        XCTAssertEqual(
+            ordered.map(\.id),
+            ["reminder-allday", "event-07:30", "reminder-08:30", "event-18:00"],
+            "全天提醒在前；定时提醒与日程按同一把 start 尺子混排"
+        )
+    }
+
+    /// 空数组返回空（宿主据此走 `EmptyEventsView`；组件自身不造任何兜底条目）。
+    func testOrderedEmptyReturnsEmpty() {
+        XCTAssertTrue(CalendarEventCardList.ordered([]).isEmpty, "空输入 → 空输出")
     }
 }
 
