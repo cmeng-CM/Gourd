@@ -61,11 +61,13 @@
 xcodebuild test -project DynamicIsland.xcodeproj -scheme DynamicIsland \
   -destination "platform=macOS" -derivedDataPath ~/Library/Developer/Xcode/Gourd \
   -only-testing:DynamicIslandTests -skipMacroValidation -skipPackagePluginValidation \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES
 
 sh tools/build.sh          # 能出包即可
 ```
+
+上面**不覆盖签名身份**（工程自己的设置生效：App target 用本机钥匙串里的自签证书 `Gourd Local`）——这样测试宿主的代码签名身份跨构建稳定，macOS 的隐私授权框（蓝牙 / 相机 / 日历 / 提醒 / 自动化 / 屏幕录制）只弹一次；若在命令行写 `CODE_SIGN_IDENTITY="-"`（临时签名），指定要求变成「本次构建的 cdhash」，每次构建都被当成新 App、授权反复弹（2026-10-10 实测）。也**不要**在命令行写 `CODE_SIGN_IDENTITY="Gourd Local"`：命令行覆盖会连带 SPM 包要求团队签名、直接构建失败。CI 没有这张证书，`.github/workflows/ci.yml` 仍用临时签名。
 
 真机自检按 [25-release-smoke](25-release-smoke.md) 走一遍；**没跑到的条目要写进当次发布报告，不许留空。**
 
