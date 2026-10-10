@@ -58,120 +58,6 @@ func scrollReferenceTime(for date: Date) -> Date {
     Calendar.current.isDateInToday(date) ? Date() : Calendar.current.startOfDay(for: date)
 }
 
-// MARK: - Compact all-day events strip
-
-/// Shared layout metrics for the all-day events strip.
-///
-/// The strip height and the space reserved for it in the timed-events list must
-/// stay in sync across `AllDayEventsStrip` and `StandaloneEventCardList`.
-/// Centralising the values here avoids the hardcoded
-/// `28` / `3` / `41` / `30` duplicated in multiple views (#566 review).
-private enum AllDayStripMetrics {
-    /// Height of the horizontal chip row inside `AllDayEventsStrip`.
-    static let chipRowHeight: CGFloat = 28
-    /// Vertical padding applied around the chips and the strip content.
-    static let verticalPadding: CGFloat = 3
-    /// Top inset pushed onto the timed `List` so `scrollTo(.top)` lands the
-    /// target event fully below the floating all-day overlay
-    /// (chip row + 1pt divider + 1pt margin ≈ 30pt). Reserved by
-    /// `StandaloneEventCardList` so its list pads exactly the strip height.
-    /// (#566 review: de-duplicate the hardcoded 28/3/41/30)
-    static let listTopInset: CGFloat = 30
-}
-
-/// Horizontal, single-row strip of all-day events.
-///
-/// The Dynamic Island calendar panel is height-constrained (`CalendarView` is
-/// capped at a fixed height). The previous design stacked one full row per
-/// all-day event in a pinned top section, so two all-day events could consume
-/// the entire panel and leave no room for the timed-events scroll area below
-/// (#566 follow-up). This strip keeps the all-day section at a constant
-/// single-row height regardless of how many all-day events exist — extra
-/// events scroll horizontally within the strip instead of growing vertically.
-private struct AllDayEventsStrip: View {
-    let events: [EventModel]
-    /// 详情浮层状态（P11 / T4，宿主一份）：芯片把悬停 / 点击写给它；浮层本体由
-    /// `StandaloneCalendarView` 右栏**整列**（`rightColumn`，P11 / T6 起）的
-    /// `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
-    let details: CalendarEventDetailsModel
-    var onToggleReminder: ((String, Bool) -> Void)? = nil
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(events) { event in
-                        allDayChip(event)
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.vertical, AllDayStripMetrics.verticalPadding)
-            }
-            .frame(height: AllDayStripMetrics.chipRowHeight)
-            .clipped()
-
-            Rectangle()
-                .fill(Color.gray.opacity(0.2))
-                .frame(height: 1)
-                .padding(.horizontal, 4)
-        }
-    }
-
-    /// 全天芯片：**点击 = 钉住详情**（P11 / T4 口径变更——原来点击是 `openURL(event.calendarAppURL())`，
-    /// 打开系统 App 改由浮层的「Open in Calendar」执行，D-09）；悬停约 0.3s 由
-    /// `CalendarEventHoverTarget` 报给浮层，锚点经 `anchorPreference` 上报到面板右栏 pane 级。
-    /// 芯片里的勾选圈（`ReminderToggle`）是 `Button`、自身吞点击，点它不会误触钉住。
-    private func allDayChip(_ event: EventModel) -> some View {
-        CalendarEventHoverTarget(id: event.id, model: details) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color(event.calendar.color))
-                    .frame(width: 8, height: 8)
-
-                Text(event.title)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-
-                if event.isAllDay {
-                    Text("All-day")
-                        .font(.caption2)
-                        .foregroundColor(Color(white: 0.6))
-                        .lineLimit(1)
-                }
-
-                if event.type.isReminder, let onToggleReminder {
-                    reminderToggle(for: event, using: onToggleReminder)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, AllDayStripMetrics.verticalPadding)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
-            .contentShape(Capsule())
-        }
-        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
-        .onTapGesture {
-            details.togglePin(event.id)
-        }
-    }
-
-    private func reminderToggle(for event: EventModel, using onToggleReminder: @escaping (String, Bool) -> Void) -> some View {
-        let isCompleted: Bool
-        if case .reminder(let completed) = event.type {
-            isCompleted = completed
-        } else {
-            isCompleted = false
-        }
-        return ReminderToggle(
-            isOn: Binding(
-                get: { isCompleted },
-                set: { newValue in onToggleReminder(event.id, newValue) }
-            ),
-            color: Color(event.calendar.color)
-        )
-    }
-}
 
 struct Config: Equatable {
     var past: Int = 7
@@ -1146,7 +1032,7 @@ struct StandaloneCalendarView: View {
     @State private var isComposing = false
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
-    /// 详情浮层状态（P11 / T4，面板页一份；首页行各自持一份）：卡片与全天芯片把悬停 / 点击写给它，
+    /// 详情浮层状态（P11 / T4，面板页一份；首页行各自持一份）：卡片把悬停 / 点击写给它，
     /// 浮层由右栏整列 `rightColumn` 上挂的 `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`；
     /// P11 / T6 起挂点从 pane 上移到整列，表单期列表不在树上 → 无锚点 → 浮层不渲染）。
     ///
@@ -1336,12 +1222,12 @@ struct StandaloneCalendarView: View {
         .frame(height: Self.quickAddHeaderHeight)
     }
 
-    /// 右栏 pane：空态走 `EmptyEventsView`，否则渲染「全天芯片条 + 可滚动卡片 List」
-    /// （`StandaloneEventCardList`，它与芯片条共持本视图的 `details`）。
+    /// 右栏 pane：空态走 `EmptyEventsView`，否则渲染可滚动卡片 List
+    /// （`StandaloneEventCardList`；**全天与定时条目都是卡片**——2026-10-10 改判，黑底芯片条已退休）。
     ///
     /// **详情浮层（P11 / T4；挂点 P11 / T6 上移到整列）**：浮层画在**列表之外**（不在 `List` 行内、
     /// 不被行 / 滚动视口裁剪），由宿主 `rightColumn` 的 `.calendarEventDetails(model:)` 挂**一次**
-    /// （本 pane 只上报锚点、不再自己挂——两处都挂会叠出两张）；条目锚点由卡片与全天芯片的
+    /// （本 pane 只上报锚点、不再自己挂——两处都挂会叠出两张）；条目锚点由卡片的
     /// `anchorPreference` 上报（`CalendarEventDetail.swift` 的 `overlayPreferenceValue` + 现场解析）。
     private var rightEventsPane: some View {
         Group {
@@ -1403,21 +1289,27 @@ private struct StandaloneEventCardList: View {
     let events: [EventModel]
     let selectedDate: Date
     let showFullEventTitles: Bool
-    /// 详情浮层状态（P11 / T4，宿主一份）：卡片与全天芯片把悬停 / 点击写给它；浮层本体由
+    /// 详情浮层状态（P11 / T4，宿主一份）：卡片把悬停 / 点击写给它；浮层本体由
     /// `StandaloneCalendarView` 右栏**整列**（`rightColumn`，P11 / T6 起）的
     /// `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
     let details: CalendarEventDetailsModel
     let onToggleReminder: (String, Bool) -> Void
     @State private var initialAutoScrollDone = false
 
-    private var allDayEvents: [EventModel] {
-        partitionEvents(events).allDay.sorted { $0.start < $1.start }
+    /// 列表顺序：**全天在前、各自按开始时间升序**——与首页卡片列（`CalendarEventCardList.ordered`）同序。
+    ///
+    /// 改判（2026-10-10，用户拍板）：原先全天条目走顶部**黑底芯片条**（`AllDayEventsStrip`，已退休），
+    /// 与首页「全天 = 一张卡片、收尾位显示 全天」的形态不一致；现在两处都走同一条卡片列表。
+    private var orderedEvents: [EventModel] {
+        let partitioned = partitionEvents(events)
+        return partitioned.allDay.sorted { $0.start < $1.start }
+            + partitioned.timed.sorted { $0.start < $1.start }
     }
 
     private var timedEvents: [EventModel] {
         // Sorted by start time so `scrollTargetForTimedEvents` (which uses
         // `first(where:)` to pick in-progress / next-upcoming) returns the true
-        // nearest-to-now event, and the list renders chronologically. (#566)
+        // nearest-to-now event. (#566)
         partitionEvents(events).timed.sorted { $0.start < $1.start }
     }
 
@@ -1438,75 +1330,52 @@ private struct StandaloneEventCardList: View {
     }
 
     var body: some View {
-        // Timed-events list fills the whole panel; the all-day strip floats as
-        // an overlay on top (zero vertical cost) so the scroll area below keeps
-        // its full height inside the constrained calendar panel. The List
-        // carries a top padding equal to the strip height so scrollTo(.top)
-        // lands the target event fully below the overlay. Using `List` (instead
-        // of the previous `LazyVStack`-in-`ScrollView`) keeps the scroll
-        // behaviour and look consistent with the home card column
-        // (`CalendarEventCardList`) and gives built-in separators.
-        // (#566 review: unify the two event lists)
-        ZStack(alignment: .top) {
-            ScrollViewReader { proxy in
-                ZStack {
-                    List {
-                        ForEach(timedEvents) { event in
-                            eventCard(event)
-                                .id(event.id)
-                                .padding(.bottom, 8)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets())
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollIndicators(.never)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
-                    // Push list content down so scrollTo(.top) positions the
-                    // target event fully below the floating all-day overlay.
-                    .padding(.top, allDayEvents.isEmpty ? 0 : AllDayStripMetrics.listTopInset)
-                }
-                .onAppear {
-                    scrollToRelevantEvent(proxy: proxy)
-                    if !timedEvents.isEmpty {
-                        initialAutoScrollDone = true
-                    }
-                }
-                .onChange(of: selectedDate) { _, _ in
-                    scrollToRelevantEvent(proxy: proxy)
-                }
-                .onChange(of: timedEvents.isEmpty) { wasEmpty, isEmpty in
-                    // Retrigger the initial auto-scroll once, when timed events become
-                    // available after the view appeared (e.g. async calendar load).
-                    // Guarded so later data refreshes don't re-scroll. (#566 follow-up)
-                    guard wasEmpty, !isEmpty, !initialAutoScrollDone else { return }
-                    scrollToRelevantEvent(proxy: proxy)
-                    initialAutoScrollDone = true
-                }
-                .onChange(of: events) { _, _ in
-                    // Fallback: re-trigger auto-scroll when events are refreshed (e.g., calendar
-                    // permission granted, calendars re-selected, or external calendar change).
-                    // The initialAutoScrollDone guard prevents unwanted re-scrolling on minor updates.
-                    if !initialAutoScrollDone {
-                        scrollToRelevantEvent(proxy: proxy)
-                    }
+        // 一条可滚动列表，**全天与定时条目都是卡片**（与首页右栏 `CalendarEventCardList` 同款；
+        // 全天卡片在收尾位显示「全天」）。改判（2026-10-10，用户拍板）：原先全天走顶部黑底芯片条
+        // （`AllDayEventsStrip`，含 `.background(Color.black.opacity(0.95))`，本次随本视图一并退休）——
+        // 面板页与首页因此在这块观感不一致（黑条 vs 卡片）。
+        // 使用 `List`（而不是 `LazyVStack`-in-`ScrollView`）保留既有滚动行为与内置分隔，
+        // 与首页卡片列的口径一致（#566 review）。自动滚动（`autoScrollToNextEvent`）只以
+        // **定时条目**为目标（`timedEvents` / `scrollTargetForTimedEvents`），全天卡片不参与。
+        ScrollViewReader { proxy in
+            List {
+                ForEach(orderedEvents) { event in
+                    eventCard(event)
+                        .id(event.id)
+                        .padding(.bottom, 8)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
             }
-
-            // Floating all-day strip overlay (28pt chip row + 1pt divider ≈ 29pt).
-            // It sits above the list and events scroll underneath it, like macOS
-            // Calendar's Day view. The reserved `listTopInset` (30) lines up with
-            // the real strip height (chip row + divider + 1pt margin).
-            // No shadow gradient is drawn on top of the events anymore.
-            if !allDayEvents.isEmpty {
-                AllDayEventsStrip(
-                    events: allDayEvents,
-                    details: details,
-                    onToggleReminder: onToggleReminder
-                )
-                .background(Color.black.opacity(0.95))
+            .listStyle(.plain)
+            .scrollIndicators(.never)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .onAppear {
+                scrollToRelevantEvent(proxy: proxy)
+                if !timedEvents.isEmpty {
+                    initialAutoScrollDone = true
+                }
+            }
+            .onChange(of: selectedDate) { _, _ in
+                scrollToRelevantEvent(proxy: proxy)
+            }
+            .onChange(of: timedEvents.isEmpty) { wasEmpty, isEmpty in
+                // Retrigger the initial auto-scroll once, when timed events become
+                // available after the view appeared (e.g. async calendar load).
+                // Guarded so later data refreshes don't re-scroll. (#566 follow-up)
+                guard wasEmpty, !isEmpty, !initialAutoScrollDone else { return }
+                scrollToRelevantEvent(proxy: proxy)
+                initialAutoScrollDone = true
+            }
+            .onChange(of: events) { _, _ in
+                // Fallback: re-trigger auto-scroll when events are refreshed (e.g., calendar
+                // permission granted, calendars re-selected, or external calendar change).
+                // The initialAutoScrollDone guard prevents unwanted re-scrolling on minor updates.
+                if !initialAutoScrollDone {
+                    scrollToRelevantEvent(proxy: proxy)
+                }
             }
         }
         .clipped()
