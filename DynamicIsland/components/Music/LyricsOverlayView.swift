@@ -29,12 +29,18 @@
 //  （取证用例 `LyricsOverlayViewRenderTests`），显隐与位置判断一条都不进视图。
 //
 //  **渲染由规则决定**：行窗口 = `LyricsOverlayRules.visibleWindow`（当前行居中、越界留空），
-//  颜色 = `LyricsOverlayRules.resolvedColor`（跟封面 / 白 / 自定义）。高亮这一档由**入参
-//  `highlightIndex`** 承载——`nil` 就是「整层同色同字重」（plain 歌词与「高亮当前行」关闭都是
-//  这一种输入，见 D-08 / `Defaults.Keys.lyricsHighlightCurrent` 的注释），视图不再自己判断。
+//  颜色 = `LyricsOverlayRules.resolvedColor`（跟封面 / 白 / 自定义），两者由入参喂进来的
+//  `lines` / `highlightIndex` 直接驱动——视图不读键、不比占位串、不做「要不要高亮」的判断。
+//
+//  **两个入参分工**：`highlightIndex`（`LyricsOverlayRules.highlightIndex` 的输出）是**行窗口的
+//  居中锚**，同时也是「哪一行是当前行」；`emphasizeCurrent`（`lyricsHighlightCurrent` 键）只决定
+//  **要不要强调**。分成两个是因为「高亮当前行」关掉时不能连行窗口一起冻住（那会永远停在第一行）；
+//  plain 歌词的「不高亮」则由 rules 的 `highlightIndex == nil` 承载（D-08），与开关无关。
+//  `nil` = 没有当前行（plain / 还没轮到第一句）→ 窗口按第一行居中。
 //
 //  **「提亮」的实现**：当前行满不透明度 + 加粗，其余行按同一颜色压到 `dimmedAlpha`——
 //  同一颜色上的相对提亮，白档 / 自定义档 / 跟封面档天然同款，不需要逐档另算亮色。
+//  强调关掉 = 整层 `dimmedAlpha` 之上的原色原字重（同色同字重，见 `Defaults.Keys.lyricsHighlightCurrent`）。
 //
 
 import AppKit
