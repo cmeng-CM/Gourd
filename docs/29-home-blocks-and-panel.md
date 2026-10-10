@@ -116,6 +116,7 @@
 ### 机制四 · 音乐块：从「大块」降到「一条」
 
 音乐块三处声明一起改：宽度 `300/420` → **`240/300`**、形态 `.large` → **`.compact`**、封面 `showAlbumArt` 默认 **false**（打开则画 40pt 小封面）。**紧凑条要自己的密度**（T3 阶段 Checkpoint 实测改判，见 D-17）：`MusicControlsView` 的标准档内容（曲名 + 艺人 + 进度 + 控制）约 127pt，装不进 96 的紧凑档——把它的**艺人行、歌词行、大内边距交给展开面板**，紧凑档只留「曲名（单行，截断）+ 进度条 + 控制三键」，因此四个元素都在块内、不裁不溢。它是首页唯一一个**因为太大而把整行撑到 152 高**的块（`HomeStripView.minimumUsableHeight` 的 152 就是从它的封面量出来的），它降到紧凑档后「大块档」就没有成员了——**大块档的高度改由镜子定义，而且必须是显式选定值、不是实测值**：镜子块体是 `CameraPreviewView`（`GeometryReader` + `.aspectRatio(1, .fit)`），**没有固有高度**，圆的直径 = `min(分到的宽, 行高)`；「实测」只会量到当前档高，是循环。故取 **大块档 = 镜子的方形边长 `140`**（= 镜子块的最小宽），并把镜子块的宽度声明收敛成 `140/140`：圆恰好是方形、块内不留横向空档，档高与块形同源。封面开关**不新增状态**：它已经是音乐模块 manifest 里的 `showAlbumArt`，只是默认值翻面。
+~~「把它的**艺人行、歌词行、大内边距交给展开面板**」~~ **2026-10-10 改判（p10-lyrics-overlay）：其中「歌词行」一句彻底不成立——内嵌歌词行随本批删除、侧歌词档整条退休，展开面板与本块都不再有歌词落点；歌词改由屏幕悬浮层（岛不展开时显示）接管（见 docs/35 与 docs/00 ADR-0018）**
 > 依据：D-09 / D-10 / D-17。
 
 ### 机制五 · Nook X 的三条可迁移原则（不是照抄它的皮肤）
@@ -242,6 +243,7 @@ manual 档 `panelHeight(...)` 原样返回手动值 → 那条链逐字是改动
     static let shared: PanelContentHeight
     static let homeTab = "home"
     static let sideLyricsHomeTab = "sideLyricsHome"   // 侧歌词档首页的键：没人上报 → `current` = nil → 回落手动值（终审 D-57）
+    // ~~侧歌词档首页的键~~ **2026-10-10 改判（p10-lyrics-overlay）：本键随侧歌词档整条退休，代码里全仓零命中（见 docs/35 与 docs/00 ADR-0018）**
     static let hysteresis: CGFloat = 8
     static let measuredTabs: Set<String>       // todos / notifications / launcher / shortcuts（模块 id）
     static func isMeasuredTab(_ tab: String?) -> Bool
@@ -265,6 +267,7 @@ extension View {
 ```
 **探针不是 `onGeometryChange`**：一个 `Layout`（`PanelNaturalHeightLayout`）在 `placeSubviews` 里按 `ProposedViewSize(width: bounds.width, height: nil)` 量这一页的**理想高**（宽按面板给的那个格子、高留空），`sizeThatFits` 逐字转发提案（渲染透明）。
 **首页不走上报**：接缝 `HomeBandedHomeView` 把「流方案的内容高 + 日历行（画了才加）+ 面板表头」算出来写 `setHomeContentHeight(_:)`；双向收敛与「光标在面板内不缩」都在那一侧做完。**这一份只对标准路径有效**：侧歌词档（`NotchHomeView` 的第二支）没有自己的内容高，账本键走 `sideLyricsHomeTab`（没人上报）→ `current` = nil → 尺寸层回落手动值（终审 D-57，判据 `showsSideLyricsHomeLayout(...)` 与视图共用）。
+~~侧歌词档（`NotchHomeView` 的第二支）+ `sideLyricsHomeTab` + `showsSideLyricsHomeLayout(...)` 这一族~~ **2026-10-10 改判（p10-lyrics-overlay）：随侧歌词档整条退休（键 / 判据 / 视图 / 用例全删、代码里全仓零命中）；首页在「歌词开 + 日历关」时也永远走标准两条带 + 一行（见 docs/35 与 docs/00 ADR-0018）**
 
 ### 模块侧（逐条对代码）
 
@@ -537,6 +540,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | D-15 | **接受超限**，九任务一个工作流（超过 8 的惯例上限） | agent | 七条反馈是同一次需求且彼此耦合（音乐降档 ↔ 大块档高度 ↔ 自适应高度），拆开要用户审两遍设计、走两道门；代价 = 两道门的审阅有效性下降（计划更长、更容易被扫过），用三阶段 Checkpoint 分段核对补偿 |
 | D-16 | auto 模式下**隐藏右下角拖动把手**（把手 = manual 专属）；auto 下 per-tab 覆盖值与内容高取 `max` | agent | 拖动写的是 `openNotchHeight`，auto 下它当场没有效果——留着手把就是本仓明确规避的「拖了没用」（`ContentView` 极简模式隐藏把手是同一条先例）；覆盖值是下限不是上限 |
 | D-17 | 紧凑档的音乐块要**自己的密度**：紧凑档只画「曲名（单行截断）+ 进度条 + 控制三键」，**艺人行 / 歌词行 / 大内边距留给展开面板**；`MusicControlsView` 加一个密度参数（默认标准档，展开面板逐字不变）而不是在模块里另写一套控制条 | agent | T3 阶段 Checkpoint 上屏实测：标准档内容 ≈127pt（10 顶距 + 17 曲名 + 17 艺人 + 41 滑条 + 8 间距 + ~30 控制），96 的紧凑档里**控制三键整行被裁**（AX 有元素、屏上没有）——这是 D-09「音乐降到紧凑档」与「保留曲名/艺人/进度/控制四件套」在 96pt 里不可能同时成立；另写一套控制条会让「音乐控制键」有两份实现，故用密度参数 |
+| D-17 改判 | ~~「**艺人行 / 歌词行 / 大内边距留给展开面板**」~~ **2026-10-10 改判（p10-lyrics-overlay）：其中「歌词行」一句作废——内嵌歌词行随本批删除、侧歌词档整条退休（`MusicControlsView` 的 `.regular` 档失去全部消费点），展开面板与本块都不再有歌词落点；歌词改由屏幕悬浮层显示（见 docs/35 与 docs/00 ADR-0018）** | agent | 推翻既有结论必须留痕（docs/35 D-14；同批完整讲法见 [35](35-desktop-lyrics-overlay.md) §背景与目标） |
 
 ### 执行期判断（2026-10-01 回写，D-18 起续号）
 
@@ -606,6 +610,7 @@ func showsPanelResizeHandle(isOpen: Bool, isMinimalistic: Bool, heightMode: Stri
 | ID | 决策 | 来源 | 理由与代价 |
 |----|------|------|------|
 | D-57 | **侧歌词档首页不吃首页的账本槽**：新键 `PanelContentHeight.sideLyricsHomeTab`（**没人上报**）→ `current` = nil → 尺寸层回落手动值；判据提成纯函数 `showsSideLyricsHomeLayout(...)`（`NotchHomeView` 与 `ContentView.selectedPanelTabKey` 共用），键映射提成 `homePanelTabKey(showsSideLyricsLayout:)` | agent | 侧歌词档（`enableLyrics` 开 + 音乐在放 + 日历关）**没有自己的内容高**——写首页那一份的接缝（`HomeBandedHomeView`）不在屏幕上；落在首页键上时 auto 档的面板高 = **上一次标准首页算出来的值 + 40**（与侧歌词无关），而 auto 下把手隐藏、滑块禁用，用户没得改。给它一个没人上报的键 = D-45 对名单外页「回落手动值」同一条口径；标准路径逐字不变（判据两处共用、键映射是纯函数，由 `testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey` 钉住）。代价：`ContentView` 为此多观察三条键（`enableLyrics` / `showCalendar` / `autoHideInactiveNotchMediaPlayer`）、`NotchHomeView` 的私有 `shouldShowMusicPlayer` 并进同一判据 |
+| D-57 改判 | ~~侧歌词档首页不吃首页的账本槽（`sideLyricsHomeTab` + `showsSideLyricsHomeLayout(...)` + `homePanelTabKey(showsSideLyricsLayout:)` 一族）~~ **2026-10-10 改判（p10-lyrics-overlay）：侧歌词档随本批整条退休——这一族键 / 判据 / 视图 / 用例全部删除、代码里全仓零命中，解题对象消失、本题作废；「歌词开 + 日历关」的首页永远走标准两条带 + 一行（见 docs/35 与 docs/00 ADR-0018）** | agent | 推翻既有结论必须留痕（docs/35 D-14） |
 | D-58 | T3 两条**只在 `.workflow/` 账本里「不修并留痕」的物品进文档**：① 紧凑小封面 `AlbumArtThumbnailView`（`MusicModule.swift`）的**冗余二次 `clipShape`**（`DynamicIslandArtworkSourceView` 的 `cornerRadius` 参数已经裁过，外面又裁一次、同值；不修）；② `DynamicIslandTests/ShortcutsFrontAppTests.swift:961/964` 两处 **152 参数化样本**（旧大块档高，只作 `FrontAppGridBudget` 的**输入样本**、不是生产声明；不修） | agent | 「账本里记了、文档里没有」= 后来读文档的人看不到这两条已知状态；写进本节是为了让「知道而没修」与「漏了没修」可区分（清单另见 §实际交付 遗留 5）。代价：两条从排版噪声升级成**显式接受**的遗留 |
 
 ---
