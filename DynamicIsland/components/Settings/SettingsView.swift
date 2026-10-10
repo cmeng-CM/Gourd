@@ -851,9 +851,10 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .media, title: "Music Source", keywords: ["media source", "controller"], highlightID: SettingsTab.media.highlightID(for: "Music Source")),
             SettingsSearchEntry(tab: .media, title: "Skip buttons", keywords: ["skip", "controls", "±10"], highlightID: SettingsTab.media.highlightID(for: "Skip buttons")),
             SettingsSearchEntry(tab: .media, title: "Sneak Peek Style", keywords: ["sneak peek", "preview"], highlightID: SettingsTab.media.highlightID(for: "Sneak Peek Style")),
-            SettingsSearchEntry(tab: .media, title: "Show lyrics on the side (requires calendar off)", keywords: ["lyrics", "song text", "side panel", "calendar"], highlightID: SettingsTab.media.highlightID(for: "Show lyrics on the side (requires calendar off)")),
-            SettingsSearchEntry(tab: .media, title: "Side lyrics width", keywords: ["lyrics", "width", "panel"], highlightID: SettingsTab.media.highlightID(for: "Side lyrics width")),
-            SettingsSearchEntry(tab: .media, title: "Side lyrics horizontal offset", keywords: ["lyrics", "offset", "panel"], highlightID: SettingsTab.media.highlightID(for: "Side lyrics horizontal offset")),
+            SettingsSearchEntry(tab: .media, title: "Show lyrics on screen when the island is collapsed", keywords: ["lyrics", "song text", "screen", "overlay", "desktop lyrics"], highlightID: SettingsTab.media.highlightID(for: "Show lyrics on screen when the island is collapsed")),
+            SettingsSearchEntry(tab: .media, title: "Font size", keywords: ["lyrics", "font", "text size"], highlightID: SettingsTab.media.highlightID(for: "Font size")),
+            SettingsSearchEntry(tab: .media, title: "Opacity", keywords: ["lyrics", "opacity", "transparency"], highlightID: SettingsTab.media.highlightID(for: "Opacity")),
+            SettingsSearchEntry(tab: .media, title: "Line count", keywords: ["lyrics", "line count", "lines"], highlightID: SettingsTab.media.highlightID(for: "Line count")),
             SettingsSearchEntry(tab: .media, title: "Show live canvas in Dynamic Island", keywords: ["canvas", "live canvas", "album art", "dynamic island", "spotify canvas"], highlightID: SettingsTab.media.highlightID(for: "Show live canvas in Dynamic Island")),
             SettingsSearchEntry(tab: .media, title: "Auto-hide inactive notch media player", keywords: ["auto hide", "inactive", "placeholder", "notch media"], highlightID: SettingsTab.media.highlightID(for: "Auto-hide inactive notch media player")),
             SettingsSearchEntry(tab: .media, title: "Show Change Media Output control", keywords: ["airplay", "route picker", "media output"], highlightID: SettingsTab.media.highlightID(for: "Show Change Media Output control")),
@@ -2802,10 +2803,11 @@ struct Media: View {
     @Default(.lockScreenMusicFullscreenArtworkEnabled) private var lockScreenMusicFullscreenArtworkEnabled
     @Default(.showStandardMediaControls) private var showStandardMediaControls
     @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
-    @Default(.showCalendar) private var showCalendar
-    @Default(.enableLyrics) private var enableLyrics
-    @Default(.lyricsPanelWidth) private var lyricsPanelWidth
-    @Default(.lyricsPanelOffset) private var lyricsPanelOffset
+    @Default(.lyricsFontSize) private var lyricsFontSize
+    @Default(.lyricsLineCount) private var lyricsLineCount
+    @Default(.lyricsOpacity) private var lyricsOpacity
+    @Default(.lyricsColorMode) private var lyricsColorMode
+    @Default(.lyricsCustomColorHex) private var lyricsCustomColorHex
     @Default(.visualizerBarCount) private var visualizerBarCount
     @Default(.enableWaveformScrubber) private var enableWaveformScrubber
     @Default(.colorExtractionMode) private var colorExtractionMode
@@ -2820,6 +2822,20 @@ struct Media: View {
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.media.highlightID(for: title)
+    }
+
+    /// `lyricsCustomColorHex`（字符串键，`Defaults` 不稳存 SwiftUI `Color`）与 `ColorPicker` 的
+    /// 双向桥：读走 `LyricsOverlayRules.resolvedColor`（非法串回落白，与悬浮层同一口径），
+    /// 写回 `#RRGGBB`——大写、带 `#`（键的取值口径见 docs/35 §接口与数据形状；D-18 只许省略 `#`）。
+    private var customLyricsColor: Binding<Color> {
+        Binding(
+            get: {
+                LyricsOverlayRules.resolvedColor(mode: .custom, hex: lyricsCustomColorHex, albumArt: nil)
+            },
+            set: { newValue in
+                Defaults[.lyricsCustomColorHex] = newValue.lyricsHexString
+            }
+        )
     }
 
     private var standardControlsSuppressed: Bool {
@@ -2962,61 +2978,6 @@ struct Media: View {
                 Toggle("Enable sneak peek", isOn: $enableSneakPeek)
                 Toggle("Show sneak peek on playback changes", isOn: $showSneakPeekOnTrackChange)
                     .disabled(!enableSneakPeek)
-                Defaults.Toggle(key: .enableLyrics) {
-                    Text("Show lyrics on the side (requires calendar off)")
-                }
-                .disabled(showCalendar || enableMinimalisticUI || !showStandardMediaControls)
-                .opacity(showCalendar || enableMinimalisticUI || !showStandardMediaControls ? 0.5 : 1)
-                .help(
-                    showCalendar
-                        ? "Disable the calendar to show lyrics in the side panel."
-                        : enableMinimalisticUI
-                            ? "Disable Minimalistic UI to show lyrics in the side panel."
-                            : !showStandardMediaControls
-                                ? "Enable Dynamic Island media controls to show lyrics in the side panel."
-                                : ""
-                )
-                .settingsHighlight(id: highlightID("Show lyrics on the side (requires calendar off)"))
-                if showCalendar {
-                    Text("Disable the calendar to use side lyrics.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if enableMinimalisticUI {
-                    Text("Disable Minimalistic UI to use side lyrics.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if !showStandardMediaControls {
-                    Text("Enable Dynamic Island media controls to use side lyrics.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if enableLyrics && !enableMinimalisticUI && !showCalendar && showStandardMediaControls {
-                    Slider(value: $lyricsPanelWidth, in: 180...420, step: 10) {
-                        HStack {
-                            Text("Side lyrics width")
-                            Spacer()
-                            Text("\(Int(lyricsPanelWidth)) px")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .settingsHighlight(id: highlightID("Side lyrics width"))
-
-                    Slider(value: $lyricsPanelOffset, in: -100...100, step: 1) {
-                        HStack {
-                            Text("Side lyrics horizontal offset")
-                            Spacer()
-                            Text("\(lyricsPanelOffset >= 0 ? "+" : "")\(Int(lyricsPanelOffset)) px")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .settingsHighlight(id: highlightID("Side lyrics horizontal offset"))
-
-                    Text("These controls apply when the calendar is disabled.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 Defaults.Toggle(key: .showLiveCanvasInDynamicIsland) {
                     Text("Show live canvas in Dynamic Island")
                 }
@@ -3059,6 +3020,74 @@ struct Media: View {
                 .settingsHighlight(id: highlightID("Show song title and artist in closed notch"))
             } header: {
                 Text("Media playback live activity")
+            }
+
+            // 屏幕歌词（docs/35 D-01/D-05/D-09）：面板内三处落点已退休，歌词只在岛不展开时
+            // 以屏幕悬浮层出现——本节是那层悬浮层的全部入口，与日历 / 极简 / 标准媒体控件
+            // **零耦合**（旧的两处 `.disabled` 死锁随 T4 解除），所以没有任何灰态。
+            Section {
+                Defaults.Toggle(key: .enableLyrics) {
+                    Text("Show lyrics on screen when the island is collapsed")
+                }
+                .settingsHighlight(id: highlightID("Show lyrics on screen when the island is collapsed"))
+
+                Slider(value: $lyricsFontSize, in: 12...30, step: 1) {
+                    HStack {
+                        Text("Font size")
+                        Spacer()
+                        Text("\(Int(lyricsFontSize)) pt")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .settingsHighlight(id: highlightID("Font size"))
+
+                Picker("Line count", selection: $lyricsLineCount) {
+                    Text("1").tag(1)
+                    Text("3").tag(3)
+                    Text("5").tag(5)
+                }
+                .settingsHighlight(id: highlightID("Line count"))
+
+                Slider(value: $lyricsOpacity, in: 0.3...1.0, step: 0.05) {
+                    HStack {
+                        Text("Opacity")
+                        Spacer()
+                        Text("\(Int(lyricsOpacity * 100))%")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .settingsHighlight(id: highlightID("Opacity"))
+
+                Picker("Color mode", selection: $lyricsColorMode) {
+                    Text("Album art").tag(LyricsColorMode.albumArt)
+                    Text("White").tag(LyricsColorMode.white)
+                    Text("Custom").tag(LyricsColorMode.custom)
+                }
+                .settingsHighlight(id: highlightID("Color mode"))
+
+                if lyricsColorMode == .custom {
+                    ColorPicker("Custom color", selection: customLyricsColor, supportsOpacity: false)
+                        .settingsHighlight(id: highlightID("Custom color"))
+                }
+
+                Defaults.Toggle(key: .lyricsHighlightCurrent) {
+                    Text("Highlight current line")
+                }
+                .settingsHighlight(id: highlightID("Highlight current line"))
+
+                Defaults.Toggle(key: .lyricsOverlayLocked) {
+                    Text("Lock position")
+                }
+                .settingsHighlight(id: highlightID("Lock position"))
+
+                Button("Reset position") {
+                    LyricsOverlayWindowManager.shared.resetOffset()
+                }
+                .settingsHighlight(id: highlightID("Reset position"))
+            } header: {
+                Text("Lyrics on screen")
+            } footer: {
+                Text("Lyrics appear in a draggable overlay on your desktop below the island while music plays. The overlay hides while the island is expanded.")
             }
 
             Section {
@@ -3204,10 +3233,25 @@ struct Media: View {
     }
 }
 
+// MARK: - 自定义歌词色的十六进制桥
+
+/// `Color` → `#RRGGBB`（大写、带 `#`、sRGB）。`ColorPicker` 写回 `lyricsCustomColorHex` 前
+/// 必须过这一道：该键的取值口径是「6 位十六进制、`#` 可省、非法回落白」（docs/35
+/// §接口与数据形状 / D-18），写出时统一成带 `#` 的大写形态——与 `PickedColor.hexString`
+/// 的手写口径同款，避免 `ColorPicker` 直接写 `Color.description` 一类大小写不定、丢 `#` 的串。
+private extension Color {
+    var lyricsHexString: String {
+        let nsColor = NSColor(self).usingColorSpace(.sRGB) ?? NSColor.white
+        let red = Int((min(max(nsColor.redComponent, 0), 1) * 255).rounded())
+        let green = Int((min(max(nsColor.greenComponent, 0), 1) * 255).rounded())
+        let blue = Int((min(max(nsColor.blueComponent, 0), 1) * 255).rounded())
+        return String(format: "#%02X%02X%02X", red, green, blue)
+    }
+}
+
 struct CalendarSettings: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     @Default(.showCalendar) var showCalendar: Bool
-    @Default(.enableLyrics) private var enableLyrics
     @Default(.enableReminderLiveActivity) var enableReminderLiveActivity
     @Default(.reminderPresentationStyle) var reminderPresentationStyle
     @Default(.reminderLeadTime) var reminderLeadTime
@@ -3267,15 +3311,7 @@ struct CalendarSettings: View {
                 Defaults.Toggle(key: .showCalendar) {
                     Text("Show calendar")
                 }
-                .disabled(enableLyrics)
-                .opacity(enableLyrics ? 0.5 : 1)
-                .help(enableLyrics ? "Disable side lyrics to show the calendar." : "")
                 .settingsHighlight(id: highlightID("Show calendar"))
-                if enableLyrics {
-                    Text("Disable side lyrics to use the calendar.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
 
                 Section(header: Text("Event List")) {
                     Toggle("Hide completed reminders", isOn: $hideCompletedReminders)

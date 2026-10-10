@@ -83344,6 +83344,126 @@
           }
         }
       }
+    },
+    "Lyrics on screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏幕歌词"
+          }
+        }
+      }
+    },
+    "Show lyrics on screen when the island is collapsed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "灵动岛收起时在屏幕上显示歌词"
+          }
+        }
+      }
+    },
+    "Line count" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行数"
+          }
+        }
+      }
+    },
+    "Opacity" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不透明度"
+          }
+        }
+      }
+    },
+    "Color mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "颜色模式"
+          }
+        }
+      }
+    },
+    "Album art" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随封面"
+          }
+        }
+      }
+    },
+    "Highlight current line" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高亮当前行"
+          }
+        }
+      }
+    },
+    "Lock position" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "锁定位置"
+          }
+        }
+      }
+    },
+    "Unlock position" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解锁位置"
+          }
+        }
+      }
+    },
+    "Reset position" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置位置"
+          }
+        }
+      }
+    },
+    "Turn Off Lyrics" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭歌词"
+          }
+        }
+      }
+    },
+    "Lyrics appear in a draggable overlay on your desktop below the island while music plays. The overlay hides while the island is expanded." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放音乐时，歌词会以可拖拽的悬浮层显示在桌面灵动岛下方；灵动岛展开时自动隐藏。"
+          }
+        }
+      }
     }
   },
   "version" : "1.2"
