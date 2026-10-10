@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 草稿（实现期文档；收尾时改「已实现」） |
+| 状态 | 已实现 |
 | 最后更新 | 2026-10-10 |
 | 关联来源 | 用户 2026-10-10 反馈（三个问题）与同日的六项决策 + 四条执行口径（本文件 §决策摘要 D-01…D-10）；承接 docs/24 D-12 与 §已知限制 7（日历 tab 原样接住孤儿视图 `StandaloneCalendarView`）、docs/17 D-25…D-27（首页整宽日历行与 `MonthGridView` 抽取复用）、docs/30 §做法 机制六/机制七（自然高布局与「纯展示块」）、docs/34 §做法 机制一（显示日历 `Calendar.gourdDisplay`）、docs/21 §已知限制 14（非激活面板 `.help()` tooltip 秒级延迟） |
 | 工作流 | `.workflow/p11-calendar-cards/` |
@@ -102,9 +102,11 @@ struct ReminderCard: View {
 
 /// 可滚动的卡片列（首页行右栏用；条目多于栏高时栏内滚动、无 +N）。
 struct CalendarEventCardList: View {
-    let events: [EventModel]           // 已过滤（CalendarEventFilters.filtered）
+    let events: [EventModel]           // 宿主传**未过滤**的原始条目；组件内读两偏好走 CalendarEventFilters.filtered
     let selectedDate: Date
     let showFullEventTitles: Bool      // 宿主读 Defaults 后传入（与面板同源）
+    @ObservedObject var details: CalendarEventDetailsModel   // 悬停 / 点击 / 锚点上报（实际签名的第四项）
+    static let headerHeight: CGFloat = 26                    // 表头高（原 collapsedHeaderHeight 原值迁入）
     static func ordered(_ events: [EventModel]) -> [EventModel]      // 全天在前、各自按 start 升序（纯函数）
 }
 
@@ -114,14 +116,19 @@ enum CalendarEventFilters {
 }
 ```
 
-**首页卡片列的旧口径收口**：`HomeTodayListLayout`（`rowHeight`/`rowSpacing`/`maxItemRows`/`timeColumnWidth`/旧 `capacity`）与旧 `EventListView` 在本批末（T7）一并退休；`collapsedHeaderHeight`（26）迁到 `CalendarEventCardList` 侧的具名常量。T2 不触碰旧常量（那时它们仍被 `EventListView` 引用）。
+**首页卡片列的旧口径收口**：`HomeTodayListLayout` 与旧 `EventListView` 已随 T7 退休；其 `collapsedHeaderHeight`（26）迁为 `CalendarEventCardList.headerHeight`，过滤口径迁为 `CalendarEventFilters.filtered`（两者同在这一个文件）。
 
 **详情浮层**（`DynamicIsland/components/Calendar/CalendarEventDetail.swift`）：
 
 ```swift
 /// 详情内容卡：色条 + 完整标题（不限行）+ 起止时间（或 All-day）+ 地点 + 备注（≤6 行尾部截断）
-/// + Join（有 conferenceURL 时）+「Open in Calendar」按钮（执行旧点击行为）。
-struct CalendarEventDetailCard: View { let event: EventModel }
+/// + Join（有 conferenceURL 时）+「Open in Calendar」按钮（执行旧点击行为）
+/// + 钉住档右上角 × 关闭按钮（`isPinned` 时显示，`onClose` 解钉）。
+struct CalendarEventDetailCard: View {
+    let event: EventModel
+    let isPinned: Bool
+    let onClose: () -> Void
+}
 
 /// 锚点表：条目 id → 在宿主坐标系里的 bounds（anchorPreference 上报，宿主 reduce）。
 struct CalendarEventAnchorKey: PreferenceKey { static var defaultValue: [String: Anchor<CGRect>] }
@@ -129,14 +136,20 @@ struct CalendarEventAnchorKey: PreferenceKey { static var defaultValue: [String:
 @MainActor final class CalendarEventDetailsModel: ObservableObject {
     @Published var hoveredID: String?
     @Published var pinnedID: String?
-    @Published var anchors: [String: CGRect]     // 由宿主经 GeometryProxy 解析后写入
+    // 不持锚点表：定位在修饰符内部闭环（overlayPreferenceValue 现场解析 Anchor + 实测高）。
     var activeID: String? { pinnedID ?? hoveredID }
     func hover(_ id: String?)
+    func endHover(_ id: String)     // 行销毁时收口：仅当 hoveredID == id 才清（T3 fix）
     func togglePin(_ id: String)
     func clear()                                  // 归位：onDisappear / 收面板 / 切页
 }
 
-/// 宿主级修饰符：在内容之上画浮层（就近定位：优先下方、空间不足翻上方、水平夹在宿主内）。
+/// 悬停接线：包一张卡片，悬停满约 0.3s 写 `model.hover(id)`；离开取消并 `hover(nil)`；
+/// onDisappear 取消在飞任务并 `endHover(id)`。
+struct CalendarEventHoverTarget<Content: View>: View { init(id: String, model: CalendarEventDetailsModel, content: () -> Content) }
+
+/// 宿主级修饰符：在内容之上画浮层。定位按**实测高**（组件内 `CalendarEventDetailHeightKey`，初值 120）：
+/// 优先条目下方 → 放不下翻上方 → 上下都放不下贴条目夹取；高度上限 = 宿主高 − 16（裁剪兜底）。
 extension View { func calendarEventDetails(model: CalendarEventDetailsModel) -> some View }
 ```
 
@@ -147,13 +160,13 @@ extension View { func calendarEventDetails(model: CalendarEventDetailsModel) -> 
 func createReminder(title: String, dueDateComponents: DateComponents?) async -> Bool
 func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool
 func writableEventCalendars() -> [CalendarModel]        // allowsContentModifications 过滤
-func defaultEventCalendarID() -> String?                // defaultCalendarForNewEvents ?? 第一个可写
+func defaultEventCalendarID() -> String?                // 只取 defaultCalendarForNewEvents；「?? 第一个可写」的兜底在 Manager 侧
 
 // CalendarManager（写后显式刷新；不依赖 EKEventStoreChanged）
 func createReminder(title: String, due: Date) async -> Bool
 func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool
 func creatableEventCalendars() async -> [CalendarModel]
-var preferredEventCalendarID: String? { get }
+var preferredEventCalendarID: String? { get }           // defaultEventCalendarID() ?? writableEventCalendars().first?.id
 var liveCalendarAuthorization: EKAuthorizationStatus { get }    // 直读 EventKit——冷启动的 @Published 状态不可信（D-12 判据）
 var liveReminderAuthorization: EKAuthorizationStatus { get }
 ```
@@ -162,7 +175,7 @@ var liveReminderAuthorization: EKAuthorizationStatus { get }
 
 ```swift
 enum CalendarQuickAdd {
-    enum AddKind: String, CaseIterable { case reminder, event }
+    // AddKind（reminder / event）实际以 extension 落在 CalendarQuickAddBar.swift；类型仍是 CalendarQuickAdd.AddKind。
     /// "15:30" / "1530" / "9:5" → 选中日上的 Date（秒归零）；越界/不可解析 → nil。
     static func parseTime(_ text: String, on day: Date, calendar: Calendar) -> Date?
     /// 选中日 == 今天 → 下一个整点（now ≥ 23:00 回退 09:00）；否则 09:00。
@@ -203,17 +216,39 @@ enum CalendarQuickAdd {
 
 ## 实际交付
 
-无（尚未实现——回写时补齐）。
+**交付物**（提交 T1…T7，范围 `40ff9b35..8bc90752`；全量测试 559 条 0 失败）：
+
+- 新文件：`DynamicIsland/components/Calendar/CalendarEventCards.swift`（共享卡片 + 滚动卡片列 + 过滤口径）、`CalendarEventDetail.swift`（详情浮层四件套）、`CalendarQuickAdd.swift`（六条纯函数）、`CalendarQuickAddBar.swift`（「+」按钮 + 内联表单 + `AddKind`）。
+- 改动：`DynamicIslandCalendar.swift`（面板页接入卡片 / 详情 / 表单，旧卡片 builder 退休）、`HomeCalendarRow.swift`（右栏换卡片列 + 「+」入口 + 详情接线）、`CalendarServiceProviding.swift`（`CalendarService` 四条新增写 / 读）、`CalendarManager.swift`（转调 + 写后显式刷新 + 实时授权读）、`DynamicIslandViewModel.swift`（`isCalendarDetailsPinned`）、`ContentView.swift`（并入 `hasAnyActivePopovers()`）、`Localizable.xcstrings`（+7 键，均含 `en` 与 `zh-Hans`）、`HomeStripView.swift`（注释引用清扫，T7 fix）、`ModuleKernelTests.swift`（新增与改造用例）。
+- 退休：`EventListView`（含 `clockLabel`）与 `HomeTodayListLayout`（含 `rowHeight`/`rowSpacing`/`maxItemRows`/`timeColumnWidth`/旧 `capacity`）；过滤口径迁为 `CalendarEventFilters.filtered`，表头高迁为 `CalendarEventCardList.headerHeight`（26）。用例账：删 4 条旧口径用例（3 容量 + 1 `clockLabel`），`HomeTodayListLayoutTests` 的日期轮 5 条重挂为 `WheelPickerIndexMathTests`（内容未变），`HomeCalendarRowLayoutTests` 保留行高 232/206 断言、判据改 `headerHeight`。
+
+**与计划的偏离及原因**：
+
+1. `CalendarEventCardList` 签名追加 `details: CalendarEventDetailsModel`（T3）——悬停 / 点击钉住 / 锚点上报需要宿主一份浮层状态，卡片列是唯一上报方。
+2. `CalendarQuickAdd.AddKind` 以 extension 落在 `CalendarQuickAddBar.swift`（类型与文档一致）——T5 的纯函数文件只落六条函数，档位类型随表单文件落地。
+3. 首页列溢出由「定高卡片 + `+N` 容量算式」改判为**滚动**（D-13，计划门补问拍板）——卡片高度随标题 / 地点变化，定高算式算不准。
+4. 详情浮层相对初稿多两处：钉住档右上角 `×` 关闭按钮（浮层会压住条目，「同卡再点取消」不一定可点）与按**实测高**定位（固定估值下翻转判据恒真、浮层被夹在列顶）——均 T3 fix。
+5. `CalendarView`（仅 `#Preview`）改渲染 `CalendarEventCardList` + 自有 `details` 模型；`.fixedSize(vertical:)` 由整块移到日期头行（`ScrollView` 需要确定高度）——T7 退休收口。
+
+**遗留项**：
+
+- 上屏证据（两处卡片 / 悬停 / 钉住 / 两处新增真写 / 失败路径）由 T8 上屏部分补充进 `.workflow/p11-calendar-cards/evidence/`（本次回写不含证据）。
+- hover 观感（0.3s 延迟 / 穿透 / 抖动）无法用合成事件驱动，需用户真人复核。
 
 ## 已知限制
 
-（起草期预计，收尾时按实测校正）
-
-1. 首页右栏**同屏可见**的卡片数比原紧凑行少（卡片约 50–66pt/h 张，5 周月同屏约 2–3 张）——条目多时需在栏内滚动（D-13 改判：不再有 `+N` 与容量算式）。这是 D-01 的直接代价。
-2. 首页卡片宽约 250pt（面板约 340pt），标题/地点截断更早——由详情浮层兜底。
-3. 点击行为变更（原「打开系统 App」→「弹出详情」）会改变既有习惯；手册与 FAQ 明示（T8）。
+1. 首页右栏**同屏可见**的卡片数比原紧凑行少（首页行宿主高约 160–268pt；卡片约 50–66pt/张，5 周月同屏约 2–3 张、3 周月 1–2 张）——条目多时需在栏内滚动（D-13 改判：不再有 `+N` 与容量算式）。这是 D-01 的直接代价。
+2. 首页卡片宽约 250pt（面板约 340pt），标题 / 地点截断更早——由详情浮层兜底。
+3. 点击行为变更（原「打开系统 App」→「弹出详情并钉住」）会改变既有习惯；手册与 FAQ 已明示（T8）。
 4. 非激活面板的悬停态无法用合成事件驱动（p6 起已知），hover 观感验收 = 代码审查 + 用户真人复核。
-5. 新建日程不做重复/闹钟/邀请人；新建待办不含具体时刻。
+5. 新建日程不做重复 / 闹钟 / 邀请人；新建待办不含具体时刻（只到日）。
+6. 钉住态详情浮层会压住其下方条目（可命中的顶层）——出口 = 浮层右上角 `×` / 切页 / 收面板；「点其它卡转移」只在未被压住的条子上可达。
+7. 极端长备注（6 行）在小列高宿主（3 周月 ≈134pt 视口）下会被浮层高度上限（宿主高 − 16）从底部裁掉——刻意兜底，完整内容去系统 App。
+8. 详情浮层首帧按测量初值（120）定位、次帧按实测高修正：极端「高卡 + 底部条目」有 1 帧（约 40pt 内）位置瞬移（接受档）。
+9. 钉住档关闭按钮（×）命中区约 13×13pt（`contentShape` 在 padding 之内）——偏小但可用；若上屏复核手感不佳再放大。
+10. `defaultStart` 的「下一个整点」用「整点起点 + 1 小时」推算：DST 切换日的极端情形与逐日推进不完全等价（Asia/Shanghai 无影响；23 点分支已挡跨日）。
+11. 两处滚动容器（面板 `List` / 首页列 `ScrollView`）的在途锚点与浮层在滚动期的行为未自动化验证——以代码审查与上屏滚动目测代替。
+12. 首页卡片在 T2 提交（T3 接入钉住之前）曾处于「点击无行为」的中间态——批次内部态，无用户可见影响。
 
 ## 验收标准
 
@@ -239,3 +274,8 @@ enum CalendarQuickAdd {
 | D-11 | 时间解析宽容度 = **宽松**（`15:30` / `1530` / `9:5` 都收、首尾空白容忍、带秒秒归零、越界拒） | 用户 | 计划门补问（输入容错类）；解析规则写进单测钉死 |
 | D-12 | 无授权形态 = 「+」**常显**、未授权档禁用 + 「Request Access」（点击才请求）/ 被拒显「Open System Settings」；门控判据**实时读 EventKit** | 用户 | 计划门补问；不打扰且可发现，同时修掉冷启动授权状态读不到的坑（独立审查发现） |
 | D-13 | 首页列溢出 = **可滚动**、卡片按内容高（不再有 `+N` 与容量算式） | 用户 | 计划门补问；卡片高度随标题/地点变化，定高容量算式算不准（独立审查发现），滚动同时完整保留「显示完整事件标题」 |
+| D-14 | 钉住档详情浮层增加右上角 `×` 关闭按钮（`CalendarEventDetailCard.onClose` 解钉） | 执行期（T3 fix） | 浮层会压住条目（窄宿主下尤其），「同卡再点取消」不一定可点——D-02 / D-09 的落地细化（浮层内的确定出口） |
+| D-15 | 详情浮层定位按**实测高**（卡片经 preference 上报，初值 120、首帧后修正） | 执行期（T3 fix） | 固定估值（200）下翻转判据恒真、夹取把浮层恒钉列顶；首页行宿主高只有 160–268pt |
+| D-16 | `collapsedHeaderHeight`（26）迁为 `CalendarEventCardList.headerHeight` | 执行期（T7） | `HomeTodayListLayout` 整体退休，但行高换算（`rowHeight − headerHeight`）与 `#Preview` 视口仍需这个数 |
+
+执行期核对：D-01…D-13 与实现逐条一致（无改判）；D-14…D-16 为执行期新增判断（编号接续）。
