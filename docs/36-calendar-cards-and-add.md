@@ -189,7 +189,7 @@ enum CalendarQuickAdd {
 }
 ```
 
-**表单与入口**（`DynamicIsland/components/Calendar/CalendarQuickAddBar.swift`）：`CalendarQuickAddBar(selectedDate:onDismiss:)`——内部持 `kind/title/startText/endText/isAllDay/calendarID/失败行`，提交直接调 `CalendarManager`；出现即聚焦标题（口径照 `TodosModule` 的 composer）；未授权档禁用并给「Request Access」（点击才请求）/ 被拒改显「Open System Settings」，入口「+」常显（D-12）。入口：首页行日期头一行右侧「+」、面板页右栏顶部一行（约 22pt）右侧「+」；表单展开时**替换**该栏列表区，取消/完成后恢复列表。三处实测形态（T8b 记）：未授权档的引导按钮（`Request Access` / `Open System Settings`）**占末行确认位**（不另起一行——表单要整条塞进列表区）；起止时间框的 prompt **兼作标签**、框内有初值时不可见；`.writeOnly`（仅写授权）下写入成功但读取路径不可用 → 新条目可能不显示（授权档口径，不是写入失败）。
+**表单与入口**（`DynamicIsland/components/Calendar/CalendarQuickAddBar.swift`）：`CalendarQuickAddBar(selectedDate:onDismiss:)`——内部持 `kind/title/startText/endText/isAllDay/calendarID/失败行`，提交直接调 `CalendarManager`；出现即聚焦标题（口径照 `TodosModule` 的 composer）；未授权档禁用并给「Request Access」（点击才请求）/ 被拒改显「Open System Settings」，入口「+」常显（D-12）。入口：首页行日期头一行右侧「+」、面板页右栏顶部一行（约 22pt）右侧「+」；表单展开时**替换**该栏列表区，取消/完成后恢复列表。三处按代码口径记的形态（T8b；上屏核实后如有出入再校正）：未授权档的引导按钮（`Request Access` / `Open System Settings`）**占末行确认位**（不另起一行——表单要整条塞进列表区）；起止时间框的 prompt **兼作标签**、框内有初值时不可见；`.writeOnly`（仅写授权）下写入成功但读取路径不可用 → 新条目可能不显示（授权档口径，不是写入失败）。
 
 **收起抑制标志**：`DynamicIslandViewModel` 新增 `@Published var isCalendarDetailsPinned: Bool = false`，并入 `ContentView.hasAnyActivePopovers()`。
 
@@ -218,7 +218,7 @@ enum CalendarQuickAdd {
 
 ## 实际交付
 
-**交付物**（提交 T1…T7，范围 `40ff9b35..8bc90752`；全量测试 559 条 0 失败）：
+**交付物**（提交 T1…T8b，范围 `40ff9b35..84c0a67c`：T1–T7 代码 + T8a 手册与回写 + T8b 终审修复；全量测试 559 条 0 失败）：
 
 - 新文件：`DynamicIsland/components/Calendar/CalendarEventCards.swift`（共享卡片 + 滚动卡片列 + 过滤口径）、`CalendarEventDetail.swift`（详情浮层四件套）、`CalendarQuickAdd.swift`（六条纯函数）、`CalendarQuickAddBar.swift`（「+」按钮 + 内联表单 + `AddKind`）。
 - 改动：`DynamicIslandCalendar.swift`（面板页接入卡片 / 详情 / 表单，旧卡片 builder 退休）、`HomeCalendarRow.swift`（右栏换卡片列 + 「+」入口 + 详情接线）、`CalendarServiceProviding.swift`（`CalendarService` 四条新增写 / 读）、`CalendarManager.swift`（转调 + 写后显式刷新 + 实时授权读）、`DynamicIslandViewModel.swift`（`isCalendarDetailsPinned`）、`ContentView.swift`（并入 `hasAnyActivePopovers()`）、`Localizable.xcstrings`（+7 键，均含 `en` 与 `zh-Hans`）、`HomeStripView.swift`（注释引用清扫，T7 fix）、`ModuleKernelTests.swift`（新增与改造用例）。
