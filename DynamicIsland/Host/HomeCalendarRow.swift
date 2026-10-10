@@ -39,6 +39,10 @@
 //  抑制面板自动收起；行销毁 / 收面板 / 切页时归位（`onDisappear` + `vm.notchState` 两条，
 //  教训同 `isHoveringCalendar`）。
 //
+//  **新增入口（P11 / T6）**：日期头那一行的右端加「+」（常显，不看授权——D-12），点开把右栏列表区
+//  换成内联新增表单 `CalendarQuickAddBar`（待办 / 日程，日期 = 月历选中日），再点一次收起；
+//  行高算式与面板自然高都不受影响（表单由本行按 `todayListHeight` 钉高并裁在区内）。
+//
 //  规格：docs/17-nookx-adoption.md（本批改判 §做法 的结构描述：strip + 日历行）；
 //  卡片列口径见 docs/36-calendar-cards-and-add.md §接口与数据形状。
 //
@@ -108,6 +112,9 @@ struct HomeCalendarRow: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     @EnvironmentObject var vm: DynamicIslandViewModel
     @State private var selectedDate = Date()
+    /// 内联新增表单是否展开（P11 / T6 · D-07）：展开时右栏列表区被 `CalendarQuickAddBar`
+    /// **替换**（含空态）；「+」再点一次收起（入口常显，不看授权——D-12）。
+    @State private var isComposing = false
     /// 月历「滚到选中日」的请求（初值在 `.onAppear` 里钉一次，让今天那格落在视口中央）。
     @State private var monthScrollTarget: Date?
     @Default(.hideCompletedReminders) private var hideCompletedReminders
@@ -281,19 +288,49 @@ struct HomeCalendarRow: View {
         return min(max(preferred, Self.monthGridMinWidth), upperBound)
     }
 
-    /// 右栏：表头 + 今日卡片列（空态走 `EmptyEventsView`），整体顶部对齐。
-    private var todayListColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// 右栏表头行：选中日期的日期头 + 右端「+」新增入口（P11 / T6 · D-04 / D-12）。
+    ///
+    /// 「+」**常显**、不看授权（冷启动授权状态读不到，按它决定显示会两处都不可见、无从发现）；
+    /// 展开期间保持 plus，再点一次收起（`isComposing.toggle()`）。行高仍是
+    /// `HomeTodayListLayout.collapsedHeaderHeight`（20pt 的圆形按钮在 26pt 行内），字体与既有日期头逐字不变。
+    private var headerRow: some View {
+        HStack(spacing: 4) {
             Text(headerText)
                 .font(.subheadline)
                 .fontWeight(.medium)
                 .foregroundColor(.white)
                 .lineLimit(1)
-                .padding(.top, 2)
-                .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
-            if filteredEvents.isEmpty {
+            Spacer(minLength: 4)
+
+            CalendarQuickAddButton {
+                isComposing.toggle()
+            }
+        }
+        .padding(.top, 2)
+        .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 右栏：表头（含「+」新增入口）+ 今日卡片列 / 新增表单（空态走 `EmptyEventsView`），整体顶部对齐。
+    private var todayListColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            headerRow
+
+            if isComposing {
+                // **新增表单**（P11 / T6 · D-07）：展开时**替换**列表区（含空态分支）。表单自身不设高度，
+                // 这里给它列表区的高度（`todayListHeight`）并**裁在区内**——行高（`rowHeight`）与面板
+                // 自然高因此都不因表单而变；表单紧凑档约 126pt，3 周月的列表区（≈134pt）也装得下。
+                //
+                // 表单期列表不在树上：详情浮层因此没有锚点可画（P11 / T6 裁决 5——不需要额外的清理
+                // 逻辑，`details` 的钉住标志与归位链路（onChange / onDisappear）照旧）。
+                CalendarQuickAddBar(selectedDate: selectedDate) {
+                    isComposing = false
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: todayListHeight, alignment: .top)
+                .clipped()
+            } else if filteredEvents.isEmpty {
                 EmptyEventsView(selectedDate: selectedDate)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)

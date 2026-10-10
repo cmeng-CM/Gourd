@@ -91,8 +91,8 @@ private enum AllDayStripMetrics {
 private struct AllDayEventsStrip: View {
     let events: [EventModel]
     /// 详情浮层状态（P11 / T4，宿主一份）：芯片把悬停 / 点击写给它；浮层本体由
-    /// `StandaloneCalendarView` 右栏 pane 级的 `.calendarEventDetails(model:)` 画
-    /// （`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
+    /// `StandaloneCalendarView` 右栏**整列**（`rightColumn`，P11 / T6 起）的
+    /// `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
     let details: CalendarEventDetailsModel
     var onToggleReminder: ((String, Bool) -> Void)? = nil
 
@@ -1125,10 +1125,14 @@ struct StandaloneCalendarView: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     @State private var selectedDate = Date()
     @State private var datePickerScrollTarget: Date?
+    /// 内联新增表单是否展开（P11 / T6 · D-07）：展开时右栏的**列表区**被 `CalendarQuickAddBar`
+    /// **替换**（顶部那行「+」保留）；再点一次「+」收起（入口常显，不看授权——D-12）。
+    @State private var isComposing = false
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     /// 详情浮层状态（P11 / T4，面板页一份；首页行各自持一份）：卡片与全天芯片把悬停 / 点击写给它，
-    /// 浮层由 `rightEventsPane` 上挂的 `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`）。
+    /// 浮层由右栏整列 `rightColumn` 上挂的 `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`；
+    /// P11 / T6 起挂点从 pane 上移到整列，表单期列表不在树上 → 无锚点 → 浮层不渲染）。
     ///
     /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
     /// 本视图不会因 `pinnedID` 变化重算 body，下面那条 `.onChange(of: details.pinnedID)`
@@ -1142,6 +1146,12 @@ struct StandaloneCalendarView: View {
 
     /// 两栏之间的间距（旧 `body` 里的局部常量逐字搬上来：几何读数去掉后它得有个具名住处）。
     private static let paneSpacing: CGFloat = 12
+
+    /// 右栏顶部「+」入口行的高度（P11 / T6 · D-04）：22pt，右端一颗常显的「+」。
+    ///
+    /// 这一行从**右栏既有高度里**出（右栏仍钉 `monthGridHeight`，见 `body`），面板自然高因此
+    /// 不因它变：它是列表区的顶缘，不是列高的增量。
+    private static let quickAddHeaderHeight: CGFloat = 22
 
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
     /// 左栏高度（`monthGridHeight`）由它算；网格本体在 `MonthGridView` 里从同一枚取数。
@@ -1213,7 +1223,7 @@ struct StandaloneCalendarView: View {
                 .frame(height: monthGridHeight, alignment: .topLeading)
                 .layoutPriority(1)
 
-            rightEventsPane
+            rightColumn
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 // 右栏拿**同一个高度**：事件列表在它里面滚动 / 裁剪（它不参与「这一页要多高」，
                 // 因此把它的大内容量进自然高是不可能的——旧结构正是靠 `paneHeight` 把它钉住的）。
@@ -1264,12 +1274,57 @@ struct StandaloneCalendarView: View {
         }
     }
 
+    /// 右栏整列（P11 / T6 起）：顶部「+」入口行 + （列表区 / 新增表单），外加整列级的详情浮层。
+    ///
+    /// **高度口径不变**（P11 / T6 验收项「表单展开 / 收起不改变面板自然高」）：整列仍由 `body` 钉
+    /// `monthGridHeight`；顶部行占的 22pt 从列表区里出，不是列高的增量。
+    ///
+    /// **详情浮层**挂在**整列**（不再是只挂列表区）：表单期列表不在树上 → 锚点表为空 → 浮层无内容
+    /// 可画（P11 / T6 裁决 5，不需要额外清理逻辑）；列表期与 T4 的行为逐字相同
+    /// （条目坐标与浮层共用同一个坐标系）。
+    private var rightColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            quickAddHeaderRow
+
+            Group {
+                if isComposing {
+                    // **新增表单**（P11 / T6 · D-07）：展开时**替换**列表区（含空态分支）。表单自身不设
+                    // 高度（自然高约 126pt），这里给它右栏剩余高度并裁在列内——右栏高度与面板自然高都不变。
+                    CalendarQuickAddBar(selectedDate: selectedDate) {
+                        isComposing = false
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                } else {
+                    rightEventsPane
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .calendarEventDetails(model: details)
+    }
+
+    /// 右栏最顶部一行（22pt）：`Spacer` + 右端「+」——与首页行日期头那颗同款（`CalendarQuickAddButton`）、
+    /// 常显（不看授权——D-12），再点一次收起（`isComposing.toggle()`）。
+    private var quickAddHeaderRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            CalendarQuickAddButton {
+                isComposing.toggle()
+            }
+        }
+        .frame(height: Self.quickAddHeaderHeight)
+    }
+
     /// 右栏 pane：空态走 `EmptyEventsView`，否则渲染「全天芯片条 + 可滚动卡片 List」
     /// （`StandaloneEventCardList`，它与芯片条共持本视图的 `details`）。
     ///
-    /// **详情浮层（P11 / T4）**挂在 `.clipped()` **之后**（pane 级）：浮层因此不在 `List` 行内、
-    /// 不被行 / 滚动视口裁剪；条目锚点由卡片与芯片的 `anchorPreference` 上报到这里
-    /// （`CalendarEventDetail.swift` 的 `overlayPreferenceValue` + 现场 `GeometryProxy` 解析）。
+    /// **详情浮层（P11 / T4；挂点 P11 / T6 上移到整列）**：浮层画在**列表之外**（不在 `List` 行内、
+    /// 不被行 / 滚动视口裁剪），由宿主 `rightColumn` 的 `.calendarEventDetails(model:)` 挂**一次**
+    /// （本 pane 只上报锚点、不再自己挂——两处都挂会叠出两张）；条目锚点由卡片与全天芯片的
+    /// `anchorPreference` 上报（`CalendarEventDetail.swift` 的 `overlayPreferenceValue` + 现场解析）。
     private var rightEventsPane: some View {
         Group {
             if filteredEvents.isEmpty {
@@ -1292,7 +1347,8 @@ struct StandaloneCalendarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .calendarEventDetails(model: details)
+        // 浮层不在这里挂（P11 / T6 起由宿主 `rightColumn` 整列挂一次）——本 pane 只上报锚点，
+        // 两处都挂会叠出两张浮层。
     }
 
     private func requestDatePickerCenterOnCurrentDate() {
@@ -1330,8 +1386,8 @@ private struct StandaloneEventCardList: View {
     let selectedDate: Date
     let showFullEventTitles: Bool
     /// 详情浮层状态（P11 / T4，宿主一份）：卡片与全天芯片把悬停 / 点击写给它；浮层本体由
-    /// `StandaloneCalendarView` 右栏 pane 级的 `.calendarEventDetails(model:)` 画
-    /// （`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
+    /// `StandaloneCalendarView` 右栏**整列**（`rightColumn`，P11 / T6 起）的
+    /// `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
     let details: CalendarEventDetailsModel
     let onToggleReminder: (String, Bool) -> Void
     @State private var initialAutoScrollDone = false
