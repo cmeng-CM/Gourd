@@ -24,24 +24,36 @@
 //  **面板内**定位（用 `anchorPreference` 上报条目 frame、在宿主坐标系里就近摆放），不碰系统 tooltip。
 //
 //  **四个部件**（口径见 docs/36-calendar-cards-and-add.md §做法 机制二 / §接口与数据形状）：
-//  1. `CalendarEventDetailCard` —— 详情内容卡（纯展示）：色条 + 完整标题（不限行）+ 起止时间
+//  1. `CalendarEventDetailCard` —— 详情内容卡（纯展示 + 一个回调）：色条 + 完整标题（不限行）+ 起止时间
 //     （或 `All-day`）+ 地点 + 备注（≤6 行尾部截断）+ 有 `conferenceURL` 时 Join
-//     + 「Open in Calendar」按钮（执行旧点击行为 `openURL(event.calendarAppURL())`）。
+//     + 「Open in Calendar」按钮（执行旧点击行为 `openURL(event.calendarAppURL())`）
+//     + 钉住档右上角关闭按钮（×，`isPinned` 时才显示；点击回调解钉——见「钉住出口」）。
 //  2. `CalendarEventAnchorKey` —— 锚点表：条目 id → 在宿主坐标系里的 bounds（`anchorPreference`
 //     上报，`reduce` 合并字典）。
-//  3. `CalendarEventDetailsModel` —— 浮层状态（悬停 id / 钉住 id / 锚点表；显示对象 = 钉住优先）。
+//  3. `CalendarEventDetailsModel` —— 浮层状态（悬停 id / 钉住 id；显示对象 = 钉住优先）。
 //  4. `CalendarEventHoverTarget` + `View.calendarEventDetails(model:)` —— 悬停接线（0.3s 延迟）
 //     与宿主级修饰符（`overlayPreferenceValue` + 内层 `GeometryReader` 解析锚点、就近定位）。
 //
 //  **两档命中（防抖动）**：悬停档浮层 `.allowsHitTesting(false)`——鼠标穿透回下面的卡片，
 //  否则浮层一出现就吃掉 hover、鼠标「离开卡片」→ 浮层消失 → 又进入卡片，来回抖；
-//  钉住档允许命中——`Open in Calendar` / `Join` 按钮可点，且浮层挡住底下的卡片、点击不会穿透成「再点一次换钉住对象」。
+//  钉住档允许命中——`Open in Calendar` / `Join` / 关闭按钮可点，且浮层挡住底下的卡片、点击不会穿透成「再点一次换钉住对象」。
 //
-//  **定位口径**：优先条目**下方**（`y = rect.maxY + 8`）；下方放不下（`rect.maxY + 8 + 200 > bounds.maxY`）
-//  翻到**上方**（`y = rect.minY − 8 − 200`）；水平 `x = rect.minX` 夹取到 `[8, bounds.maxX − 8 − width]`；
-//  竖直再夹到宿主内。浮层宽 = `min(bounds.width − 24, 320)`。**200 是定位估值高**：详情卡真实高度由
-//  内容定（`.fixedSize(horizontal: false, vertical: true)`），这个数只参与「翻上方」与竖直夹取两处决策——
-//  偏差只在极端长备注时表现为向下越界半行（备注已限 6 行，实际高约 ≤190pt，估值 200 略保守、不会越界）。
+//  **钉住出口**：钉住档浮层会压住条目（窄宿主下尤其），「同卡再点取消」因此不一定可点；详情卡右上角的
+//  关闭按钮（×）是浮层内的确定出口：`isPinned`（= `model.pinnedID == event.id`）时显示，点击解钉。
+//
+//  **定位口径（T3 fix：按实测高）**：条目 rect 由 `Anchor<CGRect>` 解析（宿主坐标），浮层真实高度 h 由
+//  卡片自身上报（卡片根视图 `.background(GeometryReader { …preference… })` + `onPreferenceChange`
+//  写 `measuredHeight`，初值 120、首帧后修正）；竖向内边距 8，H = 宿主高：
+//  - `rect.maxY + 8 + h <= H − 8` → `y = rect.maxY + 8`（放条目**下方**）；
+//  - 否则 `rect.minY − 8 − h >= 8` → `y = rect.minY − 8 − h`（翻**上方**）；
+//  - 否则 `y = min(max(8, rect.minY), max(8, H − 8 − h))`（贴条目夹取）。
+//  水平 `x = rect.minX` 夹取到 `[8, bounds.maxX − 8 − width]`；浮层宽 = `min(bounds.width − 24, 320)`。
+//  **兜底裁剪（刻意）**：h 上限 = `H − 16`（`.frame(maxHeight: H − 16, alignment: .top)` + `.clipped()`）——
+//  3 周月的宿主只有 160pt、备注 6 行的卡可到约 210pt，不夹就会越出行框被面板下缘裁掉；这里主动裁在
+//  浮层自己的框内（顶部对齐、底部裁），越界量因此封顶在浮层里，不再漏到行外。
+//
+//  历史（T3 首版）：定位曾用固定估值高 200pt 只做翻转 / 夹取决策；独立审查证明首页行宿主高只有
+//  160–268pt ⇒ 翻转判据恒真、夹取把 y 恒钉在 8（浮层永远贴在列顶、不贴条目）。T3 fix 改成实测高。
 //
 //  **浮层内容从哪来**：`CalendarEventAnchorKey` 只带 `Anchor<CGRect>`（锚点即几何，docs/36 的接口
 //  形状），不带 `EventModel`；浮层因此按 id 到 `CalendarManager.shared.events`（两处宿主渲染卡片的
@@ -56,7 +68,7 @@ import SwiftUI
 
 // MARK: - 详情内容卡
 
-/// 条目详情卡（浮层里画的那一张；纯展示，交互（悬停 / 钉住 / 点击穿透）在修饰符与宿主包装层）。
+/// 条目详情卡（浮层里画的那一张；纯展示 + 一个关闭回调；悬停 / 钉住 / 点击穿透在修饰符与宿主包装层）。
 ///
 /// 形态与条目卡同族（`CalendarEventCards.swift`）：左色条 4pt（同款圆角 2、高 36；详情卡内容更高，
 /// 色条按条目卡口径钉 36 作「标记」而不拉满）、正文列间距 10、卡底圆角 14（`.continuous`）。
@@ -65,6 +77,11 @@ import SwiftUI
 /// + 一圈 `white.opacity(0.08)` 的 1pt 细边（`strokeBorder` 内描边，与卡底同形同界）。
 struct CalendarEventDetailCard: View {
     let event: EventModel
+    /// 钉住档标记（T3 fix）：`true` 时右上角出关闭按钮（×）。悬停档整层 `.allowsHitTesting(false)`，
+    /// 本来就点不到，这里不再显示按钮。
+    let isPinned: Bool
+    /// 关闭按钮动作（解钉；由宿主 / 修饰符接到 `model.togglePin(event.id)`）。
+    let onClose: () -> Void
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -107,6 +124,20 @@ struct CalendarEventDetailCard: View {
             }
 
             Spacer(minLength: 0)
+
+            // 关闭按钮（T3 fix / 钉住出口）：放在 HStack 尾部（顶端对齐、占位而非压盖——标题横排
+            // 因此不会钻到按钮底下）。文案复用既有键 `Close`（xcstrings 已含，含 zh-Hans）。
+            if isPinned {
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(white: 0.6))
+                        .contentShape(Rectangle())
+                        .padding(2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Close"))
+            }
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
@@ -183,24 +214,20 @@ struct CalendarEventAnchorKey: PreferenceKey {
 
 // MARK: - 浮层状态
 
-/// 详情浮层状态（一处宿主一份；悬停 id / 钉住 id / 锚点表）。
+/// 详情浮层状态（一处宿主一份；悬停 id / 钉住 id）。
 ///
 /// 显示对象 = `activeID`（**钉住优先于悬停**）：鼠标从钉住的卡片移开时 `hover(nil)` 只清悬停，
 /// 浮层仍因 `pinnedID` 留着；`togglePin` 同 id 再点置 nil（取消钉住）、换 id 覆盖（转移）。
+///
+/// 说明：本模型**不持锚点表**（T3 fix 删掉无写无读的 `anchors`）——浮层定位走
+/// `overlayPreferenceValue` + `GeometryReader` 现场解析 `Anchor<CGRect>`，浮层真实高度由详情卡
+/// 经 preference 上报（`CalendarEventDetailHeightKey`），都在修饰符内部闭环，不走模型。
 @MainActor
 final class CalendarEventDetailsModel: ObservableObject {
     /// 悬停中的条目 id（悬停满 0.3s 后写入；鼠标离开立即清）。
     @Published var hoveredID: String?
     /// 钉住的条目 id（点击切换；与悬停并存时优先）。
     @Published var pinnedID: String?
-    /// 条目锚点表：id → 宿主坐标系里的 frame（由宿主经 `GeometryProxy` 解析后写入）。
-    ///
-    /// 共享修饰符 `.calendarEventDetails(model:)` 自持同一份几何——`overlayPreferenceValue` +
-    /// 内层 `GeometryReader` 直接解析当期 `Anchor<CGRect>`（每次布局都是新值，少一次
-    /// `@Published` 回写 / 回读往返，滚动时不落后一帧），因此**首页接线不写、不读本表**；
-    /// 本表按 docs/36 §接口与数据形状 保留，留给需要跨层读取锚点的宿主
-    /// （面板页 T4 的浮层若画在 `List` 行外另做外部分辨，可把解析结果写在这里）。
-    @Published var anchors: [String: CGRect] = [:]
 
     /// 当前显示对象：钉住优先于悬停。
     var activeID: String? { pinnedID ?? hoveredID }
@@ -208,6 +235,14 @@ final class CalendarEventDetailsModel: ObservableObject {
     /// 悬停进入 / 离开（`nil` = 离开当前条目）。
     func hover(_ id: String?) {
         hoveredID = id
+    }
+
+    /// 某条目被拆掉（行消失）时的收口：**仅当悬停的正是它**才清（避免误清别的条目的悬停态，
+    /// 也避免 `onDisappear` 把「此刻悬停在别的卡上」的状态抹掉）。
+    func endHover(_ id: String) {
+        if hoveredID == id {
+            hoveredID = nil
+        }
     }
 
     /// 点击钉住 / 取消：同 id 再点置 nil，换 id 覆盖。
@@ -231,7 +266,8 @@ final class CalendarEventDetailsModel: ObservableObject {
 /// （见 `CalendarEventDetailsModel.activeID`）。
 ///
 /// `model` 用普通 `let`（不 `@ObservedObject`）：本视图只**写**模型、不读它的任何已发布状态，
-/// 不必随悬停 / 钉住变化重画。`onDisappear` 里取消在飞的延迟任务（行被拆掉时别再把 hover 写进来）。
+/// 不必随悬停 / 钉住变化重画。`onDisappear` 里取消在飞的延迟任务，并 `endHover(id)` 收口
+/// （T3 fix：卡片被拆掉时不再残留悬停 id——只当悬停的正是它才清）。
 struct CalendarEventHoverTarget<Content: View>: View {
     let id: String
     let model: CalendarEventDetailsModel
@@ -260,14 +296,27 @@ struct CalendarEventHoverTarget<Content: View>: View {
             }
             .onDisappear {
                 hoverTask?.cancel()
+                model.endHover(id)
             }
+    }
+}
+
+// MARK: - 详情卡高度
+
+/// 详情卡**实测高**上报（浮层内部用；不对外）：`CalendarEventDetailsOverlay` 在卡片根视图上量
+/// `proxy.size.height`，定位算法按真实高度决定「下方 / 上方 / 贴条目夹取」（T3 fix：不再用固定估值）。
+private struct CalendarEventDetailHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
 // MARK: - 宿主级修饰符
 
 extension View {
-    /// 在内容之上画**一张**详情浮层（就近定位：优先条目下方、空间不足翻上方、水平 / 竖直夹在宿主内）。
+    /// 在内容之上画**一张**详情浮层（就近定位：优先条目下方、放不下翻上方、否则贴条目夹取；水平夹在宿主内）。
     ///
     /// 用法（两处宿主各持一份 `CalendarEventDetailsModel`，挂在**列 / 页面级**——浮层因此不落在
     /// 滚动视口里）：`todayListColumn.calendarEventDetails(model: details)`。
@@ -289,8 +338,9 @@ private struct CalendarEventDetailsOverlay: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     let anchors: [String: Anchor<CGRect>]
 
-    /// 定位估值高（pt）：只参与「下方放不下就翻上方」与竖直夹取两处决策，见文件头「定位口径」。
-    private static let estimatedHeight: CGFloat = 200
+    /// 详情卡实测高（T3 fix）：初值 120 是保守档（首帧先用它定位），卡片量出真实高后经
+    /// `CalendarEventDetailHeightKey` 修正——差的只是一帧，换来「翻转 / 夹取」都按真实高度判。
+    @State private var measuredHeight: CGFloat = 120
 
     var body: some View {
         GeometryReader { proxy in
@@ -299,21 +349,54 @@ private struct CalendarEventDetailsOverlay: View {
                proxy.size.width > 24,
                let event = calendarManager.events.first(where: { $0.id == id }) {
                 let rect = proxy[anchor]
+                let hostHeight = proxy.size.height
+                let h = measuredHeight
                 // 浮层宽 = min(宿主宽 − 24, 320)：两侧各留 12 不贴边，上限 320 保阅读行宽。
                 let width = min(proxy.size.width - 24, 320)
                 let x = min(max(rect.minX, 8), max(8, proxy.size.width - 8 - width))
                 let belowY = rect.maxY + 8
-                let aboveY = rect.minY - 8 - Self.estimatedHeight
-                let flippedY = belowY + Self.estimatedHeight > proxy.size.height ? aboveY : belowY
-                let y = min(max(flippedY, 8), max(8, proxy.size.height - 8 - Self.estimatedHeight))
+                let aboveY = rect.minY - 8 - h
+                // 竖直定位（三分支；写成闭包立即求值——ViewBuilder 里不能用语句级 if/else 赋值）：
+                // ① 下方放得下（按**实测高**判）→ 放条目下方；
+                // ② 下方放不下、上方放得下 → 翻上方（按实测高贴条目上缘）；
+                // ③ 上下都放不下（宿主比浮层高不了多少）→ 贴条目夹取，不恒钉列顶。
+                let y: CGFloat = {
+                    if belowY + h <= hostHeight - 8 {
+                        return belowY
+                    }
+                    if aboveY >= 8 {
+                        return aboveY
+                    }
+                    return min(max(8, rect.minY), max(8, hostHeight - 8 - h))
+                }()
 
-                CalendarEventDetailCard(event: event)
-                    .frame(width: width, alignment: .leading)
-                    // 真实高度由内容定（备注行数 / 地点有无 / 标题行数）：估值只用于上面的翻转与夹取。
-                    .fixedSize(horizontal: false, vertical: true)
-                    .offset(x: x, y: y)
-                    // 悬停档穿透（鼠标回到条目上，不抖）；钉住档可点（Open in Calendar / Join）。
-                    .allowsHitTesting(model.pinnedID != nil)
+                CalendarEventDetailCard(
+                    event: event,
+                    isPinned: model.pinnedID == event.id,
+                    onClose: { model.togglePin(event.id) }
+                )
+                .frame(width: width, alignment: .leading)
+                // 真实高度由内容定（备注行数 / 地点有无 / 标题行数），先量再定位（见上）。
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { cardProxy in
+                        Color.clear.preference(
+                            key: CalendarEventDetailHeightKey.self,
+                            value: cardProxy.size.height
+                        )
+                    }
+                )
+                .onPreferenceChange(CalendarEventDetailHeightKey.self) { newHeight in
+                    measuredHeight = newHeight
+                }
+                // **兜底裁剪（刻意）**：h 上限 = 宿主高 − 16。3 周月宿主只有 160pt、备注 6 行的卡可到
+                // 约 210pt——不夹就会越出行框、被面板下缘裁掉；这里顶部对齐、把溢出裁在浮层自己的框内
+                // （极端长备注时卡底「Open in Calendar」可能被裁，属刻意的兜底口径）。
+                .frame(maxHeight: max(0, hostHeight - 16), alignment: .top)
+                .clipped()
+                .offset(x: x, y: y)
+                // 悬停档穿透（鼠标回到条目上，不抖）；钉住档可点（Open in Calendar / Join / 关闭按钮）。
+                .allowsHitTesting(model.pinnedID != nil)
             }
         }
     }
