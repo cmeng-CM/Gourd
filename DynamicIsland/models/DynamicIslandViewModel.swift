@@ -51,6 +51,8 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
     @Published var isReminderPopoverActive: Bool = false
     @Published var isMediaOutputPopoverActive: Bool = false
     @Published var isTimerPopoverActive: Bool = false
+    /// 钉住详情浮层期间抑制面板自动收起（日历条目详情浮层，P11 / T3；并入 `ContentView.hasAnyActivePopovers()`）。
+    @Published var isCalendarDetailsPinned: Bool = false
     @Published var shouldRecheckHover: Bool = false
     @Published var isScrollGestureActive: Bool = false
     private var scrollGestureSuppressionTokens: Set<UUID> = []

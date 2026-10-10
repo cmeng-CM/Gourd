@@ -32,6 +32,13 @@
 //  地点变化，定高算式算不准；D-13），全天条目合并进同一列。本文件只负责**排版与接缝**：两栏怎么
 //  分宽、行高多少、交互接到哪条既有链路。
 //
+//  **详情浮层（P11 / T3）**：本行持一份 `CalendarEventDetailsModel`，右栏列上挂
+//  `.calendarEventDetails(model:)`——浮层画在列级（滚动视口之外，不被 `ScrollView` 裁剪），
+//  条目锚点由卡片侧 `anchorPreference` 上报（`CalendarEventDetail.swift`）。悬停约 0.3s 浮出、
+//  点击钉住；钉住期间 `vm.isCalendarDetailsPinned` 并入 `ContentView.hasAnyActivePopovers()`
+//  抑制面板自动收起；行销毁 / 收面板 / 切页时归位（`onDisappear` + `vm.notchState` 两条，
+//  教训同 `isHoveringCalendar`）。
+//
 //  规格：docs/17-nookx-adoption.md（本批改判 §做法 的结构描述：strip + 日历行）；
 //  卡片列口径见 docs/36-calendar-cards-and-add.md §接口与数据形状。
 //
@@ -108,6 +115,12 @@ struct HomeCalendarRow: View {
     /// 「显示完整事件标题」（P11 / T2）：旧紧凑行把 `lineLimit(1)` 写死，这个开关只对面板卡片
     /// 生效；本行右栏换成共享卡片列后由宿主读同一个键传入，两处因此同源（docs/36 §背景与目标 1）。
     @Default(.showFullEventTitles) private var showFullEventTitles
+    /// 详情浮层状态（P11 / T3）：悬停 id / 钉住 id / 锚点表（模型见 `CalendarEventDetail.swift`）。
+    ///
+    /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
+    /// 本行就不会因 `pinnedID` 变化重算 body，下面那条 `.onChange(of: details.pinnedID)`
+    /// （收起抑制标志的唯一通路）永远不会触发。`@StateObject` 让本行订阅模型，`onChange` 因此可靠。
+    @StateObject private var details = CalendarEventDetailsModel()
 
     /// 与独立面板同一套过滤（已完成提醒 / 全天条目按偏好隐藏），**空态判据**用（P11 / T2 起右栏
     /// 列表本身由 `CalendarEventCardList` 按同一口径在组件内过滤；这里保留同源的一份只为
@@ -235,10 +248,27 @@ struct HomeCalendarRow: View {
         .onHover { isHovering in
             vm.isHoveringCalendar = isHovering
         }
+        // 钉住详情浮层期间抑制面板自动收起（P11 / T3）：标志并入 `ContentView.hasAnyActivePopovers()`。
+        // 判据放在本行（浮层状态的所有者）：`pinnedID` 一变就同步标志，`clear()` 归位同样经这里落回 false。
+        .onChange(of: details.pinnedID) { _, newValue in
+            vm.isCalendarDetailsPinned = (newValue != nil)
+        }
+        // 收面板 / 切页（任何 `notchState != .open`）时浮层归位：`onDisappear` 对无边框面板不可靠
+        // （见 `DynamicIslandViewModel.onViewTeardown` 的注释），这条是「面板收起后不残留浮层与标志」
+        // 的主通路——否则钉住标志悬空为 true，面板之后再也收不起来。
+        .onChange(of: vm.notchState) { _, newState in
+            if newState != .open {
+                details.clear()
+                vm.isCalendarDetailsPinned = false
+            }
+        }
         // 行被销毁（关日历行 / 收面板）时 `onHover` 不会再补发一次 false，必须显式归位——
         // 否则 `vm.isHoveringCalendar` 悬空为 true，面板之后再也收不起来。
+        // 详情浮层与 `vm.isCalendarDetailsPinned` 是同一条教训（P11 / T3），并列归位。
         .onDisappear {
             vm.isHoveringCalendar = false
+            details.clear()
+            vm.isCalendarDetailsPinned = false
         }
     }
 
@@ -275,14 +305,23 @@ struct HomeCalendarRow: View {
                 // 滚动手势与面板收起：本行既有 `.onHover { vm.isHoveringCalendar = $0 }`（见下方）
                 // 已覆盖整行，`ContentView` 的收起滚动判据是 `!vm.isHoveringCalendar`，因此在本列
                 // 里滚动不会把面板收起——不另加抑制逻辑。
+                //
+                // `details`（P11 / T3）：卡片把悬停 / 点击写给它；浮层由下面 `todayListColumn` 上的
+                // `.calendarEventDetails(model:)` 画（列级 = 滚动视口之外，不被 `ScrollView` 裁）。
                 CalendarEventCardList(
                     events: calendarManager.events,
                     selectedDate: selectedDate,
-                    showFullEventTitles: showFullEventTitles
+                    showFullEventTitles: showFullEventTitles,
+                    details: details
                 )
                 .frame(height: todayListHeight, alignment: .top)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // **详情浮层**（P11 / T3）：挂在右栏列上——条目锚点由卡片 `anchorPreference` 上报到这里，
+        // 浮层就近定位（优先条目下方、放不下翻上方、夹在列内；`CalendarEventDetail.swift`）。
+        // 悬停档穿透鼠标、钉住档可点；无 active 条目时不渲染。列宽已预留右内边距（
+        // `todayListTrailingInset`，拖动把手让位），浮层宽度算式再夹一层，不会出栏。
+        .calendarEventDetails(model: details)
     }
 }

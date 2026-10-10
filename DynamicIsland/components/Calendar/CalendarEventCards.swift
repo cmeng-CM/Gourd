@@ -42,10 +42,15 @@
 //  口径：docs/36-calendar-cards-and-add.md §接口与数据形状（`CalendarEventCard(event:showFullEventTitles:)`、
 //  `ReminderCard(event:showFullEventTitles:onToggle:)`、
 //  `CalendarEventCardList(events:selectedDate:showFullEventTitles:)` 与它的 `ordered(_:)` 纯函数）。
+//  **签名增量（P11 / T3）**：`CalendarEventCardList` 增 `details: CalendarEventDetailsModel`（详情浮层
+//  接线用；相对 docs/36 的签名多这一项，T8 回写对齐）——本列是**唯一**给浮层上报锚点与悬停 / 点击的组件，
+//  浮层本体与模型在 `CalendarEventDetail.swift`。
 //
 //  说明：本文件只含**纯展示**卡片——点击 / 悬停 / 打开系统 App 等宿主交互仍由宿主包装层负责
-//  （面板侧见 `StandaloneEventCardList.eventCard(_:)`）。`ReminderToggle` / `ConferenceJoinButton`
-//  留在 `DynamicIslandCalendar.swift`（同模块可见），不随本次抽取搬迁。
+//  （面板侧见 `StandaloneEventCardList.eventCard(_:)`；首页侧 T3 起由本文件的 `CalendarEventCardList`
+//  接详情浮层：卡片包 `CalendarEventHoverTarget` + `anchorPreference` 上报锚点，点击 `togglePin`）。
+//  `ReminderToggle` / `ConferenceJoinButton` 留在 `DynamicIslandCalendar.swift`（同模块可见），
+//  不随本次抽取搬迁。
 //
 
 import Defaults
@@ -195,8 +200,12 @@ struct ReminderCard: View {
 /// **高度口径**：本组件**自身不设高度**（不读行高、不读可用高度）——视口高度由宿主钉
 /// （`HomeCalendarRow` 给 `rowHeight − collapsedHeaderHeight`）；条目多则栏内滚动、少则自然高。
 ///
-/// **交互口径**：提醒卡片的勾选写回走 `CalendarManager.shared.setReminderCompleted`
-/// （与旧 `EventListView.reminderToggle` 同链路）；点击 / 悬停等宿主交互不在本组件（T3 接入）。
+/// **交互口径（P11 / T3 起）**：提醒卡片的勾选写回走 `CalendarManager.shared.setReminderCompleted`
+/// （与旧 `EventListView.reminderToggle` 同链路）；每张卡片包一层 `CalendarEventHoverTarget`
+/// （悬停约 0.3s 报给 `details`）+ `anchorPreference` 上报锚点（宿主据此画详情浮层）+
+/// 点击 `details.togglePin(event.id)`（**点击从「打开系统 App」改为「钉住详情」**，D-09——打开按钮
+/// 移进浮层的 `CalendarEventDetailCard`）。提醒卡的勾选圈是 `Button`、自身吞点击，因此点勾选圈
+/// 不会落到本层的 `onTapGesture`（不误触钉住）。
 ///
 /// 说明：本列**不新增滚动 / 收起手势抑制逻辑**——首页宿主 `HomeCalendarRow` 既有
 /// `.onHover { vm.isHoveringCalendar }` 已覆盖本行，`ContentView` 的面板收起滚动判据是
@@ -209,6 +218,9 @@ struct CalendarEventCardList: View {
     let selectedDate: Date
     /// 标题是否不限行（宿主读 `Defaults[.showFullEventTitles]` 后传入，与面板同源）。
     let showFullEventTitles: Bool
+    /// 详情浮层状态（P11 / T3；宿主一份）：卡片把 `event.id` 的悬停 / 点击写给它，
+    /// 浮层本体由宿主的 `.calendarEventDetails(model:)` 画（本组件只上报锚点、不画浮层）。
+    @ObservedObject var details: CalendarEventDetailsModel
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
 
@@ -246,8 +258,25 @@ struct CalendarEventCardList: View {
     }
 
     /// 日程 → `CalendarEventCard`；提醒 → `ReminderCard`（勾选走既有写回链路）。
-    @ViewBuilder
+    ///
+    /// 外面统一包一层宿主交互（P11 / T3）：`CalendarEventHoverTarget`（悬停 0.3s → `details.hover`）
+    /// + `anchorPreference`（把本卡的 bounds 按 id 上报给宿主的详情浮层）
+    /// + `contentShape(Rectangle())`（整块卡片（含色条与空隙）都可悬停 / 可点）
+    /// + `onTapGesture`（点击 → `details.togglePin`，同卡再点取消、点其它卡转移）。
     private func card(for event: EventModel) -> some View {
+        CalendarEventHoverTarget(id: event.id, model: details) {
+            cardBody(for: event)
+        }
+        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            details.togglePin(event.id)
+        }
+    }
+
+    /// 卡片本体分派（纯展示，不含宿主交互；交互见上面的 `card(for:)`）。
+    @ViewBuilder
+    private func cardBody(for event: EventModel) -> some View {
         if event.type.isReminder {
             ReminderCard(
                 event: event,

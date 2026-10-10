@@ -3111,7 +3111,10 @@ struct ContentView: View {
          vm.isStatsPopoverActive ||
          vm.isTimerPopoverActive ||
          vm.isMediaOutputPopoverActive ||
-         vm.isReminderPopoverActive
+         vm.isReminderPopoverActive ||
+         // 钉住的日历详情浮层（P11 / T3）：同属「面板上有一层用户正在操作的可交互东西」，
+         // 鼠标移出面板时不该自动收起（标志由 `HomeCalendarRow` 按 `details.pinnedID` 同步）。
+         vm.isCalendarDetailsPinned
     }
 
     private func shouldPreventAutoClose() -> Bool {
