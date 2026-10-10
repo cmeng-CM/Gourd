@@ -155,65 +155,6 @@ struct MinimalisticMusicPlayerView: View {
         }
     }
 
-    // MARK: - TypingLyricView
-
-    struct TypingLyricView: View {
-        let text: String
-        let color: Color
-        let id: Int
-        let playbackRate: Double
-        let isPlaying: Bool
-        @State private var displayed: String = ""
-        @State private var lastText: String = ""
-        @State private var animationTask: Task<Void, Never>?
-
-        var body: some View {
-            Text(displayed)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(color)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 4)
-                .padding(.top, 4)
-                .id(id)
-                .onChange(of: text) { _, newText in
-                    animateTyping(newText)
-                }
-                .onChange(of: isPlaying) { _, playing in
-                    if !playing {
-                        animationTask?.cancel()
-                    } else if displayed != text {
-                        animateTyping(text)
-                    }
-                }
-                .onAppear {
-                    animateTyping(text)
-                }
-                .onDisappear {
-                    animationTask?.cancel()
-                }
-        }
-
-        private func animateTyping(_ newText: String) {
-            animationTask?.cancel()
-            displayed = ""
-            lastText = newText
-            let chars = Array(newText)
-
-            animationTask = Task {
-                for (i, c) in chars.enumerated() {
-                    if Task.isCancelled { return }
-                    try? await Task.sleep(for: .milliseconds(Int(30 / max(playbackRate, 0.1))))
-                    if Task.isCancelled { return }
-                    if lastText == newText {
-                        displayed += String(c)
-                    }
-                }
-            }
-        }
-    }
-
     private var reminderEntries: [ReminderLiveActivityManager.ReminderEntry] {
         reminderManager.activeWindowReminders
     }

@@ -1316,7 +1316,8 @@ struct HomeFlowView: View {
 ///
 /// 为什么接缝在这一层而不是 `NotchHomeView`：高度取舍要知道「小组件要几行」，而那是**宽度**的函数
 /// ——名单与宽度都在这一层（注册表投影 + 块宽声明），把它们再搬进 `NotchHomeView` 只会多一处
-/// 重复解析。`NotchHomeView` 保留的是更外面那层接缝：**极简 UI / 侧歌词 / 首发动画都不走这里**。
+/// 重复解析。`NotchHomeView` 保留的是更外面那层接缝：**极简 UI / 首发动画都不走这里**
+/// （侧歌词档一族已随 p10-lyrics-overlay 整条退休，不再有第三条支路）。
 struct HomeBandedHomeView: View {
     @ObservedObject private var registry = ModuleRegistry.shared
     /// **观测源**（不是判据）：音乐块 / 镜子块的**存在性**由 `content(for: .home)` 答不答 `.none`

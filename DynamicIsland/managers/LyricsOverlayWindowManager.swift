@@ -37,8 +37,10 @@
 //  **观察链**：`MusicManager` 的 `syncedLyrics` / `currentLyricIndex` / `isPlaying` 三个
 //  `@Published`＋`vm.notchState` / `vm.screen`＋`NSApplication.didChangeScreenParametersNotification`
 //  （屏参变化时 `screen` 的 localizedName 可能不变，光靠 `$screen` 接不到）＋
-//  `LockScreenManager.$isLocked`＋`enableLyrics` 与 9 枚显示档键的 `Defaults.publisher`；
+//  `LockScreenManager.$isLocked`＋`enableLyrics` 与 9 枚显示档键（共 10 条 `Defaults.publisher`）；
 //  任一变化调 `sync()`（不自建第二套状态，docs/35 §做法 机制一）。
+//  `vm` **由启动路径注入**（`configure(viewModel:)`，与 `LockScreenManager.configure(viewModel:)`
+//  同口径）——不走 `AppDelegate.shared`：那条路在本 App 恒 nil（见属性注释），判据便永远为假。
 //
 //  **锚点**：岛所在屏（`DynamicIslandViewModel.screen` 的 localizedName 匹配，回落
 //  `NSScreen.main`，与 `FlyoutWindowPresenter.resolveScreen` 同口径）的 `frame.midX` 居中、
@@ -82,13 +84,33 @@ final class LyricsOverlayWindowManager: ObservableObject {
 
     private init() {}
 
-    /// 岛所在屏的设备 `vm`：与 `FlyoutWindowPresenter` 的入参同源（应用主 VM）。
-    private var viewModel: DynamicIslandViewModel? { AppDelegate.shared?.vm }
+    /// 应用主 VM（岛状态与所在屏）——**由启动路径注入**（`configure(viewModel:)`，与
+    /// `LockScreenManager.configure(viewModel:)` 同一口径）。`weak`：VM 由 App 侧持有。
+    ///
+    /// 为什么不走 `AppDelegate.shared?.vm`：`@NSApplicationDelegateAdaptor` 包的那一层不落在
+    /// `NSApplication.shared.delegate` 上，那条路径在本 App 里**恒为 nil**（2026-09-29 实测注释见
+    /// `ContentView.swift:1191`；2026-10-10 上屏取证再证 `vmNil=true appDelegateNil=true`）。
+    /// 取不到 VM → `islandClosed` 恒 false → 悬浮层永不建窗（终审 Critical）。
+    private weak var viewModel: DynamicIslandViewModel?
+    /// `notchState` / `screen` 两条订阅是否已装：`configure` 与 `start` 都可能触发装配，
+    /// 用它在整个生命周期里只装一份（重复注入不叠订阅）。
+    private var viewModelObserversAttached = false
 
     // MARK: - 启动
 
+    /// 注入应用主 VM。**先注入、再 `start()`**（本仓唯一调用点：
+    /// `DynamicIslandApp.applicationDidFinishLaunching`，`setupAudioTapMusicObservers()` 旁）。
+    /// 注入后立刻 `sync()` 一次——否则要等到下一次状态变化才建窗；若 `start()` 已经跑过，
+    /// 这里顺带补装 VM 的两条订阅。vm 未注入时 `sync()` 按「不显示」处理（判据取不到就不显示）。
+    func configure(viewModel: DynamicIslandViewModel) {
+        self.viewModel = viewModel
+        observeViewModelStateChanges()
+        sync()
+    }
+
     /// 装观察链并立刻同步一次。重复调用是空操作（不叠第二份订阅）。
-    /// 调用点：`DynamicIslandApp.applicationDidFinishLaunching`（`setupAudioTapMusicObservers()` 旁）。
+    /// 调用点：`DynamicIslandApp.applicationDidFinishLaunching`（`setupAudioTapMusicObservers()` 旁），
+    /// 在 `configure(viewModel:)` 之后。
     func start() {
         guard !isStarted else { return }
         isStarted = true
@@ -107,12 +129,8 @@ final class LyricsOverlayWindowManager: ObservableObject {
                 .map { _ in () }.eraseToAnyPublisher(),
         ]
 
-        if let viewModel {
-            sources.append(viewModel.$notchState.map { _ in () }.eraseToAnyPublisher())
-            sources.append(viewModel.$screen.map { _ in () }.eraseToAnyPublisher())
-        }
-
-        // 总开关 + 9 枚显示档键（字体 / 行数 / 透明度 / 颜色模式 / 自定义色 / 高亮 / 锁定 / 偏移 X / 偏移 Y）。
+        // 总开关 + 9 枚显示档键（字体 / 行数 / 透明度 / 颜色模式 / 自定义色 / 高亮 / 锁定 / 偏移 X / 偏移 Y）
+        // ——共 10 条 publisher。
         sources.append(Defaults.publisher(.enableLyrics, options: []).map { _ in () }.eraseToAnyPublisher())
         sources.append(Defaults.publisher(.lyricsFontSize, options: []).map { _ in () }.eraseToAnyPublisher())
         sources.append(Defaults.publisher(.lyricsLineCount, options: []).map { _ in () }.eraseToAnyPublisher())
@@ -128,6 +146,24 @@ final class LyricsOverlayWindowManager: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.sync() }
             .store(in: &cancellables)
+
+        observeViewModelStateChanges()
+    }
+
+    /// `vm.notchState` / `vm.screen` 两条订阅（VM 由 `configure(viewModel:)` 注入；与既有链同口径，
+    /// 任一变化 `sync()`）。单列的理由：注入可能发生在 `start()` 之前或之后，两处都调它，
+    /// `viewModelObserversAttached` 保证只装一份；vm 未注入时是空操作（不崩）。
+    private func observeViewModelStateChanges() {
+        guard !viewModelObserversAttached, let viewModel else { return }
+        viewModelObserversAttached = true
+
+        Publishers.MergeMany(
+            viewModel.$notchState.map { _ in () }.eraseToAnyPublisher(),
+            viewModel.$screen.map { _ in () }.eraseToAnyPublisher()
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] in self?.sync() }
+        .store(in: &cancellables)
     }
 
     // MARK: - 显隐（幂等）
@@ -137,6 +173,9 @@ final class LyricsOverlayWindowManager: ObservableObject {
     func sync() {
         let music = MusicManager.shared
         let mapped = LyricsOverlayRules.displayLines(synced: music.syncedLyrics)
+        // 显隐的唯一判据（五输入）。VM 未注入（启动路径漏调 `configure(viewModel:)`）时
+        // `islandClosed` 落 false——取不到就不显示，不崩；下面的 `guard let viewModel`
+        // 再把「该显示但没有 VM 可用」的情形一并兜成隐藏。
         let shouldShow = LyricsOverlayRules.shouldShow(
             enableLyrics: Defaults[.enableLyrics],
             hasActiveSession: music.hasActiveSession,

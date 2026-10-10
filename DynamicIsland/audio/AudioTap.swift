@@ -35,7 +35,13 @@ private let audioTapLog = OSLog(subsystem: "com.cmeng.gourd", category: "AudioTa
 /// `DynamicIslandApp.setupAudioTapMusicObservers` (which launch/terminate notifications
 /// restart capture). Keeping a single literal here means adding a player can no longer
 /// update one copy and silently miss the other. Order is kept as shipped (11 original
-/// entries) with the four China-market players appended.
+/// entries) with the four China-market players appended, then the lx-music helper
+/// (16 entries).
+///
+/// Electron 类播放器的音频可能出自其 `.helper` 子进程（bundle id 形如 `<main>.helper`），
+/// 按实测逐个列入——`cn.toside.music.desktop.helper` 即 lx-music 的出声进程（2026-10-10 实测：
+/// 主进程 `cn.toside.music.desktop` 在 CoreAudio 里没有进程对象，`getAudioObjectID` 返回 nil
+/// 被静默跳过，只有这个 helper 能取到 AudioObjectID）。
 enum AudioTapTargets {
     static let bundleIDs: [String] = [
         "com.apple.Music",
@@ -53,6 +59,7 @@ enum AudioTapTargets {
         "com.netease.163music",
         "com.tencent.QQMusicMac",
         "com.kugou.mac.Music",
+        "cn.toside.music.desktop.helper",
     ]
 }
 

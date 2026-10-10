@@ -4008,7 +4008,8 @@ final class PanelIconTests: XCTestCase {
 
 /// `AudioTapTargets.bundleIDs` 是采集白名单的**唯一**字面量（docs/35 §做法 机制三 / D-12）：
 /// `AudioTap.startCaptureSync` 与 `DynamicIslandApp.setupAudioTapMusicObservers` 两处消费它。
-/// 用例钉三件事：四个国内播放器确实在名单里（每个逐条写死，拼错哪条哪条红）、名单无重复项
+/// 用例钉四件事：四个国内播放器确实在名单里（每个逐条写死，拼错哪条哪条红）、Electron 类播放器
+/// 的出声 `.helper` 进程也在名单里（lx-music 实测；D-34）、名单无重复项
 /// （`Set` 折短即说明有一项白写——两处 `contains` 判定虽不受影响，但清单本身就是契约）、
 /// 既有 Safari 未被顺手删掉（浏览器播放同属「音乐来源」，docs/35 §做法 机制三）。
 final class AudioTapTargetsTests: XCTestCase {
@@ -4022,6 +4023,24 @@ final class AudioTapTargetsTests: XCTestCase {
         XCTAssertTrue(bundleIDs.contains("com.netease.163music"), "网易云不在采集白名单里")
         XCTAssertTrue(bundleIDs.contains("com.tencent.QQMusicMac"), "QQ音乐不在采集白名单里")
         XCTAssertTrue(bundleIDs.contains("com.kugou.mac.Music"), "酷狗不在采集白名单里")
+    }
+
+    /// Electron 类播放器的出声 `.helper` 进程（D-34）：lx-music 的音频出自
+    /// `cn.toside.music.desktop.helper`——主进程 `cn.toside.music.desktop` 在 CoreAudio 里没有
+    /// 进程对象，`getAudioObjectID` 返回 nil 被静默跳过（2026-10-10 上屏取证）。
+    /// 新项按契约**追加在末尾**：既有 15 项逐字逐序保留（总数 = 16；主进程条目不得因补 helper 而删）。
+    func testLxMusicHelperProcessIsCaptureTarget() {
+        let bundleIDs = AudioTapTargets.bundleIDs
+        XCTAssertTrue(
+            bundleIDs.contains("cn.toside.music.desktop.helper"),
+            "lx-music 的出声进程（.helper）不在采集白名单里——主进程取不到 AudioObjectID，波形仍恒 0"
+        )
+        XCTAssertEqual(bundleIDs.last, "cn.toside.music.desktop.helper", "新项按契约追加在名单末尾")
+        XCTAssertEqual(bundleIDs.count, 16, "既有 15 项 + lx-music 的 .helper 一项")
+        XCTAssertTrue(
+            bundleIDs.contains("cn.toside.music.desktop"),
+            "补 helper 不得顺手删掉主进程条目——名单只增不删"
+        )
     }
 
     /// 无重复项：两处 `contains` 判定不受重复影响，但名单是「唯一一份字面量」的契约本体，
