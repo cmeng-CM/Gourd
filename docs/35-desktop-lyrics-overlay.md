@@ -54,12 +54,12 @@ LyricsOverlayWindowManager.sync()           折叠态岛右翼 / 锁屏面板（
 
 ### 机制一 · 悬浮层（新增）
 
-- **数据**：零新增抓取。直接读 `MusicManager` 已有的 `syncedLyrics` / `currentLyricIndex` / `currentLyrics`——逐行同步由既有的 300ms `lyricSyncTask` 推进，缓存与 LRCLIB 拉取都不动。
+- **数据**：零新增抓取。只读 `MusicManager` 已有的 `syncedLyrics` / `currentLyricIndex`（`currentLyrics` 是既有链路的内部状态——占位串的载体，悬浮层不读它）；逐行同步由既有的 300ms `lyricSyncTask` 推进，缓存与 LRCLIB 拉取都不动。
 - **窗口**：一个无边框、非激活（`styleMask: [.borderless, .nonactivatingPanel]`）、置顶（`CGShieldingWindowLevel()`）、`[.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]` 的 `NSPanel`——配方逐字沿用 `FlyoutWindowPresenter`（同一种窗口语义只留一份配方，但**不复用它的本体**：它的定位与动画是「贴着岛」的专用逻辑）。屏幕取岛所在屏（`DynamicIslandViewModel.screen` 的 localizedName 匹配，与 `FlyoutWindowPresenter.resolveScreen` 同口径）。
-- **显隐**：判据提成一个纯函数（见 §接口与数据形状），四个输入之外没有隐含通道；显隐由一条观察链（`MusicManager` 的四个 `@Published` + `vm.notchState` + 锁屏状态 + 三枚设置键）驱动，`sync()` 幂等。
-- **渲染**：行数档 1 / 3 / 5；当前行取 `currentLyricIndex`，`lineCount > 1` 时把当前行摆在**中间**（上下各露相邻行），越界处留空不补行；当前行按「高亮」档加粗提亮，颜色按档解析（跟封面取色 / 白 / 自定义）；整层套一档不透明度；行切换用短 `easeInOut` 淡入淡出。**无时间轴歌词**（LRCLIB 只有 `plainLyrics` 时既有链路产出 `[LyricLine(timestamp: 0, text: 整段)]`）按换行拆行、静态显示：不高亮、不滚动——不拆行会把整段歌词糊成一团。
+- **显隐**：判据提成一个纯函数（见 §接口与数据形状），四个输入之外没有隐含通道——其中 `hasRealLyrics = !syncedLyrics.isEmpty`（既有链路的两种占位态「Loading lyrics...」/「No lyrics found」都伴随 `syncedLyrics = []`，所以读 `syncedLyrics` 就够，不要去比占位串）；显隐由一条观察链（`MusicManager` 的 `syncedLyrics` / `currentLyricIndex` / `isPlaying` 三个 `@Published` + `vm.notchState` / `vm.screen` + 屏参变化通知 + 锁屏状态 + 9 枚设置键）驱动，`sync()` 幂等。
+- **渲染**：行数档 1 / 3 / 5；当前行取 `LyricsOverlayRules.highlightIndex(...)`（无时间轴时为 `nil`，即不高亮），`lineCount > 1` 时把当前行摆在**中间**（上下各露相邻行），越界处留空不补行；当前行按「高亮」档加粗提亮，颜色按档解析（跟封面取色 / 白 / 自定义）；整层套一档不透明度；行切换用短 `easeInOut` 淡入淡出。**无时间轴歌词**（LRCLIB 只有 `plainLyrics` 时既有链路产出 `[LyricLine(timestamp: 0, text: 整段)]`）按换行拆行、静态显示：不高亮、不滚动——不拆行会把整段歌词糊成一团。
 - **位置与交互**：默认锚点 = 岛下方居中，用户拖拽写下相对锚点的偏移（两个 `Defaults` 值），窗口每次出现按锚点 + 偏移就位（屏参变化时重算锚点、保留偏移）。「锁定位置」档把 `ignoresMouseEvents` 置真（完全鼠标穿透，代价是不能拖）；未锁定时拖拽移动，并提供右键菜单三个动作（锁定 / 重置位置 / 关闭歌词）——不锁定时窗口会接到鼠标事件，这是拖拽的必然代价，记在 §已知限制。
-- **隐私口径**：沿用 `ScreenCaptureVisibilityManager` 的手法——设置里「截屏 / 录屏时隐藏灵动岛」开着时，窗口 `sharingType = .none`，歌词不漏进录制。
+- **隐私口径**：窗口建好后注册进 `ScreenCaptureVisibilityManager`（`scope: .entireInterface`）——该 manager 自己订阅「截屏 / 录屏时隐藏灵动岛」并逐窗刷 `sharingType = .none`，所以开关切换当场生效、本层不另写一份判断；歌词因此不漏进录制。
 
 ### 机制二 · 面板内歌词退休（改动既有行为）
 
@@ -69,7 +69,9 @@ LyricsOverlayWindowManager.sync()           折叠态岛右翼 / 锁屏面板（
 |---|---|
 | 侧歌词档（`showsSideLyricsHomeLayout` / `sideLyricsRequiredNotchWidth` / `NotchHomeView.sideLyricsContent` + `LyricsSidePanelView` / `SideLyricsLayout` / `PanelContentHeight.sideLyricsHomeTab` / `homePanelTabKey(showsSideLyricsLayout:)` 的分档 / `ContentView` 的 `.home` 分档与最小宽度项 / `DynamicIslandViewModel` 的三条 publisher） | 整条退休；首页在「歌词开 + 日历关」时不再变形，永远走标准两条带 + 一行 |
 | `songInfoContent` 的内嵌歌词行（`enableLyrics && showCalendar`） | 删除（它已是死路，见 §背景与目标 1） |
-| 极简播放器的歌词行（`MinimalisticMusicPlayerView` 的三处 `if enableLyrics` 渲染分支） | 删除（极简档也是岛面板）；**歌词按钮保留**，改为控制悬浮层总开关 |
+| 极简播放器的歌词行（`MinimalisticMusicPlayerView` 的三处 `if enableLyrics` 渲染分支） | 删除（极简档也是岛面板）；**歌词按钮保留**，改为控制悬浮层总开关。注意它有**两个消费面**：`NotchHomeView` 的极简档与 `ExtensionLiveActivityViews` 的扩展实时活动兜底——后者的音乐格会跟着失去歌词行，由悬浮层接管 |
+| 极简档的歌词加高（`matters.swift` 的 `minimalisticLyricsExtraHeight` = 40pt 与 `minimalisticOpenNotchSize` 的 `enableLyrics` 分支、`DynamicIslandViewModel` 里那条专为它重算尺寸的 observer） | 一并退休（D-17）：行删了高度留着就是「开歌词即一条 40pt 空带」 |
+| 被动孤儿（因上面两条失去全部消费点的符号：`AlbumArtView`、`mirrorIsVisible` / `cameraPreview` / `webcamManager`、`MusicControlsView` 的 `.regular` 档、`NotchHomeView` 里两行 `lyricsPanelWidth/Offset` 的 `@Default`） | 逐符号 grep 确认零消费点后删除；仍有别处消费者的部分只删失去消费点的入口并在报告里写明 |
 
 **两处设置耦合同时解除**：媒体页歌词开关不再被 `showCalendar` / `enableMinimalisticUI` / `showStandardMediaControls` 挡住（用户点得动）；日历页日历开关不再被 `enableLyrics` 挡住。这就是把「互相锁死」修掉的那一步。
 
@@ -116,8 +118,11 @@ enum LyricsOverlayRules {
         enableLyrics: Bool, hasActiveSession: Bool, hasRealLyrics: Bool,
         islandClosed: Bool, screenLocked: Bool
     ) -> Bool
-    /// 无时间轴歌词按换行拆行（plain = 一条 timestamp 0 的整段文本）
-    static func displayLines(synced: [LyricLine], plain: String) -> [(index: Int, text: String)]
+    /// 无时间轴歌词按换行拆行——判据锚在既有链路的真实形状上：
+    /// plain 落点 = syncedLyrics 里的一条 `LyricLine(timestamp: 0, text: 整段)`
+    static func displayLines(synced: [LyricLine]) -> (lines: [(index: Int, text: String)], isSynced: Bool)
+    /// D-08 的「plain 不高亮」由它承载：isSynced == false 或 currentIndex < 0 → nil
+    static func highlightIndex(isSynced: Bool, currentIndex: Int) -> Int?
     /// 行窗口：当前行居中，越界留空不补行
     static func visibleWindow(lineCount: Int, currentIndex: Int, total: Int) -> [Int?]
     /// 颜色解析（跟封面时用 `ensureMinimumBrightness` 同款下限，保证深色封面上可读）
@@ -142,7 +147,7 @@ final class LyricsOverlayWindowManager: ObservableObject {
 
 **白名单常量**：`AudioTapTargets.bundleIDs: [String]`（放 `AudioTap.swift` 顶部，两处消费：`AudioTap.startCaptureSync` 与 `DynamicIslandApp.setupAudioTapMusicObservers`）。
 
-**退休符号**（删除，清单即契约）：`SideLyricsLayout`、`showsSideLyricsHomeLayout`、`sideLyricsRequiredNotchWidth`、`PanelContentHeight.sideLyricsHomeTab`、`homePanelTabKey(showsSideLyricsLayout:)` 的侧歌词分档、`NotchHomeView.sideLyricsContent` / `LyricsSidePanelView` / `shouldShowSideLyrics`、`songInfoContent` 的内嵌歌词行、`MinimalisticMusicPlayerView` 的三处歌词渲染分支、`lyricsPanelWidth` / `lyricsPanelOffset`、`PanelAutoHeightTests.testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey`。
+**退休符号**（删除，清单即契约）：`SideLyricsLayout`、`showsSideLyricsHomeLayout`、`sideLyricsRequiredNotchWidth`（含 `openNotchSize` 与 `ContentView.currentOpenNotchResizeBounds()` 两处 `minWidth` 里的调用）、`PanelContentHeight.sideLyricsHomeTab`、`homePanelTabKey(showsSideLyricsLayout:)` 的侧歌词分档、`NotchHomeView.sideLyricsContent` / `LyricsSidePanelView` / `shouldShowSideLyrics` / `MusicPlayerView`、`songInfoContent` 的内嵌歌词行、`MinimalisticMusicPlayerView` 的三处歌词渲染分支、`minimalisticLyricsExtraHeight` 与其两处消费（D-17）、`lyricsPanelWidth` / `lyricsPanelOffset`（键定义 + 两处 `@Default` + 两条 publisher + 两条滑杆）、`PanelAutoHeightTests.testSideLyricsHomeLayoutDoesNotResolveToTheHomeLedgerKey`。
 
 ## 明确不做
 
@@ -188,18 +193,19 @@ final class LyricsOverlayWindowManager: ObservableObject {
 | ID | 决策 | 来源 | 理由 |
 |----|------|------|------|
 | D-01 | 歌词落点从面板改为**屏幕悬浮层**（自绘），岛不展开时显示 | 用户 | 2026-10-10 原话「歌词是否可以不显示在面板上，当灵动岛不展开的情况下，歌词直接显示在屏幕上……或者自定义一套歌词显示模式」；二选一拍板「Gourd 自绘悬浮歌词」 |
-| D-02 | 数据源沿用既有 LRCLIB 链路（`syncedLyrics` / `currentLyricIndex` / `currentLyrics`），零新增抓取与缓存 | agent | 逐行同步（300ms）与缓存已存在；换源会引入新外部依赖与合规面（备选 7） |
+| D-02 | 数据源沿用既有 LRCLIB 链路（悬浮层只读 `syncedLyrics` / `currentLyricIndex`；`currentLyrics` 是既有链路的内部状态——占位串载体，悬浮层不读它），零新增抓取与缓存 | agent | 逐行同步（300ms）与缓存已存在；换源会引入新外部依赖与合规面（备选 7） |
 | D-03 | 面板内三处歌词落点全部退休（侧歌词档一族、内嵌歌词行、极简播放器歌词行） | 用户 | 「不显示在面板上」是用户拍的范围；内嵌行在 docs/29 D-17 之后本就不可达 |
-| D-04 | 保留锁屏媒体面板的歌词行与全屏作品窗口的歌词 | agent | 二者不在灵动岛面板上；锁屏与解锁互斥，与悬浮层不重叠 |
-| D-05 | `enableLyrics` 键名沿用、语义改为「屏幕歌词总开关」；解除媒体页/日历页两处互相 disable 的耦合 | agent | 复用同一枚键避免两套开关；那个死锁是本次要修的毛病之一（用户 2026-10-10 抱怨的直接来源） |
+| D-04 | 保留锁屏媒体面板的歌词行与全屏作品窗口的歌词 | 用户 | 二者不在灵动岛面板上；锁屏与解锁互斥，与悬浮层不重叠 |
+| D-05 | `enableLyrics` 键名沿用、语义改为「屏幕歌词总开关」；解除媒体页/日历页两处互相 disable 的耦合 | 用户 | 复用同一枚键避免两套开关；那个死锁是本次要修的毛病之一（用户 2026-10-10 抱怨的直接来源） |
 | D-06 | 悬浮层窗口配方沿用 `FlyoutWindowPresenter` 的常量组，但**另写** manager | agent | 同一种窗口语义只留一份配方；FlyoutWindowPresenter 的定位/动画是「贴着岛」专用逻辑（备选 3） |
-| D-07 | 显示判据 = 总开关 && 有活跃音乐会话 && 拿到真实歌词行 && 岛不展开 && 屏幕未锁；**不跟 `hideOnClosed`** | agent | 「Loading / No lyrics found」不常驻（避免闪烁与噪声）；锁屏归锁屏面板；全屏仍显示是桌面歌词的常见用法（记入 §已知限制） |
-| D-08 | 无时间轴歌词按换行拆行、静态显示（不高亮、不滚动） | agent | LRCLIB 只有 plainLyrics 时既有链路产出单条整段文本，不拆行会糊成一团 |
-| D-09 | 显示档 = 字号 / 行数(1·3·5) / 透明度 / 颜色模式(跟封面·白·自定义) / 高亮当前行 / 锁定位置 + 重置位置；默认 18pt / 3 行 / 0.9 / 跟封面 / 高亮开 / 未锁定 | agent | 用户给的维度原样落地；默认值取「贴在岛下方、不抢眼」 |
+| D-07 | 显示判据 = 总开关 && 有活跃音乐会话 && 拿到真实歌词行 && 岛不展开 && 屏幕未锁；**不跟 `hideOnClosed`** | 用户 | 「Loading / No lyrics found」不常驻（避免闪烁与噪声）；锁屏归锁屏面板；全屏仍显示是桌面歌词的常见用法（记入 §已知限制） |
+| D-08 | 无时间轴歌词按换行拆行、静态显示（不高亮、不滚动） | 用户 | LRCLIB 只有 plainLyrics 时既有链路产出单条整段文本，不拆行会糊成一团（2026-10-10 计划门逐条请用户确认，答复「可以」） |
+| D-09 | 显示档 = 字号 / 行数(1·3·5) / 透明度 / 颜色模式(跟封面·白·自定义) / 高亮当前行 / 锁定位置 + 重置位置；默认 18pt / 3 行 / 0.9 / 跟封面 / 高亮开 / 未锁定 | 用户 | 用户给的维度原样落地；默认值取「贴在岛下方、不抢眼」（2026-10-10 计划门逐条请用户确认，答复「可以」） |
 | D-10 | 位置 = 岛所在屏、默认岛下方居中；拖拽写偏移、可锁定（锁定档 `ignoresMouseEvents = true`） | 用户 | 用户选项文案已含「位置可拖拽记忆」；穿透是锁定档的附带语义 |
-| D-11 | 截屏/录屏时与岛同口径隐藏（`sharingType = .none`） | agent | 与既有隐私口径一致，别让歌词漏进录制 |
+| D-11 | 截屏/录屏时与岛同口径隐藏（`sharingType = .none`） | 用户 | 与既有隐私口径一致，别让歌词漏进录制（2026-10-10 计划门逐条请用户确认，答复「可以」） |
 | D-12 | 白名单提取为**唯一常量** `AudioTapTargets.bundleIDs`，并加入 lx-music / 网易云 / QQ音乐 / 酷狗四个 bundle id | 用户 | 用户「如果不展开可以显示就增加白名单」+ 拍板「四个国内播放器」；提取常量是防两处名单漂移（现状两份字面量副本） |
 | D-13 | 实时波形配置**保留**（不删） | 用户 | 该分支前提「必须展开才显示」不成立——它不展开就显示（折叠态右翼 + 锁屏面板） |
 | D-14 | 新增 ADR-0018，记录「歌词落点从面板移到屏幕」并作废 docs/29 D-57 的侧歌词档结论 | agent | 推翻既有结论必须留痕（文档会变：改判就地留痕） |
-| D-15 | 悬浮层单实例、跟随岛所在屏；副屏不画第二份 | agent | 多实例要处理每屏锚点/拖拽状态与 `showOnAllDisplays` 的交互，收益低（备选 4 之外的范围控制） |
-| D-16 | 不做逐字高亮、不做字体族/描边/背景板自定义、不做按 App 单独开关 | agent | 用户给的档位里没有这些；先把「能看、能调、能挪」做对（§明确不做 2/8/9） |
+| D-15 | 悬浮层单实例、跟随岛所在屏；副屏不画第二份 | 用户 | 多实例要处理每屏锚点/拖拽状态与 `showOnAllDisplays` 的交互，收益低（备选 4 之外的范围控制） |
+| D-16 | 不做逐字高亮、不做字体族/描边/背景板自定义、不做按 App 单独开关 | 用户 | 用户给的档位里没有这些；先把「能看、能调、能挪」做对（§明确不做 2/8/9；2026-10-10 方案门呈现的「明确不做」点名，用户答复「可以」） |
+| D-17 | 极简档的歌词加高（`minimalisticLyricsExtraHeight` = 40pt 与其 observer）随极简歌词行一起退休 | 用户 | 那段高度只服务极简档那一行歌词；行删了高度留着就是「开歌词即一条 40pt 空带」（独立审查 F4 发现；2026-10-10 计划门逐条请用户确认，答复「可以」） |
