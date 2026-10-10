@@ -107,13 +107,13 @@ LyricsOverlayWindowManager.sync()           折叠态岛右翼 / 锁屏面板（
 | `lyricsCustomColorHex` | String | `"#FFFFFF"` | 6 位十六进制（`#` 可省；非法回落白。自定义档用；`Defaults` 不稳存 SwiftUI `Color`，用十六进制字符串） |
 | `lyricsHighlightCurrent` | Bool | true | — |
 | `lyricsOverlayLocked` | Bool | false | true = 鼠标穿透 |
-| `lyricsOverlayOffsetX` / `lyricsOverlayOffsetY` | Double | 0 / 0 | 相对「岛下方居中」锚点的 pt 偏移 |
+| `lyricsOverlayOffsetX` / `lyricsOverlayOffsetY` | Double | 0 / 0 | 相对「岛下方居中」锚点的 pt 偏移；**AppKit 屏幕坐标位移**（向下拖 = Y 负），窗口 `origin = 锚点 + 偏移`（定位与拖拽同一坐标系，D-25） |
 
 **纯函数（新文件，`DynamicIsland/components/Music/LyricsOverlayRules.swift`）**：
 
 ```swift
 enum LyricsOverlayRules {
-    /// 显隐的唯一判据（四个输入之外没有隐含通道）
+    /// 显隐的唯一判据（五个输入之外没有隐含通道）
     static func shouldShow(
         enableLyrics: Bool, hasActiveSession: Bool, hasRealLyrics: Bool,
         islandClosed: Bool, screenLocked: Bool
@@ -138,7 +138,10 @@ enum LyricsOverlayRules {
 ```swift
 final class LyricsOverlayWindowManager: ObservableObject {
     static let shared: LyricsOverlayWindowManager
+    /// 启动一次：装观察链（只装一次）并跑一次 sync()——窗口由 `sync()` 在判据成立时建，总开关关着时反而走退役
+    func start()
     /// 幂等：按判据决定显示 / 隐藏，按锚点 + 偏移布局；观察链变化时调用
+    /// （拖拽进行中只跳过重排、不跳过显隐——D-26）
     func sync()
     /// 拖拽落点写入偏移（两个 Defaults 键）
     func commitOffset(_ offset: CGSize)
@@ -146,7 +149,8 @@ final class LyricsOverlayWindowManager: ObservableObject {
 }
 ```
 
-**视图（新文件，`DynamicIsland/components/Music/LyricsOverlayView.swift`）**：渲染 + 右键菜单（锁定 / 重置位置 / 关闭歌词）。
+**视图（新文件，`DynamicIsland/components/Music/LyricsOverlayView.swift`）**：渲染 + 右键菜单（`Lock position` / `Reset position` / `Turn Off Lyrics`，zh-Hans 条目由 T4 补）+ 拖拽回调。**入参（全部显式、视图不读单例）**：`lines: [(index: Int, text: String)]`、`isSynced: Bool`、`highlightIndex: Int?`、`emphasizeCurrent: Bool`、`fontSize: CGFloat`、`lineCount: Int`、`opacity: Double`、`colorMode: LyricsColorMode`、`customHex: String`、`albumArtColor: NSColor?`、`locked: Bool`、`onToggleLock` / `onResetPosition` / `onCloseLyrics` / `onDragChanged` / `onDragEnded`。
+两条实现级契约（D-20 / D-21）：**`highlightIndex` 同时是行窗口的居中锚**——高亮档关掉只把 `emphasizeCurrent` 置假（字重与明暗恢复一致），**锚点仍跟当前行**（折成 `highlightIndex = nil` 会让窗口冻在第一行，1 行档时恒显示第 1 句）；**「高亮当前行」落成「其余行相对压暗」**（当前行满不透明度、其余行同色 ×0.72，`dimmedAlpha`）——三档颜色同一条式子成立（白档无法更亮）。窗口尺寸由 `NSHostingView.fittingSize` 定：宽 = 最长行固有宽（封顶 860pt `maximumWidth`），高 = `lineCount × round(fontSize × 1.4)`（D-23）。
 
 **白名单常量**：`AudioTapTargets.bundleIDs: [String]`（放 `AudioTap.swift` 顶部，两处消费：`AudioTap.startCaptureSync` 与 `DynamicIslandApp.setupAudioTapMusicObservers`）。
 
@@ -179,6 +183,8 @@ final class LyricsOverlayWindowManager: ObservableObject {
 - **锁屏时不显示**：锁屏有媒体面板自己的那一行（解锁后悬浮层接管）。
 - **plain（无时间轴）歌词**只是静态多行，不随播放推进。
 - **不改 App 内其它歌词入口的语义**：锁屏面板与全屏作品窗口照旧（同一枚 `enableLyrics` 同时门控它们，关总开关会一起关）。
+- **锁定档下右键菜单打不开**：锁定 = 整窗 `ignoresMouseEvents`（穿透），所以「Unlock position」那一项在锁定档不可达——解锁的正式入口是设置页的「Lock position」开关（T4）；菜单里保留该项纯属防御性。
+- **拖拽期间不做重排**：拖拽中任何一次 `sync()`（如播放中每 ~300ms 的行切换）都会与拖拽抢窗口位置，故重排被挂起、拖拽结束再按新偏移归位一次（D-26）；拖拽中歌词行照常推进（只窗口不动）。**连带**：挂起的是「测量 + 锚点 + `setFrame`」整段，所以拖拽中窗口**尺寸**也不跟随行窗口（切到长行时按旧宽截尾，松手即恢复）——瞬时观感，与 D-26 自洽。
 
 ## 验收标准
 
@@ -213,4 +219,11 @@ final class LyricsOverlayWindowManager: ObservableObject {
 | D-16 | 不做逐字高亮、不做字体族/描边/背景板自定义、不做按 App 单独开关 | 用户 | 用户给的档位里没有这些；先把「能看、能调、能挪」做对（§明确不做 2/8/9；2026-10-10 方案门呈现的「明确不做」点名，用户答复「可以」） |
 | D-18 | 自定义颜色档的十六进制**接受省略 `#`**（仍要求 6 位十六进制、非法回落白） | agent | 用户可见的自由输入：`FF0000` 写成不带 `#` 不该变成白（独立审查 T2-Minor 2 引出；代价：比本表原先写的 `#RRGGBB` 宽一档，已在表里改齐） |
 | D-19 | `visibleWindow` 收 `lines`、回窗口行（去掉 `total`）——把「index 与 currentIndex 同坐标」编进类型 | agent | 独立审查 T2-Important 1：`displayLines` 丢空行时保留下标洞，消费方按位置取值会错位，而原签名（`[Int?]` + `total`）在类型上无约束（代价：签名多一个参数、`total` 概念消失，由 `lines` 隐式承担） |
+| D-20 | 视图增 `emphasizeCurrent`：`highlightIndex` 兼作**行窗口居中锚**，高亮档只影响字重/明暗 | agent | T3 实现发现文档欠定：把 `lyricsHighlightCurrent=false` 折成 `highlightIndex = nil` 会让 `visibleWindow` 的 `currentIndex` 退回 `?? 0`，行窗口**永远停在第一行**（「关高亮」连带冻住滚动） |
+| D-21 | 「高亮当前行」落成「**其余行相对压暗**」（当前行满不透明度、其余行 ×0.72） | agent | 三档颜色（跟封面 / 白 / 自定义）同一条式子成立；白档「更亮」已无空间，压暗是唯一一致的表达（观测上仍是「当前行最醒目」） |
+| D-22 | 总开关 `enableLyrics` 关掉时**整窗退役**（`unregister` + 断内容视图 + 丢窗口），其余「暂不该显示」的情形只 `orderOut` 留窗 | agent | 给 `ScreenCaptureVisibilityManager.unregister` 一个收敛触发点，且不留一件 `CGShieldingWindowLevel` 的隐形窗口；代价 = 重开总开关要重建窗口（一次 `NSPanel` + `register`） |
+| D-23 | 窗口尺寸取 `NSHostingView.fittingSize`（宽封顶 860pt；高 = `lineCount × round(fontSize × 1.4)`） | agent | 与 `FlyoutWindowPresenter` 同一测量口径；代价 = 歌词行宽变化时窗口宽度跟随（居中锚不变）、超长行截尾（刻意） |
+| D-24 | 接线带 `if !AppRuntimeEnvironment.isUITesting`；右键菜单三项用英文 literal（zh-Hans 由 T4 补） | agent | 与相邻的 `ModuleHUDWindowHost.shared.start()` 逐字同口径（全局层不进 UI 测试界面栈）；本仓既有菜单同为英文 literal |
+| D-25 | `lyricsOverlayOffsetX/Y` 存**AppKit 屏幕坐标位移**（向下拖 = Y 负），窗口 `origin = 锚点 + 偏移` | agent | 窗口定位与拖拽提交在同一坐标系里闭合成环：拖动落点与 `sync()` 重排结果逐位相同、不回跳（T3 报告第 7 条候选决策；代价 = 两枚键的符号语义要写清） |
+| D-26 | 拖拽进行中 `sync()` 只跳过**重排**、不跳过显隐；拖拽结束补一次完整 `sync()` | agent | 独立审查 T3-Minor 4：播放中行切换触发的 sync 会把窗口拉回「锚点 + 已存偏移」，机制上必然抖动（上屏未证实——锁屏阻断）；显隐不能跳过，否则拖拽中该藏的窗口藏不掉 |
 | D-17 | 极简档的歌词加高（`minimalisticLyricsExtraHeight` = 40pt 与其 observer）随极简歌词行一起退休 | 用户 | 那段高度只服务极简档那一行歌词；行删了高度留着就是「开歌词即一条 40pt 空带」（独立审查 F4 发现；2026-10-10 计划门逐条请用户确认，答复「可以」） |
