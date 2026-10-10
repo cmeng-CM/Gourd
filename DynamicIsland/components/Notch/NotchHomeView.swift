@@ -981,9 +981,9 @@ private struct MediaOutputPickerButton: View {
     @State private var isHoveringPopover = false
     @EnvironmentObject private var vm: DynamicIslandViewModel
 
-    /// 键的尺寸档（p6 / T2）：调用方（`MusicControlsView.slotView`）按密度传——
-    /// 缺省 `.medium`（30）是**展开面板那一档，逐字不变**；紧凑档传 `.small`（26）。
-    var scale: Image.Scale = .medium
+    /// 键的尺寸档（p6 / T2；T6 起**无缺省**）：唯一调用方 `MusicControlsView.slotView` 传 `.small`
+    /// （26）——旧 `.medium` 缺省（展开面板那一档）随 `.regular` 档退休后零消费，已删。
+    var scale: Image.Scale
 
     var body: some View {
         HoverButton(icon: buttonIcon, iconColor: .white, scale: scale) {
@@ -1041,9 +1041,9 @@ private struct AirPlayPickerButton: View {
         musicManager.bundleIdentifier == "com.apple.Music"
     }
 
-    /// 键的尺寸档（p6 / T2）：与 `MediaOutputPickerButton.scale` 同口径——缺省 `.medium`
-    /// 是展开面板那一档（逐字不变），紧凑档由 `slotView(for:)` 传 `.small`。
-    var scale: Image.Scale = .medium
+    /// 键的尺寸档（p6 / T2；T6 起**无缺省**）：与 `MediaOutputPickerButton.scale` 同口径，由
+    /// `slotView(for:)` 传 `.small`（26）。
+    var scale: Image.Scale
 
     var body: some View {
         HoverButton(icon: "airplayaudio", iconColor: .white, scale: scale) {
