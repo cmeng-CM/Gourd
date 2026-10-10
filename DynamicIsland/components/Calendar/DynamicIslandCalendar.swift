@@ -1416,106 +1416,19 @@ private struct StandaloneEventCardList: View {
         }
     }
 
+    /// 卡片本体已抽为共享组件 `ReminderCard`（`CalendarEventCards.swift`，P11/T1）：
+    /// 这里只做宿主侧的接缝——把 `event.id` 与宿主的 `onToggleReminder` 闭包绑给组件的 `onToggle`。
     private func reminderCard(_ event: EventModel) -> some View {
-        let isCompleted: Bool
-        if case .reminder(let completed) = event.type {
-            isCompleted = completed
-        } else {
-            isCompleted = false
-        }
-
-        return HStack(spacing: 10) {
-            ReminderToggle(
-                isOn: Binding(
-                    get: { isCompleted },
-                    set: { newValue in onToggleReminder(event.id, newValue) }
-                ),
-                color: Color(event.calendar.color)
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.callout)
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .lineLimit(showFullEventTitles ? nil : 2)
-
-                if event.isAllDay {
-                    Text("All-day")
-                        .font(.caption)
-                        .foregroundColor(Color(white: 0.65))
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            if !event.isAllDay {
-                Text(event.start, style: .time)
-                    .font(.caption)
-                    .foregroundColor(Color(white: 0.75))
-            }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+        ReminderCard(
+            event: event,
+            showFullEventTitles: showFullEventTitles,
+            onToggle: { completed in onToggleReminder(event.id, completed) }
         )
-        .opacity(isCompleted ? 0.55 : 1)
     }
 
+    /// 卡片本体已抽为共享组件 `CalendarEventCard`（`CalendarEventCards.swift`，P11/T1）。
     private func calendarEventCard(_ event: EventModel) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color(event.calendar.color))
-                .frame(width: 4, height: 36)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.callout)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(showFullEventTitles ? nil : 2)
-
-                if let location = event.location, !location.isEmpty {
-                    Text(location)
-                        .font(.caption)
-                        .foregroundColor(Color(white: 0.65))
-                        .lineLimit(1)
-                }
-
-                if let conferenceURL = event.conferenceURL {
-                    ConferenceJoinButton(url: conferenceURL, event: event)
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                if event.isAllDay {
-                    Text("All-day")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                } else {
-                    Text(event.start, style: .time)
-                        .font(.caption)
-                        .foregroundColor(.white)
-                    Text(event.end, style: .time)
-                        .font(.caption2)
-                        .foregroundColor(Color(white: 0.65))
-                }
-            }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-        .opacity(event.eventStatus == .ended && Calendar.current.isDateInToday(event.start) ? 0.6 : 1)
+        CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles)
     }
 }
 
