@@ -89,8 +89,11 @@ private enum AllDayStripMetrics {
 /// single-row height regardless of how many all-day events exist — extra
 /// events scroll horizontally within the strip instead of growing vertically.
 private struct AllDayEventsStrip: View {
-    @Environment(\.openURL) private var openURL
     let events: [EventModel]
+    /// 详情浮层状态（P11 / T4，宿主一份）：芯片把悬停 / 点击写给它；浮层本体由
+    /// `StandaloneCalendarView` 右栏 pane 级的 `.calendarEventDetails(model:)` 画
+    /// （`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
+    let details: CalendarEventDetailsModel
     var onToggleReminder: ((String, Bool) -> Void)? = nil
 
     var body: some View {
@@ -114,37 +117,42 @@ private struct AllDayEventsStrip: View {
         }
     }
 
+    /// 全天芯片：**点击 = 钉住详情**（P11 / T4 口径变更——原来点击是 `openURL(event.calendarAppURL())`，
+    /// 打开系统 App 改由浮层的「Open in Calendar」执行，D-09）；悬停约 0.3s 由
+    /// `CalendarEventHoverTarget` 报给浮层，锚点经 `anchorPreference` 上报到面板右栏 pane 级。
+    /// 芯片里的勾选圈（`ReminderToggle`）是 `Button`、自身吞点击，点它不会误触钉住。
     private func allDayChip(_ event: EventModel) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color(event.calendar.color))
-                .frame(width: 8, height: 8)
+        CalendarEventHoverTarget(id: event.id, model: details) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(event.calendar.color))
+                    .frame(width: 8, height: 8)
 
-            Text(event.title)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-                .lineLimit(1)
-
-            if event.isAllDay {
-                Text("All-day")
-                    .font(.caption2)
-                    .foregroundColor(Color(white: 0.6))
+                Text(event.title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
                     .lineLimit(1)
-            }
 
-            if event.type.isReminder, let onToggleReminder {
-                reminderToggle(for: event, using: onToggleReminder)
+                if event.isAllDay {
+                    Text("All-day")
+                        .font(.caption2)
+                        .foregroundColor(Color(white: 0.6))
+                        .lineLimit(1)
+                }
+
+                if event.type.isReminder, let onToggleReminder {
+                    reminderToggle(for: event, using: onToggleReminder)
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, AllDayStripMetrics.verticalPadding)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .contentShape(Capsule())
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, AllDayStripMetrics.verticalPadding)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
-        .contentShape(Capsule())
+        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
         .onTapGesture {
-            if let url = event.calendarAppURL() {
-                openURL(url)
-            }
+            details.togglePin(event.id)
         }
     }
 
@@ -1119,6 +1127,13 @@ struct StandaloneCalendarView: View {
     @State private var datePickerScrollTarget: Date?
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
+    /// 详情浮层状态（P11 / T4，面板页一份；首页行各自持一份）：卡片与全天芯片把悬停 / 点击写给它，
+    /// 浮层由 `rightEventsPane` 上挂的 `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`）。
+    ///
+    /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
+    /// 本视图不会因 `pinnedID` 变化重算 body，下面那条 `.onChange(of: details.pinnedID)`
+    /// （收起抑制标志的唯一通路）永远不会触发（教训同 T3 的 `HomeCalendarRow`）。
+    @StateObject private var details = CalendarEventDetailsModel()
 
     /// 左栏**显示月份**（`MonthGridView` 自持，经 `onDisplayedMonthChange` 回声到这里）：只用于左栏高度
     /// ——网格高度算式与首页日历行**同源**（`MonthGridLayout.monthGridHeight`，`36N + 52`）。
@@ -1222,15 +1237,39 @@ struct StandaloneCalendarView: View {
             }
         }
         .onChange(of: vm.notchState) { _, newState in
-            guard newState == .open else { return }
+            guard newState == .open else {
+                // 收面板 / 切页（任何 `notchState != .open`）时浮层归位（P11 / T4）：`onDisappear`
+                // 对无边框面板不可靠（见 `DynamicIslandViewModel.onViewTeardown` 的注释），这条是
+                // 「面板收起后不残留浮层与标志」的主通路——否则钉住标志悬空为 true，面板再也收不起来。
+                details.clear()
+                vm.isCalendarDetailsPinned = false
+                return
+            }
             selectedDate = Date.now
             requestDatePickerCenterOnCurrentDate()
             Task {
                 await calendarManager.updateCurrentDate(selectedDate)
             }
         }
+        // 钉住详情浮层期间抑制面板自动收起（P11 / T4）：标志并入 `ContentView.hasAnyActivePopovers()`。
+        // 判据放在本视图（浮层状态的所有者）：`pinnedID` 一变就同步标志，`clear()` 归位同样经这里落回 false。
+        .onChange(of: details.pinnedID) { _, newValue in
+            vm.isCalendarDetailsPinned = (newValue != nil)
+        }
+        // 本页被销毁（退出日历 tab / 面板收起）时的兜底归位（P11 / T4）：与 `HomeCalendarRow`
+        // 的 `onDisappear` 同一条教训——悬停与钉住双清、标志复位，不留悬空状态。
+        .onDisappear {
+            details.clear()
+            vm.isCalendarDetailsPinned = false
+        }
     }
 
+    /// 右栏 pane：空态走 `EmptyEventsView`，否则渲染「全天芯片条 + 可滚动卡片 List」
+    /// （`StandaloneEventCardList`，它与芯片条共持本视图的 `details`）。
+    ///
+    /// **详情浮层（P11 / T4）**挂在 `.clipped()` **之后**（pane 级）：浮层因此不在 `List` 行内、
+    /// 不被行 / 滚动视口裁剪；条目锚点由卡片与芯片的 `anchorPreference` 上报到这里
+    /// （`CalendarEventDetail.swift` 的 `overlayPreferenceValue` + 现场 `GeometryProxy` 解析）。
     private var rightEventsPane: some View {
         Group {
             if filteredEvents.isEmpty {
@@ -1241,6 +1280,7 @@ struct StandaloneCalendarView: View {
                     events: filteredEvents,
                     selectedDate: selectedDate,
                     showFullEventTitles: Defaults[.showFullEventTitles],
+                    details: details,
                     onToggleReminder: { reminderID, completed in
                         Task {
                             await calendarManager.setReminderCompleted(reminderID: reminderID, completed: completed)
@@ -1252,6 +1292,7 @@ struct StandaloneCalendarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .calendarEventDetails(model: details)
     }
 
     private func requestDatePickerCenterOnCurrentDate() {
@@ -1284,11 +1325,14 @@ private extension Date {
 }
 
 private struct StandaloneEventCardList: View {
-    @Environment(\.openURL) private var openURL
     @Default(.autoScrollToNextEvent) private var autoScrollToNextEvent
     let events: [EventModel]
     let selectedDate: Date
     let showFullEventTitles: Bool
+    /// 详情浮层状态（P11 / T4，宿主一份）：卡片与全天芯片把悬停 / 点击写给它；浮层本体由
+    /// `StandaloneCalendarView` 右栏 pane 级的 `.calendarEventDetails(model:)` 画
+    /// （`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
+    let details: CalendarEventDetailsModel
     let onToggleReminder: (String, Bool) -> Void
     @State private var initialAutoScrollDone = false
 
@@ -1384,6 +1428,7 @@ private struct StandaloneEventCardList: View {
             if !allDayEvents.isEmpty {
                 AllDayEventsStrip(
                     events: allDayEvents,
+                    details: details,
                     onToggleReminder: onToggleReminder
                 )
                 .background(Color.black.opacity(0.95))
@@ -1392,28 +1437,30 @@ private struct StandaloneEventCardList: View {
         .clipped()
     }
 
-    @ViewBuilder
+    /// 单张卡片的**宿主交互包装**（P11 / T4）——卡片本体分派到下面两个 builder（纯展示）：
+    /// `CalendarEventHoverTarget`（悬停约 0.3s → `details.hover`）
+    /// + `anchorPreference`（本卡 bounds 按 id 上报给面板右栏 pane 级的详情浮层）
+    /// + `contentShape(Rectangle())`（整卡可悬停 / 可点，含色条与空隙）
+    /// + `onTapGesture`（**点击 = 钉住详情**；打开系统 App 走浮层的「Open in Calendar」——
+    /// P11 / T4 口径变更，D-09）。
+    ///
+    /// 提醒分支原外层 `Button { openURL(calendarAppURL()) }` 随本次接线去掉：勾选圈
+    /// （`ReminderCard` 里的 `ReminderToggle`）是 `Button`、自身吞点击（写回仍走 `onToggleReminder`
+    /// 链路，一行未动）；卡片其余区域点击落到本层 `onTapGesture` → 钉住，不误触勾选。
     private func eventCard(_ event: EventModel) -> some View {
-        if event.type.isReminder {
-            Button {
-                if let url = event.calendarAppURL() {
-                    openURL(url)
-                }
-            } label: {
+        CalendarEventHoverTarget(id: event.id, model: details) {
+            if event.type.isReminder {
                 reminderCard(event)
+            } else {
+                calendarEventCard(event)
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 2)
-        } else {
-            calendarEventCard(event)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if let url = event.calendarAppURL() {
-                        openURL(url)
-                    }
-                }
-                .padding(.horizontal, 2)
         }
+        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            details.togglePin(event.id)
+        }
+        .padding(.horizontal, 2)
     }
 
     /// 卡片本体已抽为共享组件 `ReminderCard`（`CalendarEventCards.swift`，P11/T1）：
