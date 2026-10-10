@@ -45,6 +45,11 @@
 //  岛底边下方一档间距（8pt），再叠加 `lyricsOverlayOffsetX/Y`（AppKit 屏幕坐标系的位移，
 //  向下拖 = y 变小 = 负偏移）。屏参变化 / `screen` 变化时重算锚点、偏移原样保留。
 //
+//  **拖拽保护**：拖拽进行中（`isDragging`）`sync()` **只跳过重排**——位置由 `dragChanged`
+//  直接驱动，此时按「锚点 + 已存偏移」设帧会把拖到一半的窗口拉回上一次落点（播放中每 ~300ms
+//  一次行切换的 sync 都会触发），靠下一次 `dragChanged` 弹回来。显隐判断与 `rootView`
+//  更新不跳过：拖拽中歌词照常推进、需要藏时照常藏。
+//
 
 #if os(macOS)
 import AppKit
@@ -70,6 +75,10 @@ final class LyricsOverlayWindowManager: ObservableObject {
     private var anchorOrigin: CGPoint?
     /// 拖拽起点（窗口左上角）：拖动期间窗口 origin = 起点 + 位移。
     private var dragStartOrigin: CGPoint?
+    /// 拖拽进行中：`sync()` 此时**只跳过重排**（位置由 `dragChanged` 直接驱动），
+    /// 否则播放中每 ~300ms 一次的行切换 sync 都会把窗口按「锚点 + **已存**偏移」拉回去、
+    /// 靠下一次 `dragChanged` 弹回来（拖拽抖动）。显隐判断与 `rootView` 更新不受它影响。
+    private var isDragging = false
 
     private init() {}
 
@@ -187,6 +196,12 @@ final class LyricsOverlayWindowManager: ObservableObject {
         }
         window.ignoresMouseEvents = locked
 
+        // 拖拽进行中只跳过重排：窗口位置这段由 `dragChanged` 直接驱动，`sync()` 若按
+        // 「锚点 + 已存偏移」设帧会把拖到一半的窗口拉回上一次落点（播放中每 ~300ms 一次
+        // `$currentLyricIndex` 的 sync 都会触发）。上面的显隐判断与本行的 `rootView`
+        // 更新都不跳过——拖拽时歌词照常随播放推进，只是位置不动。
+        guard !isDragging else { return }
+
         let size = measuredSize(for: hosting)
         let origin = anchorOrigin(on: screen, windowSize: size, viewModel: viewModel)
         self.anchorOrigin = origin
@@ -196,6 +211,7 @@ final class LyricsOverlayWindowManager: ObservableObject {
     private func hideIfNeeded() {
         dragStartOrigin = nil
         anchorOrigin = nil
+        isDragging = false
         guard let window, window.isVisible else { return }
         window.orderOut(nil)
     }
@@ -214,10 +230,12 @@ final class LyricsOverlayWindowManager: ObservableObject {
         commitOffset(.zero)
     }
 
-    /// 拖拽进行中（视图 `DragGesture.onChanged`）：窗口原点 = 拖拽起点 + 位移。
-    /// SwiftUI 的 y 向下，AppKit 的窗口 y 向上，所以高度取反。
+    /// 拖拽进行中（视图 `DragGesture.onChanged`）：窗口原点 = 拖拽起点 + 位移，
+    /// 并竖起 `isDragging`（`sync()` 从这一刻起不重排）。SwiftUI 的 y 向下，AppKit 的窗口
+    /// y 向上，所以高度取反。
     func dragChanged(_ translation: CGSize) {
         guard !Defaults[.lyricsOverlayLocked], let window, anchorOrigin != nil else { return }
+        isDragging = true
         let start = dragStartOrigin ?? window.frame.origin
         dragStartOrigin = start
         let origin = CGPoint(
@@ -229,14 +247,21 @@ final class LyricsOverlayWindowManager: ObservableObject {
         }
     }
 
-    /// 拖拽结束（视图 `DragGesture.onEnded`）：把落点折算成相对锚点的偏移并落盘。
+    /// 拖拽结束（视图 `DragGesture.onEnded`）：把落点折算成相对锚点的偏移并落盘，随后
+    /// **主动完整 sync() 一次**——按新偏移归位（写盘触发的 sync 与这次同帧幂等，不重复动窗）。
     func dragEnded(_ translation: CGSize) {
         guard let window else { return }
         dragChanged(translation)
         let origin = window.frame.origin
         dragStartOrigin = nil
-        guard let anchorOrigin else { return }
+        guard let anchorOrigin else {
+            isDragging = false
+            return
+        }
+        // 先落旗再写盘：`Defaults.publisher` 触发的 sync 必须是「完整」的那一次。
+        isDragging = false
         commitOffset(CGSize(width: origin.x - anchorOrigin.x, height: origin.y - anchorOrigin.y))
+        sync()
     }
 
     // MARK: - 窗口
@@ -282,6 +307,7 @@ final class LyricsOverlayWindowManager: ObservableObject {
         self.window = nil
         dragStartOrigin = nil
         anchorOrigin = nil
+        isDragging = false
     }
 
     /// 只建一次 `NSHostingView`（`rootView` 每次 `sync()` 整体重建，docs/35 §做法 机制一）。

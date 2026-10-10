@@ -49,7 +49,7 @@ enum LyricsOverlayRules {
 
     /// 悬浮层显隐的**唯一**判据：总开关 && 有活跃音乐会话 && 拿到真实歌词行 && 岛不展开 && 屏幕未锁。
     ///
-    /// 四个输入之外没有隐含通道：**不跟 `hideOnClosed`**（全屏 app 上仍显示是桌面歌词的常见用法）、
+    /// 五个输入之外没有隐含通道：**不跟 `hideOnClosed`**（全屏 app 上仍显示是桌面歌词的常见用法）、
     /// 不读占位串（见文件头）。锁屏归锁屏媒体面板自己那一行（D-04）。
     static func shouldShow(
         enableLyrics: Bool,
