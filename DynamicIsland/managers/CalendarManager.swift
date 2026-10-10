@@ -31,8 +31,8 @@ class CalendarManager: ObservableObject {
     static let shared = CalendarManager()
 
     @Published var currentWeekStartDate: Date
-    /// **按日**窗口（`[选中日, +1 天)`）的条目：今日清单（`HomeCalendarRow` 右栏 /
-    /// `EventListView`）与独立日历面板右栏（`StandaloneEventCardList`）的数据源。
+    /// **按日**窗口（`[选中日, +1 天)`）的条目：今日清单（`HomeCalendarRow` 右栏的
+    /// `CalendarEventCardList`）与独立日历面板右栏（`StandaloneEventCardList`）的数据源。
     /// `updateEvents` 是它唯一的赋值点。**月历标记不用它**（见 `monthEvents`）。
     @Published var events: [EventModel] = []
     /// **按月**窗口的条目快照（与 `events` 完全独立的一条数据路径，2026-09-29 补）。
@@ -49,8 +49,8 @@ class CalendarManager: ObservableObject {
     /// 已经有人要过按月数据时**重抓一次（`refreshRequestedMonthEvents()`）——不打开日历行的用户
     /// 不为这条数据付任何查询代价。
     ///
-    /// 条目**未过滤**：已完成提醒 / 全天条目的隐藏偏好由显示侧（宿主）走
-    /// `EventListView.filteredEvents` 施加，与右侧今日清单同一条链路。
+    /// 条目**未过滤**：已完成提醒 / 全天条目的隐藏偏好由显示侧（宿主 / 卡片列组件）走
+    /// `CalendarEventFilters.filtered` 施加，与右侧今日清单同一条链路。
     @Published private(set) var monthEvents: MonthEventSnapshot = .empty
     @Published var allCalendars: [CalendarModel] = []
     @Published var eventCalendars: [CalendarModel] = []

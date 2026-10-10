@@ -42,6 +42,8 @@
 //  口径：docs/36-calendar-cards-and-add.md §接口与数据形状（`CalendarEventCard(event:showFullEventTitles:)`、
 //  `ReminderCard(event:showFullEventTitles:onToggle:)`、
 //  `CalendarEventCardList(events:selectedDate:showFullEventTitles:)` 与它的 `ordered(_:)` 纯函数）。
+//  **P11 / T7 增补**：本文件同时承载**两处共用的过滤口径** `CalendarEventFilters.filtered(events:hideCompletedReminders:hideAllDayEvents:)`
+//  （旧紧凑行的过滤函数迁址，函数体逐字未动）——「列组件 + 过滤口径」是配套的一对。
 //  **签名增量（P11 / T3）**：`CalendarEventCardList` 增 `details: CalendarEventDetailsModel`（详情浮层
 //  接线用；相对 docs/36 的签名多这一项，T8 回写对齐）——本列是**唯一**给浮层上报锚点与悬停 / 点击的组件，
 //  浮层本体与模型在 `CalendarEventDetail.swift`。
@@ -182,26 +184,56 @@ struct ReminderCard: View {
     }
 }
 
+/// 两处日历共用的**过滤口径**（P11 / T7）：原旧紧凑行的 `filteredEvents` 静态函数**逐字搬家**为本枚举。
+///
+/// 剔除「已完成的提醒」（`hideCompletedReminders`）与被偏好隐藏的「全天条目」（`hideAllDayEvents`）；
+/// 两个偏好由调用方从 `Defaults` 读出后传入（本枚举**不读 `Defaults`**，仍是纯函数，可直接单测）。
+///
+/// **为什么独立成枚举**：旧紧凑行退休后这条口径仍是两处共用——首页卡片列在组件内过滤
+/// （`CalendarEventCardList.orderedEvents`）、独立日历面板右栏与月历标记快照在宿主侧过滤
+/// （`StandaloneCalendarView` / `HomeCalendarRow` 的 `filteredEvents` / `monthEventSnapshot`）。
+enum CalendarEventFilters {
+    static func filtered(
+        events: [EventModel],
+        hideCompletedReminders: Bool,
+        hideAllDayEvents: Bool
+    ) -> [EventModel] {
+        events.filter { event in
+            if event.type.isReminder {
+                if case .reminder(let completed) = event.type {
+                    return !completed || !hideCompletedReminders
+                }
+            }
+            if event.isAllDay && hideAllDayEvents {
+                return false
+            }
+            return true
+        }
+    }
+}
+
 /// 首页整宽日历行右栏的**可滚动卡片列**（P11 / T2；docs/36 §接口与数据形状 / D-13）。
 ///
 /// **为什么是滚动列**：卡片高度随标题行数（「显示完整事件标题」开着时更多行）与地点有无而变
-/// （约 50–66pt），定高容量算式（旧 `HomeTodayListLayout.capacity` 那一档）算不准——要么裁掉
+/// （约 50–66pt），定高容量算式（旧紧凑列表的行容量档，本批已退休）算不准——要么裁掉
 /// 内容、要么白留一档，因此条目多于栏高时**栏内滚动**：不做 `+N`、不做容量算式、不分「全天
 /// 芯片条」（全天条目合并进本列，收尾时间列显 `All-day`）。
 ///
-/// **过滤口径**（与旧 `EventListView` 内部 `filteredEvents` 计算属性同形、逐字沿用）：`events`
-/// 收的是**未过滤**的原始条目（首页宿主传 `calendarManager.events`），组件自己读
-/// `hideCompletedReminders` / `hideAllDayEvents` 两个偏好走 `EventListView.filteredEvents`，
+/// **过滤口径**：`events` 收的是**未过滤**的原始条目（首页宿主传 `calendarManager.events`），
+/// 组件自己读 `hideCompletedReminders` / `hideAllDayEvents` 两个偏好走 `CalendarEventFilters.filtered`
+/// （口径逐字沿用旧紧凑行的 `filteredEvents` 计算属性，T7 起迁为本文件顶部的独立枚举），
 /// 再交给 `ordered`。宿主不预先过滤（组件与宿主空态判据因此同源）。
 ///
 /// **排序口径**：`ordered` 纯函数——`partitionEvents` 后全天在前、各自按 `start` 升序
-/// （口径逐字沿用旧 `EventListView.orderedEvents`；与面板「芯片条 + 时间线」同序）。
+/// （口径逐字沿用旧紧凑行的 `orderedEvents`；与面板「芯片条 + 时间线」同序）。
 ///
 /// **高度口径**：本组件**自身不设高度**（不读行高、不读可用高度）——视口高度由宿主钉
-/// （`HomeCalendarRow` 给 `rowHeight − collapsedHeaderHeight`）；条目多则栏内滚动、少则自然高。
+/// （`HomeCalendarRow` 给 `rowHeight − headerHeight`）；条目多则栏内滚动、少则自然高。
+/// 表头（收起态日期头）的占用高度由本组件的 `headerHeight` 常量提供（原旧紧凑列表的
+/// `collapsedHeaderHeight` 原值迁入，见下方）。
 ///
 /// **交互口径（P11 / T3 起）**：提醒卡片的勾选写回走 `CalendarManager.shared.setReminderCompleted`
-/// （与旧 `EventListView.reminderToggle` 同链路）；每张卡片包一层 `CalendarEventHoverTarget`
+/// （与旧紧凑行的勾选圈同链路）；每张卡片包一层 `CalendarEventHoverTarget`
 /// （悬停约 0.3s 报给 `details`）+ `anchorPreference` 上报锚点（宿主据此画详情浮层）+
 /// 点击 `details.togglePin(event.id)`（**点击从「打开系统 App」改为「钉住详情」**，D-09——打开按钮
 /// 移进浮层的 `CalendarEventDetailCard`）。提醒卡的勾选圈是 `Button`、自身吞点击，因此点勾选圈
@@ -211,10 +243,16 @@ struct ReminderCard: View {
 /// `.onHover { vm.isHoveringCalendar }` 已覆盖本行，`ContentView` 的面板收起滚动判据是
 /// `!vm.isHoveringCalendar`，本列滚动因此安全（docs/36 执行期裁决）。
 struct CalendarEventCardList: View {
+    /// 宿主表头（收起态日期头那一行）占用的高度 = 26pt（P11 / T7 从已退休的旧紧凑列表行容量档
+    /// 原值迁入）：一行 `subheadline` + 顶部 2pt padding + 与列表之间的 4pt 间距。
+    /// 两处宿主共用这一个数——`HomeCalendarRow` 的 `todayListHeight`（`rowHeight − headerHeight`）
+    /// 与 `CalendarView`（**仅供 `#Preview`**）的视口换算都引它。
+    static let headerHeight: CGFloat = 26
+
     @ObservedObject private var calendarManager = CalendarManager.shared
     /// **未过滤**的原始条目（首页宿主传 `calendarManager.events`）；偏好过滤在组件内做。
     let events: [EventModel]
-    /// 选中日（与旧 `EventListView` 同形的接口参数；本组件不消费，保留给后续接线）。
+    /// 选中日（与两处宿主同形的接口参数；本组件不消费，保留给后续接线）。
     let selectedDate: Date
     /// 标题是否不限行（宿主读 `Defaults[.showFullEventTitles]` 后传入，与面板同源）。
     let showFullEventTitles: Bool
@@ -224,8 +262,8 @@ struct CalendarEventCardList: View {
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
 
-    /// 展示顺序（纯函数）：全天在前、再定时，各自按开始时间升序——口径逐字沿用原
-    /// `EventListView.orderedEvents`（`partitionEvents` 分组后两次 `sorted`）。
+    /// 展示顺序（纯函数）：全天在前、再定时，各自按开始时间升序——口径逐字沿用旧紧凑行的
+    /// `orderedEvents`（`partitionEvents` 分组后两次 `sorted`）。
     static func ordered(_ events: [EventModel]) -> [EventModel] {
         let partitioned = partitionEvents(events)
         return partitioned.allDay.sorted { $0.start < $1.start }
@@ -235,7 +273,7 @@ struct CalendarEventCardList: View {
     /// 过滤（组件内，读偏好）→ 排序（纯函数）。**渲染全部条目**，不再有 `prefix(capacity)`。
     private var orderedEvents: [EventModel] {
         Self.ordered(
-            EventListView.filteredEvents(
+            CalendarEventFilters.filtered(
                 events: events,
                 hideCompletedReminders: hideCompletedReminders,
                 hideAllDayEvents: hideAllDayEvents

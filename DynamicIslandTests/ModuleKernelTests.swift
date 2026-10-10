@@ -83,8 +83,8 @@
 //  见 docs/34 §做法 机制二）；视图侧的渲染像素判据（圆心点 + 三段同心环 + 缺口在视觉正下方）
 //  在 `.workflow/p9-calendar-week-icon/evidence/glyph-structure.py`（脚本，退出码 0）。
 //  P11 / T2 首页行滚动卡片列——`CalendarEventCardList.ordered` 的展示顺序（全天在前、各自按
-//  `start` 升序、提醒与日程混排同一把尺子、空数组返回空；口径逐字沿用旧
-//  `EventListView.orderedEvents`）。
+//  `start` 升序、提醒与日程混排同一把尺子、空数组返回空；口径逐字沿用旧紧凑行的
+//  `orderedEvents`）。
 //  P11 / T5 快速新增口径——`CalendarQuickAdd` 六条纯函数（宽松时间解析 D-11 的收/拒全表、
 //  日程默认时段 D-08 的整点取当前与 23 点回退、起止同自然日校验、全天区间、提醒到期组件的
 //  年月日归一化）。**不碰真 EventKit**（无 TCC 依赖）；服务层真写入归 T8 上屏复核。
@@ -5905,106 +5905,21 @@ final class AppleNotesTrashFilterTests: XCTestCase {
     }
 }
 
-// MARK: - 首页「今日」紧凑列表：行容量与时间列（2026-09-29 用户反馈）
+// MARK: - 首页日历块：日期轮下标算术（2026-09-29 T1）
 
-/// `HomeTodayListLayout.capacity` 是纯函数（不读 `Defaults`、不碰 `Calendar`），直接对算式测。
+/// 日期轮的「选中日 ↔ 项下标」换算（`WheelPickerIndexMath`，纯函数）。
 ///
-/// 背景（用户原话：「日历的今日内容不能只是一行，这种情况下还需要滑动，然后还有很大留白」）：
-/// 首页今日内容原先是「横向芯片条（只露一行、要左右滑）+ 写死 120pt 的块」，改成竖向紧凑多行后
-/// 「显示几行 + 是否溢出」**必须算得准**——算不准要么截断要么又留白。三条覆盖边界：
-/// 0 项、恰好放满、超出一行；另有一条钉住时间列的 `HH:mm` 口径。
-final class HomeTodayListLayoutTests: XCTestCase {
+/// 这一组用例钉的是**定位落点**：`WheelPicker` 的初始定位就是
+/// `scrollPosition = indexForDate(selectedDate)`（`scrollToToday`），落点算错 = 展开后不在选中日上。
+/// 注意「hover 展开的日期轮是空条」那条 bug 的**根因不在算术**（实测滚动位置一直是对的，是容器
+/// 把 AppKit 背书的 `ScrollView` 裁没了），渲染层测不了——由
+/// `.workflow/p2-calendar-row/reports/` 的对照实验与截图覆盖；这里保证算术不回归。
+///
+/// **P11 / T7**：原与本组同类的「首页今日紧凑列表行容量 / 时间列（固定 24 小时制）」用例（旧
+/// 行容量档的纯函数断言）随旧紧凑行本批退休，已整组删除——本类只留日期轮算术
+/// （`WheelPicker` 与日期头 hover 逻辑按 T7 判决保留不动）。
+final class WheelPickerIndexMathTests: XCTestCase {
 
-    /// 能摆下 `lines` 行内容所需的高度（最后一行不带行距）。用例用它构造「恰好放满」的高度，
-    /// 与视图渲染共用 `rowHeight` / `rowSpacing` 两个常量，避免算式与渲染各写一套数字。
-    private func height(fittingLines lines: Int) -> CGFloat {
-        CGFloat(lines) * HomeTodayListLayout.rowHeight
-            + CGFloat(max(0, lines - 1)) * HomeTodayListLayout.rowSpacing
-    }
-
-    /// **0 项：不显示行、也不溢出**（空态由 `EmptyEventsView` 负责，不占高度）。
-    /// 顺带钉住退化输入（高度为 0 / 负数 / 非法）：不崩、不返回负数行，条目全部计入溢出。
-    func testCapacityIsEmptyWithoutItems() {
-        for available in [height(fittingLines: 5), 0, -40] {
-            let capacity = HomeTodayListLayout.capacity(availableHeight: available, itemCount: 0)
-            XCTAssertEqual(capacity.visibleItemCount, 0, "可用高度 \(available)：没有条目就不该有行")
-            XCTAssertEqual(capacity.overflowCount, 0, "可用高度 \(available)：没有条目就没有溢出")
-            XCTAssertFalse(capacity.showsOverflow, "0 项不应出现「+N」提示行")
-            XCTAssertEqual(capacity.contentHeight, 0, "0 项时列表内容高度为 0")
-        }
-
-        let degenerate = HomeTodayListLayout.capacity(availableHeight: .nan, itemCount: 3)
-        XCTAssertEqual(degenerate.visibleItemCount, 0, "非法高度下不猜行数")
-        XCTAssertEqual(degenerate.overflowCount, 3, "非法高度下条目全部计入溢出（走「+N」一行）")
-    }
-
-    /// **恰好放满：全部显示、不溢出**，且高度刚好用尽（内容高度 == 可用高度，不多不少）。
-    /// 另外钉住行数上限：高度再富余也不超过 `maxItemRows`（首页日历块不允许无限长）。
-    func testCapacityFitsExactlyWhenHeightIsExactlyEnough() {
-        let lines = HomeTodayListLayout.maxItemRows
-        let available = height(fittingLines: lines)
-
-        let exact = HomeTodayListLayout.capacity(availableHeight: available, itemCount: lines)
-        XCTAssertEqual(exact.visibleItemCount, lines, "5 行高度 + 5 条 = 全部显示")
-        XCTAssertEqual(exact.overflowCount, 0, "恰好放满时不应有溢出")
-        XCTAssertFalse(exact.showsOverflow)
-        XCTAssertEqual(exact.contentHeight, available, accuracy: 0.001, "内容高度应与可用高度相等")
-
-        // 高度富余（面板 683/850 时的真实情形）也停在行数上限上。
-        let generous = HomeTodayListLayout.capacity(availableHeight: height(fittingLines: 30), itemCount: lines)
-        XCTAssertEqual(generous.visibleItemCount, lines, "高度富余时仍以 5 行为上限")
-        XCTAssertEqual(generous.overflowCount, 0, "条目数等于上限时不算溢出")
-    }
-
-    /// **超出一行：让出一行额度给「+N」提示行**——6 条放进「5 行高度」，显示 4 条 + `+2`。
-    /// 同时钉住「高度富余时会因行数上限溢出」（8 条 → 5 行 + `+3`），这正是「不允许再横滑」的兜底：
-    /// 超出部分一定看得见条数，不需要任何滚动。
-    func testCapacityOverflowsByOneRowWhenItemsExceedHeight() {
-        let lines = HomeTodayListLayout.maxItemRows
-        let available = height(fittingLines: lines)
-
-        let overflowByOne = HomeTodayListLayout.capacity(availableHeight: available, itemCount: lines + 1)
-        XCTAssertEqual(overflowByOne.visibleItemCount, lines - 1, "提示行占掉一行额度 → 少显示一条")
-        XCTAssertEqual(overflowByOne.overflowCount, 2, "隐藏条数 = 总数 − 显示行数")
-        XCTAssertTrue(overflowByOne.showsOverflow, "溢出时必须出现「+N」提示行")
-        XCTAssertEqual(overflowByOne.contentHeight, available, accuracy: 0.001, "含提示行后仍应恰好占满可用高度")
-
-        let cappedByMaxRows = HomeTodayListLayout.capacity(
-            availableHeight: height(fittingLines: 30), itemCount: lines + 3
-        )
-        XCTAssertEqual(cappedByMaxRows.visibleItemCount, lines, "高度富余时由行数上限决定显示行数")
-        XCTAssertEqual(cappedByMaxRows.overflowCount, 3, "超出上限的条目计入溢出")
-        XCTAssertTrue(cappedByMaxRows.showsOverflow)
-    }
-
-    /// 时间列口径：**固定 24 小时制 `HH:mm`**，与系统 locale 无关（`Text(_, style: .time)` 会变
-    /// `12:10 PM` 这类 12 小时制 + AM/PM，紧凑行放不下）。用固定时区的日历构造，避免随本机时区漂。
-    func testClockLabelIsFixedTwentyFourHour() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .gmt
-
-        func label(_ hour: Int, _ minute: Int) -> String {
-            let date = calendar.date(
-                from: DateComponents(year: 2026, month: 9, day: 29, hour: hour, minute: minute)
-            )!
-            return EventListView.clockLabel(for: date, calendar: calendar)
-        }
-
-        XCTAssertEqual(label(9, 5), "09:05", "个位数补零")
-        XCTAssertEqual(label(13, 7), "13:07", "下午仍是 24 小时制（不会变成 1:07 PM）")
-        XCTAssertEqual(label(0, 0), "00:00", "零点")
-        XCTAssertEqual(label(23, 59), "23:59", "末班时间")
-    }
-
-    // MARK: - 首页日历块：日期轮下标算术（2026-09-29 T1）
-
-    /// 日期轮的「选中日 ↔ 项下标」换算（`WheelPickerIndexMath`，纯函数）。
-    ///
-    /// 这一组用例钉的是**定位落点**：`WheelPicker` 的初始定位就是
-    /// `scrollPosition = indexForDate(selectedDate)`（`scrollToToday`），落点算错 = 展开后不在选中日上。
-    /// 注意「hover 展开的日期轮是空条」那条 bug 的**根因不在算术**（实测滚动位置一直是对的，是容器
-    /// 把 AppKit 背书的 `ScrollView` 裁没了），渲染层测不了——由
-    /// `.workflow/p2-calendar-row/reports/` 的对照实验与截图覆盖；这里保证算术不回归。
     private func wheelCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .gmt
@@ -6378,7 +6293,7 @@ final class MonthGridLayoutTests: XCTestCase {
         XCTAssertEqual(days.count, 3, "四条条目 → 三个有事件的日期（10/15 那条被裁掉）")
     }
 
-    /// **被过滤掉的条目**不产生标记：先过 `EventListView.filteredEvents`（与两个宿主同一套口径）——
+    /// **被过滤掉的条目**不产生标记：先过 `CalendarEventFilters.filtered`（与两个宿主同一套口径）——
     /// 已完成提醒（`hideCompletedReminders`）与全天条目（`hideAllDayEvents`）各一例，
     /// 两种偏好都打开时是**空集**；偏好关掉时两条都在（证明「没标记」是过滤造成的，不是别的原因）。
     func testFilteredOutEventsProduceNoMarks() {
@@ -6392,13 +6307,13 @@ final class MonthGridLayoutTests: XCTestCase {
                       end: gridDay(calendar, year: 2026, month: 9, day: 30), isAllDay: true)
         ]
 
-        let hidden = EventListView.filteredEvents(
+        let hidden = CalendarEventFilters.filtered(
             events: events, hideCompletedReminders: true, hideAllDayEvents: true
         )
         XCTAssertTrue(hidden.isEmpty, "两条都被偏好隐藏")
         XCTAssertTrue(gridDaysWithEvents(calendar, hidden).isEmpty, "被过滤掉的条目不产生任何标记")
 
-        let shown = EventListView.filteredEvents(
+        let shown = CalendarEventFilters.filtered(
             events: events, hideCompletedReminders: false, hideAllDayEvents: false
         )
         XCTAssertEqual(shown.count, 2, "偏好关掉时两条都在（过滤才是「没标记」的原因）")
@@ -6620,8 +6535,8 @@ final class MonthGridLayoutTests: XCTestCase {
 ///
 /// 把 `gourdDisplay` 的 `firstWeekday` 改回 1（周日）时，②③⑥ 必须变红——这是它们存在的理由；
 /// ⑤（`firstDay(ofMonth:)` 的默认值切换）不写成用例：它的结果与周起点无关，用例钉不住「默认值改没改」
-/// ——那一条由源码检查覆盖（`DynamicIslandCalendar.swift` 里 `calendar: Calendar = .current` 只剩
-/// `EventListView.clockLabel` 一处，且那是按日粒度的时刻文案，本次不动）。
+/// ——那一条由源码检查覆盖（P11 / T7 退休旧紧凑行后，`DynamicIslandCalendar.swift` 里
+/// `Calendar = .current` 的默认参数已清零，其余显式 `Calendar` 默认参数一律是 `.gourdDisplay`）。
 @MainActor
 final class CalendarWeekStartTests: XCTestCase {
 
@@ -6721,21 +6636,26 @@ final class CalendarWeekStartTests: XCTestCase {
     }
 }
 
-// MARK: - 首页日历行 · 行高与今日清单行数（P2 批次 / T2）
+// MARK: - 首页日历行 · 行高与卡片列视口（P2 批次 / T2）
 
-/// 日历行是**按当月周数算出的固定行高**：行高与「今日清单显示几行」是同一组数字，算错就会出现
-/// 「清单溢出到行外」或「行内留白」——这里把这条算术钉住（`HomeCalendarRow` 与
-/// `HomeTodayListLayout` 共用常量，不在两处各写一套）。
+/// 日历行是**按当月周数算出的固定行高**：行高与卡片列视口（行高 − 表头高
+/// `CalendarEventCardList.headerHeight`）是同一组数字，算错就会出现「卡片列溢出到行外」或
+/// 「行内留白」——这里把这条算术钉住（`HomeCalendarRow` 与 `CalendarEventCardList` 共用常量，
+/// 不在两处各写一套）。
+///
+/// **P11 / T7**：旧「今日清单显示几行 + `+N` 溢出」的行容量算式随滚动卡片列（D-13）退休，
+/// 相关断言已删；本类只留行高算式（`36N + 52`，本批未动）与卡片列视口高度的断言。
 @MainActor
 final class HomeCalendarRowLayoutTests: XCTestCase {
 
     /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`36 × 5 + 52 = 232`；
-    /// T8 前是「最坏 6 周」的固定 294、T8 首版 258）− 26（收起态日期头，含与列表之间的 4pt 间距）= 206
-    /// → 今日清单 5 行（`maxItemRows` 封顶），第 6 条起让出一行给 `+N`，内容高度仍在行高之内。
+    /// T8 前是「最坏 6 周」的固定 294、T8 首版 258）− 26（收起态日期头 `CalendarEventCardList.headerHeight`，
+    /// 含与列表之间的 4pt 间距）= 206 → 卡片列视口高度（条目多于它时栏内滚动——P11 / T7 起
+    /// 不再有 `+N` 与容量算式，D-13）。
     ///
     /// 固定到 2026-10 再取行高：`HomeCalendarRow.rowHeight` 随运行日所在月的周数走，直接拿它
     /// 参与字面量断言换个 6 周月就整片红。
-    func testRowHeightYieldsFiveItemRowsPlusOverflowRow() {
+    func testRowHeightYieldsCardColumnViewportHeight() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         calendar.locale = Locale(identifier: "en_US_POSIX")
@@ -6746,26 +6666,16 @@ final class HomeCalendarRowLayoutTests: XCTestCase {
         // 5 周月的行高（2026-10 在两种周起点下都是 5 周，见 HomeStripLayoutTests 的同源用例）。
         let rowHeight = HomeCalendarRow.rowHeight(forMonth: october2026, calendar: calendar)
         XCTAssertEqual(rowHeight, 232, "36 × 5 + 52")
-        let listHeight = rowHeight - HomeTodayListLayout.collapsedHeaderHeight
+        let listHeight = rowHeight - CalendarEventCardList.headerHeight
         XCTAssertEqual(listHeight, 206, "232 − 26")
-
-        let five = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 5)
-        XCTAssertEqual(five.visibleItemCount, 5, "5 条全显示")
-        XCTAssertFalse(five.showsOverflow, "5 条不溢出")
-        XCTAssertLessThanOrEqual(five.contentHeight, listHeight, "5 行必须放进行高里")
-
-        let six = HomeTodayListLayout.capacity(availableHeight: listHeight, itemCount: 6)
-        XCTAssertEqual(six.visibleItemCount, 5, "第 6 条起让出一行给 +N，条目行仍封顶 5 行")
-        XCTAssertEqual(six.overflowCount, 1)
-        XCTAssertTrue(six.showsOverflow)
-        XCTAssertLessThanOrEqual(six.contentHeight, listHeight, "「5 行 + +N」也必须放进行高里")
+        XCTAssertGreaterThan(listHeight, 0, "卡片列视口必须为正——列按它钉高（D-13 滚动列）")
     }
 }
 
 // MARK: - 首页行滚动卡片列的展示顺序（P11 / T2，docs/36 §接口与数据形状）
 
-/// `CalendarEventCardList.ordered(_:)` 的展示顺序（纯函数）——口径**逐字沿用**旧
-/// `EventListView.orderedEvents`：`partitionEvents` 后**全天在前、各自按 `start` 升序**；
+/// `CalendarEventCardList.ordered(_:)` 的展示顺序（纯函数）——口径**逐字沿用**旧紧凑行的
+/// `orderedEvents`：`partitionEvents` 后**全天在前、各自按 `start` 升序**；
 /// 提醒与日程走同一把尺子混排（旧清单本来就是一条竖列，不分「提醒一档、日程一档」）。
 ///
 /// **时区前提**：夹具用固定 GMT 日历构造时刻（不读本机时区），期望值全部是同一份日历下的

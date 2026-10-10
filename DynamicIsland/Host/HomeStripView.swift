@@ -1476,7 +1476,7 @@ struct HomeBandedHomeView: View {
 /// 模块块画不出来时的浅色占位：只解释原因，不带交互。
 ///
 /// 文字**显式浅色**（`.white.opacity`）：本项目在浅色系统外观下踩过 `.primary` / `.secondary`
-/// 变黑的坑（与 `EventListView` 同一条约定）。
+/// 变黑的坑（与日历卡片组件 `CalendarEventCards.swift` 同一条约定）。
 private struct HomeStripModulePlaceholder: View {
     let reason: String
 

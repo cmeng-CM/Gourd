@@ -134,7 +134,7 @@ struct HomeCalendarRow: View {
     /// 「有没有条目」这个判断）。**数据源是 `calendarManager.events`（选中日那一天）**——右栏今日
     /// 清单的口径。
     private var filteredEvents: [EventModel] {
-        EventListView.filteredEvents(
+        CalendarEventFilters.filtered(
             events: calendarManager.events,
             hideCompletedReminders: hideCompletedReminders,
             hideAllDayEvents: hideAllDayEvents
@@ -147,7 +147,7 @@ struct HomeCalendarRow: View {
     private var monthEventSnapshot: MonthEventSnapshot {
         MonthEventSnapshot(
             month: calendarManager.monthEvents.month,
-            events: EventListView.filteredEvents(
+            events: CalendarEventFilters.filtered(
                 events: calendarManager.monthEvents.events,
                 hideCompletedReminders: hideCompletedReminders,
                 hideAllDayEvents: hideAllDayEvents
@@ -163,10 +163,10 @@ struct HomeCalendarRow: View {
     }
 
     /// 今日清单的**滚动视口高度** = 行高 − 表头（P11 / T2：右栏换成滚动卡片列后，这个数不再参与
-    /// 容量算式，只钉 `CalendarEventCardList` 的视口——条目多于它时栏内滚动）。`collapsedHeaderHeight`
+    /// 容量算式，只钉 `CalendarEventCardList` 的视口——条目多于它时栏内滚动）。`headerHeight`
     /// 的构成里**已经含**「表头与列表之间的 4pt 间距」，所以不再另加（与 `CalendarView` 同一条口径）。
     private var todayListHeight: CGFloat {
-        max(0, Self.rowHeight - HomeTodayListLayout.collapsedHeaderHeight)
+        max(0, Self.rowHeight - CalendarEventCardList.headerHeight)
     }
 
     var body: some View {
@@ -292,7 +292,7 @@ struct HomeCalendarRow: View {
     ///
     /// 「+」**常显**、不看授权（冷启动授权状态读不到，按它决定显示会两处都不可见、无从发现）；
     /// 展开期间保持 plus，再点一次收起（`isComposing.toggle()`）。行高仍是
-    /// `HomeTodayListLayout.collapsedHeaderHeight`（20pt 的圆形按钮在 26pt 行内），字体与既有日期头逐字不变。
+    /// `CalendarEventCardList.headerHeight`（20pt 的圆形按钮在 26pt 行内），字体与既有日期头逐字不变。
     private var headerRow: some View {
         HStack(spacing: 4) {
             Text(headerText)
@@ -308,7 +308,7 @@ struct HomeCalendarRow: View {
             }
         }
         .padding(.top, 2)
-        .frame(height: HomeTodayListLayout.collapsedHeaderHeight, alignment: .topLeading)
+        .frame(height: CalendarEventCardList.headerHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

@@ -63,8 +63,8 @@ func scrollReferenceTime(for date: Date) -> Date {
 /// Shared layout metrics for the all-day events strip.
 ///
 /// The strip height and the space reserved for it in the timed-events list must
-/// stay in sync across `AllDayEventsStrip`, `StandaloneEventCardList`, and
-/// `EventListView`. Centralising the values here avoids the hardcoded
+/// stay in sync across `AllDayEventsStrip` and `StandaloneEventCardList`.
+/// Centralising the values here avoids the hardcoded
 /// `28` / `3` / `41` / `30` duplicated in multiple views (#566 review).
 private enum AllDayStripMetrics {
     /// Height of the horizontal chip row inside `AllDayEventsStrip`.
@@ -73,8 +73,8 @@ private enum AllDayStripMetrics {
     static let verticalPadding: CGFloat = 3
     /// Top inset pushed onto the timed `List` so `scrollTo(.top)` lands the
     /// target event fully below the floating all-day overlay
-    /// (chip row + 1pt divider + 1pt margin ≈ 30pt). Shared by `EventListView`
-    /// and `StandaloneEventCardList` so both reserve exactly the same space.
+    /// (chip row + 1pt divider + 1pt margin ≈ 30pt). Reserved by
+    /// `StandaloneEventCardList` so its list pads exactly the strip height.
     /// (#566 review: de-duplicate the hardcoded 28/3/41/30)
     static let listTopInset: CGFloat = 30
 }
@@ -415,19 +415,24 @@ struct CalendarView: View {
     @State private var dateExpanded = false
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
+    /// 详情浮层状态（P11 / T7，与两处宿主同款的一份；本视图 **仅供 `#Preview`**，运行期不可达）：
+    /// 卡片把悬停 / 点击写给它，浮层由下面 VStack 上挂的 `.calendarEventDetails(model:)` 画
+    /// （`CalendarEventDetail.swift`；列级挂点 = 滚动视口之外，不被 `ScrollView` 裁）。
+    @StateObject private var details = CalendarEventDetailsModel()
 
-    /// 今日列表的可用高度（2026-09-29）：面板高度 − 刘海底座 − 首页内边距 − 收起态日期头。
+    /// 今日卡片列的**滚动视口高度**（2026-09-29 口径，P11 / T7 改用途）：面板高度 − 刘海底座 −
+    /// 首页内边距 − 收起态日期头。
     ///
     /// 口径与独立面板旧档的 `StandaloneCalendarView.maxTabContentHeight` 同源（都从 `vm.notchSize`
     /// 往下减）——独立面板 p6-ui-polish / T8 起改**自然高**布局（docs/30 §做法 机制六），那个
     /// 「按面板高反推」的口径现在只剩本视图（**仅供 `#Preview`**，运行期不可达；首页日历见
-    /// `HomeCalendarRow` 自己按行高算的那一份）。今日列表的行数**只**由这里决定
-    /// （`HomeTodayListLayout.capacity`），不再靠滚动容纳条目。
+    /// `HomeCalendarRow` 自己按行高算的那一份）。视口高度**只**由这里决定（`CalendarEventCardList`
+    /// 自身不设高度），条目多于栏高时栏内滚动（D-13）。
     private var availableTodayListHeight: CGFloat {
         let panelHeight = vm.notchSize.height > 0 ? vm.notchSize.height : openNotchSize.height
         let closedNotch = max(24, vm.effectiveClosedNotchHeight)
         // 16 = 首页 `NotchHomeView` 的上下各 8pt 内边距（与独立面板的 −36 不同源，各自留自己的）。
-        let reserved = closedNotch + 16 + HomeTodayListLayout.collapsedHeaderHeight
+        let reserved = closedNotch + 16 + CalendarEventCardList.headerHeight
         return max(0, panelHeight - reserved)
     }
 
@@ -492,6 +497,9 @@ struct CalendarView: View {
             }
             .padding(.horizontal, 4)
             .padding(.top, 2)
+            // 日期头按**自然高度**排（原来挂在整块上的 `.fixedSize(horizontal: false, vertical: true)`
+            // 口径随 T7 移到这一行）：块级不再需要它——卡片列是钉高的 `ScrollView`，块高已确定。
+            .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())
             .onHover { inside in
                 withAnimation(.easeInOut(duration: 0.18)) {
@@ -499,7 +507,7 @@ struct CalendarView: View {
                 }
             }
 
-            let filteredEvents = EventListView.filteredEvents(
+            let filteredEvents = CalendarEventFilters.filtered(
                 events: calendarManager.events,
                 hideCompletedReminders: hideCompletedReminders,
                 hideAllDayEvents: hideAllDayEvents
@@ -512,21 +520,30 @@ struct CalendarView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)
             } else {
-                EventListView(
+                // 卡片列（P11 / T7）：与首页行右栏同款容器 `CalendarEventCardList`（原本这里的
+                // 紧凑多行视图已随本批退休）。视口钉 `availableTodayListHeight`——`ScrollView`
+                // 需要确定高度；条目多于栏高时栏内滚动。传**未过滤**的原始条目（过滤在组件内做，
+                // 与空态判据同源）。
+                CalendarEventCardList(
                     events: calendarManager.events,
                     selectedDate: selectedDate,
-                    availableHeight: availableTodayListHeight
+                    showFullEventTitles: Defaults[.showFullEventTitles],
+                    details: details
                 )
+                .frame(height: availableTodayListHeight, alignment: .top)
                 .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // **详情浮层**（P11 / T7）：挂在整块上（与 `HomeCalendarRow` 的列级挂点同款）——条目锚点
+        // 由卡片 `anchorPreference` 上报到这里，浮层就近定位；无 active 条目不渲染。
+        .calendarEventDetails(model: details)
         // 整块按**内容高度**收缩（2026-09-29 用户反馈「还有很大留白」）：原先这里写死
         // `.frame(height: 120)`——当时为了不撑大折叠态窗口，但首页面板早已是 120…850 可配的
         // 展开态，120pt 的固定块在今日条目少时就是一块空白（且把列表压进 120 里去滚）。
-        // 现在块高 = 日期头 + 今日列表（最多 5 行 + 溢出提示），多余的空白自然留在面板最下方，
-        // 不再夹在日期头与列表之间；顶部对齐由 `NotchHomeView` 的 `HStack(alignment: .top)` 保证。
-        .fixedSize(horizontal: false, vertical: true)
+        // 现在块高 = 日期头 + 卡片列视口（T7 起视口由 `availableTodayListHeight` 钉死），多余的
+        // 空白自然留在面板最下方，不再夹在日期头与列表之间；顶部对齐由 `NotchHomeView` 的
+        // `HStack(alignment: .top)` 保证。块级不再需要 `.fixedSize`（口径在日期头上）。
         .listRowBackground(Color.clear)
         .onChange(of: selectedDate) {
             Task {
@@ -551,7 +568,7 @@ struct CalendarView: View {
 // MARK: - 整月网格（抽取复用：独立面板左栏 + 首页日历行左栏）
 
 /// 一份**按月**的事件快照：`month` = 这份数据覆盖的显示月份（该月 1 日零点），`events` = 该月
-/// 网格覆盖区间（`MonthGridLayout.monthWindow`）内的**已过滤**条目（口径 = `EventListView.filteredEvents`）。
+/// 网格覆盖区间（`MonthGridLayout.monthWindow`）内的**已过滤**条目（口径 = `CalendarEventFilters.filtered`）。
 ///
 /// 由 `CalendarManager.monthEvents`（按月的唯一抓取路径）产出、经宿主过滤后交给 `MonthGridView`。
 ///
@@ -673,7 +690,7 @@ enum MonthGridLayout {
     /// 给定月份里**有事件的日期**（每个元素都是那天的零点）——`MonthGridView` 日格标记的唯一判据。
     ///
     /// 三条口径（都有用例钉住）：
-    /// 1. **传入的 `events` 必须已过滤**：调用方走 `EventListView.filteredEvents(events:hideCompletedReminders:hideAllDayEvents:)`
+    /// 1. **传入的 `events` 必须已过滤**：调用方走 `CalendarEventFilters.filtered(events:hideCompletedReminders:hideAllDayEvents:)`
     ///    （「已完成提醒 / 被偏好隐藏的全天条目」不进标记），本函数自己**不读 `Defaults`、不碰 `CalendarManager`**
     ///    ——这样"哪些天有点"与右侧清单同源，不会出现「清单里没有这条、格子上却有点」；
     /// 2. **覆盖区间按天算**：一条事件覆盖 `[起始日, (结束时刻 − 1s) 所在日]` 里的每一天（跨天事件每天都算）。
@@ -713,7 +730,7 @@ enum MonthGridLayout {
     /// 翻月后新数据到达之前手上还是上个月的条目——不对齐就会把上个月的点画到新网格上
     /// （批次的失败信号之一）；对齐判据下这段时间是「没有点」，不会出错点。
     ///
-    /// 快照的条目仍然**必须已过滤**（口径同 `daysWithEvents`，由宿主走 `EventListView.filteredEvents`）。
+    /// 快照的条目仍然**必须已过滤**（口径同 `daysWithEvents`，由宿主走 `CalendarEventFilters.filtered`）。
     static func eventDays(
         forDisplayedMonth displayedMonth: Date,
         snapshot: MonthEventSnapshot,
@@ -772,7 +789,7 @@ struct MonthGridView: View {
     /// 翻月时是否把选中日一并挪到**新月份首日**：独立面板的既有行为是 `true`；
     /// 首页日历行传 `false`（翻月只改显示月份，选中日不动）。
     var monthNavigationMovesSelection: Bool
-    /// 事件标记的数据源：**按月**快照，`events` 必须**已过滤**（口径 = `EventListView.filteredEvents`，
+    /// 事件标记的数据源：**按月**快照，`events` 必须**已过滤**（口径 = `CalendarEventFilters.filtered`，
     /// 由调用方在「`CalendarManager.monthEvents` → 过滤」之后传进来）。
     /// 切片到「显示月份的那张网格（含跨月补格）」由 `MonthGridLayout.eventDays` 在这里做；
     /// 快照月份与显示月份不同月时不出点（数据在路上时的口径）。
@@ -1158,7 +1175,7 @@ struct StandaloneCalendarView: View {
     private let calendar = Calendar.gourdDisplay
 
     private var filteredEvents: [EventModel] {
-        EventListView.filteredEvents(
+        CalendarEventFilters.filtered(
             events: calendarManager.events,
             hideCompletedReminders: hideCompletedReminders,
             hideAllDayEvents: hideAllDayEvents
@@ -1170,7 +1187,7 @@ struct StandaloneCalendarView: View {
     private var monthEventSnapshot: MonthEventSnapshot {
         MonthEventSnapshot(
             month: calendarManager.monthEvents.month,
-            events: EventListView.filteredEvents(
+            events: CalendarEventFilters.filtered(
                 events: calendarManager.monthEvents.events,
                 hideCompletedReminders: hideCompletedReminders,
                 hideAllDayEvents: hideAllDayEvents
@@ -1426,8 +1443,9 @@ private struct StandaloneEventCardList: View {
         // carries a top padding equal to the strip height so scrollTo(.top)
         // lands the target event fully below the overlay. Using `List` (instead
         // of the previous `LazyVStack`-in-`ScrollView`) keeps the scroll
-        // behaviour and look consistent with `EventListView` and gives built-in
-        // separators. (#566 review: unify the two event lists)
+        // behaviour and look consistent with the home card column
+        // (`CalendarEventCardList`) and gives built-in separators.
+        // (#566 review: unify the two event lists)
         ZStack(alignment: .top) {
             ScrollViewReader { proxy in
                 ZStack {
@@ -1478,9 +1496,9 @@ private struct StandaloneEventCardList: View {
 
             // Floating all-day strip overlay (28pt chip row + 1pt divider ≈ 29pt).
             // It sits above the list and events scroll underneath it, like macOS
-            // Calendar's Day view. Matches `EventListView`'s overlay exactly so
-            // the reserved `listTopInset` (30) lines up with the real strip
-            // height. No shadow gradient is drawn on top of the events anymore.
+            // Calendar's Day view. The reserved `listTopInset` (30) lines up with
+            // the real strip height (chip row + divider + 1pt margin).
+            // No shadow gradient is drawn on top of the events anymore.
             if !allDayEvents.isEmpty {
                 AllDayEventsStrip(
                     events: allDayEvents,
@@ -1532,271 +1550,6 @@ private struct StandaloneEventCardList: View {
     /// 卡片本体已抽为共享组件 `CalendarEventCard`（`CalendarEventCards.swift`，P11/T1）。
     private func calendarEventCard(_ event: EventModel) -> some View {
         CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles)
-    }
-}
-
-// MARK: - 首页「今日」紧凑列表（2026-09-29 用户反馈改造）
-
-/// 首页日历「今日」列表的**行容量**：给定可用高度与条目数 → 显示几行 + 溢出多少条。
-///
-/// **为什么要有它**（2026-09-29 用户反馈：「日历的今日内容不能只是一行，这种情况下还需要滑动，
-/// 然后还有很大留白」）：原先今日内容里，全天条目走一条**横向滚动**的芯片行（只露一行、要左右滑），
-/// 定时条目另走一个竖向 `List`，而整块被写死 120pt——条目一多只能横滑，条目少则是一块空白。
-/// 改成「竖向紧凑多行 + 溢出提示」后，**行数必须由可用高度算准**：算不准就要么截断要么又留白，
-/// 所以把这条算式抽成不读 `Defaults`、不碰 `Calendar` 的纯函数，直接单测（`ModuleKernelTests`）。
-enum HomeTodayListLayout {
-    /// 单行高度（`caption` 正文 + 行内余量）。行高与行距是容量的唯一刻度，视图里逐字使用这两个值。
-    static let rowHeight: CGFloat = 19
-    /// 行间距（与列表 `VStack(spacing:)` 取同一值，否则算出的高度与渲染高度会差一档）。
-    static let rowSpacing: CGFloat = 4
-    /// 条目行数上限：再多也不让日历块抢占面板高度（对齐参考里 Nook X 首页「日历压成小信息条」的做法）。
-    static let maxItemRows: Int = 5
-    /// 时间列宽度：`HH:mm` / `全天` 都要放得下，且各行的标题左边缘对齐。
-    static let timeColumnWidth: CGFloat = 36
-    /// 收起态日期头占用的高度（一行 `subheadline` + 顶部 2pt padding + 与列表之间的 4pt 间距）。
-    static let collapsedHeaderHeight: CGFloat = 26
-
-    /// 行容量：`visibleItemCount` 行内容，外加（若溢出）一行 `+N` 提示。
-    struct Capacity: Equatable {
-        /// 实际渲染的条目行数（**不含**溢出提示行）。
-        let visibleItemCount: Int
-        /// 未显示的条目数；0 表示全部放得下。
-        let overflowCount: Int
-
-        var showsOverflow: Bool { overflowCount > 0 }
-
-        /// 列表内容高度（条目行 + 溢出提示行 + 行距）。块本身按内容收缩，所以这就是块内列表部分的高度。
-        var contentHeight: CGFloat {
-            let lines = visibleItemCount + (showsOverflow ? 1 : 0)
-            guard lines > 0 else { return 0 }
-            return CGFloat(lines) * HomeTodayListLayout.rowHeight
-                + CGFloat(lines - 1) * HomeTodayListLayout.rowSpacing
-        }
-    }
-
-    /// 给定可用高度与条目数，返回「显示几行 + 溢出多少条」。
-    ///
-    /// 口径（三条，都有用例钉住）：
-    /// 1. `itemCount == 0` → 0 行 0 溢出（空态由 `EmptyEventsView` 负责，不占高度）；
-    /// 2. 放得下（且不超过 `maxItemRows`）→ 全部显示、不溢出；
-    /// 3. 放不下 / 超上限 → 让出一行额度给 `+N` 提示行，剩余条目计入溢出。
-    ///
-    /// - Parameters:
-    ///   - availableHeight: 列表可用高度。两个调用方各自换算：`CalendarView`（**仅供 `#Preview`**，
-    ///     运行期不可达；首页日历见 `HomeCalendarRow`）按
-    ///     **面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
-    ///     `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
-    ///   - itemCount: 今日条目数（全天 + 定时合计，已过 `filteredEvents` 与排序）。
-    static func capacity(availableHeight: CGFloat, itemCount: Int) -> Capacity {
-        guard itemCount > 0 else { return Capacity(visibleItemCount: 0, overflowCount: 0) }
-        guard availableHeight.isFinite else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
-
-        // 可用高度里最多能摆几行：最后一行不需要行距，故先补一个行距再取整。
-        let pitch = rowHeight + rowSpacing
-        let fittingLines = max(0, Int(floor((availableHeight + rowSpacing) / pitch)))
-        guard fittingLines > 0 else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
-
-        if itemCount <= min(fittingLines, maxItemRows) {
-            return Capacity(visibleItemCount: itemCount, overflowCount: 0)
-        }
-        // 需要「+N」提示行 → 条目行让出一行额度，且不超过行数上限。
-        let visible = min(fittingLines - 1, maxItemRows)
-        guard visible > 0 else { return Capacity(visibleItemCount: 0, overflowCount: itemCount) }
-        return Capacity(visibleItemCount: visible, overflowCount: itemCount - visible)
-    }
-}
-
-/// 首页日历的「今日」列表：**竖向紧凑多行，不横向滚动**（2026-09-29 用户反馈改造）。
-///
-/// 改造前：全天条目走 `AllDayEventsStrip` 那条**横向滚动**的芯片行（只露一行、要左右滑），
-/// 定时条目另走一个竖向 `List`；当天条目全是全天时 `List` 是空的，于是「今日内容只有一行 +
-/// 要在一条细条上左右滑 + 大片留白」三件事同时出现。
-/// 改造后：全天与定时条目**合并成一条竖向列表**（全天在前、各自按开始时间排序），每行
-/// 「时间 + 标题（单行尾部截断）」，行数由 `HomeTodayListLayout.capacity` 按可用高度算准
-/// （条目行最多 5 行 + 必要时一行 `+N`）；高度算得准，因此列表**自身既不同横滚也不同竖滚**。
-///
-/// 说明：`AllDayEventsStrip` 仍服务于独立日历面板（`StandaloneEventCardList`），本视图已不再使用它。
-struct EventListView: View {
-    @Environment(\.openURL) private var openURL
-    @ObservedObject private var calendarManager = CalendarManager.shared
-    let events: [EventModel]
-    let selectedDate: Date
-    /// 列表可用高度——决定显示几行 + 是否溢出。由调用方各自换算：`CalendarView`（**仅供 `#Preview`**，
-    /// 运行期不可达；首页日历见 `HomeCalendarRow`）
-    /// 按**面板高度**（`vm.notchSize` 减去刘海底座与内边距、再减去收起态日期头），
-    /// `HomeCalendarRow`（展开面板首页的全宽日历行）按**行高**（`rowHeight` 减去收起态日期头）。
-    let availableHeight: CGFloat
-    @Default(.hideCompletedReminders) private var hideCompletedReminders
-    @Default(.hideAllDayEvents) private var hideAllDayEvents
-
-    static func filteredEvents(
-        events: [EventModel],
-        hideCompletedReminders: Bool,
-        hideAllDayEvents: Bool
-    ) -> [EventModel] {
-        events.filter { event in
-            if event.type.isReminder {
-                if case .reminder(let completed) = event.type {
-                    return !completed || !hideCompletedReminders
-                }
-            }
-            if event.isAllDay && hideAllDayEvents {
-                return false
-            }
-            return true
-        }
-    }
-
-    private var filteredEvents: [EventModel] {
-        Self.filteredEvents(
-            events: events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-    }
-
-    /// 展示顺序：全天在前、再定时，各自按开始时间升序——与独立面板「顶部芯片条 + 下方时间线」
-    /// 同序，只是这里合成一条竖向列表（时间列里全天显示「全天」，定时显示 `HH:mm`）。
-    private var orderedEvents: [EventModel] {
-        let partitioned = partitionEvents(filteredEvents)
-        return partitioned.allDay.sorted { $0.start < $1.start }
-            + partitioned.timed.sorted { $0.start < $1.start }
-    }
-
-    private var capacity: HomeTodayListLayout.Capacity {
-        HomeTodayListLayout.capacity(
-            availableHeight: availableHeight,
-            itemCount: orderedEvents.count
-        )
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: HomeTodayListLayout.rowSpacing) {
-            ForEach(Array(orderedEvents.prefix(capacity.visibleItemCount))) { event in
-                row(for: event)
-            }
-
-            if capacity.showsOverflow {
-                overflowRow(hiddenCount: capacity.overflowCount)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// 一行 = 时间 + 标题。**文字一律显式浅色**（`.white` / `.white.opacity(...)`）：
-    /// 本项目在浅色系统外观下踩过 `.primary` / `.secondary` 变黑的坑，这里不使用环境色。
-    private func row(for event: EventModel) -> some View {
-        let isDimmed = self.isDimmed(event)
-        return HStack(spacing: 8) {
-            timeLabel(for: event, isDimmed: isDimmed)
-                .frame(width: HomeTodayListLayout.timeColumnWidth, alignment: .leading)
-
-            Text(event.title)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.white.opacity(isDimmed ? 0.5 : 1))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            // 行内**横向** `Spacer`：只把行尾的提醒勾选圈推到右边，不参与纵向分摊
-            // （2026-09-29：面板里不允许再用会把内容摊开的纵向 `Spacer`）。
-            Spacer(minLength: 0)
-
-            if event.type.isReminder {
-                reminderToggle(for: event)
-            }
-        }
-        .padding(.horizontal, 2)
-        .frame(height: HomeTodayListLayout.rowHeight)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            openInCalendar(event)
-        }
-    }
-
-    /// 时间列：有具体时间的显示 `HH:mm`，全天项显示「全天」（`All-day` 已有 19 个语言的译文）。
-    @ViewBuilder
-    private func timeLabel(for event: EventModel, isDimmed: Bool) -> some View {
-        let color = Color.white.opacity(isDimmed ? 0.5 : 0.7)
-        if event.isAllDay {
-            Text("All-day")
-                .font(.caption2)
-                .fontWeight(.medium)
-                .foregroundColor(color)
-                .lineLimit(1)
-        } else {
-            Text(verbatim: Self.clockLabel(for: event.start))
-                .font(.caption2)
-                .fontWeight(.medium)
-                .monospacedDigit()
-                .foregroundColor(color)
-                .lineLimit(1)
-        }
-    }
-
-    /// 溢出提示行 `+N`（N = 没显示的条目数）。
-    ///
-    /// 用 `Text(verbatim:)` 而不是 `Text("+\(n)")`：后者会被当成带 `%lld` 的本地化 key，
-    /// 在 19 个语言的 string catalog 里凭空多出一条待翻译条目（2026-09-29：本改动不新增文案 key）。
-    private func overflowRow(hiddenCount: Int) -> some View {
-        HStack(spacing: 8) {
-            Text(verbatim: "+\(hiddenCount)")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .monospacedDigit()
-                .foregroundColor(.white.opacity(0.55))
-                .frame(width: HomeTodayListLayout.timeColumnWidth, alignment: .leading)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 2)
-        .frame(height: HomeTodayListLayout.rowHeight)
-    }
-
-    /// 已完成提醒 / 已结束（过期）的日程整行降到 `.white.opacity(0.5)`。
-    private func isDimmed(_ event: EventModel) -> Bool {
-        if case .reminder(let completed) = event.type, completed {
-            return true
-        }
-        return event.eventStatus == .ended
-    }
-
-    /// `HH:mm`（固定 24 小时制）：`Text(_, style: .time)` 与 `DateFormatter` 的默认样式都跟随
-    /// 系统 locale，会变成 `12:10 PM` 这类 12 小时制 + AM/PM，紧凑行放不下。
-    /// 走 `Calendar` 取时分再补零：纯函数、无 locale 依赖，也便于单测。
-    static func clockLabel(for date: Date, calendar: Calendar = .current) -> String {
-        let parts = calendar.dateComponents([.hour, .minute], from: date)
-        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
-    }
-
-    private func openInCalendar(_ event: EventModel) {
-        if let url = event.calendarAppURL() {
-            openURL(url)
-        }
-    }
-
-    /// 提醒的勾选圈（保留首页可勾选完成的能力；勾选写回系统提醒，与独立面板同一条链路）。
-    private func reminderToggle(for event: EventModel) -> some View {
-        let isCompleted: Bool
-        if case .reminder(let completed) = event.type {
-            isCompleted = completed
-        } else {
-            isCompleted = false
-        }
-
-        return ReminderToggle(
-            isOn: Binding(
-                get: { isCompleted },
-                set: { newValue in
-                    Task {
-                        await calendarManager.setReminderCompleted(
-                            reminderID: event.id, completed: newValue
-                        )
-                    }
-                }
-            ),
-            color: Color(event.calendar.color)
-        )
     }
 }
 
