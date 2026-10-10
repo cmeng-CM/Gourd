@@ -416,3 +416,23 @@ tabSwitchResize size=887.0x868.0   resizeWindow→noop h=872.0        ← 面板
 - **用户若要回滚笔记那枚是一行**：改回 `note.text` 只需动 `PanelIconTable.notes` 一处（D-07）。
 - **三处同义图标本轮不动**：`ShelfInlineLiveActivity` 折叠态投送反馈图标、`NotchNotesView` 笔记页的空态提示图标（无笔记时 `note.text`、搜索无结果时 `magnifyingglass`）、`MinimalisticMusicPlayerView` Notes 明细行图标——它们不是「面板元素的图标」（[34](34-calendar-week-and-panel-icons.md) §明确不做 6）。
 - 实测记录、备选与取舍、验收标准详见 [34](34-calendar-week-and-panel-icons.md)。
+
+---
+
+## ADR-0018：歌词落点从面板移到屏幕悬浮层
+
+**状态**：已采纳（2026-10-10）
+
+**背景**：用户 2026-10-10 原话「歌词是否可以不显示在面板上，当灵动岛不展开的情况下，歌词直接显示在屏幕上……或者自定义一套歌词显示模式」，并在「Gourd 自绘悬浮歌词」与「由 Gourd 去开关播放器自带的桌面歌词」二选一中拍板**自绘**。当时面板内的歌词已经无处可显：内嵌歌词行（判据 `enableLyrics && showCalendar`）所在的 `MusicControlsView(density: .regular)` 只被侧歌词档渲染，而侧歌词档要求 `!showCalendar`——两个设置开关互相 `.disabled`，**用户被锁死**（设置页两边都点不动，见 [35](35-desktop-lyrics-overlay.md) §背景与目标 1）。同一轮反馈里实时波形「看不到效果」：tap 的采集白名单写死 11 个国外播放器、不含用户在用的 lx-music。
+
+**决策**：歌词的**唯一**呈现出口从面板移到一层 Gourd 自绘的**桌面歌词悬浮层**（`LyricsOverlayWindowManager` + `LyricsOverlayView` + 纯函数 `LyricsOverlayRules`，窗口配方沿用 `FlyoutWindowPresenter` 的常量组）：只在**岛不展开**时显示（判据 = `enableLyrics` && 有活跃音乐会话 && 拿到真实歌词行 && 岛不展开 && 屏幕未锁；**不跟 `hideOnClosed`**）；默认锚点 = 岛下方居中、可拖拽并记住偏移，显示档 = 字号 / 行数（1·3·5）/ 透明度 / 颜色模式（跟封面·白·自定义）/ 高亮当前行 / 锁定位置 + 重置位置。数据源沿用既有 LRCLIB 链路（只读 `MusicManager` 的 `syncedLyrics` / `currentLyricIndex`，逐行同步仍是既有的 300ms），**零新增抓取、不换源**。`enableLyrics` 键名沿用、语义改为「**屏幕歌词总开关**」，媒体页/日历页两处互相 disable 的耦合同时解除。**面板内三处歌词落点整条退休**：侧歌词档一族、`songInfoContent` 的内嵌歌词行、极简播放器的歌词行（含 `minimalisticLyricsExtraHeight` 的 40pt 加高）；锁屏媒体面板与全屏作品窗口的歌词行**保留**（不在灵动岛面板上）。同批把实时波形的采集白名单提成唯一常量 `AudioTapTargets.bundleIDs` 并加入 lx-music / 网易云 / QQ音乐 / 酷狗。
+
+**被作废的既有结论**：[29](29-home-blocks-and-panel.md) 的 **D-57**（侧歌词档首页的账本键 `PanelContentHeight.sideLyricsHomeTab` + `showsSideLyricsHomeLayout(...)` / `homePanelTabKey(showsSideLyricsLayout:)` 一族、含它的用例）与 **D-17 的后半句**（紧凑档把「艺人行 / 歌词行 / 大内边距交给展开面板」——那句话预设展开面板仍有歌词落点，事实是它随侧歌词档一起被否掉）。两处原文保留、就地加改判留痕；同批点了 [13](13-runtime-kernel.md) 限制 30 ① 的「再叠加歌词…的附加高度」与 D-29 夹取公式里的 `sideLyricsRequiredNotchWidth()`、[26](26-home-widgets-and-settings.md) §与计划的偏离 3 的「三条支路（极简 UI / 侧歌词 / 首发）不动」。
+
+**后果**：
+
+- 首页在「歌词开 + 日历关」时不再变形，永远走标准两条带 + 一行；`showsSideLyricsHomeLayout` / `sideLyricsHomeTab` / `LyricsSidePanelView` 全仓零命中（验收标准 3）。
+- **歌词源单点与静默不显示**：LRCLIB 查不到词条时**不显示**（不出现 "No lyrics found" 常驻文案）、加载中也不显示占位——「看起来没反应」的第一嫌疑是词条缺失。
+- **边界（如实记）**：未锁定档会接到鼠标事件（拖拽的代价，要穿透就锁定位）；**锁定档整窗鼠标穿透、右键菜单因此打不开，解锁入口是设置页的「Lock position」**；单实例、跟随岛所在屏（副屏不显示）；全屏 app 上前景可见（有意，不跟 `hideOnClosed`）；锁屏时不显示（锁屏面板有自己那一行）；plain（无时间轴）歌词只静态多行；拖拽期间挂起重排（连带窗口尺寸不跟随）。
+- 极简播放器的歌词按钮**保留**、改为控制悬浮层总开关；`MusicSlotConfigurationView` 的 `.lyrics` 槽位按钮同义（激活配色仍读 `enableLyrics`）。
+- 显示条件、取舍与已知限制的全文见 [35](35-desktop-lyrics-overlay.md) §已知限制 / §接口与数据形状；实现过程与证据在账本 `.workflow/p10-lyrics-overlay/`。

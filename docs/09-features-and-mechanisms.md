@@ -29,7 +29,7 @@
 
 | 面 | 用户看到什么 | 交互 |
 |---|---|---|
-| **折叠态** `compact` | 刘海两侧图标槽（网速/电量/CPU/农历…）+ 中央主区域（正在播放/歌词/计时器/通知浮层） | 悬停预览、点击展开、上下滑动手势 |
+| **折叠态** `compact` | 刘海两侧图标槽（网速/电量/CPU/农历…）+ 中央主区域（正在播放/计时器/通知浮层）；**歌词自 2026-10-10 起改在屏幕上（岛不展开时出现一层悬浮层，不在面板内）**，见 §2.A | 悬停预览、点击展开、上下滑动手势 |
 | **展开面板** `expanded` | 一排 tab：主页 / Shelf / 终端 / 剪贴板（按显示方式）… + **模块自己的 tab**（待办 / 通知 / 日历 / 启动台 / 计时器…） | 点击 tab 切换，点外部或再点收起 |
 | **锁屏** `lockscreen` | 锁屏 widget：音乐面板、天气、日历、提醒、计时器、第三方扩展 widget | 锁屏时自动出现 |
 | **瞬时浮层** HUD | 音量/亮度条、Caps Lock、电量、下载完成、媒体键反馈、**新通知到达** | 短暂显示后自动消失 |
@@ -48,7 +48,8 @@
 | 播放控制（播放/暂停/上下曲/跳转/随机/循环） | ✅ | `dlopen` 私有 `MediaRemote.framework` → `MRMediaRemoteSendCommand` |
 | **媒体数据源** | ✅ | **只用系统 Now Playing 一路**（P3）。它覆盖所有走系统媒体键的播放器 |
 | 其余 6 个播放器适配器（Apple Music / Spotify / YouTube Music / Amazon / TIDAL / Cider） | ⬜️ | 代码保留（AppleScript / 逆向 cookie 的 Web API / AXUIElement / 本地 HTTP），默认不启用 |
-| 逐行歌词 | ✅ | LRCLIB **单源**；匹配打分 + 版本标记过滤 + 精确 sleep 到下一行时间戳（clamp 0.05–0.25s）+ 行内高亮（**静态渐变整行填充**，非动画扫过）+ 内存 LRU（80 首）。**未做**：NetEase 备源、间奏识别、磁盘缓存（2026-09-29 逐行审计更正） |
+| 逐行歌词（数据链，本次不动） | ✅ | LRCLIB **单源**；匹配打分 + 版本标记过滤 + 精确 sleep 到下一行时间戳（clamp 0.05–0.25s）+ 行内高亮（**静态渐变整行填充**，非动画扫过）+ 内存 LRU（80 首）。**未做**：NetEase 备源、间奏识别、磁盘缓存（2026-09-29 逐行审计更正）。**2026-10-10（`p10-lyrics-overlay`）**：这条链本次一字未动——它今天的唯一上屏出口是下一行的屏幕悬浮层（读 `syncedLyrics` / `currentLyricIndex`） |
+| **屏幕歌词（悬浮层）** | ✅ | **2026-10-10 落地（`p10-lyrics-overlay`）**：新增一层 Gourd 自绘的桌面**悬浮层**（`LyricsOverlayWindowManager` / `LyricsOverlayView` / 纯函数 `LyricsOverlayRules`；窗口配方沿用 `FlyoutWindowPresenter` 的常量组、另写 manager）。**只在岛不展开时**显示（判据 = 总开关 `enableLyrics` && 有活跃音乐会话 && 拿到真实歌词行 && 岛不展开 && 屏幕未锁；没拿到歌词**静默不显示**，无 "No lyrics found" 常驻文案）；默认贴岛下方居中、可拖拽并记住位置，显示档 = 字号 / 行数（1·3·5）/ 透明度 / 颜色模式（跟封面·白·自定义）/ 高亮当前行 / 锁定位置 + 重置位置；`enableLyrics` 沿用键名、语义改为「**屏幕歌词总开关**」（媒体页 / 日历页两处互相 disable 的耦合解除）。**面板内不再显示歌词**：侧歌词档一族（`showsSideLyricsHomeLayout` / `sideLyricsRequiredNotchWidth` / `LyricsSidePanelView` / `PanelContentHeight.sideLyricsHomeTab`…）、`songInfoContent` 的内嵌歌词行、极简播放器歌词行（含 40pt 加高）全部退休；锁屏媒体面板与全屏作品窗口的歌词行**保留**（不在面板上）。设计与已知限制见 [35](35-desktop-lyrics-overlay.md)，决策见 [00](00-decisions.md) ADR-0018 |
 | 歌词缓存 | 🔧 | 上游**纯内存 LRU 80 条、不落盘** → 补磁盘缓存（离线可用） |
 | 逐字歌词 / 简繁转换 | ⬜️ | 上游无（只有逐行两级）→ 不在本轮范围 |
 
@@ -111,7 +112,7 @@
 | 键盘背光 | ✅ | 私有 `CoreBrightness` 反射 + IORegistry |
 | 防休眠 | ✅ | IOKit `IOPMAssertionCreateWithName`（退出自动释放） |
 | 音频输出切换 | ✅ | CoreAudio 枚举 + 设默认设备 |
-| 进程级音频 tap | ✅ | CoreAudio `CATapDescription` 进程 tap + 私有 stacked aggregate device——**只喂音频可视化（FFT 频谱），不是"每 App 音量控制"**（全仓 `perApp\|appVolume` 0 命中；2026-09-29 逐行审计更正） |
+| 进程级音频 tap | ✅ | CoreAudio `CATapDescription` 进程 tap + 私有 stacked aggregate device——**只喂音频可视化（FFT 频谱），不是"每 App 音量控制"**（全仓 `perApp\|appVolume` 0 命中；2026-09-29 逐行审计更正）。**2026-10-10（`p10-lyrics-overlay`）**：采集白名单提成唯一常量 `AudioTapTargets.bundleIDs`（原来两份字面量副本），并**已含四个国内播放器**——lx-music（`cn.toside.music.desktop`）/ 网易云（`com.netease.163music`）/ QQ音乐（`com.tencent.QQMusicMac`）/ 酷狗（`com.kugou.mac.Music`）；Safari 保留（[35](35-desktop-lyrics-overlay.md) D-12） |
 | 勿扰（Focus）状态 | ✅ 只读 | 读 `~/Library/DoNotDisturb/DB/Assertions.json` + `log stream`；上游无法切换 |
 | 蓝牙开关状态 | ✅ 只读 | IOBluetooth `powerState` |
 | 外接屏亮度 | ✅ | 经第三方 App（Lunar TCP 23803 / BetterDisplay），上游不发 DDC |
@@ -405,7 +406,7 @@
 | 待办块 | `todos` 与 `notifications` 声明 `home`（2026-09-29 起；`progress` 不声明）：三环横排（复用展开 tab 的同一个 `TodoScopeRing`）+ 今日清单**分三档**（≥220pt 完整行最多 5 行 / ≥160pt 紧凑行只标题最多 3 行 / <160pt 只画三环，判据取放置后的实测宽度）。宽度预算与可用宽的口径推导见 [17](17-nookx-adoption.md) §已知限制 16 |
 | 组件开关 | 设置页新增第 21 个 tab「组件」（`SettingsTab.modules`；`SettingsTab` 共 22 个 case，第 22 个是 `about`）：一张卡 = 一个已注册模块（**数据源是 `ModuleRegistry.manifests` 全量**，含未启用——用 `tabEntries` 会让关掉的组件从列表里消失、再也开不回来）。卡片 = 图标 + 名称 + 摘要 + surfaces 徽标 + 开关；宿主内置三块**不在此页**（它们由上游 `Defaults` 键门控，卡片页顶部有一行说明作缓解）。**2026-09-30 `p2-takeover` 改判**：接管后的音乐 / 镜子（以及计时器）**有卡**了——它们的开关就是上游键，卡与上游设置页拨的是同一个布尔量；页面结构变为「组件（七张卡）→ 功能（七张上游开关卡）→ 首页块顺序」三段（[20](20-component-page.md)）——**此后同日又改过两轮**：T3 把组件段拆成**首页组件 / 面板组件两节**（顺序节被两节吸收，每行自带 ↑↓）、T6 收尾把功能段摘到**六张**（`enableNotes` 那张随笔记入口一并摘除、键惰性）；**今天的结构 = 两节 + 功能段（六张）**，见 §5.9 |
 | 开关的写路径 | **先落盘再改内存**：先写 `Defaults[.moduleEnableOverrides]`（`[String: Bool]`，**缺键 = 用户未表达**，回落 `manifest.defaultEnabled`），再 `await ModuleRegistry.setEnabled(_:for:)`。置开走与启动同一条实例化 + `activate()` 路径；置关 `deactivate()` 后摘实例。activate 失败 → 开关回弹，回弹**只把偏好写回 `false`**、绝不再调 `setEnabled(false)`（`failed` 不可逃逸，见 [13](13-runtime-kernel.md) 本批小节）。**2026-09-30 `p2-takeover` 改判**：写路径收在 `ModuleEnablementWrite.write(_:for:takeoverKey:)`——**接管模块写上游键**（`enableTimerFeature` / `showMirror` / `showStandardMediaControls`），非接管模块才写 `moduleEnableOverrides`；回弹分档由 `ModuleEnablementRollback.preferenceToWrite(takeoverKey:)` 给出，接管模块返回 `nil`（**什么都不写**——回弹等于替用户把关掉的功能关掉，[20](20-component-page.md) D-13） |
-| 边界 | **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 与 `shouldShowSideLyrics` 两条路径逐字未动，因此"首页 = strip"只在标准路径成立 |
+| 边界 | **minimalistic UI 与歌词侧栏两条路径不接 strip**：`NotchHomeView` 只把**标准分支**换成 `HomeStripView`，`enableMinimalisticUI` 与 `shouldShowSideLyrics` 两条路径逐字未动，因此"首页 = strip"只在标准路径成立。**2026-10-10（`p10-lyrics-overlay`）**：歌词侧栏整条退休——`shouldShowSideLyrics` 已不存在，标准路径之外只剩极简 UI 与首发两条；歌词改由屏幕悬浮层显示（见 §2.A，[00](00-decisions.md) ADR-0018） |
 | 权限与出站 | **本批零新增权限**：没有新 capability、没有新 TCC 授权、没有新出站请求。首页块都是进程内视图，组件开关只写本机偏好（与 [06](06-module-protocol.md) §7.1 的边界一致） |
 | 测试 | `HomeStripLayoutTests`（16 条，三条规则 + 边界 + 不变量）、`ModuleToggleTests`（14 条，`setEnabled` 幂等 / 终态 / 代次作废）、`ModuleKernelTests` 里的 todos 与首页投影断言；`DynamicIslandTests` 合计 **199 条**（**2026-09-29 晚 `p2-calendar-row` 后为 215 条**：本批 +11——`WheelPickerIndexMath` 5 / `MonthGridLayoutTests` 5 / `HomeCalendarRowLayoutTests` 1；其间 `p2-p0-visible` 另有 +5） |
 | 工作量 | 中（5 个实现任务，**已落地**，P2 批次 p2-home-strip，2026-09-29） |
