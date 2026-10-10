@@ -104,7 +104,7 @@ LyricsOverlayWindowManager.sync()           折叠态岛右翼 / 锁屏面板（
 | `lyricsLineCount` | Int | 3 | 1 / 3 / 5 |
 | `lyricsOpacity` | Double | 0.9 | 0.3…1.0，步长 0.05 |
 | `lyricsColorMode` | enum `LyricsColorMode` | `.albumArt` | `.albumArt` / `.white` / `.custom` |
-| `lyricsCustomColorHex` | String | `"#FFFFFF"` | `#RRGGBB`（自定义档用；`Defaults` 不稳存 SwiftUI `Color`，用十六进制字符串） |
+| `lyricsCustomColorHex` | String | `"#FFFFFF"` | 6 位十六进制（`#` 可省；非法回落白。自定义档用；`Defaults` 不稳存 SwiftUI `Color`，用十六进制字符串） |
 | `lyricsHighlightCurrent` | Bool | true | — |
 | `lyricsOverlayLocked` | Bool | false | true = 鼠标穿透 |
 | `lyricsOverlayOffsetX` / `lyricsOverlayOffsetY` | Double | 0 / 0 | 相对「岛下方居中」锚点的 pt 偏移 |
@@ -123,8 +123,11 @@ enum LyricsOverlayRules {
     static func displayLines(synced: [LyricLine]) -> (lines: [(index: Int, text: String)], isSynced: Bool)
     /// D-08 的「plain 不高亮」由它承载：isSynced == false 或 currentIndex < 0 → nil
     static func highlightIndex(isSynced: Bool, currentIndex: Int) -> Int?
-    /// 行窗口：当前行居中，越界留空不补行
-    static func visibleWindow(lineCount: Int, currentIndex: Int, total: Int) -> [Int?]
+    /// 行窗口：以当前行居中，返回长度恒为 lineCount 的窗口；越界槽位为 nil（画空，不补行）
+    /// currentIndex 用 lines[i].index 坐标（与 highlightIndex 同源）；找不到匹配行时按「当前行 = 第一行」
+    /// **收 lines、回窗口行**（而非「输入下标 + total」）：坐标契约编进类型，index 有洞时消费方不会错位
+    static func visibleWindow(lineCount: Int, currentIndex: Int,
+                              lines: [(index: Int, text: String)]) -> [(index: Int, text: String)?]
     /// 颜色解析（跟封面时用 `ensureMinimumBrightness` 同款下限，保证深色封面上可读）
     static func resolvedColor(mode: LyricsColorMode, hex: String, albumArt: NSColor?) -> Color
 }
@@ -208,4 +211,6 @@ final class LyricsOverlayWindowManager: ObservableObject {
 | D-14 | 新增 ADR-0018，记录「歌词落点从面板移到屏幕」并作废 docs/29 D-57 的侧歌词档结论 | agent | 推翻既有结论必须留痕（文档会变：改判就地留痕） |
 | D-15 | 悬浮层单实例、跟随岛所在屏；副屏不画第二份 | 用户 | 多实例要处理每屏锚点/拖拽状态与 `showOnAllDisplays` 的交互，收益低（备选 4 之外的范围控制） |
 | D-16 | 不做逐字高亮、不做字体族/描边/背景板自定义、不做按 App 单独开关 | 用户 | 用户给的档位里没有这些；先把「能看、能调、能挪」做对（§明确不做 2/8/9；2026-10-10 方案门呈现的「明确不做」点名，用户答复「可以」） |
+| D-18 | 自定义颜色档的十六进制**接受省略 `#`**（仍要求 6 位十六进制、非法回落白） | agent | 用户可见的自由输入：`FF0000` 写成不带 `#` 不该变成白（独立审查 T2-Minor 2 引出；代价：比本表原先写的 `#RRGGBB` 宽一档，已在表里改齐） |
+| D-19 | `visibleWindow` 收 `lines`、回窗口行（去掉 `total`）——把「index 与 currentIndex 同坐标」编进类型 | agent | 独立审查 T2-Important 1：`displayLines` 丢空行时保留下标洞，消费方按位置取值会错位，而原签名（`[Int?]` + `total`）在类型上无约束（代价：签名多一个参数、`total` 概念消失，由 `lines` 隐式承担） |
 | D-17 | 极简档的歌词加高（`minimalisticLyricsExtraHeight` = 40pt 与其 observer）随极简歌词行一起退休 | 用户 | 那段高度只服务极简档那一行歌词；行删了高度留着就是「开歌词即一条 40pt 空带」（独立审查 F4 发现；2026-10-10 计划门逐条请用户确认，答复「可以」） |
