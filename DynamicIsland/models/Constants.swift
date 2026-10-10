@@ -1406,10 +1406,51 @@ extension Defaults.Keys {
     static let enableMinimalisticUI = Key<Bool>("enableMinimalisticUI", default: false)
     
     // MARK: Lyrics Feature
+
+    /// 歌词总开关。**键名沿用、语义改为「屏幕歌词总开关」**（docs/35-desktop-lyrics-overlay.md
+    /// D-05）——不新增第二枚总开关；面板内三处落点退休后它仍同时门控锁屏媒体面板与全屏作品
+    /// 窗口的歌词行（docs/35 §已知限制）。
     static let enableLyrics = Key<Bool>("enableLyrics", default: false)
+
+    /// 侧歌词档的两枚旧键（docs/29 D-57 那一族）：消费点要随面板内歌词退休（T4 设置页两条滑杆 /
+    /// T5 `matters.swift` 与 `NotchHomeView`）才消失，**这里暂不动**——键定义、publisher 与残余
+    /// 一起在 T6 删，删早了编译红。
     static let lyricsPanelWidth = Key<CGFloat>("lyricsPanelWidth", default: 280)
     static let lyricsPanelOffset = Key<CGFloat>("lyricsPanelOffset", default: 0)
+
     static let showLiveCanvasInDynamicIsland = Key<Bool>("showLiveCanvasInDynamicIsland", default: false)
+
+    // MARK: Desktop Lyrics Overlay（显示档；docs/35 §接口与数据形状）
+
+    /// 悬浮层的**显示档**九枚。默认值 / 档位对照 docs/35 的表（`LyricsOverlayRulesTests` 逐条钉住）；
+    /// 总开关是上面的 `enableLyrics`。判据与渲染映射在 `LyricsOverlayRules`（五个纯函数），
+    /// 窗口与视图在 `LyricsOverlayWindowManager` / `LyricsOverlayView`（T3），设置页在媒体页（T4）。
+    ///
+    /// 字号 pt（档 12…30，步长 1）：18 = 「贴在岛下方、不抢眼」的默认档。
+    static let lyricsFontSize = Key<Double>("lyricsFontSize", default: 18)
+
+    /// 行数档 1 / 3 / 5（`> 1` 时当前行居中，见 `LyricsOverlayRules.visibleWindow`）。
+    static let lyricsLineCount = Key<Int>("lyricsLineCount", default: 3)
+
+    /// 整层不透明度（档 0.3…1.0，步长 0.05）。
+    static let lyricsOpacity = Key<Double>("lyricsOpacity", default: 0.9)
+
+    /// 颜色模式：跟封面 / 白 / 自定义（`LyricsColorMode`；落盘走 RawRepresentable 桥 = rawValue 字符串）。
+    static let lyricsColorMode = Key<LyricsColorMode>("lyricsColorMode", default: .albumArt)
+
+    /// 自定义档的 `#RRGGBB` 十六进制串（`Defaults` 不稳存 SwiftUI `Color`，所以存字符串；
+    /// 非法串回落白，见 `LyricsOverlayRules.resolvedColor`）。
+    static let lyricsCustomColorHex = Key<String>("lyricsCustomColorHex", default: "#FFFFFF")
+
+    /// 高亮当前行（关闭 = 整层同色同字重；无时间轴歌词本来就不高亮，见 D-08）。
+    static let lyricsHighlightCurrent = Key<Bool>("lyricsHighlightCurrent", default: true)
+
+    /// 锁定位置：true = `ignoresMouseEvents` 完全鼠标穿透（代价是不能拖，见 docs/35 §已知限制）。
+    static let lyricsOverlayLocked = Key<Bool>("lyricsOverlayLocked", default: false)
+
+    /// 相对「岛下方居中」锚点的拖拽偏移，pt（两枚）；「重置位置」写回 0 / 0。
+    static let lyricsOverlayOffsetX = Key<Double>("lyricsOverlayOffsetX", default: 0)
+    static let lyricsOverlayOffsetY = Key<Double>("lyricsOverlayOffsetY", default: 0)
     
     // MARK: Notes Feature
     static let enableNotes = Key<Bool>("enableNotes", default: false)
@@ -1667,4 +1708,23 @@ extension Defaults.Keys {
     static let didPromptLocationOnce = Key<Bool>("didPromptLocationOnce", default: false)
 
     static let showSongMetadataInClosedNotch = Key<Bool>("showSongMetadataInClosedNotch", default: false)
+}
+
+// MARK: - 桌面歌词悬浮层
+
+/// 桌面歌词悬浮层的**颜色模式**（键 `lyricsColorMode`，声明在本文件 `// MARK: Desktop Lyrics
+/// Overlay` 段）。形态沿用既有的键类型枚举（`ColorExtractionMode`）：`String` 原始值 +
+/// `CaseIterable` + `Identifiable` + `Defaults.Serializable`，落盘走 `RawRepresentable` 桥
+/// （即 rawValue 字符串；手改成未知串时由桥退回默认档）。
+///
+/// 消费点：`LyricsOverlayRules.resolvedColor`（T2）与设置页的颜色选择器（T4）。
+enum LyricsColorMode: String, CaseIterable, Identifiable, Defaults.Serializable {
+    /// 跟封面（`MusicManager.avgColor` 经 `ensureMinimumBrightness(factor: 0.6)`；**默认**）。
+    case albumArt
+    /// 纯白。
+    case white
+    /// 自定义（`lyricsCustomColorHex` 的 `#RRGGBB`，非法回落白）。
+    case custom
+
+    var id: Self { self }
 }

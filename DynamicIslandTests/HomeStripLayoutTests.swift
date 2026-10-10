@@ -2931,3 +2931,301 @@ private final class HomeBareProbeModule: GourdModule {
         return .view(AnyView(HomeBlockSizeProbe(id: Self.manifest.id)))
     }
 }
+
+// MARK: - 桌面歌词悬浮层的判据与显示档（p10 / T2；docs/35-desktop-lyrics-overlay.md §接口与数据形状）
+
+/// `LyricsOverlayRules` 的五个纯函数 + 9 枚显示档键的默认值——「什么时候画 / 画什么」的全部输入
+/// 在这里钉住，**不需要跑起 App**（窗口与视图在 T3 才接上，本类只管算术与默认值）。
+///
+/// 覆盖 docs/35 的四条决策：
+/// - **D-07 显隐**：总开关 && 有活跃会话 && 有真实歌词行 && 岛不展开 && 屏幕未锁——真值表穷举；
+/// - **D-08 plain 静态**：单条 `timestamp: 0` = 无时间轴 → 拆行（含 `\r\n` / 空行 / 首尾空白）+
+///   `isSynced == false` + `highlightIndex == nil`；
+/// - **D-09 显示档**：9 枚键的默认值与档位逐条对照 docs/35 的表（读 `defaultValue`，不受开发机上
+///   真实 UserDefaults 影响——同 `ModuleKernelTests` 的既定手法）；
+/// - 行窗口（1/3/5 档 × 首/中/末行、`total < lineCount`）与颜色三档（含非法 hex 回落白）。
+@MainActor
+final class LyricsOverlayRulesTests: XCTestCase {
+
+    // MARK: - 夹具
+
+    /// 逐行断言行表（`[(index: Int, text: String)]` 是元组数组，没有 `Equatable`，只能对位比）。
+    private func assertLines(
+        _ lines: [(index: Int, text: String)],
+        _ expected: [(index: Int, text: String)],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(lines.count, expected.count, "行数不符", file: file, line: line)
+        for (actual, want) in zip(lines, expected) {
+            XCTAssertEqual(actual.index, want.index, "index 不符（实到 \(actual.index)，期望 \(want.index)）", file: file, line: line)
+            XCTAssertEqual(actual.text, want.text, "text 不符（实到「\(actual.text)」，期望「\(want.text)」）", file: file, line: line)
+        }
+    }
+
+    /// `Color` 没有 `Equatable`：转 sRGB 逐通道断言（歌词颜色一律不透明，alpha 恒 1）。
+    private func assertColor(
+        _ color: Color,
+        red: CGFloat,
+        green: CGFloat,
+        blue: CGFloat,
+        accuracy: CGFloat = 0.002,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let srgb = NSColor(color).usingColorSpace(.sRGB) else {
+            XCTFail("颜色无法转到 sRGB 色彩空间：\(color)", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(srgb.redComponent, red, accuracy: accuracy, "R 通道", file: file, line: line)
+        XCTAssertEqual(srgb.greenComponent, green, accuracy: accuracy, "G 通道", file: file, line: line)
+        XCTAssertEqual(srgb.blueComponent, blue, accuracy: accuracy, "B 通道", file: file, line: line)
+        XCTAssertEqual(srgb.alphaComponent, 1, accuracy: accuracy, "A 通道", file: file, line: line)
+    }
+
+    // MARK: - shouldShow（D-07）
+
+    /// 五个输入全满足才显示（岛不展开、未锁屏、有真实歌词行、有活跃会话、总开关开）。
+    func testShouldShowRequiresAllInputs() {
+        XCTAssertTrue(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: true, hasActiveSession: true, hasRealLyrics: true,
+                islandClosed: true, screenLocked: false
+            ),
+            "五个输入全满足才显示"
+        )
+    }
+
+    /// 五条单因 false 边界（其余输入置真、只翻一条）：总开关关 / 无播放会话 / 无真实歌词行 /
+    /// 岛展开 / 锁屏。
+    func testShouldShowFalseBoundaries() {
+        XCTAssertFalse(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: false, hasActiveSession: true, hasRealLyrics: true,
+                islandClosed: true, screenLocked: false
+            ),
+            "总开关关 → 不显示"
+        )
+        XCTAssertFalse(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: true, hasActiveSession: false, hasRealLyrics: true,
+                islandClosed: true, screenLocked: false
+            ),
+            "没有活跃音乐会话 → 不显示"
+        )
+        XCTAssertFalse(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: true, hasActiveSession: true, hasRealLyrics: false,
+                islandClosed: true, screenLocked: false
+            ),
+            "没拿到真实歌词行（空数组 / 占位态）→ 不显示"
+        )
+        XCTAssertFalse(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: true, hasActiveSession: true, hasRealLyrics: true,
+                islandClosed: false, screenLocked: false
+            ),
+            "岛展开 → 悬浮层消失"
+        )
+        XCTAssertFalse(
+            LyricsOverlayRules.shouldShow(
+                enableLyrics: true, hasActiveSession: true, hasRealLyrics: true,
+                islandClosed: true, screenLocked: true
+            ),
+            "锁屏 → 归锁屏媒体面板，悬浮层不显示"
+        )
+    }
+
+    /// 32 种组合穷举：判据恒等于五个输入的合取（`!screenLocked` 计入），没有隐含通道。
+    func testShouldShowTruthTableIsPureConjunction() {
+        for mask in 0..<32 {
+            let enableLyrics = mask & 1 != 0
+            let hasActiveSession = mask & 2 != 0
+            let hasRealLyrics = mask & 4 != 0
+            let islandClosed = mask & 8 != 0
+            let screenLocked = mask & 16 != 0
+            XCTAssertEqual(
+                LyricsOverlayRules.shouldShow(
+                    enableLyrics: enableLyrics, hasActiveSession: hasActiveSession,
+                    hasRealLyrics: hasRealLyrics, islandClosed: islandClosed, screenLocked: screenLocked
+                ),
+                enableLyrics && hasActiveSession && hasRealLyrics && islandClosed && !screenLocked,
+                "mask=\(mask) 的组合与合取不一致"
+            )
+        }
+    }
+
+    // MARK: - displayLines（plain 判据 / 时间轴原样）
+
+    /// 空数组：空行表 + `isSynced == true`（没有「plain」这回事，显隐由 `hasRealLyrics` 判）。
+    func testDisplayLinesEmptyInputStaysEmpty() {
+        let result = LyricsOverlayRules.displayLines(synced: [])
+        XCTAssertTrue(result.lines.isEmpty, "空数组 → 空行表")
+        XCTAssertTrue(result.isSynced, "空数组不是 plain")
+    }
+
+    /// plain 落点（单条 `LyricLine(timestamp: 0, text: 整段)`）＝ 无时间轴：按换行拆行 + `isSynced == false`。
+    func testDisplayLinesPlainSplitsIntoStaticLines() {
+        let result = LyricsOverlayRules.displayLines(
+            synced: [LyricLine(timestamp: 0, text: "第一行\n第二行\n第三行")]
+        )
+        XCTAssertFalse(result.isSynced, "单条 timestamp 0 = plain（无时间轴）")
+        assertLines(result.lines, [(0, "第一行"), (1, "第二行"), (2, "第三行")])
+    }
+
+    /// plain 的 CRLF / 空行 / 首尾空白：`\r` 不得留在行尾、空行不得留下、逐行 trim。
+    func testDisplayLinesPlainTrimsCRLFBlanksAndPadding() {
+        let result = LyricsOverlayRules.displayLines(
+            synced: [LyricLine(timestamp: 0, text: "  A  \r\n\r\nB\n\n C \n")]
+        )
+        XCTAssertFalse(result.isSynced)
+        assertLines(result.lines, [(0, "A"), (1, "B"), (2, "C")])
+    }
+
+    /// 单条但 `timestamp != 0` 不是 plain（有时间轴）：不拆行、按时间轴档原样返回。
+    func testDisplayLinesSingleTimestampedLineIsNotPlain() {
+        let result = LyricsOverlayRules.displayLines(synced: [LyricLine(timestamp: 3, text: "A\nB")])
+        XCTAssertTrue(result.isSynced, "单条但 timestamp != 0 → 有时间轴")
+        assertLines(result.lines, [(0, "A\nB")])
+    }
+
+    /// 多条时间轴：顺序、文本、下标原样不动 + `isSynced == true`。
+    func testDisplayLinesSyncedKeepsOrderAndIndices() {
+        let synced = [
+            LyricLine(timestamp: 0, text: "第一行"),
+            LyricLine(timestamp: 12.5, text: "第二行"),
+            LyricLine(timestamp: 30, text: "第三行"),
+        ]
+        let result = LyricsOverlayRules.displayLines(synced: synced)
+        XCTAssertTrue(result.isSynced)
+        assertLines(result.lines, [(0, "第一行"), (1, "第二行"), (2, "第三行")])
+    }
+
+    /// 时间轴里混进空行（`parseLRC` 不产，防御性丢掉）时：**下标仍指向输入坐标**——它与
+    /// `MusicManager.currentLyricIndex` 同一坐标系，`visibleWindow` 靠它找当前行（total 用 `synced.count`）。
+    func testDisplayLinesSyncedDropsBlankLinesButKeepsInputIndices() {
+        let synced = [
+            LyricLine(timestamp: 0, text: "A"),
+            LyricLine(timestamp: 5, text: "   "),
+            LyricLine(timestamp: 10, text: "B"),
+        ]
+        let result = LyricsOverlayRules.displayLines(synced: synced)
+        XCTAssertTrue(result.isSynced)
+        assertLines(result.lines, [(0, "A"), (2, "B")])
+    }
+
+    // MARK: - highlightIndex（D-08：plain 不高亮）
+
+    /// plain 不高亮（由 `highlightIndex` 承载，视图没有判断）；`currentIndex < 0` 同样不高亮。
+    func testHighlightIndexNilForPlainAndForNegativeIndex() {
+        XCTAssertNil(LyricsOverlayRules.highlightIndex(isSynced: false, currentIndex: 3), "plain 不滚动、不高亮")
+        XCTAssertNil(LyricsOverlayRules.highlightIndex(isSynced: false, currentIndex: -1), "plain + 负下标 → nil")
+        XCTAssertNil(LyricsOverlayRules.highlightIndex(isSynced: true, currentIndex: -1), "-1 = 还没轮到第一行 → 不高亮")
+    }
+
+    /// 时间轴档：下标透传（0 号行也算高亮——首行正在唱）。
+    func testHighlightIndexPassesThroughWhenSynced() {
+        XCTAssertEqual(LyricsOverlayRules.highlightIndex(isSynced: true, currentIndex: 0), 0, "首行（0）也算高亮")
+        XCTAssertEqual(LyricsOverlayRules.highlightIndex(isSynced: true, currentIndex: 7), 7)
+    }
+
+    // MARK: - visibleWindow（当前行居中）
+
+    /// 长度恒为 `lineCount`；当前行居中；越界补 `nil`（1/3/5 三档 × 首 / 中 / 末行）。
+    func testVisibleWindowCentersCurrentLine() {
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 4, total: 10), [4], "一行档 = 只有当前行")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, total: 10), [nil, 0, 1], "首行：上方留空")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 5, total: 10), [4, 5, 6], "中间行：上下各一行")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 9, total: 10), [8, 9, nil], "末行：下方留空")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 5, total: 12), [3, 4, 5, 6, 7], "五行档：上下各两行")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, total: 12), [nil, nil, 0, 1, 2], "五行档首行：上方两格留空")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 11, total: 12), [9, 10, 11, nil, nil], "五行档末行：下方两格留空")
+    }
+
+    /// `total < lineCount` / 空表：两侧照补 `nil`——不夹取、不补行，长度不变量照旧。
+    func testVisibleWindowPadsWithNilWhenTotalShorterThanLineCount() {
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, total: 2), [nil, nil, 0, 1, nil])
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 1, total: 2), [nil, 0, 1, nil, nil])
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, total: 0), [nil, nil, nil], "空表：全空")
+        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 0, total: 0), [nil])
+    }
+
+    /// 长度不变量：任何档、任何位置、任何行数，窗口长度恒等于 `lineCount`。
+    func testVisibleWindowLengthInvariant() {
+        for lineCount in [1, 3, 5] {
+            for currentIndex in -2...8 {
+                for total in [0, 1, 3, 9] {
+                    XCTAssertEqual(
+                        LyricsOverlayRules.visibleWindow(lineCount: lineCount, currentIndex: currentIndex, total: total).count,
+                        lineCount,
+                        "lineCount=\(lineCount) currentIndex=\(currentIndex) total=\(total)"
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - resolvedColor（三档 + 回落）
+
+    /// 三档：白档纯白、自定义档解析 `#RRGGBB`（大小写皆可）、跟封面对深色封面提亮到亮度下限。
+    func testResolvedColorModes() {
+        assertColor(LyricsOverlayRules.resolvedColor(mode: .white, hex: "#123456", albumArt: nil), red: 1, green: 1, blue: 1)
+
+        assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#FF0000", albumArt: nil), red: 1, green: 0, blue: 0)
+        assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#00ff00", albumArt: nil), red: 0, green: 1, blue: 0, accuracy: 0.01)
+        assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#0000FF", albumArt: nil), red: 0, green: 0, blue: 1)
+
+        // 跟封面 = `ensureMinimumBrightness(factor: 0.6)` 同款：深灰 0.1（感知亮度 0.1）被提到 0.6。
+        let darkGray = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        assertColor(
+            LyricsOverlayRules.resolvedColor(mode: .albumArt, hex: "#000000", albumArt: darkGray),
+            red: 0.6, green: 0.6, blue: 0.6, accuracy: 0.02
+        )
+    }
+
+    /// 兜底一律纯白：跟封面档没封面 / 自定义档非法 hex（长度不对、非十六进制字符、空串）。
+    func testResolvedColorFallsBackToWhite() {
+        assertColor(
+            LyricsOverlayRules.resolvedColor(mode: .albumArt, hex: "#000000", albumArt: nil),
+            red: 1, green: 1, blue: 1
+        )
+        for invalid in ["#GGGGGG", "#12345", "1234567", "#", "", "白色"] {
+            assertColor(
+                LyricsOverlayRules.resolvedColor(mode: .custom, hex: invalid, albumArt: nil),
+                red: 1, green: 1, blue: 1
+            )
+        }
+    }
+
+    // MARK: - 显示档键（9 枚；默认值与档位对照 docs/35 §接口与数据形状的表）
+
+    /// 读 `defaultValue` 而不是当前生效值——不受开发机上真实 UserDefaults 影响。
+    func testLyricsOverlayKeyDefaultsMatchDesignDoc() {
+        XCTAssertEqual(Defaults.Keys.lyricsFontSize.defaultValue, 18, "字号默认 18pt")
+        XCTAssertTrue((12...30).contains(Defaults.Keys.lyricsFontSize.defaultValue), "字号档 12…30")
+
+        XCTAssertEqual(Defaults.Keys.lyricsLineCount.defaultValue, 3, "行数默认 3")
+        XCTAssertTrue([1, 3, 5].contains(Defaults.Keys.lyricsLineCount.defaultValue), "行数档 1/3/5")
+
+        XCTAssertEqual(Defaults.Keys.lyricsOpacity.defaultValue, 0.9, accuracy: 1e-9, "透明度默认 0.9")
+        XCTAssertTrue((0.3...1.0).contains(Defaults.Keys.lyricsOpacity.defaultValue), "透明度档 0.3…1.0")
+
+        XCTAssertEqual(Defaults.Keys.lyricsColorMode.defaultValue, .albumArt, "颜色默认跟封面")
+        XCTAssertEqual(Defaults.Keys.lyricsCustomColorHex.defaultValue, "#FFFFFF", "自定义色默认白")
+        XCTAssertTrue(Defaults.Keys.lyricsHighlightCurrent.defaultValue, "高亮当前行默认开")
+        XCTAssertFalse(Defaults.Keys.lyricsOverlayLocked.defaultValue, "锁定位置默认关（默认可拖拽）")
+        XCTAssertEqual(Defaults.Keys.lyricsOverlayOffsetX.defaultValue, 0, "偏移 X 默认 0")
+        XCTAssertEqual(Defaults.Keys.lyricsOverlayOffsetY.defaultValue, 0, "偏移 Y 默认 0")
+
+        XCTAssertFalse(Defaults.Keys.enableLyrics.defaultValue, "总开关默认关（沿用旧默认，不新增第二枚）")
+    }
+
+    /// `LyricsColorMode` 的取值与盘上格式：`allCases` 顺序 + rawValue（`Defaults` 走
+    /// RawRepresentable 桥存 rawValue 字符串；枚举改名的代价在盘上可见）。
+    func testLyricsColorModeCasesAndRawValues() {
+        XCTAssertEqual(LyricsColorMode.allCases, [.albumArt, .white, .custom], "三档：跟封面 / 白 / 自定义")
+        XCTAssertEqual(LyricsColorMode.allCases.map(\.rawValue), ["albumArt", "white", "custom"])
+        XCTAssertEqual(LyricsColorMode(rawValue: "albumArt"), .albumArt, "盘上旧值可解")
+        XCTAssertNil(LyricsColorMode(rawValue: "unknown"), "未知串留给 Defaults 的桥退回默认档")
+    }
+}
