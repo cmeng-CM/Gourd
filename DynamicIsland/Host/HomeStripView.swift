@@ -416,7 +416,7 @@ struct HomeBandBlockContent: View {
 /// 也不可点击（docs/21 §明确不做：做入口要先定「点了去哪」）。
 ///
 /// 文字用 `Text(verbatim:)`：`＋N` 是符号 + 数字、语言无关，走本地化 key 会让 string catalog
-/// 凭空多出一条待翻译条目（与 `DynamicIslandCalendar.overflowRow` 的 `+N` 同一口径）。
+/// 凭空多出一条待翻译条目。
 /// 悬停文案只列**已被注册表本地化**的块名（`HomeBandBlock.name`），本身不含待翻译句子。
 struct HomeBandDroppedHint: View {
     let count: Int
