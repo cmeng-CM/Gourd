@@ -3159,7 +3159,7 @@ final class LyricsOverlayRulesTests: XCTestCase {
     }
 
     /// 时间轴里混进空行（`parseLRC` 不产，防御性丢掉）时：**下标仍指向输入坐标**——它与
-    /// `MusicManager.currentLyricIndex` 同一坐标系，`visibleWindow` 靠它找当前行（total 用 `synced.count`）。
+    /// `MusicManager.currentLyricIndex` 同一坐标系，窗口按 `lines[i].index` 命中。
     func testDisplayLinesSyncedDropsBlankLinesButKeepsInputIndices() {
         let synced = [
             LyricLine(timestamp: 0, text: "A"),
@@ -3324,5 +3324,262 @@ final class LyricsOverlayRulesTests: XCTestCase {
         XCTAssertEqual(LyricsColorMode.allCases.map(\.rawValue), ["albumArt", "white", "custom"])
         XCTAssertEqual(LyricsColorMode(rawValue: "albumArt"), .albumArt, "盘上旧值可解")
         XCTAssertNil(LyricsColorMode(rawValue: "unknown"), "未知串留给 Defaults 的桥退回默认档")
+    }
+}
+
+// MARK: - 桌面歌词悬浮层的渲染取证（p10 / T3；docs/35-desktop-lyrics-overlay.md §做法 机制一）
+
+/// `LyricsOverlayView` 的**结构性渲染取证**：用 `ImageRenderer` 把视图渲成位图，钉住 D-09 里
+/// 可量化的三件事——三档行数的**墨迹高度递增**、opacity 0.3 与 1.0 的**均值 alpha** 不同、
+/// 高亮开关下**当前行墨迹权重**不同——并把 1/3/5 行 × 三颜色档 × 两档不透明度的 PNG 写进
+/// `.workflow/p10-lyrics-overlay/evidence/`（人审与上屏取证的对照物）。
+///
+/// 为什么断言墨迹而不是逐像素 golden：这四档的语义就是「墨迹的多少、高、亮」；golden 会把
+/// 字体反走样与系统字体版本一并钉进用例。这里的量（墨迹带数 / 带高 / alpha 和）只随视图的
+/// **结构**变化——行数、行高、不透明度、字重。
+///
+/// 视图收参数、不读单例（见 `LyricsOverlayView` 文件头），所以这些渲染不需要起 App，也不需要
+/// `MusicManager` / `Defaults` 的任何状态。
+@MainActor
+final class LyricsOverlayViewRenderTests: XCTestCase {
+
+    // MARK: - 夹具
+
+    private static let fiveLines = ["第一行歌词", "第二行歌词", "第三行歌词", "第四行歌词", "第五行歌词"]
+    private static let identicalLines = ["相同的歌词行", "相同的歌词行", "相同的歌词行"]
+
+    private func makeLines(_ texts: [String]) -> [(index: Int, text: String)] {
+        texts.enumerated().map { (index: $0.offset, text: $0.element) }
+    }
+
+    private func makeView(
+        lines: [(index: Int, text: String)],
+        lineCount: Int,
+        opacity: Double,
+        colorMode: LyricsColorMode,
+        highlightIndex: Int?,
+        emphasizeCurrent: Bool
+    ) -> LyricsOverlayView {
+        LyricsOverlayView(
+            lines: lines,
+            isSynced: true,
+            highlightIndex: highlightIndex,
+            emphasizeCurrent: emphasizeCurrent,
+            fontSize: 18,
+            lineCount: lineCount,
+            opacity: opacity,
+            colorMode: colorMode,
+            customHex: "#00FF00",
+            albumArtColor: NSColor(srgbRed: 0.2, green: 0.55, blue: 0.95, alpha: 1),
+            locked: false,
+            onToggleLock: {},
+            onResetPosition: {},
+            onCloseLyrics: {},
+            onDragChanged: { _ in },
+            onDragEnded: { _ in }
+        )
+    }
+
+    // MARK: - 三档行数 × 三颜色档 × 两档不透明度（矩阵 PNG + 墨迹高度递增）
+
+    /// 1 / 3 / 5 行 × 三颜色档（跟封面 / 白 / 自定义）× 两档不透明度（0.3 / 1.0）共 18 张：
+    /// 每张都写出 PNG、且墨迹带数 = 行数（窗口居中、越界留空不补行 → 带数就是行数）；白档
+    /// 满不透明度的三张再断言**墨迹高度逐档递增**（1 行 < 3 行 < 5 行）。
+    func testLineCountMatrixWritesEvidenceAndGrowsInkHeight() throws {
+        let five = makeLines(Self.fiveLines)
+        var heights: [Int] = []
+
+        for lineCount in [1, 3, 5] {
+            for mode in LyricsColorMode.allCases {
+                for opacity in [0.3, 1.0] {
+                    let bitmap = try render(
+                        view: makeView(
+                            lines: five,
+                            lineCount: lineCount,
+                            opacity: opacity,
+                            colorMode: mode,
+                            highlightIndex: 2,
+                            emphasizeCurrent: true
+                        ),
+                        pngName: "render-\(lineCount)line-\(mode.rawValue)-op\(Int(opacity * 100)).png"
+                    )
+                    XCTAssertEqual(
+                        bitmap.inkBands.count, lineCount,
+                        "行数档 \(lineCount) / \(mode.rawValue) / op\(opacity)：墨迹带数应等于行数"
+                    )
+                    XCTAssertGreaterThan(bitmap.inkSum, 0, "行数档 \(lineCount)：应画出内容")
+                    if mode == .white, opacity == 1.0 {
+                        heights.append(bitmap.inkHeight)
+                    }
+                }
+            }
+        }
+
+        XCTAssertEqual(heights.count, 3, "白档满不透明度三张都要上榜")
+        XCTAssertLessThan(heights[0], heights[1], "1 行的墨迹高度应小于 3 行")
+        XCTAssertLessThan(heights[1], heights[2], "3 行的墨迹高度应小于 5 行")
+    }
+
+    // MARK: - 两档不透明度（均值 alpha）
+
+    /// 同一内容的 0.3 与 1.0 两档：均值 alpha 必须不同（满档明显更亮），且都不是空白。
+    func testOpacityScalesMeanAlpha() throws {
+        let five = makeLines(Self.fiveLines)
+        let full = try render(
+            view: makeView(lines: five, lineCount: 3, opacity: 1.0, colorMode: .white, highlightIndex: 2, emphasizeCurrent: true),
+            pngName: "render-opacity-100.png"
+        )
+        let faint = try render(
+            view: makeView(lines: five, lineCount: 3, opacity: 0.3, colorMode: .white, highlightIndex: 2, emphasizeCurrent: true),
+            pngName: "render-opacity-30.png"
+        )
+
+        XCTAssertGreaterThan(faint.meanAlpha, 0, "0.3 档也应有墨迹")
+        XCTAssertGreaterThan(full.meanAlpha, faint.meanAlpha * 1.5, "1.0 档的均值 alpha 应显著高于 0.3 档")
+    }
+
+    // MARK: - 高亮开关（当前行墨迹权重）
+
+    /// 三行**逐字相同**的歌词：高亮档开 → 中间那条（当前行）的墨迹权重大于两侧（加粗 + 提亮；
+    /// 两侧被压暗）；高亮档关 → 三带墨迹等量（整层同色同字重）；且当前行自身「开 > 关」
+    /// （加粗带来的墨迹增量）。行窗口居中锚在同一档，两种渲染只有字重与明暗不同。
+    func testHighlightChangesCurrentLineInkWeight() throws {
+        let identical = makeLines(Self.identicalLines)
+        let on = try render(
+            view: makeView(lines: identical, lineCount: 3, opacity: 1.0, colorMode: .white, highlightIndex: 1, emphasizeCurrent: true),
+            pngName: "render-highlight-on.png"
+        )
+        let off = try render(
+            view: makeView(lines: identical, lineCount: 3, opacity: 1.0, colorMode: .white, highlightIndex: 1, emphasizeCurrent: false),
+            pngName: "render-highlight-off.png"
+        )
+
+        XCTAssertEqual(on.inkBands.count, 3, "高亮开：三行各一条墨迹带")
+        XCTAssertEqual(off.inkBands.count, 3, "高亮关：三行各一条墨迹带")
+
+        let onSums = on.bandInkSums
+        let offSums = off.bandInkSums
+
+        XCTAssertGreaterThan(onSums[1], onSums[0] * 1.05, "高亮开：当前行（中带）墨迹应重于上一行")
+        XCTAssertGreaterThan(onSums[1], onSums[2] * 1.05, "高亮开：当前行（中带）墨迹应重于下一行")
+        XCTAssertLessThan(offSums.max()!, offSums.min()! * 1.05, "高亮关：三行墨迹权重应一致（同色同字重）")
+        XCTAssertGreaterThan(onSums[1], offSums[1], "当前行自身：加粗档的墨迹权重应大于常规档")
+    }
+
+    // MARK: - 渲染夹具
+
+    /// 渲一张位图并写一份 PNG（`scale = 2`，与既有取证 `ShelfItemView.renderDragPreview` 同口径）。
+    private func render(view: LyricsOverlayView, pngName: String) throws -> LyricsOverlayBitmap {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let cgImage = renderer.cgImage else {
+            XCTFail("ImageRenderer 没能渲出位图：\(pngName)")
+            throw RenderEvidenceError.noCGImage
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        pixels.withUnsafeMutableBytes { raw in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        let alpha = stride(from: 3, to: pixels.count, by: 4).map { pixels[$0] }
+
+        let url = try Self.evidenceDirectory().appendingPathComponent(pngName)
+        guard let png = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else {
+            XCTFail("PNG 编码失败：\(pngName)")
+            throw RenderEvidenceError.pngEncodingFailed
+        }
+        try png.write(to: url)
+
+        return LyricsOverlayBitmap(width: width, height: height, alpha: alpha, pngURL: url)
+    }
+
+    /// `.workflow/p10-lyrics-overlay/evidence/`——`#filePath` 上溯两级即仓库根；目录不存在则创建。
+    private static func evidenceDirectory() throws -> URL {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DynamicIslandTests/
+            .deletingLastPathComponent()   // 仓库根
+        let directory = repositoryRoot
+            .appendingPathComponent(".workflow", isDirectory: true)
+            .appendingPathComponent("p10-lyrics-overlay", isDirectory: true)
+            .appendingPathComponent("evidence", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+}
+
+private enum RenderEvidenceError: Error {
+    case noCGImage
+    case pngEncodingFailed
+}
+
+/// 渲出来的一张位图：只留 alpha 通道——四档的判据（墨迹高度 / 均值 alpha / 行带权重）都只用它。
+private struct LyricsOverlayBitmap {
+    /// 「这一行有字」的判定：行内最大 alpha 超过它才算（反走样的边毛不算）。
+    static let bandThreshold: UInt8 = 24
+
+    let width: Int
+    let height: Int
+    /// 逐像素 alpha（行优先）。本用例只比较**相对顺序与和**，不依赖首行是图像顶还是底。
+    let alpha: [UInt8]
+    let pngURL: URL
+
+    /// 首条到末条墨迹带的跨度（三档行数的「墨迹高度」）。
+    var inkHeight: Int {
+        guard let first = inkBands.first, let last = inkBands.last else { return 0 }
+        return last.upperBound - first.lowerBound + 1
+    }
+
+    /// 墨迹带：逐行取峰值 alpha，连续的「有字」行归成一条带（一行歌词一条带）。
+    var inkBands: [ClosedRange<Int>] {
+        var bands: [ClosedRange<Int>] = []
+        var start: Int?
+        for y in 0..<height {
+            if rowPeak(y) > Self.bandThreshold {
+                if start == nil { start = y }
+            } else if let began = start {
+                bands.append(began...(y - 1))
+                start = nil
+            }
+        }
+        if let began = start {
+            bands.append(began...(height - 1))
+        }
+        return bands
+    }
+
+    var inkSum: Double { alpha.reduce(0) { $0 + Double($1) } }
+    var meanAlpha: Double { alpha.isEmpty ? 0 : inkSum / (Double(alpha.count) * 255) }
+
+    /// 每条墨迹带的 alpha 和——「当前行墨迹权重」的度量。
+    var bandInkSums: [Double] {
+        inkBands.map { band in
+            var sum = 0.0
+            for y in band.lowerBound...band.upperBound {
+                for x in 0..<width {
+                    sum += Double(alpha[y * width + x])
+                }
+            }
+            return sum
+        }
+    }
+
+    private func rowPeak(_ y: Int) -> UInt8 {
+        var peak: UInt8 = 0
+        let base = y * width
+        for x in 0..<width where alpha[base + x] > peak {
+            peak = alpha[base + x]
+        }
+        return peak
     }
 }

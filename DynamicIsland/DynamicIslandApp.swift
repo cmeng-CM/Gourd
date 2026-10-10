@@ -775,6 +775,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             setupAudioTapMusicObservers()
         }
+
+        // Setup 桌面歌词悬浮层（docs/35-desktop-lyrics-overlay.md；p10 / T3）：独立窗口 + 观察链，
+        // 显隐由 `LyricsOverlayRules.shouldShow` 与 9 枚显示档键自决，所以**无条件**起一次
+        // （不像波形那样由开关门控 start / stop）。与相邻的 ModuleHUDWindowHost 同口径：
+        // UI 测试下不挂——它是全局层（CGShieldingWindowLevel），不该进 UI 测试的界面栈。
+        if !AppRuntimeEnvironment.isUITesting {
+            LyricsOverlayWindowManager.shared.start()
+        }
         
         // Observe enableRealTimeWaveform changes
         Defaults.publisher(.enableRealTimeWaveform, options: [])
