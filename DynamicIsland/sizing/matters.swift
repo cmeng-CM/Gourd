@@ -27,73 +27,6 @@ import SwiftUI
 let downloadSneakSize: CGSize = .init(width: 65, height: 1)
 let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
-/// Layout budgets applied to the home view only while the side lyrics panel is active
-enum SideLyricsLayout {
-    /// Room the standard player needs for its album art and five-button control row
-    static let minimumPlayerWidth: CGFloat = 380
-
-    /// Room the webcam mirror needs to stay usable next to the player
-    static let minimumMirrorWidth: CGFloat = 220
-
-    /// Spacing between the player, mirror, and lyrics panel columns
-    static let hStackSpacing: CGFloat = 20
-
-    /// Combined home-view and notch content insets surrounding those columns
-    static let combinedInset: CGFloat = 40
-}
-
-/// 首页视图此刻画的是不是**侧歌词档**（`NotchHomeView.mainContent` 的第二支；p5-home-blocks 终审
-/// T-final，docs/29 §决策摘要 D-57）。
-///
-/// 判据提成纯函数、两处共用（不是各写一份 `if`）：`NotchHomeView.mainContent`（决定画哪一支）与
-/// `ContentView.selectedPanelTabKey`（决定这一支用哪个高度账本键——侧歌词档**没有自己的内容高**，
-/// 写首页那一份的接缝不在屏幕上，落到首页键就会拿上一次标准首页算出来的值当内容高；给它一个
-/// 没人上报的键 → `current` = nil → 尺寸层回落手动值，与 D-45 对名单外页同一条口径）。
-///
-/// 极简档（同一 `mainContent` 的第一支）**不算**侧歌词档：那一支的尺寸来源是
-/// `minimalisticOpenNotchSize`、根本不读高度账本，所以它的账本键保持首页键（逐字不变）。
-/// `sideLyricsRequiredNotchWidth()`（本文件上方）与它同源——同一条判据此前只服务宽度。
-func showsSideLyricsHomeLayout(
-    enableLyrics: Bool,
-    showCalendar: Bool,
-    enableMinimalisticUI: Bool,
-    showStandardMediaControls: Bool,
-    autoHideInactiveNotchMediaPlayer: Bool,
-    musicHasActiveSession: Bool
-) -> Bool {
-    enableLyrics
-        && !showCalendar
-        && !enableMinimalisticUI
-        && showStandardMediaControls
-        && (!autoHideInactiveNotchMediaPlayer || musicHasActiveSession)
-}
-
-func sideLyricsRequiredNotchWidth() -> CGFloat {
-    guard showsSideLyricsHomeLayout(
-        enableLyrics: Defaults[.enableLyrics],
-        showCalendar: Defaults[.showCalendar],
-        enableMinimalisticUI: Defaults[.enableMinimalisticUI],
-        showStandardMediaControls: Defaults[.showStandardMediaControls],
-        autoHideInactiveNotchMediaPlayer: Defaults[.autoHideInactiveNotchMediaPlayer],
-        musicHasActiveSession: MusicManager.shared.hasActiveSession
-    ) else { return 0 }
-
-    let panelWidth = max(0, Defaults[.lyricsPanelWidth])
-    let offsetDistance = abs(Defaults[.lyricsPanelOffset])
-    let mirrorWidth = Defaults[.showMirror] && WebcamManager.shared.cameraAvailable
-        ? SideLyricsLayout.minimumMirrorWidth + SideLyricsLayout.hStackSpacing
-        : 0
-
-    // Include the home-view and notch content insets so the player receives
-    // the same usable width it had before the panel was added.
-    return SideLyricsLayout.minimumPlayerWidth
-        + panelWidth
-        + SideLyricsLayout.hStackSpacing
-        + offsetDistance
-        + mirrorWidth
-        + SideLyricsLayout.combinedInset
-}
-
 /// 展开态高度的**可配范围**（用户可拖的区间，也是夹取的下界 + 绝对上界）。
 ///
 /// 2026-09-28 用户反馈「这个高度最高就 400 吗，现在高度不够，这个要可以调」：上限从 400 提到 1000。
@@ -135,7 +68,7 @@ var openNotchSize: CGSize {
     let storedWidth = Defaults[.openNotchWidth]
     let minWidth = currentRecommendedMinimumNotchWidth()
     let maxWidth = maxAllowedNotchWidth()
-    let width = min(max(storedWidth, minWidth, sideLyricsRequiredNotchWidth()), maxWidth)
+    let width = min(max(storedWidth, minWidth), maxWidth)
     // 高度按 `panelHeightMode` 二选一（p5-home-blocks / T6，docs/29 §做法 机制六）：
     // **auto** 读高度账本的内容高（`PanelContentHeight.current`——首页那一份由接缝算出来、
     // 其它 tab 那一份由内容页量出来，两路同一个口径，T7），经 `panelHeight(...)` 加上宿主内边距
@@ -259,7 +192,6 @@ func enforceMinimumNotchWidth() {
     }
 }
 private let minimalisticBaseOpenNotchSize: CGSize = .init(width: 420, height: 180)
-private let minimalisticLyricsExtraHeight: CGFloat = 40
 let minimalisticTimerCountdownTopPadding: CGFloat = 12
 let minimalisticTimerCountdownContentHeight: CGFloat = 82
 let minimalisticTimerCountdownBlockHeight: CGFloat = minimalisticTimerCountdownTopPadding + minimalisticTimerCountdownContentHeight
@@ -277,10 +209,6 @@ func minimalisticOpenNotchSize(isDynamicIslandMode: Bool) -> CGSize {
         size.height = 144 // Exact height of the minimalistic music player view
     }
 
-    if Defaults[.enableLyrics] {
-        size.height += minimalisticLyricsExtraHeight
-    }
-    
     let reminderCount = ReminderLiveActivityManager.shared.activeWindowReminders.count
     if reminderCount > 0 {
         let reminderHeight = ReminderLiveActivityManager.additionalHeight(forRowCount: reminderCount)

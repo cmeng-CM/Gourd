@@ -155,126 +155,6 @@ struct DynamicIslandArtworkSourceView: View {
 
 // MARK: - Music Player Components
 
-struct MusicPlayerView: View {
-    @EnvironmentObject var vm: DynamicIslandViewModel
-    let albumArtNamespace: Namespace.ID
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace)
-            MusicControlsView()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct LyricsSidePanelView: View {
-    @ObservedObject private var musicManager = MusicManager.shared
-    @EnvironmentObject private var vm: DynamicIslandViewModel
-    @State private var suppressionToken = UUID()
-    @State private var isSuppressing = false
-    @State private var lyrics: [(index: Int, lyric: LyricLine)] = []
-
-    private var artistLineColor: Color {
-        Defaults[.playerColorTinting]
-            ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6)
-            : .gray
-    }
-
-    private var currentLyricGradient: LinearGradient {
-        LinearGradient(
-            colors: [artistLineColor, .white, artistLineColor.opacity(0.82)],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
-    private static func nonEmptyLines(in lines: [LyricLine]) -> [(index: Int, lyric: LyricLine)] {
-        lines.enumerated().compactMap { index, lyric in
-            guard !lyric.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
-            }
-            return (index: index, lyric: lyric)
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Lyrics")
-                .font(.headline)
-                .foregroundStyle(artistLineColor)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    if lyrics.isEmpty {
-                        Text(musicManager.currentLyrics.isEmpty ? "Show lyrics here" : musicManager.currentLyrics)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.78))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(lyrics, id: \.index) { index, lyric in
-                                Text(lyric.text)
-                                    .font(.system(size: 14, weight: index == musicManager.currentLyricIndex ? .semibold : .regular))
-                                    .foregroundStyle(
-                                        index == musicManager.currentLyricIndex
-                                            ? AnyShapeStyle(currentLyricGradient)
-                                            : AnyShapeStyle(Color.white.opacity(0.5))
-                                    )
-                                    .lineLimit(2)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 12)
-                                    .id(index)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-                .scrollIndicators(.never)
-                .onAppear {
-                    lyrics = Self.nonEmptyLines(in: musicManager.syncedLyrics)
-                    let index = musicManager.currentLyricIndex
-                    guard index >= 0, index < musicManager.syncedLyrics.count else { return }
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(index, anchor: .center)
-                    }
-                }
-                .onChange(of: musicManager.currentLyricIndex) { _, index in
-                    guard index >= 0, index < musicManager.syncedLyrics.count else { return }
-                    withAnimation(.smooth(duration: 0.3)) {
-                        proxy.scrollTo(index, anchor: .center)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.black.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .onChange(of: musicManager.syncedLyrics) { _, newLyrics in
-            lyrics = Self.nonEmptyLines(in: newLyrics)
-        }
-        .onHover { hovering in
-            updateSuppression(for: hovering)
-        }
-        .onDisappear {
-            updateSuppression(for: false)
-        }
-    }
-
-    // Prevent lyrics scrolling to close the expanded notch
-    private func updateSuppression(for hovering: Bool) {
-        guard hovering != isSuppressing else { return }
-        isSuppressing = hovering
-        vm.setScrollGestureSuppression(hovering, token: suppressionToken)
-    }
-}
-
 struct AlbumArtView: View {
     @ObservedObject var musicManager = MusicManager.shared
     @ObservedObject var vm: DynamicIslandViewModel
@@ -513,7 +393,7 @@ struct MusicControlsView: View {
         }
     }
 
-    /// 紧凑档的密度档位（`MusicHomeBlockView` 传 `.compact`；`MusicPlayerView` 不传 = 标准档）。
+    /// 紧凑档的密度档位（`MusicHomeBlockView` 传 `.compact`；缺省 = 标准档）。
     var density: Density = .regular
 
     /// 顶部内边距（标准档 10 / 紧凑档 4）。
@@ -543,7 +423,7 @@ struct MusicControlsView: View {
 
     /// 「标题 / 歌手」文字区：紧凑档把曲名行**钉在预算那 17pt**（`CompactMetrics.titleRowHeight`）
     /// ——不钉的话这一行的高度由字体度量决定，`contentHeight ≤ 96` 就只是估算；标准档不加任何框，
-    /// 视图树与改动前逐字相同（艺人行 / 歌词行也只在标准档）。
+    /// 视图树与改动前逐字相同（艺人行也只在标准档）。
     @ViewBuilder
     private func songInfo(width: CGFloat) -> some View {
         if density == .compact {
@@ -565,7 +445,7 @@ struct MusicControlsView: View {
                 frameWidth: width,
                 badgeHeight: 14
             )
-            // 艺人行与歌词行**只在标准档**（紧凑档 96 高，装不下；D-17 把它们留给展开面板）。
+            // 艺人行**只在标准档**（紧凑档 96 高，装不下；D-17 把它留给展开面板）。
             if density == .regular {
                 MarqueeText(
                     $musicManager.artistName,
@@ -576,34 +456,6 @@ struct MusicControlsView: View {
                     frameWidth: width
                 )
                 .fontWeight(.medium)
-                if enableLyrics && showCalendar {
-                    let transition = AnyTransition.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .move(edge: .top).combined(with: .opacity)
-                    )
-
-                    let line = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    if !line.isEmpty {
-                        let lyricsBinding = Binding<String>(
-                            get: { musicManager.currentLyrics },
-                            set: { _ in }
-                        )
-
-                        MarqueeText(
-                            lyricsBinding,
-                            font: .system(size: 12, weight: .regular),
-                            nsFont: .headline,
-                            textColor: .white.opacity(0.7),
-                            minDuration: 0.35,
-                            frameWidth: width
-                        )
-                        .padding(.top, 2)
-                        .id(line)
-                        .transition(transition)
-                        .animation(.easeInOut(duration: 0.32), value: line)
-                    }
-                }
             }
         }
     }
@@ -938,27 +790,8 @@ struct NotchHomeView: View {
     @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
     @Default(.showCalendar) private var showCalendar
     @Default(.enableLyrics) private var enableLyrics
-    @Default(.lyricsPanelWidth) private var lyricsPanelWidth
-    @Default(.lyricsPanelOffset) private var lyricsPanelOffset
     let albumArtNamespace: Namespace.ID
 
-    /// 侧歌词档 = 「音乐该显示」（`showStandardMediaControls && (!autoHideInactiveNotchMediaPlayer ||
-    /// hasActiveSession)`）**且**歌词开、日历行关、非极简——整条判据提成 `matters.swift` 的纯函数
-    /// `showsSideLyricsHomeLayout(...)`，与 `ContentView.selectedPanelTabKey` 共用（终审 T-final /
-    /// D-57）；本视图不再自己拼一遍那个 `&&` 链。
-    private var shouldShowSideLyrics: Bool {
-        // 判据与 `ContentView.selectedPanelTabKey` 共用同一个纯函数（p5-home-blocks 终审 T-final /
-        // D-57）：侧歌词档没有自己的内容高，账本键必须与标准路径分开——判据各写一份就会漂。
-        showsSideLyricsHomeLayout(
-            enableLyrics: enableLyrics,
-            showCalendar: showCalendar,
-            enableMinimalisticUI: Defaults[.enableMinimalisticUI],
-            showStandardMediaControls: showStandardMediaControls,
-            autoHideInactiveNotchMediaPlayer: autoHideInactiveNotchMediaPlayer,
-            musicHasActiveSession: musicManager.hasActiveSession
-        )
-    }
-    
     var body: some View {
         Group {
             if !coordinator.firstLaunch {
@@ -979,8 +812,6 @@ struct NotchHomeView: View {
                 } else {
                     MinimalisticMusicPlayerView(albumArtNamespace: albumArtNamespace)
                 }
-            } else if shouldShowSideLyrics {
-                sideLyricsContent
             } else {
                 // 标准路径（2026-09-29 起）：首页是**两条带 + 一行**——上排主块带（大块：音乐 / 镜子，
                 // 一条横向 strip，宽度按声明自适应且富余不拉伸），中排小组件带（紧凑块：进度 / 统计 /
@@ -1006,7 +837,7 @@ struct NotchHomeView: View {
     /// 各拿多少高度（**先收日历行 → 再收主块带 → 最后才动小组件带**，docs/26-home-widgets-and-settings.md
     /// §做法 机制六 / D-09），再按 `HomeBandedLayout` 摆放（主块带沿用旧 strip 语义——宽度不足时
     /// 按序丢尾巴；小组件带网格换行、**放不下换行而不是丢块**）。本视图保留的是更外面那层接缝：
-    /// **极简 UI / 侧歌词 / 首发动画都不走这一支**。
+    /// **极简 UI / 首发动画都不走这一支**。
     ///
     /// 日历行的「开不开」仍是用户偏好（`showCalendar`，那条键在接缝里的读者是 `HomeBandedHomeView`）；
     /// 高度取舍的判据只有一处（`HomeVerticalFit.plan`），本视图不再自己比一次高度——两处各判一次
@@ -1025,24 +856,6 @@ struct NotchHomeView: View {
                 effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
             )
         )
-    }
-
-    private var sideLyricsContent: some View {
-        HStack(alignment: .top, spacing: SideLyricsLayout.hStackSpacing) {
-            MusicPlayerView(albumArtNamespace: albumArtNamespace)
-                .frame(minWidth: SideLyricsLayout.minimumPlayerWidth, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
-
-            LyricsSidePanelView()
-                .frame(width: max(0, lyricsPanelWidth), alignment: .topLeading)
-                .padding(.leading, max(0, -lyricsPanelOffset))
-                .offset(x: lyricsPanelOffset)
-
-            if mirrorIsVisible {
-                cameraPreview
-                    .frame(minWidth: SideLyricsLayout.minimumMirrorWidth, maxWidth: .infinity)
-            }
-        }
     }
 
     private var mirrorIsVisible: Bool {
