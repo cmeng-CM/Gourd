@@ -2943,7 +2943,8 @@ private final class HomeBareProbeModule: GourdModule {
 ///   `isSynced == false` + `highlightIndex == nil`；
 /// - **D-09 显示档**：9 枚键的默认值与档位逐条对照 docs/35 的表（读 `defaultValue`，不受开发机上
 ///   真实 UserDefaults 影响——同 `ModuleKernelTests` 的既定手法）；
-/// - 行窗口（1/3/5 档 × 首/中/末行、`total < lineCount`）与颜色三档（含非法 hex 回落白）。
+/// - 行窗口（1/3/5 档 × 首/中/末行、行数不足、**下标间隙**、找不到当前行、空表；返回的是行本身、
+///   长度恒为 `lineCount`）与颜色三档（含非法 hex 回落白）。
 @MainActor
 final class LyricsOverlayRulesTests: XCTestCase {
 
@@ -2960,6 +2961,46 @@ final class LyricsOverlayRulesTests: XCTestCase {
         for (actual, want) in zip(lines, expected) {
             XCTAssertEqual(actual.index, want.index, "index 不符（实到 \(actual.index)，期望 \(want.index)）", file: file, line: line)
             XCTAssertEqual(actual.text, want.text, "text 不符（实到「\(actual.text)」，期望「\(want.text)」）", file: file, line: line)
+        }
+    }
+
+    /// **行表夹具**：`index` 从 offset 起连续（真实 LRC 经 `parseLRC` 后的形状；`displayLines`
+    /// 保留下标间隙只在防御性丢空行时出现，要造那种形状用下面的 `makeGappedLines`）。
+    private func makeLines(_ texts: [String], offset: Int = 0) -> [(index: Int, text: String)] {
+        texts.enumerated().map { (index: $0.offset + offset, text: $0.element) }
+    }
+
+    /// **带洞的行表夹具**（输入坐标 vs 位置坐标分离的题面）：`indices` 就是每行的 `index`。
+    private func makeGappedLines(indices: [Int]) -> [(index: Int, text: String)] {
+        indices.map { (index: $0, text: "L\($0)") }
+    }
+
+    /// 逐槽断言行窗口（`[(index: Int, text: String)?]` 同样没有 `Equatable`）：`expected` 写
+    /// **输入坐标**（`nil` = 空槽），文本从 `lines` 里的同一行取——这样「窗口回的是行本身、
+    /// 坐标口径与 `highlightIndex` 同源」两件事一起被钉住。
+    private func assertWindow(
+        _ window: [(index: Int, text: String)?],
+        _ expected: [Int?],
+        in lines: [(index: Int, text: String)],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(window.count, expected.count, "窗口长度必须等于 lineCount", file: file, line: line)
+        guard window.count == expected.count else { return }
+        for (slot, want) in zip(window, expected) {
+            switch (slot, want) {
+            case (nil, nil):
+                continue
+            case (let actual?, let want?):
+                XCTAssertEqual(actual.index, want, "槽位的输入坐标不符", file: file, line: line)
+                if let source = lines.first(where: { $0.index == want }) {
+                    XCTAssertEqual(actual.text, source.text, "槽位文本应与源行逐字相同", file: file, line: line)
+                } else {
+                    XCTFail("期望的 index \(want) 不在夹具里", file: file, line: line)
+                }
+            default:
+                XCTFail("槽位与期望不符（实到 \(String(describing: slot))，期望 \(String(describing: want))）", file: file, line: line)
+            }
         }
     }
 
@@ -3089,6 +3130,22 @@ final class LyricsOverlayRulesTests: XCTestCase {
         assertLines(result.lines, [(0, "A\nB")])
     }
 
+    /// plain 的**单独 `\r`**（老 Mac 换行 / 网络歌词偶发）：`\r` 不得留在行尾、也不得只切出一条
+    /// 含 `\r` 的长行——拆行走 `CharacterSet.newlines`，`\r` 与 `\n` 同权。
+    func testDisplayLinesPlainSplitsOnLoneCR() {
+        let result = LyricsOverlayRules.displayLines(synced: [LyricLine(timestamp: 0, text: "A\rB")])
+        XCTAssertFalse(result.isSynced, "单条 timestamp 0 = plain")
+        assertLines(result.lines, [(0, "A"), (1, "B")])
+    }
+
+    /// plain 的**整行空白**（`"   \nB"`）：空白行丢掉、下标从留下来那行重新起算 0（plain 档没有
+    /// 时间轴坐标，位置即坐标）。
+    func testDisplayLinesPlainDropsAllBlankLines() {
+        let result = LyricsOverlayRules.displayLines(synced: [LyricLine(timestamp: 0, text: "   \nB")])
+        XCTAssertFalse(result.isSynced)
+        assertLines(result.lines, [(0, "B")])
+    }
+
     /// 多条时间轴：顺序、文本、下标原样不动 + `isSynced == true`。
     func testDisplayLinesSyncedKeepsOrderAndIndices() {
         let synced = [
@@ -3129,36 +3186,73 @@ final class LyricsOverlayRulesTests: XCTestCase {
         XCTAssertEqual(LyricsOverlayRules.highlightIndex(isSynced: true, currentIndex: 7), 7)
     }
 
-    // MARK: - visibleWindow（当前行居中）
+    // MARK: - visibleWindow（当前行居中；窗口回的是行本身，不是下标）
 
     /// 长度恒为 `lineCount`；当前行居中；越界补 `nil`（1/3/5 三档 × 首 / 中 / 末行）。
+    /// 期望值写**输入坐标**——窗口槽位回的是行本身（`(index, text)` 或 `nil`）。
     func testVisibleWindowCentersCurrentLine() {
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 4, total: 10), [4], "一行档 = 只有当前行")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, total: 10), [nil, 0, 1], "首行：上方留空")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 5, total: 10), [4, 5, 6], "中间行：上下各一行")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 9, total: 10), [8, 9, nil], "末行：下方留空")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 5, total: 12), [3, 4, 5, 6, 7], "五行档：上下各两行")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, total: 12), [nil, nil, 0, 1, 2], "五行档首行：上方两格留空")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 11, total: 12), [9, 10, 11, nil, nil], "五行档末行：下方两格留空")
+        let ten = makeLines(["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"])
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 4, lines: ten), [4], in: ten)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, lines: ten), [nil, 0, 1], in: ten)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 5, lines: ten), [4, 5, 6], in: ten)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 9, lines: ten), [8, 9, nil], in: ten)
+
+        let twelve = makeLines(Array(0..<12).map { "L\($0)" })
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 5, lines: twelve), [3, 4, 5, 6, 7], in: twelve)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, lines: twelve), [nil, nil, 0, 1, 2], in: twelve)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 11, lines: twelve), [9, 10, 11, nil, nil], in: twelve)
     }
 
-    /// `total < lineCount` / 空表：两侧照补 `nil`——不夹取、不补行，长度不变量照旧。
-    func testVisibleWindowPadsWithNilWhenTotalShorterThanLineCount() {
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, total: 2), [nil, nil, 0, 1, nil])
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 1, total: 2), [nil, 0, 1, nil, nil])
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, total: 0), [nil, nil, nil], "空表：全空")
-        XCTAssertEqual(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 0, total: 0), [nil])
+    /// 行数不足（`lines.count < lineCount`）：当前行仍居中、两端照补 `nil`——不夹取、不补行。
+    func testVisibleWindowPadsWithNilWhenLinesShorterThanLineCount() {
+        let two = makeLines(["A", "B"])
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 0, lines: two), [nil, nil, 0, 1, nil], in: two)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 5, currentIndex: 1, lines: two), [nil, 0, 1, nil, nil], in: two)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 1, lines: two), [0, 1, nil], in: two)
     }
 
-    /// 长度不变量：任何档、任何位置、任何行数，窗口长度恒等于 `lineCount`。
+    /// 空行表：全 `nil`，长度仍恒等于 `lineCount`。
+    func testVisibleWindowOnEmptyLinesIsAllNil() {
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, lines: []), [nil, nil, nil], in: [])
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 1, currentIndex: 4, lines: []), [nil], in: [])
+        XCTAssertTrue(LyricsOverlayRules.visibleWindow(lineCount: 0, currentIndex: 0, lines: []).isEmpty, "0 行档 = 空窗口")
+    }
+
+    /// **坐标口径（这次修的正事）**：`displayLines` 丢空行时保留下标间隙，窗口按
+    /// `lines[i].index` 找当前行、回的是行本身——洞不位移、`lines[windowIdx]` 那种取法不再需要。
+    func testVisibleWindowMatchesByInputIndexAcrossGaps() {
+        // 时间轴档含空行（防御性丢掉）后的形状：输入坐标 0 / 2 / 4，位置坐标 0 / 1 / 2。
+        let gapped = makeGappedLines(indices: [0, 2, 4])
+        // 当前行 = 输入坐标 4 → 命中位置 2，窗口 [1, 2, 3]：位置 1=输入 2、位置 2=输入 4、位置 3 越界。
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 4, lines: gapped), [2, 4, nil], in: gapped)
+        // 当前行 = 输入坐标 2 → 命中位置 1，窗口 [0, 1, 2]。
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 2, lines: gapped), [0, 2, 4], in: gapped)
+        // 当前行 = 输入坐标 0 → 命中位置 0，上方留空。
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 0, lines: gapped), [nil, 0, 2], in: gapped)
+    }
+
+    /// `currentIndex` 在 `lines` 里找不到（空行被丢后那一格 / 还没轮到第一行给的 -1）：
+    /// 按「当前行 = 第一行」处理，不崩、不空窗。
+    func testVisibleWindowFallsBackToFirstLineWhenIndexNotFound() {
+        let gapped = makeGappedLines(indices: [0, 2, 4])
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 1, lines: gapped), [nil, 0, 2], in: gapped)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 7, lines: gapped), [nil, 0, 2], in: gapped)
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: -1, lines: gapped), [nil, 0, 2], in: gapped)
+
+        let continuous = makeLines(["A", "B", "C", "D"])
+        assertWindow(LyricsOverlayRules.visibleWindow(lineCount: 3, currentIndex: 99, lines: continuous), [nil, 0, 1], in: continuous)
+    }
+
+    /// 长度不变量：任何档、任何 `currentIndex`、任何行数，窗口长度恒等于 `lineCount`。
     func testVisibleWindowLengthInvariant() {
+        let fixtures = [[], makeLines(["A"]), makeLines(["A", "B"]), makeGappedLines(indices: [0, 2, 4]), makeLines(Array(0..<9).map { "L\($0)" })]
         for lineCount in [1, 3, 5] {
             for currentIndex in -2...8 {
-                for total in [0, 1, 3, 9] {
+                for lines in fixtures {
                     XCTAssertEqual(
-                        LyricsOverlayRules.visibleWindow(lineCount: lineCount, currentIndex: currentIndex, total: total).count,
+                        LyricsOverlayRules.visibleWindow(lineCount: lineCount, currentIndex: currentIndex, lines: lines).count,
                         lineCount,
-                        "lineCount=\(lineCount) currentIndex=\(currentIndex) total=\(total)"
+                        "lineCount=\(lineCount) currentIndex=\(currentIndex) lines=\(lines.count)"
                     )
                 }
             }
@@ -3174,6 +3268,8 @@ final class LyricsOverlayRulesTests: XCTestCase {
         assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#FF0000", albumArt: nil), red: 1, green: 0, blue: 0)
         assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#00ff00", albumArt: nil), red: 0, green: 1, blue: 0, accuracy: 0.01)
         assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "#0000FF", albumArt: nil), red: 0, green: 0, blue: 1)
+        // `#` 可省（控制器裁定的放宽）：`FF0000` 与 `#FF0000` 同色。
+        assertColor(LyricsOverlayRules.resolvedColor(mode: .custom, hex: "FF0000", albumArt: nil), red: 1, green: 0, blue: 0)
 
         // 跟封面 = `ensureMinimumBrightness(factor: 0.6)` 同款：深灰 0.1（感知亮度 0.1）被提到 0.6。
         let darkGray = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
@@ -3183,13 +3279,14 @@ final class LyricsOverlayRulesTests: XCTestCase {
         )
     }
 
-    /// 兜底一律纯白：跟封面档没封面 / 自定义档非法 hex（长度不对、非十六进制字符、空串）。
+    /// 兜底一律纯白：跟封面档没封面 / 自定义档非法 hex（长度不对、非十六进制字符、空串、
+    /// **`UInt32(_:radix:)` 会收下的前导 `+`**——校验必须先过 `isHexDigit` 再解析）。
     func testResolvedColorFallsBackToWhite() {
         assertColor(
             LyricsOverlayRules.resolvedColor(mode: .albumArt, hex: "#000000", albumArt: nil),
             red: 1, green: 1, blue: 1
         )
-        for invalid in ["#GGGGGG", "#12345", "1234567", "#", "", "白色"] {
+        for invalid in ["#GGGGGG", "#12345", "1234567", "#", "", "白色", "+12345", "-12345", "0x1234", "12 456"] {
             assertColor(
                 LyricsOverlayRules.resolvedColor(mode: .custom, hex: invalid, albumArt: nil),
                 red: 1, green: 1, blue: 1
