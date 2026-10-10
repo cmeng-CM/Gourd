@@ -29,6 +29,33 @@ import os.log
 
 private let audioTapLog = OSLog(subsystem: "com.cmeng.gourd", category: "AudioTap")
 
+/// The one and only list of bundle IDs the CoreAudio process tap will capture.
+///
+/// Two consumers read it — `AudioTap.startCaptureSync` (which apps to tap) and
+/// `DynamicIslandApp.setupAudioTapMusicObservers` (which launch/terminate notifications
+/// restart capture). Keeping a single literal here means adding a player can no longer
+/// update one copy and silently miss the other. Order is kept as shipped (11 original
+/// entries) with the four China-market players appended.
+enum AudioTapTargets {
+    static let bundleIDs: [String] = [
+        "com.apple.Music",
+        "com.spotify.client",
+        "com.amazon.music",
+        "sh.cider.genten.mac",
+        "com.apple.Safari",
+        "com.tidal.desktop",
+        "tv.plex.plexamp",
+        "com.roon.Roon",
+        "com.audirvana.Audirvana-Studio",
+        "com.vox.vox",
+        "com.coppertino.Vox",
+        "cn.toside.music.desktop",
+        "com.netease.163music",
+        "com.tencent.QQMusicMac",
+        "com.kugou.mac.Music",
+    ]
+}
+
 // Debug: track callback invocations
 private var callbackCount: Int = 0
 
@@ -121,20 +148,6 @@ class AudioTap: NSObject {
     // Debounce restart requests
     private var pendingRestartWorkItem: DispatchWorkItem?
 
-    private let targetBundleIDs = [
-        "com.apple.Music",
-        "com.spotify.client",
-        "com.amazon.music",
-        "sh.cider.genten.mac",
-        "com.apple.Safari",
-        "com.tidal.desktop",
-        "tv.plex.plexamp",
-        "com.roon.Roon",
-        "com.audirvana.Audirvana-Studio",
-        "com.vox.vox",
-        "com.coppertino.Vox",
-    ]
-
     private override init() {
         super.init()
     }
@@ -183,7 +196,7 @@ class AudioTap: NSObject {
         let bluetoothOutputActive = AudioRouteManager.shared.isDefaultOutputBluetooth()
 
         for app in runningApps {
-            if let bundleID = app.bundleIdentifier, targetBundleIDs.contains(bundleID) {
+            if let bundleID = app.bundleIdentifier, AudioTapTargets.bundleIDs.contains(bundleID) {
                 if bundleID == SpotifyController.bundleIdentifier, bluetoothOutputActive {
                     print("⏭️ [AudioTap] Bluetooth output active — skipping Spotify tap to preserve AirPods media control")
                     continue

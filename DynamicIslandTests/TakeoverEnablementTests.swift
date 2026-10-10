@@ -4003,3 +4003,42 @@ final class PanelIconTests: XCTestCase {
         }
     }
 }
+
+// MARK: - 实时波形采集白名单（p10 / T1）
+
+/// `AudioTapTargets.bundleIDs` 是采集白名单的**唯一**字面量（docs/35 §做法 机制三 / D-12）：
+/// `AudioTap.startCaptureSync` 与 `DynamicIslandApp.setupAudioTapMusicObservers` 两处消费它。
+/// 用例钉三件事：四个国内播放器确实在名单里（每个逐条写死，拼错哪条哪条红）、名单无重复项
+/// （`Set` 折短即说明有一项白写——两处 `contains` 判定虽不受影响，但清单本身就是契约）、
+/// 既有 Safari 未被顺手删掉（浏览器播放同属「音乐来源」，docs/35 §做法 机制三）。
+final class AudioTapTargetsTests: XCTestCase {
+    /// 四个国内播放器：lx-music / 网易云 / QQ音乐 / 酷狗（D-12 拍板「四个国内播放器」）。
+    func testChinaMarketPlayersAreCaptureTargets() {
+        let bundleIDs = AudioTapTargets.bundleIDs
+        XCTAssertTrue(
+            bundleIDs.contains("cn.toside.music.desktop"),
+            "lx-music 不在采集白名单里——用户在用的就是这个（读数恒 0 的原始抱怨）"
+        )
+        XCTAssertTrue(bundleIDs.contains("com.netease.163music"), "网易云不在采集白名单里")
+        XCTAssertTrue(bundleIDs.contains("com.tencent.QQMusicMac"), "QQ音乐不在采集白名单里")
+        XCTAssertTrue(bundleIDs.contains("com.kugou.mac.Music"), "酷狗不在采集白名单里")
+    }
+
+    /// 无重复项：两处 `contains` 判定不受重复影响，但名单是「唯一一份字面量」的契约本体，
+    /// 重复项说明有一次「加播放器」是往旧副本里顺手补的。
+    func testBundleIDsHasNoDuplicates() {
+        let bundleIDs = AudioTapTargets.bundleIDs
+        XCTAssertEqual(
+            Set(bundleIDs).count, bundleIDs.count,
+            "白名单出现重复项：\(bundleIDs)"
+        )
+    }
+
+    /// Safari 保留（docs/35 §做法 机制三：「已有的 Safari 保留（浏览器播放同属『音乐来源』）」）。
+    func testSafariStaysInTheList() {
+        XCTAssertTrue(
+            AudioTapTargets.bundleIDs.contains("com.apple.Safari"),
+            "Safari 是既有 11 项之一，本次扩容不删旧项"
+        )
+    }
+}

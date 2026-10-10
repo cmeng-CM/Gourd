@@ -198,21 +198,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // why they are retained in `audioTapObserverTokens`.
         tearDownAudioTapMusicObservers()
 
-        // Listen for app launches to restart capture when music apps are opened
-        let targetBundleIDs = [
-            "com.apple.Music",
-            "com.spotify.client",
-            "com.amazon.music",
-            "sh.cider.genten.mac",
-            "com.apple.Safari",
-            "com.tidal.desktop",
-            "tv.plex.plexamp",
-            "com.roon.Roon",
-            "com.audirvana.Audirvana-Studio",
-            "com.vox.vox",
-            "com.coppertino.Vox",
-        ]
-        
+        // Listen for app launches to restart capture when music apps are opened. The target
+        // list is the shared `AudioTapTargets.bundleIDs` constant (single literal for both
+        // this observer set and `AudioTap.startCaptureSync`).
         let launchToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
             object: nil,
@@ -220,7 +208,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   let bundleID = app.bundleIdentifier,
-                  targetBundleIDs.contains(bundleID) else { return }
+                  AudioTapTargets.bundleIDs.contains(bundleID) else { return }
             
             // A target music app was launched, restart capture to include it
             if Defaults[.enableRealTimeWaveform] {
@@ -240,7 +228,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   let bundleID = app.bundleIdentifier,
-                  targetBundleIDs.contains(bundleID) else { return }
+                  AudioTapTargets.bundleIDs.contains(bundleID) else { return }
             
             // A target music app was terminated, restart capture to update the list
             if Defaults[.enableRealTimeWaveform] {
