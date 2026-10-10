@@ -41,12 +41,12 @@
 //
 //  口径：docs/36-calendar-cards-and-add.md §接口与数据形状（`CalendarEventCard(event:showFullEventTitles:)`、
 //  `ReminderCard(event:showFullEventTitles:onToggle:)`、
-//  `CalendarEventCardList(events:selectedDate:showFullEventTitles:)` 与它的 `ordered(_:)` 纯函数）。
+//  `CalendarEventCardList(events:showFullEventTitles:details:)` 与它的 `ordered(_:)` 纯函数）。
 //  **P11 / T7 增补**：本文件同时承载**两处共用的过滤口径** `CalendarEventFilters.filtered(events:hideCompletedReminders:hideAllDayEvents:)`
 //  （旧紧凑行的过滤函数迁址，函数体逐字未动）——「列组件 + 过滤口径」是配套的一对。
-//  **签名增量（P11 / T3）**：`CalendarEventCardList` 增 `details: CalendarEventDetailsModel`（详情浮层
-//  接线用；相对 docs/36 的签名多这一项，T8 回写对齐）——本列是**唯一**给浮层上报锚点与悬停 / 点击的组件，
-//  浮层本体与模型在 `CalendarEventDetail.swift`。
+//  **签名（P11 / T3；T8b 归位）**：`CalendarEventCardList` 的 `details: CalendarEventDetailsModel`（详情浮层
+//  接线用）——本列是**唯一**给浮层上报锚点与悬停 / 点击的组件，浮层本体与模型在 `CalendarEventDetail.swift`；
+//  `selectedDate` 参数（组件不消费）T8b 已删，实现与 docs/36 §接口与数据形状 对齐。
 //
 //  说明：本文件只含**纯展示**卡片——点击 / 悬停 / 打开系统 App 等宿主交互仍由宿主包装层负责
 //  （面板侧见 `StandaloneEventCardList.eventCard(_:)`；首页侧 T3 起由本文件的 `CalendarEventCardList`
@@ -252,8 +252,6 @@ struct CalendarEventCardList: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     /// **未过滤**的原始条目（首页宿主传 `calendarManager.events`）；偏好过滤在组件内做。
     let events: [EventModel]
-    /// 选中日（与两处宿主同形的接口参数；本组件不消费，保留给后续接线）。
-    let selectedDate: Date
     /// 标题是否不限行（宿主读 `Defaults[.showFullEventTitles]` 后传入，与面板同源）。
     let showFullEventTitles: Bool
     /// 详情浮层状态（P11 / T3；宿主一份）：卡片把 `event.id` 的悬停 / 点击写给它，
@@ -310,6 +308,9 @@ struct CalendarEventCardList: View {
         .onTapGesture {
             details.togglePin(event.id)
         }
+        // 辅助功能语义（T8b）：整块可点（点击 = 钉住详情），补 Button 语义——不加视觉、不加文案键
+        // （屏幕朗读仍读卡片内容，读者由此知道「这是可点开的条目」）。
+        .accessibilityAddTraits(.isButton)
     }
 
     /// 卡片本体分派（纯展示，不含宿主交互；交互见上面的 `card(for:)`）。

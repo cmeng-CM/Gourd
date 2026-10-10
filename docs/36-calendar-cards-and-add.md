@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 已实现 |
 | 最后更新 | 2026-10-10 |
-| 关联来源 | 用户 2026-10-10 反馈（三个问题）与同日的六项决策 + 四条执行口径（本文件 §决策摘要 D-01…D-10）；承接 docs/24 D-12 与 §已知限制 7（日历 tab 原样接住孤儿视图 `StandaloneCalendarView`）、docs/17 D-25…D-27（首页整宽日历行与 `MonthGridView` 抽取复用）、docs/30 §做法 机制六/机制七（自然高布局与「纯展示块」）、docs/34 §做法 机制一（显示日历 `Calendar.gourdDisplay`）、docs/21 §已知限制 14（非激活面板 `.help()` tooltip 秒级延迟） |
+| 关联来源 | 用户 2026-10-10 反馈（三个问题）与同日的六项决策 + 四条执行口径（本文件 §决策摘要 D-01…D-16）；承接 docs/24 D-12 与 §已知限制 7（日历 tab 原样接住孤儿视图 `StandaloneCalendarView`）、docs/17 D-25…D-27（首页整宽日历行与 `MonthGridView` 抽取复用）、docs/30 §做法 机制六/机制七（自然高布局与「纯展示块」）、docs/34 §做法 机制一（显示日历 `Calendar.gourdDisplay`）、docs/21 §已知限制 14（非激活面板 `.help()` tooltip 秒级延迟） |
 | 工作流 | `.workflow/p11-calendar-cards/` |
 
 > **怎么读**：§背景与目标 / §明确不做 / §备选与取舍 是这场改动的判断依据；
@@ -58,7 +58,7 @@ CalendarManager.createReminder / createEvent ──→ EKEventStore.save(commit:
 
 ### 机制二 · 详情浮层（悬停 + 点击）
 
-两处宿主各持一个 `CalendarEventDetailsModel`（悬停 id / 钉住 id / 条目锚点表；显示对象 = 钉住优先于悬停）。条目经 `anchorPreference` 上报自己在宿主坐标系里的 frame；宿主在列表之外画**一张**浮层——悬停约 0.3 秒出现（`.allowsHitTesting(false)`，鼠标穿透回卡片、避免 hover 抖动），点击钉住后同一张浮层变为可交互（含「Open in Calendar」按钮，执行旧点击行为）。钉住期间把 `vm.isCalendarDetailsPinned` 并入 `ContentView.hasAnyActivePopovers()` 的收起抑制组；宿主销毁 / 收面板 / 切页时显式归位（`onDisappear` 教训同 `isHoveringCalendar`）。不用系统 `.help()`：非激活面板的 tooltip 有秒级延迟（docs/21 §已知限制 14）。全天芯片条（面板页）接同一条链路。
+两处宿主各持一个 `CalendarEventDetailsModel`（悬停 id / 钉住 id / 条目锚点表；显示对象 = 钉住优先于悬停）。条目经 `anchorPreference` 上报自己在宿主坐标系里的 frame；宿主在列表之外画**一张**浮层——悬停约 0.3 秒出现（`.allowsHitTesting(false)`，鼠标穿透回卡片、避免 hover 抖动），点击钉住后同一张浮层变为可交互（含「Open in Calendar」按钮，执行旧点击行为）。钉住期间把 `vm.isCalendarDetailsPinned` 并入 `ContentView.hasAnyActivePopovers()` 的收起抑制组；宿主销毁 / 收面板 / 切页时显式归位（`onDisappear` 教训同 `isHoveringCalendar`）；条目离开当日窗口（换选中日）/ 被偏好过滤 / 被表单替换的列表带走时锚点消失、浮层不渲染，抑制标志随 `isPinRenderable`（钉住**且**锚点仍在）自动复位（T8b），不会悬空。不用系统 `.help()`：非激活面板的 tooltip 有秒级延迟（docs/21 §已知限制 14）。全天芯片条（面板页）接同一条链路。
 
 ### 机制三 · 新增（待办 / 日程）
 
@@ -103,9 +103,8 @@ struct ReminderCard: View {
 /// 可滚动的卡片列（首页行右栏用；条目多于栏高时栏内滚动、无 +N）。
 struct CalendarEventCardList: View {
     let events: [EventModel]           // 宿主传**未过滤**的原始条目；组件内读两偏好走 CalendarEventFilters.filtered
-    let selectedDate: Date
     let showFullEventTitles: Bool      // 宿主读 Defaults 后传入（与面板同源）
-    @ObservedObject var details: CalendarEventDetailsModel   // 悬停 / 点击 / 锚点上报（实际签名的第四项）
+    @ObservedObject var details: CalendarEventDetailsModel   // 悬停 / 点击 / 锚点上报（组件交互接线）
     static let headerHeight: CGFloat = 26                    // 表头高（原 collapsedHeaderHeight 原值迁入）
     static func ordered(_ events: [EventModel]) -> [EventModel]      // 全天在前、各自按 start 升序（纯函数）
 }
@@ -137,10 +136,12 @@ struct CalendarEventAnchorKey: PreferenceKey { static var defaultValue: [String:
     @Published var hoveredID: String?
     @Published var pinnedID: String?
     // 不持锚点表：定位在修饰符内部闭环（overlayPreferenceValue 现场解析 Anchor + 实测高）。
+    @Published private(set) var isPinRenderable: Bool = false   // 钉住**且**锚点仍在（T8b；宿主据此同步收起抑制标志）
     var activeID: String? { pinnedID ?? hoveredID }
     func hover(_ id: String?)
     func endHover(_ id: String)     // 行销毁时收口：仅当 hoveredID == id 才清（T3 fix）
     func togglePin(_ id: String)
+    func refreshPinRenderable(pinnedAnchorPresent: Bool)   // 修饰符在锚点表 / pinnedID 变化时各算一次（T8b）
     func clear()                                  // 归位：onDisappear / 收面板 / 切页
 }
 
@@ -176,7 +177,8 @@ var liveReminderAuthorization: EKAuthorizationStatus { get }
 ```swift
 enum CalendarQuickAdd {
     // AddKind（reminder / event）实际以 extension 落在 CalendarQuickAddBar.swift；类型仍是 CalendarQuickAdd.AddKind。
-    /// "15:30" / "1530" / "9:5" → 选中日上的 Date（秒归零）；越界/不可解析 → nil。
+    /// "15:30" / "1530" / "9:5" → 选中日上的 Date（秒归零）；纯 1–2 位数字 = 整点（"9" → 09:00）、
+    /// 3–4 位 = 时+分（"930" → 09:30）、带秒秒归零（"15:30:45"）；5 位+ / 越界 / 不可解析 → nil。
     static func parseTime(_ text: String, on day: Date, calendar: Calendar) -> Date?
     /// 选中日 == 今天 → 下一个整点（now ≥ 23:00 回退 09:00）；否则 09:00。
     static func defaultStart(on day: Date, now: Date, calendar: Calendar) -> Date
@@ -187,7 +189,7 @@ enum CalendarQuickAdd {
 }
 ```
 
-**表单与入口**（`DynamicIsland/components/Calendar/CalendarQuickAddBar.swift`）：`CalendarQuickAddBar(selectedDate:onDismiss:)`——内部持 `kind/title/startText/endText/isAllDay/calendarID/失败行`，提交直接调 `CalendarManager`；出现即聚焦标题（口径照 `TodosModule` 的 composer）；未授权档禁用并给「Request Access」（点击才请求）/ 被拒改显「Open System Settings」，入口「+」常显（D-12）。入口：首页行日期头一行右侧「+」、面板页右栏顶部一行（约 22pt）右侧「+」；表单展开时**替换**该栏列表区，取消/完成后恢复列表。
+**表单与入口**（`DynamicIsland/components/Calendar/CalendarQuickAddBar.swift`）：`CalendarQuickAddBar(selectedDate:onDismiss:)`——内部持 `kind/title/startText/endText/isAllDay/calendarID/失败行`，提交直接调 `CalendarManager`；出现即聚焦标题（口径照 `TodosModule` 的 composer）；未授权档禁用并给「Request Access」（点击才请求）/ 被拒改显「Open System Settings」，入口「+」常显（D-12）。入口：首页行日期头一行右侧「+」、面板页右栏顶部一行（约 22pt）右侧「+」；表单展开时**替换**该栏列表区，取消/完成后恢复列表。三处实测形态（T8b 记）：未授权档的引导按钮（`Request Access` / `Open System Settings`）**占末行确认位**（不另起一行——表单要整条塞进列表区）；起止时间框的 prompt **兼作标签**、框内有初值时不可见；`.writeOnly`（仅写授权）下写入成功但读取路径不可用 → 新条目可能不显示（授权档口径，不是写入失败）。
 
 **收起抑制标志**：`DynamicIslandViewModel` 新增 `@Published var isCalendarDetailsPinned: Bool = false`，并入 `ContentView.hasAnyActivePopovers()`。
 
@@ -242,13 +244,14 @@ enum CalendarQuickAdd {
 3. 点击行为变更（原「打开系统 App」→「弹出详情并钉住」）会改变既有习惯；手册与 FAQ 已明示（T8）。
 4. 非激活面板的悬停态无法用合成事件驱动（p6 起已知），hover 观感验收 = 代码审查 + 用户真人复核。
 5. 新建日程不做重复 / 闹钟 / 邀请人；新建待办不含具体时刻（只到日）。
-6. 钉住态详情浮层会压住其下方条目（可命中的顶层）——出口 = 浮层右上角 `×` / 切页 / 收面板；「点其它卡转移」只在未被压住的条子上可达。
+6. 钉住态详情浮层会压住其下方条目（可命中的顶层）——出口 = 浮层右上角 `×` / 切页 / 收面板；「点其它卡转移」只在未被压住的条子上可达。条目离开当日窗口 / 被偏好过滤 / 表单替换列表时锚点消失 → 浮层不渲染，收起抑制标志随 `isPinRenderable` 自动复位（T8b）——`×` 出口不悬空。
 7. 极端长备注（6 行）在小列高宿主（3 周月 ≈134pt 视口）下会被浮层高度上限（宿主高 − 16）从底部裁掉——刻意兜底，完整内容去系统 App。
 8. 详情浮层首帧按测量初值（120）定位、次帧按实测高修正：极端「高卡 + 底部条目」有 1 帧（约 40pt 内）位置瞬移（接受档）。
 9. 钉住档关闭按钮（×）命中区约 13×13pt（`contentShape` 在 padding 之内）——偏小但可用；若上屏复核手感不佳再放大。
 10. `defaultStart` 的「下一个整点」用「整点起点 + 1 小时」推算：DST 切换日的极端情形与逐日推进不完全等价（Asia/Shanghai 无影响；23 点分支已挡跨日）。
 11. 两处滚动容器（面板 `List` / 首页列 `ScrollView`）的在途锚点与浮层在滚动期的行为未自动化验证——以代码审查与上屏滚动目测代替。
 12. 首页卡片在 T2 提交（T3 接入钉住之前）曾处于「点击无行为」的中间态——批次内部态，无用户可见影响。
+13. 未授权档表单的引导按钮（`Request Access` / `Open System Settings`）占末行确认位（不另起一行——表单要整条塞进列表区）；起止时间框的 prompt 兼作标签、有初值时不可见；`.writeOnly`（仅写授权）下写入成功但读取路径不可用——新条目可能不显示（授权档口径，不是写入失败）。
 
 ## 验收标准
 

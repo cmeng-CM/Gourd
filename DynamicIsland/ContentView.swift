@@ -3113,7 +3113,8 @@ struct ContentView: View {
          vm.isMediaOutputPopoverActive ||
          vm.isReminderPopoverActive ||
          // 钉住的日历详情浮层（P11 / T3）：同属「面板上有一层用户正在操作的可交互东西」，
-         // 鼠标移出面板时不该自动收起（标志由 `HomeCalendarRow` 按 `details.pinnedID` 同步）。
+         // 鼠标移出面板时不该自动收起（标志由两处宿主按 `details.isPinRenderable` 同步——
+         // 钉住**且**锚点还在；条目离窗 / 被过滤 / 表单替换列表时自动复位，T8b）。
          vm.isCalendarDetailsPinned
     }
 

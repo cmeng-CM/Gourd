@@ -526,7 +526,6 @@ struct CalendarView: View {
                 // 与空态判据同源）。
                 CalendarEventCardList(
                     events: calendarManager.events,
-                    selectedDate: selectedDate,
                     showFullEventTitles: Defaults[.showFullEventTitles],
                     details: details
                 )
@@ -1152,7 +1151,7 @@ struct StandaloneCalendarView: View {
     /// P11 / T6 起挂点从 pane 上移到整列，表单期列表不在树上 → 无锚点 → 浮层不渲染）。
     ///
     /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
-    /// 本视图不会因 `pinnedID` 变化重算 body，下面那条 `.onChange(of: details.pinnedID)`
+    /// 本视图不会因 `isPinRenderable` 变化重算 body，下面那条 `.onChange(of: details.isPinRenderable)`
     /// （收起抑制标志的唯一通路）永远不会触发（教训同 T3 的 `HomeCalendarRow`）。
     @StateObject private var details = CalendarEventDetailsModel()
 
@@ -1278,10 +1277,12 @@ struct StandaloneCalendarView: View {
                 await calendarManager.updateCurrentDate(selectedDate)
             }
         }
-        // 钉住详情浮层期间抑制面板自动收起（P11 / T4）：标志并入 `ContentView.hasAnyActivePopovers()`。
-        // 判据放在本视图（浮层状态的所有者）：`pinnedID` 一变就同步标志，`clear()` 归位同样经这里落回 false。
-        .onChange(of: details.pinnedID) { _, newValue in
-            vm.isCalendarDetailsPinned = (newValue != nil)
+        // 钉住详情浮层期间抑制面板自动收起（P11 / T4；判据 T8b 起改 `isPinRenderable`）：标志并入
+        // `ContentView.hasAnyActivePopovers()`。`isPinRenderable` = 钉住了**且**锚点还在（条目离开
+        // 当日窗口 / 被偏好过滤 / 表单替换列表时自动落回 false——否则标志悬空为 true，面板再也收不
+        // 起来、浮层里的 × 出口也不可达）。判据放在本视图（浮层状态的所有者），`clear()` 归位同经这里。
+        .onChange(of: details.isPinRenderable) { _, renderable in
+            vm.isCalendarDetailsPinned = renderable
         }
         // 本页被销毁（退出日历 tab / 面板收起）时的兜底归位（P11 / T4）：与 `HomeCalendarRow`
         // 的 `onDisappear` 同一条教训——悬停与钉住双清、标志复位，不留悬空状态。
@@ -1516,7 +1517,8 @@ private struct StandaloneEventCardList: View {
     /// + `anchorPreference`（本卡 bounds 按 id 上报给面板右栏 pane 级的详情浮层）
     /// + `contentShape(Rectangle())`（整卡可悬停 / 可点，含色条与空隙）
     /// + `onTapGesture`（**点击 = 钉住详情**；打开系统 App 走浮层的「Open in Calendar」——
-    /// P11 / T4 口径变更，D-09）。
+    /// P11 / T4 口径变更，D-09）
+    /// + `.accessibilityAddTraits(.isButton)`（T8b：可点语义给辅助功能，不加视觉 / 文案）。
     ///
     /// 提醒分支原外层 `Button { openURL(calendarAppURL()) }` 随本次接线去掉：勾选圈
     /// （`ReminderCard` 里的 `ReminderToggle`）是 `Button`、自身吞点击（写回仍走 `onToggleReminder`
@@ -1534,6 +1536,7 @@ private struct StandaloneEventCardList: View {
         .onTapGesture {
             details.togglePin(event.id)
         }
+        .accessibilityAddTraits(.isButton)
         .padding(.horizontal, 2)
     }
 

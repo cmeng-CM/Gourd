@@ -125,7 +125,7 @@ struct HomeCalendarRow: View {
     /// 详情浮层状态（P11 / T3）：悬停 id / 钉住 id / 锚点表（模型见 `CalendarEventDetail.swift`）。
     ///
     /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
-    /// 本行就不会因 `pinnedID` 变化重算 body，下面那条 `.onChange(of: details.pinnedID)`
+    /// 本行就不会因 `isPinRenderable` 变化重算 body，下面那条 `.onChange(of: details.isPinRenderable)`
     /// （收起抑制标志的唯一通路）永远不会触发。`@StateObject` 让本行订阅模型，`onChange` 因此可靠。
     @StateObject private var details = CalendarEventDetailsModel()
 
@@ -255,10 +255,12 @@ struct HomeCalendarRow: View {
         .onHover { isHovering in
             vm.isHoveringCalendar = isHovering
         }
-        // 钉住详情浮层期间抑制面板自动收起（P11 / T3）：标志并入 `ContentView.hasAnyActivePopovers()`。
-        // 判据放在本行（浮层状态的所有者）：`pinnedID` 一变就同步标志，`clear()` 归位同样经这里落回 false。
-        .onChange(of: details.pinnedID) { _, newValue in
-            vm.isCalendarDetailsPinned = (newValue != nil)
+        // 钉住详情浮层期间抑制面板自动收起（P11 / T3；判据 T8b 起改 `isPinRenderable`）：标志并入
+        // `ContentView.hasAnyActivePopovers()`。`isPinRenderable` = 钉住了**且**锚点还在（条目离开
+        // 当日窗口 / 被偏好过滤 / 表单替换列表时自动落回 false——否则标志悬空为 true，面板再也收不
+        // 起来、浮层里的 × 出口也不可达）。判据放在本行（浮层状态的所有者），`clear()` 归位同经这里。
+        .onChange(of: details.isPinRenderable) { _, renderable in
+            vm.isCalendarDetailsPinned = renderable
         }
         // 收面板 / 切页（任何 `notchState != .open`）时浮层归位：`onDisappear` 对无边框面板不可靠
         // （见 `DynamicIslandViewModel.onViewTeardown` 的注释），这条是「面板收起后不残留浮层与标志」
@@ -347,7 +349,6 @@ struct HomeCalendarRow: View {
                 // `.calendarEventDetails(model:)` 画（列级 = 滚动视口之外，不被 `ScrollView` 裁）。
                 CalendarEventCardList(
                     events: calendarManager.events,
-                    selectedDate: selectedDate,
                     showFullEventTitles: showFullEventTitles,
                     details: details
                 )

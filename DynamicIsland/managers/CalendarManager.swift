@@ -565,9 +565,16 @@ class CalendarManager: ObservableObject {
     }
 
     /// 新增表单目标日历的**初始选中项**：优先系统默认新事件日历（`defaultEventCalendarID()`），
-    /// 没有默认日历时兜第一个可写日历；都没有 → nil（表单此时不预选，保存会走服务层的同一套兜底）。
+    /// 但**只在可写集合内取**（T8b：默认日历可能不可写——表单菜单只列可写日历，预选到不可写的
+    /// 那一颗会造成「菜单显示 A、提交写 B」的错配）；不在集合里就兜第一个可写；都没有 → nil
+    /// （表单此时不预选，保存会走服务层的同一套兜底）。
     var preferredEventCalendarID: String? {
-        calendarService.defaultEventCalendarID() ?? calendarService.writableEventCalendars().first?.id
+        let writable = calendarService.writableEventCalendars()
+        if let defaultID = calendarService.defaultEventCalendarID(),
+           writable.contains(where: { $0.id == defaultID }) {
+            return defaultID
+        }
+        return writable.first?.id
     }
 
     /// **实时**的日历授权状态（D-12 的判据来源）：直读 `EKEventStore.authorizationStatus(for: .event)`。

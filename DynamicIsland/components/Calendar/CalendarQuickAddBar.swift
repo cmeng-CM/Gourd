@@ -417,11 +417,19 @@ struct CalendarQuickAddBar: View {
     // MARK: - 目标日历
 
     /// 可写日程日历（懒初始化，只取一次；`preferredEventCalendarID` **兜第一个**可写日历）。
+    ///
+    /// **目标日历归一（T8b）**：`calendarID` 必须落在**可写集合**里——`preferredEventCalendarID`
+    /// 可能预选到「默认新事件日历」而它并不可写（菜单里根本没有这一项），会造成「菜单显示 A、
+    /// 提交写 B」的错配；装载后不在集合里就退第一个可写（没有可写日历 → nil，提交走服务层
+    /// 同一套兜底并失败回显）。
     private func loadCalendars() async {
         let calendars = await calendarManager.creatableEventCalendars()
         availableCalendars = calendars
         if calendarID == nil {
-            calendarID = calendarManager.preferredEventCalendarID ?? calendars.first?.id
+            calendarID = calendarManager.preferredEventCalendarID
+        }
+        if let current = calendarID, !calendars.contains(where: { $0.id == current }) {
+            calendarID = calendars.first?.id
         }
     }
 

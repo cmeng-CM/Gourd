@@ -41,6 +41,10 @@
 //  **钉住出口**：钉住档浮层会压住条目（窄宿主下尤其），「同卡再点取消」因此不一定可点；详情卡右上角的
 //  关闭按钮（×）是浮层内的确定出口：`isPinned`（= `model.pinnedID == event.id`）时显示，点击解钉。
 //
+//  **抑制标志随可渲染性（T8b）**：条目离开当日窗口（换选中日）/ 被偏好过滤隐藏 / 被表单替换的列表
+//  带走时锚点消失、浮层不渲染——模型 `isPinRenderable`（钉住**且**锚点仍在）随之落 false，宿主的
+//  `vm.isCalendarDetailsPinned` 一并复位；否则标志悬空为 true，面板再也收不起来、× 出口也不可达。
+//
 //  **定位口径（T3 fix：按实测高）**：条目 rect 由 `Anchor<CGRect>` 解析（宿主坐标），浮层真实高度 h 由
 //  卡片自身上报（卡片根视图 `.background(GeometryReader { …preference… })` + `onPreferenceChange`
 //  写 `measuredHeight`，初值 120、首帧后修正）；竖向内边距 8，H = 宿主高：
@@ -229,6 +233,15 @@ final class CalendarEventDetailsModel: ObservableObject {
     /// 钉住的条目 id（点击切换；与悬停并存时优先）。
     @Published var pinnedID: String?
 
+    /// 钉住档**是否可渲染**（T8b）：`pinnedID != nil` **且**该 id 当前仍在锚点表里。
+    ///
+    /// **为什么单独成字段**：钉住后条目可能离开当日窗口（换选中日）、被偏好过滤隐藏、或被
+    /// 表单替换的列表带走——锚点消失后浮层什么都不画，但 `pinnedID` 还在。宿主的收起抑制标志
+    /// 若只看 `pinnedID != nil` 就会悬空为 true（面板再也收不起来、浮层里的 × 出口也不可达）；
+    /// 改看本字段，锚点一消失即自动复位。写回只在 `calendarEventDetails(model:)` 的回调里
+    /// （锚点表变化 / `pinnedID` 变化各算一次），**不在 body 求值期**改 `@Published`。
+    @Published private(set) var isPinRenderable: Bool = false
+
     /// 当前显示对象：钉住优先于悬停。
     var activeID: String? { pinnedID ?? hoveredID }
 
@@ -250,10 +263,20 @@ final class CalendarEventDetailsModel: ObservableObject {
         pinnedID = (pinnedID == id) ? nil : id
     }
 
-    /// 归位（宿主销毁 / 收面板 / 切页）：悬停与钉住双清。
+    /// 重算 `isPinRenderable`（T8b；由 `calendarEventDetails(model:)` 的两个回调调用）：
+    /// `pinnedID != nil` **且**其锚点仍在表里（查不到 → false）。值不变不发布（避免多余重画）。
+    func refreshPinRenderable(pinnedAnchorPresent: Bool) {
+        let renderable = pinnedID != nil && pinnedAnchorPresent
+        if isPinRenderable != renderable {
+            isPinRenderable = renderable
+        }
+    }
+
+    /// 归位（宿主销毁 / 收面板 / 切页）：悬停与钉住双清、可渲染性一并复位（T8b）。
     func clear() {
         hoveredID = nil
         pinnedID = nil
+        isPinRenderable = false
     }
 }
 
@@ -321,9 +344,19 @@ extension View {
     /// 用法（两处宿主各持一份 `CalendarEventDetailsModel`，挂在**列 / 页面级**——浮层因此不落在
     /// 滚动视口里）：`todayListColumn.calendarEventDetails(model: details)`。
     /// 条目的锚点由卡片侧 `.anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds)` 上报。
+    ///
+    /// **钉住可渲染性重算（T8b）**：锚点表一变就按「pinnedID 是否仍有锚点」重算 `isPinRenderable`
+    /// （条目离开当日窗口 / 被偏好过滤 / 表单替换列表 → 查不到 → false；宿主据此复位收起抑制标志，
+    /// 否则标志悬空、面板再也收不起来）。`pinnedID` 自身的变化由浮层内层那条
+    /// `.onChange(of: model.pinnedID)` 用同一口径补算（锚点表在那一刻不一定会变）。
     func calendarEventDetails(model: CalendarEventDetailsModel) -> some View {
         overlayPreferenceValue(CalendarEventAnchorKey.self) { anchors in
             CalendarEventDetailsOverlay(model: model, anchors: anchors)
+        }
+        .onPreferenceChange(CalendarEventAnchorKey.self) { anchors in
+            model.refreshPinRenderable(
+                pinnedAnchorPresent: model.pinnedID.flatMap { anchors[$0] } != nil
+            )
         }
     }
 }
@@ -398,6 +431,14 @@ private struct CalendarEventDetailsOverlay: View {
                 // 悬停档穿透（鼠标回到条目上，不抖）；钉住档可点（Open in Calendar / Join / 关闭按钮）。
                 .allowsHitTesting(model.pinnedID != nil)
             }
+        }
+        // **钉住可渲染性补算（T8b）**：`pinnedID` 变化时用本层拿到的锚点表重算一次（锚点表自身的
+        // 变化由宿主修饰符的 `onPreferenceChange` 负责——那一刻 `pinnedID` 不一定变）。挂在这一层
+        // （GeometryReader 永远在树上，即使当前无可渲染条目）。写回在回调里，不在 body 求值期。
+        .onChange(of: model.pinnedID) { _, _ in
+            model.refreshPinRenderable(
+                pinnedAnchorPresent: model.pinnedID.flatMap { anchors[$0] } != nil
+            )
         }
     }
 }
