@@ -169,6 +169,104 @@ class CalendarService: CalendarServiceProviding {
             }
         }.value
     }
+
+    // MARK: - 新增（P11 / T5：两处日历的「+」快速新增待办与日程）
+
+    /// 新建一条待办（`EKReminder`，docs/36 §做法 机制三）。
+    ///
+    /// **目标列表**：`defaultCalendarForNewReminders()` 兜第一个 `.reminder` 日历；一个都没有 → `false`
+    /// （调用方给失败提示，不重试）。`dueDateComponents` **允许 nil**——无日期的待办也是合法输入
+    /// （本批表单总是传选中日的年月日，nil 只留给直接调用这个服务的路径）。
+    ///
+    /// 写档口径与 `setReminderPriority` 完全一致：`nonisolated` + `Task.detached(priority: .userInitiated)`，
+    /// `commit: true` 的磁盘 I/O 不在主线程；成功 `true`、失败 `false` 并把细节 `print` 到控制台。
+    /// 不进 `CalendarServiceProviding` 协议（本批不改对外契约），调用方 `CalendarManager` 持有具体类型。
+    nonisolated func createReminder(title: String, dueDateComponents: DateComponents?) async -> Bool {
+        let store = self.store
+        return await Task.detached(priority: .userInitiated) {
+            guard let targetList = store.defaultCalendarForNewReminders() ?? store.calendars(for: .reminder).first else {
+                print("Failed to create reminder: no reminder list available")
+                return false
+            }
+
+            let reminder = EKReminder(eventStore: store)
+            reminder.title = title
+            reminder.dueDateComponents = dueDateComponents
+            reminder.calendar = targetList
+
+            do {
+                try store.save(reminder, commit: true)
+                return true
+            } catch {
+                print("Failed to create reminder: \(error)")
+                return false
+            }
+        }.value
+    }
+
+    /// 新建一条日程（`EKEvent`，docs/36 §做法 机制三）。
+    ///
+    /// **目标日历**（逐级兜底，全无 → `false`）：
+    /// ① 给定 `calendarID` 且该日历 `allowsContentModifications` → 用它；
+    /// ② `store.defaultCalendarForNewEvents`；
+    /// ③ 第一个 `allowsContentModifications` 的 `.event` 日历。
+    ///
+    /// 写档口径同上：`nonisolated` + `Task.detached(priority: .userInitiated)`，`commit: true`；
+    /// `span: .thisEvent`（本批不建重复规则 / 不做编辑，跨度参数只是 `save` 的必填项）。
+    nonisolated func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool {
+        let store = self.store
+        return await Task.detached(priority: .userInitiated) {
+            let writableCalendars = store.calendars(for: .event).filter(\.allowsContentModifications)
+
+            let targetCalendar: EKCalendar? = {
+                if let calendarID,
+                   let requested = writableCalendars.first(where: { $0.calendarIdentifier == calendarID }) {
+                    return requested
+                }
+                if let defaultCalendar = store.defaultCalendarForNewEvents {
+                    return defaultCalendar
+                }
+                return writableCalendars.first
+            }()
+
+            guard let targetCalendar else {
+                print("Failed to create event: no writable event calendar available")
+                return false
+            }
+
+            let event = EKEvent(eventStore: store)
+            event.title = title
+            event.startDate = start
+            event.endDate = end
+            event.isAllDay = isAllDay
+            event.calendar = targetCalendar
+
+            do {
+                try store.save(event, span: .thisEvent, commit: true)
+                return true
+            } catch {
+                print("Failed to create event: \(error)")
+                return false
+            }
+        }.value
+    }
+
+    /// **可写**的日程日历（`allowsContentModifications` 过滤，`CalendarModel(from:)` 复用）——新增表单的
+    /// 「目标日历」下拉只列它，避免用户选中一个订阅 / 只读日历经到保存失败。
+    ///
+    /// 同步读（主线程调用；与既有 `reloadCalendarAndReminderLists` 内部的同步读同口径）：
+    /// 一次 `calendars(for:)` 的内存过滤，不做 I/O。
+    func writableEventCalendars() -> [CalendarModel] {
+        store.calendars(for: .event)
+            .filter(\.allowsContentModifications)
+            .map { CalendarModel(from: $0) }
+    }
+
+    /// 新日程的默认目标日历 id（`defaultCalendarForNewEvents`）——新增表单的初始选中项。
+    /// 同步读，理由同上；为 nil（没有默认日历的仓库）时调用方再由 `writableEventCalendars()` 兜底。
+    func defaultEventCalendarID() -> String? {
+        store.defaultCalendarForNewEvents?.calendarIdentifier
+    }
 }
 
 // MARK: - Model Extensions

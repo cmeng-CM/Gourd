@@ -85,6 +85,9 @@
 //  P11 / T2 首页行滚动卡片列——`CalendarEventCardList.ordered` 的展示顺序（全天在前、各自按
 //  `start` 升序、提醒与日程混排同一把尺子、空数组返回空；口径逐字沿用旧
 //  `EventListView.orderedEvents`）。
+//  P11 / T5 快速新增口径——`CalendarQuickAdd` 六条纯函数（宽松时间解析 D-11 的收/拒全表、
+//  日程默认时段 D-08 的整点取当前与 23 点回退、起止同自然日校验、全天区间、提醒到期组件的
+//  年月日归一化）。**不碰真 EventKit**（无 TCC 依赖）；服务层真写入归 T8 上屏复核。
 //
 
 import AppKit
@@ -8241,6 +8244,287 @@ final class AirDropGlyphMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.ringRadiusFactors, AirDropGlyphMetrics.ringRadiusFactors, "环心半径：实例读法 = 静态读法")
         XCTAssertEqual(metrics.strokeFactor, AirDropGlyphMetrics.strokeFactor, "线宽：实例读法 = 静态读法")
         XCTAssertEqual(metrics.gapDegrees, AirDropGlyphMetrics.gapDegrees, "开口角度：实例读法 = 静态读法")
+    }
+}
+
+// MARK: - 快速新增的口径纯函数（P11 / T5，docs/36 §做法 机制三）
+
+/// `CalendarQuickAdd` 六条纯函数——两处日历「+」内联表单的输入口径
+/// （D-11 宽松时间解析、D-08 默认时段与全天口径、起止同自然日校验）。
+///
+/// **时区前提**：夹具一律用固定 `Asia/Shanghai` 的格里高利历构造时刻（不读本机时区），
+/// 期望值是同一份日历下的 `Date`——这些函数只按传入的 `calendar` 算账，固定日历只为让断言可复现。
+///
+/// **不碰真 EventKit**：本类全部是纯函数断言，没有 TCC 依赖；服务层的真实写入
+/// （`CalendarService.createReminder` / `createEvent` 落库）不在这里验证——单测环境没有可控的
+/// 授权与干净日历库，归 T8 上屏真写 + 系统 App 侧复核（docs/36 §验收标准 2）。
+final class CalendarQuickAddTests: XCTestCase {
+
+    /// 固定日历：格里高利 + `Asia/Shanghai` + `en_US_POSIX`（构造口径同同文件其他日历用例，
+    /// 例 `CalendarEventCardListOrderTests.cardCalendar`，只是时区固定为用户所在时区而非 GMT）。
+    private func quickAddCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }
+
+    /// 2026-10 里某天某时刻（构造口径同同文件既有的 `gridTime` / `cardTime`）。
+    private func quickAddMoment(
+        _ calendar: Calendar,
+        day: Int,
+        hour: Int,
+        minute: Int = 0,
+        second: Int = 0
+    ) -> Date {
+        calendar.date(
+            from: DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute, second: second)
+        )!
+    }
+
+    // MARK: parseTime（宽松解析，D-11）
+
+    /// **收**：`15:30` / `1530` / `930` / `9` / `9:5` / `" 15:30 "` / `15:30:45`（秒归零）/
+    /// `0:00` / `23:59` 全部解析成**选中日当天**该时分、秒 = 0、不滚动到别的日期。
+    func testParseTimeAcceptsLenientFormatsWithSecondsZeroed() {
+        let calendar = quickAddCalendar()
+        let day = quickAddMoment(calendar, day: 10, hour: 0)
+
+        let accepted: [(text: String, hour: Int, minute: Int)] = [
+            ("15:30", 15, 30),
+            ("1530", 15, 30),
+            ("930", 9, 30),
+            ("9", 9, 0),
+            ("9:5", 9, 5),
+            (" 15:30 ", 15, 30),
+            ("15:30:45", 15, 30),
+            ("0:00", 0, 0),
+            ("23:59", 23, 59)
+        ]
+
+        for item in accepted {
+            let parsed = CalendarQuickAdd.parseTime(item.text, on: day, calendar: calendar)
+            XCTAssertNotNil(parsed, "「\(item.text)」应可解析")
+            XCTAssertEqual(
+                parsed,
+                quickAddMoment(calendar, day: 10, hour: item.hour, minute: item.minute),
+                "「\(item.text)」应落到选中日的 \(item.hour):\(item.minute)（秒归零）"
+            )
+            if let parsed {
+                XCTAssertEqual(calendar.component(.second, from: parsed), 0, "「\(item.text)」的秒归零")
+                XCTAssertEqual(calendar.component(.day, from: parsed), 10, "「\(item.text)」落在选中日当天")
+            }
+        }
+    }
+
+    /// **拒**：越界（时 / 分 / 秒）与非数字字符一律 nil——`24:00` / `15:60` / `-1:00` / `15:3a` /
+    /// `abc` / 空串 / 5 位纯数字 `15300`；外加三条**同规则派生**的边界：`"   "`（trim 后为空）、
+    /// `25`（两位纯数字 → 时 25 越界）、`2400`（时 24 越界）、`15:30:99`（秒越界）。
+    func testParseTimeRejectsOutOfRangeAndNonNumericInputs() {
+        let calendar = quickAddCalendar()
+        let day = quickAddMoment(calendar, day: 10, hour: 0)
+
+        let rejected = ["24:00", "15:60", "-1:00", "15:3a", "abc", "", "15300", "   ", "25", "2400", "15:30:99"]
+
+        for text in rejected {
+            XCTAssertNil(
+                CalendarQuickAdd.parseTime(text, on: day, calendar: calendar),
+                "「\(text.debugDescription)」应被拒（nil）"
+            )
+        }
+    }
+
+    /// 解析的落点跟着传入的 `day` 走：同一条 `"15:30"` 在 10 日 / 12 日上各落各的。
+    func testParseTimeLandsOnThePassedDay() {
+        let calendar = quickAddCalendar()
+        XCTAssertEqual(
+            CalendarQuickAdd.parseTime("15:30", on: quickAddMoment(calendar, day: 12, hour: 0), calendar: calendar),
+            quickAddMoment(calendar, day: 12, hour: 15, minute: 30)
+        )
+    }
+
+    // MARK: defaultStart / defaultEnd（默认时段，D-08）
+
+    /// 今天取**下一个整点**：14:20 → 15:00；22:59 → 23:00（23 点前最后一档）。
+    func testDefaultStartPicksNextWholeHourOnToday() {
+        let calendar = quickAddCalendar()
+        let day = quickAddMoment(calendar, day: 10, hour: 0)
+
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 14, minute: 20),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 15)
+        )
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 22, minute: 59),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 23)
+        )
+    }
+
+    /// 恰在整点 → **取当前这个整点**（09:00:00 → 09:00；14:00:00 → 14:00），不跳下一个。
+    func testDefaultStartKeepsCurrentHourWhenNowIsExactlyOnTheHour() {
+        let calendar = quickAddCalendar()
+        let day = quickAddMoment(calendar, day: 10, hour: 0)
+
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 9),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 9)
+        )
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 14),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 14)
+        )
+    }
+
+    /// 今天 23 点起（23:00 整 / 23:10）回退**当天 09:00**（不跳次日——日期一律 = 选中日）。
+    func testDefaultStartFallsBackToNineOnTheSelectedDayWhenLate() {
+        let calendar = quickAddCalendar()
+        let day = quickAddMoment(calendar, day: 10, hour: 0)
+
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 23, minute: 0),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 9)
+        )
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: day,
+                now: quickAddMoment(calendar, day: 10, hour: 23, minute: 10),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 10, hour: 9)
+        )
+    }
+
+    /// 选中日**不是今天** → 选中日 09:00（今天几点都不看，含今天 23:30）。
+    func testDefaultStartUsesNineOnDaysThatAreNotToday() {
+        let calendar = quickAddCalendar()
+        let tomorrow = quickAddMoment(calendar, day: 11, hour: 0)
+
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: tomorrow,
+                now: quickAddMoment(calendar, day: 10, hour: 14, minute: 20),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 11, hour: 9)
+        )
+        XCTAssertEqual(
+            CalendarQuickAdd.defaultStart(
+                on: tomorrow,
+                now: quickAddMoment(calendar, day: 10, hour: 23, minute: 30),
+                calendar: calendar
+            ),
+            quickAddMoment(calendar, day: 11, hour: 9)
+        )
+    }
+
+    /// `defaultEnd` = 开始 + 1 小时（09:00–10:00 默认档的另一半）。
+    func testDefaultEndAddsOneHour() {
+        let calendar = quickAddCalendar()
+        let start = quickAddMoment(calendar, day: 10, hour: 15)
+
+        XCTAssertEqual(CalendarQuickAdd.defaultEnd(start: start), quickAddMoment(calendar, day: 10, hour: 16))
+        XCTAssertEqual(CalendarQuickAdd.defaultEnd(start: start), start.addingTimeInterval(3600))
+    }
+
+    // MARK: isValidRange / allDayRange / reminderDueComponents
+
+    /// `isValidRange`：`end > start` 且**同一自然日**；相等 / 倒挂 / 跨日（23:00 → 次日 00:30）都拒。
+    func testIsValidRangeRequiresEndAfterStartOnTheSameDay() {
+        let calendar = quickAddCalendar()
+
+        XCTAssertTrue(
+            CalendarQuickAdd.isValidRange(
+                start: quickAddMoment(calendar, day: 10, hour: 15),
+                end: quickAddMoment(calendar, day: 10, hour: 16),
+                calendar: calendar
+            ),
+            "15:00 → 16:00 正常"
+        )
+        XCTAssertFalse(
+            CalendarQuickAdd.isValidRange(
+                start: quickAddMoment(calendar, day: 10, hour: 15),
+                end: quickAddMoment(calendar, day: 10, hour: 15),
+                calendar: calendar
+            ),
+            "相等拒"
+        )
+        XCTAssertFalse(
+            CalendarQuickAdd.isValidRange(
+                start: quickAddMoment(calendar, day: 10, hour: 16),
+                end: quickAddMoment(calendar, day: 10, hour: 15),
+                calendar: calendar
+            ),
+            "倒挂拒"
+        )
+        XCTAssertFalse(
+            CalendarQuickAdd.isValidRange(
+                start: quickAddMoment(calendar, day: 10, hour: 23),
+                end: quickAddMoment(calendar, day: 11, hour: 0, minute: 30),
+                calendar: calendar
+            ),
+            "跨日拒"
+        )
+    }
+
+    /// `allDayRange`：选中日当天 00:00 → **次日 00:00**（与选中日上是几点无关）。
+    func testAllDayRangeSpansSelectedDayToNextMidnight() {
+        let calendar = quickAddCalendar()
+        let range = CalendarQuickAdd.allDayRange(
+            on: quickAddMoment(calendar, day: 10, hour: 13, minute: 37),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(range.start, quickAddMoment(calendar, day: 10, hour: 0))
+        XCTAssertEqual(range.end, quickAddMoment(calendar, day: 11, hour: 0))
+    }
+
+    /// `reminderDueComponents`：只带 `[.year, .month, .day]` 三个 key——选中日上的**任意时刻**
+    /// （这里 00:00 与 15:30 两档）都归一化成同一个组件；未请求的 hour / minute / second / timeZone
+    /// 全为 nil（`EventModel.init?(from: EKReminder)` 用 `dueDateComponents.hour == nil` 判全天待办）。
+    func testReminderDueComponentsCarryOnlyYearMonthDay() {
+        let calendar = quickAddCalendar()
+        let components = CalendarQuickAdd.reminderDueComponents(
+            on: quickAddMoment(calendar, day: 10, hour: 15, minute: 30),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            components,
+            DateComponents(year: 2026, month: 10, day: 10),
+            "逐字段等于只带年月日的组件（多余字段全为 nil）"
+        )
+        XCTAssertNil(components.hour)
+        XCTAssertNil(components.minute)
+        XCTAssertNil(components.second)
+        XCTAssertNil(components.timeZone)
+        XCTAssertEqual(
+            CalendarQuickAdd.reminderDueComponents(
+                on: quickAddMoment(calendar, day: 10, hour: 0),
+                calendar: calendar
+            ),
+            components,
+            "选中日的任意时刻都归一化到同一个组件"
+        )
     }
 }
 

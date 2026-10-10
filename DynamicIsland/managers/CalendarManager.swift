@@ -515,6 +515,96 @@ class CalendarManager: ObservableObject {
     func setReminderPriority(_ reminderID: String, priority: Int) async -> Bool {
         await calendarService.setReminderPriority(reminderID: reminderID, priority: priority)
     }
+
+    // MARK: - 快速新增（P11 / T5：两处日历「+」的写入与口径）
+
+    /// 新建一条待办（写系统「提醒事项」）——两处日历内联表单的「待办」档入口（docs/36 §做法 机制三）。
+    ///
+    /// **日期归一化**：`due` 是**选中日上的任意时刻**（表单只给日期，不给时刻），这里经
+    /// `CalendarQuickAdd.reminderDueComponents` 只取年月日后交给服务层——`dueDateComponents.hour == nil`
+    /// 是 `EventModel.init?(from: EKReminder)` 判「全天待办」的判据，带时刻会把条目渲染成带时间的。
+    ///
+    /// 写成功后**显式刷新**（理由见 `refreshAfterCalendarWrite()`）；失败返回 false，
+    /// 不重试、不回显（失败提示由表单一层落文案，T6）。
+    @discardableResult
+    func createReminder(title: String, due: Date) async -> Bool {
+        let dueComponents = CalendarQuickAdd.reminderDueComponents(on: due, calendar: Calendar.current)
+        let created = await calendarService.createReminder(title: title, dueDateComponents: dueComponents)
+        if created {
+            await refreshAfterCalendarWrite()
+        }
+        return created
+    }
+
+    /// 新建一条日程（写系统「日历」）——两处日历内联表单的「日程」档入口。
+    ///
+    /// 起止时间与目标日历的合法性/兜底都在服务层（`CalendarService.createEvent`）与纯函数
+    /// （`CalendarQuickAdd.isValidRange` / `allDayRange`）里，这里只负责转调与「成功后刷哪些数据」。
+    /// 写成功同样显式刷新（新条目要立刻出现在首页行、面板页与月历标记三处）。
+    @discardableResult
+    func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool {
+        let created = await calendarService.createEvent(
+            title: title,
+            start: start,
+            end: end,
+            isAllDay: isAllDay,
+            calendarID: calendarID
+        )
+        if created {
+            await refreshAfterCalendarWrite()
+        }
+        return created
+    }
+
+    /// 新增表单可选的目标日历列表（只含**可写**日历）——转调服务层。
+    ///
+    /// 保留 async 形态（内部同步完成，一次内存过滤，不做 I/O）：表单在 `task` 里按异步形态调用，
+    /// 与「取数可能是异步的」这一层保持同形；将来若改为按需异步取数，调用点不用改。
+    func creatableEventCalendars() async -> [CalendarModel] {
+        calendarService.writableEventCalendars()
+    }
+
+    /// 新增表单目标日历的**初始选中项**：优先系统默认新事件日历（`defaultEventCalendarID()`），
+    /// 没有默认日历时兜第一个可写日历；都没有 → nil（表单此时不预选，保存会走服务层的同一套兜底）。
+    var preferredEventCalendarID: String? {
+        calendarService.defaultEventCalendarID() ?? calendarService.writableEventCalendars().first?.id
+    }
+
+    /// **实时**的日历授权状态（D-12 的判据来源）：直读 `EKEventStore.authorizationStatus(for: .event)`。
+    ///
+    /// **为什么不用 `@Published` 的 `calendarAuthorizationStatus`**：那个属性的真值只在
+    /// `checkCalendarAuthorization()` 被调过之后才有——而那条链路只挂在设置页与锁屏天气小部件上，
+    /// **不在应用启动链上**，冷启动时它恒为 `.notDetermined`（用户已授权也读不到）。新增入口
+    /// 「+」常显（D-12）后，表单要靠它判「未授权 / 被拒」：按 `@Published` 的状态守门会让没打开过
+    /// 设置页的机器永远显示未授权。口径同 `updateMonthEvents` 里的直读注释：这里只读不写，
+    /// 授权状态本身仍由既有链路（`checkCalendarAuthorization()` / `checkReminderAuthorization()`）维护。
+    var liveCalendarAuthorization: EKAuthorizationStatus {
+        EKEventStore.authorizationStatus(for: .event)
+    }
+
+    /// **实时**的提醒授权状态（D-12 的判据来源）——直读 `EKEventStore.authorizationStatus(for: .reminder)`，
+    /// 理由与 `liveCalendarAuthorization` 逐字相同（`reminderAuthorizationStatus` 同样只在设置页链路被调过之后才有真值）。
+    var liveReminderAuthorization: EKAuthorizationStatus {
+        EKEventStore.authorizationStatus(for: .reminder)
+    }
+
+    /// 写库成功后的**显式刷新**：新条目要立刻出现在三处数据面上——按日窗口 `events`（首页行 / 面板页右栏）、
+    /// 锁屏面板 `lockScreenEvents`、按月快照 `monthEvents`（月历标记）。
+    ///
+    /// **为什么不依赖 `EKEventStoreChanged` 通知**：那是自己刚写完的变更，通知会紧随 `save` 而来，
+    /// 但既有的 `handleEventStoreChanged` 有节流（`eventStoreChangeThrottle`）与**自诱发抑制窗**
+    /// （`ignoreEventStoreChangesUntil`，`performEventStoreRefresh` 结尾会把窗往后推 6s）——
+    /// 我们的写入正落在自己刚设的抑制窗内，通知会被整段丢掉；不显式刷的话，用户看到的是
+    /// 「写完的那一刻两个日历都没变」，要等下一次**外部**变更（例如别的 App 改了事件库）透进来
+    /// 才补上。所以写成功后就地强制刷一遍，不等通知。
+    ///
+    /// `refreshRequestedMonthEvents()` 自带守卫（没人要过按月数据时什么都不做）——不打开日历行
+    /// 的用户不为这次刷新多付一次按月查询。
+    private func refreshAfterCalendarWrite() async {
+        await updateEvents(force: true)
+        await updateLockScreenEvents(force: true)
+        await refreshRequestedMonthEvents()
+    }
 }
 
 // MARK: - Event Fetch Limiter
