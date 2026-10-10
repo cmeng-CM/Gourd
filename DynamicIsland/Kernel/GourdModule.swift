@@ -101,6 +101,14 @@ public protocol GourdModule: AnyObject {
     /// `any GourdModule.Type` 取用时才会走到具体模块的实现上；只写在扩展里的话，元类型取用
     /// 一律静默拿到缺省值（`.compact`），大块的声明会被无声忽略。
     static var homeFormFactor: HomeFormFactor { get }
+
+    /// 首页块的**高度声明**（缺省 `.formFactor` = 沿用形态档高，docs/37-home-layout-v2.md D-01）。
+    ///
+    /// 需要按内容要高度的模块（前台应用 / 通知 / 统计 / 待办）重写它，答一个按**理想宽**
+    /// 量出的固定高。宿主把它交给流（`HomeFlowLayout.Item.height`），行高 = 该行最高块——
+    /// 于是「块显示多少内容」只由块自己的声明决定，不再受同一行里别的块（例如镜子）影响
+    /// （2026-10-10 用户反馈：前台应用「开镜子显示得多、关了显示得少」）。
+    static var homeBlockHeight: ModuleHomeBlockHeight { get }
 }
 
 /// 接管三件套的**缺省语义**（docs/20-component-page.md §接口与数据形状 1 逐字）：
@@ -127,6 +135,11 @@ public extension GourdModule {
     /// 这是新增模块的常态（进度 / 统计 / 待办 / 通知 / 前台应用都不写这一条）。
     /// 与宽度钩子同一条理由进协议要求而不是只放扩展里：元类型取用走的是具体模块的实现。
     static var homeFormFactor: HomeFormFactor { .compact }
+
+    /// 首页块的高度声明（缺省 `.formFactor` = 沿用形态档高：`.large` 140 / `.compact` 96）。
+    /// **不申报的模块行为逐字不变**；按内容要高度的四块（前台应用 / 通知 / 统计 / 待办）
+    /// 答 `.points(...)`，取值口径见各自模块与 docs/37 §接口与数据形状。
+    static var homeBlockHeight: ModuleHomeBlockHeight { .formFactor }
 }
 
 /// 06 §3.1 的内容请求（本批去掉事件相关字段——事件总线属 P1-3）。

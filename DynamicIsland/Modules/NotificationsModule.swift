@@ -798,6 +798,15 @@ final class NotificationsModule: GourdModule {
     private let context: ModuleContext
     private let store: NotificationStore
     private var pollTask: Task<Void, Never>?
+
+    /// 首页块**高度申报**（docs/37 D-03）：固定 = 表头 + 4 条两行式条目。
+    ///
+    /// 改前首页块不申报高度（紧凑档 96）、行数写死 3、每条只有一行「App 名 · 标题」，
+    /// 正文完全看不见（用户 2026-10-10 反馈「只能显示几条？而且还不能显示内容」）。
+    /// 取值算法收在 `NotificationsHomeBlockLayout`（与视图的行高预算同源）。
+    static var homeBlockHeight: ModuleHomeBlockHeight {
+        .points(NotificationsHomeBlockLayout.blockHeight)
+    }
     /// AX 横幅通道（**实时 + 可真关闭**那条路，见文件头「双通道口径」）。
     /// `bannerCancel` 是 `start()` 的取消闭包（拆 AXObserver + 轮询 timer），`bannerObserver`
     /// 只为持有它——模块停用/重新激活都走 `deactivate()` → `startBannerObservation()`。
@@ -1379,10 +1388,29 @@ private struct NotificationRow: View {
 /// 每行「App 名 · 标题」。**行数上限固定 3、不按块宽分档**（按宽度分档是本批之后的事）。
 /// 块宽由宿主 `HomeStripView` 统一声明（模块块 180 / 240），本模块**不声明、不读宽度**。
 enum NotificationsHomeBlockLayout {
-    /// 首页块最多画几条（规格：最近 3 条；超出的不显示——完整列表在展开 tab）。
-    static let maxListRows = 3
+    /// 首页块最多画几条（2026-10-10 / docs/37 D-03：3 → 4；再多就把块顶得过高，
+    /// 完整列表仍在展开 tab）。
+    static let maxListRows = 4
 
-    /// 清单要画的条目：**列表顺序的前 3 条**。
+    /// 一条通知占的高度：第一行（App 名 + 相对时间，10pt）14pt + 第二行（标题 · 正文，11pt）16pt。
+    static let entryHeight: CGFloat = 30
+    /// 条与条之间的间距。
+    static let entrySpacing: CGFloat = 5
+    /// 表头行的高度（11pt 的「通知 · 最近 N 条」）。
+    static let headerHeight: CGFloat = 16
+    /// 表头与第一条之间的间距。
+    static let listSpacing: CGFloat = 4
+
+    /// 首页块申报的**固定高**（与视图的行高预算同源：`FrontAppModule.homeBlockHeight` 引用它）。
+    ///
+    /// = 表头 16 + 间距 4 + 4 × 条目 30 + 3 × 条间距 5 = **155**。
+    static var blockHeight: CGFloat {
+        headerHeight + listSpacing
+            + CGFloat(maxListRows) * entryHeight
+            + CGFloat(maxListRows - 1) * entrySpacing
+    }
+
+    /// 清单要画的条目：**列表顺序的前 4 条**。
     ///
     /// 不在这里排序：`store.items` 本身就是「新的在前」（`NotificationCenterReader.fetchRecent`
     /// 走 `ORDER BY rec_id DESC`），再排一遍只会让首页块与展开 tab 的顺序出现两套口径。
@@ -1390,19 +1418,22 @@ enum NotificationsHomeBlockLayout {
         Array(items.prefix(maxListRows))
     }
 
-    /// 一行的文案：「App 名 · 标题」。
-    ///
-    /// - 标题先去空白并**压成单行**（复用 `NotificationText.singleLine`：通知标题里的换行会
-    ///   白白吃掉 `lineLimit(1)` 的预算，截断位置也不可控）；
-    /// - 任一边为空时**不留悬空的分隔符**（plist 缺 `titl` 时只有 App 名，反之亦然）；
-    /// - 两边都空时给空串（`Text("")` 不画内容；这种条目在 DB 通道实际上不存在——
-    ///   `displayName` 有 bundle id 兜底）。
-    static func rowLabel(appName: String, title: String) -> String {
+    /// **第一行**的文案：「App 名」。
+    static func sourceLabel(appName: String, title: String) -> String {
         let name = NotificationText.singleLine(appName)
+        return name.isEmpty ? NotificationText.singleLine(title) : name
+    }
+
+    /// **第二行**的文案：有标题时「标题 · 正文预览」，没有标题时只给正文预览（不留悬空的分隔符）。
+    ///
+    /// 正文先经 `NotificationText.singleLine` 压成单行（通知正文里的换行会白白吃掉
+    /// `lineLimit(1)` 的预算，截断位置也不可控）——与展开列表同一套压行口径。
+    static func detailLabel(title: String, body: String) -> String {
         let subject = NotificationText.singleLine(title)
-        guard !subject.isEmpty else { return name }
-        guard !name.isEmpty else { return subject }
-        return name + " · " + subject
+        let preview = NotificationText.singleLine(body)
+        guard !preview.isEmpty else { return subject }
+        guard !subject.isEmpty else { return preview }
+        return subject + " · " + preview
     }
 }
 
@@ -1446,7 +1477,7 @@ private struct NotificationsHomeBlockView: View {
     @State private var hoveredID: Int64?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
             header
 
             // 不可读 / 无权限时加一行浅色提示（取数失败与「真的 0 条」必须能区分开）；
@@ -1466,8 +1497,11 @@ private struct NotificationsHomeBlockView: View {
         // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：加在**内容上、frame 之前**（frame 之内才算块内布局——
         // 加在 frame 之后会让整框高出块 5pt 挂在块外）。改前表头贴着板顶（上屏读数 2.0pt）；
         // 5pt 是「11pt 文字的行首留白 +2.0pt」的反推值，墨迹因此落在板顶下 7pt（与统计块同档，
-        // 见 `HomeBlockChrome`）。本块行数**固定 3、不按块高分档**（见 `NotificationsHomeBlockLayout`），
-        // 内缩不动行数；三行 + 表头约 65pt，96 里本来就宽裕（改前下余量就有 29.5pt）。
+        // 见 `HomeBlockChrome`）。
+        //
+        // **2026-10-10 / docs/37 D-03 起行数与行高都是预算的一部分**：块高由
+        // `NotificationsHomeBlockLayout.blockHeight` 申报（表头 + 4 条两行式），本视图按预算画——
+        // 改前块高是紧凑档 96 且行数写死 3，正文完全没地方画（用户反馈「不能显示内容」）。
         .padding(.top, HomeBlockChrome.contentInsetTopText)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // 与展开 tab 同口径：每次出现取一次数（首页块只在展开面板里存在，面板一开就是它出现的时刻）。
@@ -1482,30 +1516,51 @@ private struct NotificationsHomeBlockView: View {
             .foregroundStyle(.white.opacity(0.95))
             .lineLimit(1)
             .truncationMode(.tail)
+            .frame(height: NotificationsHomeBlockLayout.headerHeight, alignment: .leading)
     }
 
-    /// 一行 = 「App 名 · 标题」，单行尾部截断；整行是「打开 App + 收起刘海」的点击区。
+    /// 一条通知**两行**：第一行「App 名 · 相对时间」（10pt 弱色），第二行「标题 · 正文预览」
+    /// （11pt，单行尾部截断）；整条是「打开 App + 收起刘海」的点击区。
     ///
-    /// **T8 起整行有 hover 底**（首页那条唯一的规则 `homeBlockHoverBackground`，docs/26 §做法 机制七）：
-    /// 本行原来只有 `.contentShape` + 点击——首页块里它是**可交互的**（点一下打开 App），
-    /// 悬停却没有任何反馈，与带内其它可交互格（前台应用格子）不一致。悬停态按 **id** 记
-    /// （行视图共用一个 `@State`，`Bool` 会让三行一起亮；与前台应用格子同款）。
+    /// **2026-10-10 / docs/37 D-03 改口径**：改前每条只有一行「App 名 · 标题」，正文（`item.body`）
+    /// 在数据里但看不见（用户反馈「不能显示内容」）。两行式在同样的宽度下把可读信息翻了一倍，
+    /// 完整正文仍在展开 tab 的列表里。
     ///
-    /// 底色**就是这一行的 frame**（不额外加内边距）：行高 = 一行文字高，加竖向内边距会把
-    /// 三行推出 96pt 的带高（块壳 `.clipped()` 会裁掉最后一行），因此这里只借现成的行距
-    ///（`VStack(spacing: 4)`）做呼吸。
+    /// **T8 起整条有 hover 底**（首页那条唯一的规则 `homeBlockHoverBackground`，docs/26 §做法 机制七）：
+    /// 悬停态按 **id** 记（视图共用一个 `@State`，`Bool` 会让几条一起亮；与前台应用格子同款）。
     private func row(_ item: NotificationItem) -> some View {
-        Text(NotificationsHomeBlockLayout.rowLabel(appName: item.displayName, title: item.title))
-            .font(.system(size: 11))
-            .foregroundStyle(.white.opacity(0.8))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // `.contentShape` 让整行（含文字右侧的空白）都能点到，而不是只有字形落在的地方
-            .contentShape(Rectangle())
-            .homeBlockHoverBackground(isHovered: hoveredID == item.id)
-            .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
-            .onTapGesture { onOpen(item) }
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Text(NotificationsHomeBlockLayout.sourceLabel(appName: item.displayName, title: item.title))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 4)
+
+                if let date = item.deliveredDate {
+                    Text(NotificationText.relative(date))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .monospacedDigit()
+                        .fixedSize()
+                }
+            }
+
+            Text(NotificationsHomeBlockLayout.detailLabel(title: item.title, body: item.body))
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: NotificationsHomeBlockLayout.entryHeight, alignment: .top)
+        // `.contentShape` 让整条（含文字右侧的空白）都能点到，而不是只有字形落在的地方
+        .contentShape(Rectangle())
+        .homeBlockHoverBackground(isHovered: hoveredID == item.id)
+        .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
+        .onTapGesture { onOpen(item) }
     }
 }
 

@@ -948,22 +948,45 @@ final class ShortcutsFrontAppTests: XCTestCase {
 
     // MARK: - T4 追加：块内排版预算（FrontAppGridBudget）
 
-    /// 预算：**宽决定一行几格、高决定几行**，且画出来的格子**绝不比块更大**（"挤变形 / 被裁"的判据）。
+    /// 预算：**固定 4 列、行数按 App 数、上限 4 行**（docs/37 D-02，2026-10-10 改判；
+    /// 改前是「宽决定一行几格、高决定几行」的自适应档）。
     ///
-    /// 两条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，而不是画一格
-    /// 越界）；② `strip` 的最小可用高度 152pt → 当前应用行 + **4 行**网格（= 180pt 宽下 24 格）。
-    func testFrontAppGridBudgetKeepsCellsInsideTheBlock() {
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 180), 6, "宿主最小块宽 180 → 6 格")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 240), 8, "宿主理想块宽 240 → 8 格")
+    /// 两条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，
+    /// 而不是画一格越界）；② 块宽**不再影响列数**——最小块宽 180 与理想宽 240 都是 4 列，
+    /// 这正是「开镜子 / 关镜子显示一样多」的几何前提。
+    func testFrontAppGridBudgetIsAFixedFourColumnGrid() {
+        XCTAssertEqual(FrontAppGridBudget.columns, 4, "固定列数（D-02）")
+        XCTAssertEqual(FrontAppGridBudget.maximumRows, 4, "固定行数上限（D-02）")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 180), 4, "最小块宽也是 4 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 240), 4, "理想块宽同样 4 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 400), 4, "再宽也不加列（上限恒为 columns）")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 108), 4, "刚好 4 列（4×24 + 3×4）")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 80), 3, "更窄按宽度收敛到 3 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 24), 1, "一格宽只画一格")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 0), 0, "`.zero` 提案 → 一格都不画（不越界）")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 23), 0, "放不下一格就是 0")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: .nan), 0, "非有限宽同样不画")
 
-        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 152), 4, "strip 最小可用高度 → 当前行 + 4 行")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 148), 4, "申报的块高 → 满 4 行")
         XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 58), 1, "刚好一行（28 + 6 + 24 = 58）")
         XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 57), 0, "矮一点点就一行都不画（不裁半行）")
-        XCTAssertEqual(FrontAppGridBudget.capacity(forWidth: 180, forHeight: 152), 24, "6 × 4")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 400), 4, "再高也钳在 4 行")
+        XCTAssertEqual(FrontAppGridBudget.capacity(forWidth: 180, forHeight: 148), 16, "4 × 4")
+        XCTAssertEqual(FrontAppGridBudget.maximumCells, 16, "上限格数 = 列 × 行")
 
-        // 逐档扫 0…400pt：把"上限预算"反推成实际占用的宽高，任何一档都不许超过块本身
+        // 申报的块高必须**恰好装下满行数**（少一行 = 最后一排被裁）
+        XCTAssertEqual(
+            FrontAppGridBudget.maximumBlockHeight,
+            28 + 6 + 4 * 24 + 3 * 6,
+            "块高 = 当前应用行 + 间距 + 4 行 + 3 个行间距"
+        )
+        XCTAssertEqual(
+            FrontAppGridBudget.rowCount(forHeight: FrontAppGridBudget.maximumBlockHeight),
+            4,
+            "申报高下能画满 4 行"
+        )
+
+        // 逐档扫 0…400pt：把预算反推成实际占用的宽高，任何一档都不许超过块本身
         for width in 0...400 {
             let cells = FrontAppGridBudget.cellsPerRow(forWidth: CGFloat(width))
             let used = CGFloat(cells) * FrontAppGridBudget.cellSize
@@ -979,6 +1002,13 @@ final class ShortcutsFrontAppTests: XCTestCase {
                 + CGFloat(rows - 1) * FrontAppGridBudget.rowSpacing
             XCTAssertLessThanOrEqual(used, CGFloat(height), "\(height)pt 高：\(rows) 行要占 \(used)pt")
         }
+
+        // 申报的块高（模块的钩子）与预算同源：两处必须是一个数
+        XCTAssertEqual(
+            FrontAppModule.homeBlockHeight,
+            .points(FrontAppGridBudget.maximumBlockHeight),
+            "模块申报的块高与块内预算同源"
+        )
     }
 
     // MARK: - 夹具（T2）

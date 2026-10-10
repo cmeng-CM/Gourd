@@ -154,9 +154,14 @@ final class StatsModule: GourdModule {
     // 接管三件套之二 `isTabVisible()`：本模块**不重写**它——它不声明 `expanded`，投影先按
     // `surfaces` 过滤，可见性钩子对它永远不被问到（与 mirror / music 同一口径）。这里刻意留白。
 
-    /// 接管三件套之三：首块宽度声明 = **26 §做法 机制一 给统计的定值 220 / 300**（口径 3）——
-    /// 比模块统一值（180 / 240）宽一档：三行「标签 + 值 + 细条」需要更多固定宽度。
-    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 220, ideal: 300) }
+    /// 接管三件套之三：首块宽度声明（口径 3 在 docs/37 D-04 收窄）——单行形态下三组
+    /// 「点 + 标签 + 读数」的最坏内容宽约 205，**220 / 240**（原 220 / 300 是三环口径的取值）。
+    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 220, ideal: 240) }
+
+    /// 首页块**高度申报**（docs/37 D-04）：单行形态 = 内容约 28 + 顶部让位 7 → 申报 **36**。
+    ///
+    /// 改前不申报（紧凑档 96）——三环形态下内容只占 68，用户 2026-10-10 反馈「就三项占了很大的区域」。
+    static var homeBlockHeight: ModuleHomeBlockHeight { .points(36) }
 
     /// 只记一条日志：本模块不采样、不起 Task、不持有定时器（数据源是上游 `StatsManager.shared`）。
     func activate() async throws {
@@ -184,92 +189,41 @@ final class StatsModule: GourdModule {
 
 /// 三环的**尺寸与取舍**（纯函数，无 SwiftUI 依赖；单测在 `TakeoverEnablementTests` 的统计一节）。
 ///
-/// 口径（docs/26-home-widgets-and-settings.md §做法 机制八 / D-11，用户 2026-09-30 追加指示）：
-/// 三个环并排，直径 **46pt**（块宽 < 200 时退 **40pt**），环间距 **10pt**；
-/// 进度 = 2pt 亮描边叠在 5pt 主环上，环轨 `white.opacity(0.12)`；环心百分比、环下 9pt 标签。
+/// 口径（docs/37-home-layout-v2.md §做法 机制四 / D-04，2026-10-10 改判；改前是 docs/26 的三环形态）：
+/// **单行**三个指标组并排，每组 = 指标色圆点（直径 **12pt**，含用量弧）+ 标签 + 读数；
+/// 组间距 **12pt**、组内元素间距 **5pt**；圆点中心实心、外圈按用量 `trim`。
 ///
 /// **「不裁」是一句可断言的话**（不是感觉）：宿主给统计块的最小宽是 220
-/// （`StatsModule.homeBlockWidth.min`），而 `rowWidth(forWidth: 220) = 3 × 46 + 2 × 10 = 158 ≤ 220`。
-/// 块更窄时直径退一档（40）——算得出来、钉得住，因此不必靠上屏目测。
+/// （`StatsModule.homeBlockWidth.min`），而单行的**最坏内容宽**约 205（三组 × 最长文案
+/// 「内存 · 83.4%」量级 + 组间距）≤ 220——算得出来、钉得住，因此不必靠上屏目测。
 enum StatsRingMetrics {
-    /// **环直径的唯一判据**：块宽 < `compactThreshold` 退一档。
+    /// 指标圆点直径（D-04：46pt 的三环收成 12pt 的点 + 弧）。
+    static let dotDiameter: CGFloat = 12
+    /// 圆点外圈的线宽（轨道 + 用量弧）。
+    static let dotTrackLineWidth: CGFloat = 2
+    /// 圆点中心的实心直径。
+    static let dotCoreDiameter: CGFloat = 4
+
+    /// 三组之间的间距（组 = 点 + 标签 + 读数）。取 8：三组的**最坏内容宽**
+    /// （含「100.0%」量级读数与两字 CJK 标签 + 组内两处 4pt 间距）约 `3 × 80 + 2 × 8 = 256`…
+    /// 这条算式由 `testStatsSingleRowContentFitsItsBlock` 逐项加出——**它必须 ≤ 220**
+    /// （`StatsModule.homeBlockWidth.min`），改常量时要一起看那个用例。
+    static let metricSpacing: CGFloat = 8
+    /// 组内元素间距（点 → 标签、标签 → 读数）。
+    static let metricInnerSpacing: CGFloat = 4
+
+    /// 内容与板顶之间的余量（模块侧的唯一取值处；与其余各块的顶部内缩同档，见 `HomeBlockChrome`）。
     ///
-    /// 宽取不到（首帧 0 / NaN / 无穷）时给**小档**：宁可画小一点，也不要画出被裁的三个环。
-    static func ringDiameter(forWidth width: CGFloat) -> CGFloat {
-        guard width.isFinite else { return compactRingDiameter }
-        return width < compactThreshold ? compactRingDiameter : regularRingDiameter
-    }
+    /// 改判前这一条是 8（= 46pt 三环的绘制外溢 5 + 3，用户 2026-10-06 反馈「cpu 这三个上边距太小、
+    /// 顶部被遮盖」驱动）；单行形态下圆点只有 12pt、线宽 2（外溢 1pt），取值回归
+    /// `HomeBlockChrome.contentInsetTopGraphics` 那一档（7）——与前台应用等图形起始的块一致。
+    static let homeBlockTopInset: CGFloat = 7
 
-    /// 常规档直径（26 §做法 机制八 的定值）。
-    static let regularRingDiameter: CGFloat = 46
-    /// 紧凑档直径（块宽不到 `compactThreshold` 时）。
-    static let compactRingDiameter: CGFloat = 40
-    /// 常规 / 紧凑两档的**分界**（`< 200` 退档；200 本身仍是常规档，阈值取闭区间下界）。
-    static let compactThreshold: CGFloat = 200
-
-    /// 三个环的间距（机制八 的定值：`46 × 3 + 10 × 2 = 158`）。
-    static let ringSpacing: CGFloat = 10
-
-    /// 环的**绘制外溢**：环的**墨迹比它的布局框大**——`Circle().stroke(lineWidth:)` 以**路径为中心**
-    /// 描边，主环 5pt 因此向框的每一侧各溢出 `mainLineWidth / 2`（2.5pt），亮描边的发光
-    /// （`glowRadius`）再往外 2.5pt，**合计 5pt**。
-    ///
-    /// 宿主在块框上 `.clipped()`（`HomeStripBlock`，那份裁剪是必须的：被丢块拿 `.zero` 提案时
-    /// 固定尺寸的内容仍会溢出绘制）——所以这条外溢得由模块自己让出位置，见 `homeBlockTopInset`。
-    static var drawingOverhang: CGFloat { mainLineWidth / 2 + glowRadius }
-
-    /// 首页块内容与**板上缘**之间的余量（模块侧的唯一取值处）。
-    ///
-    /// **为什么不是 0**（用户 2026-10-06 反馈「cpu 这三个上边距太小，顶部被遮盖了」）：
-    /// 宿主给块内容的**纵向**内缩恒 0（`HomeBlockChrome.contentInsetVertical`——那条判据是进度块的
-    /// 94/96 卡出来的，见 docs/32 D-20），于是环的**布局框顶 = 板顶**；而环的墨迹要比框多出
-    /// `drawingOverhang`（5pt），多出来的那截正好落在块框之外 → 被 `.clipped()` 齐平切掉。
-    /// 上屏像素实测（2026-10-06，读数见 `.workflow/p7c-home-plates/evidence/stat-top-measure.txt`）：
-    /// 三个环的亮描边都**从板顶边 y=392px 开始**（最上行宽 16–18px = 切口弦；完整时该是
-    /// 5–9px 的圆头小帽）——顶部 2.5pt 描边 + 整圈发光被裁，肉眼即「顶部被遮盖」。
-    ///
-    /// 取值 **8 = 外溢 5 + 3**：前 5pt 把墨迹整个收进框内（**不裁**），多出的 3pt 让环的**可见**
-    /// 上距（描边外缘到板缘 = 8 − 2.5 = 5.5pt）不低于 T2 那条「内容 ↔ 板缘 ≥ 5pt」的判据下界
-    /// （该判据此前只对左右成立：左右内缩 5pt，顶上是 0.5pt——见 `inset-measure.txt` 逐块表）。
-    /// 块高 96pt 而内容（环 46 + 间距 2 + 标签 ~12 + 本项 8）≈ 68pt，**余量足够**：
-    /// 这是模块自己的上边距，不是再要一次宿主级的垂直内缩。
-    static let homeBlockTopInset: CGFloat = 8
-
-    /// 主环线宽（5pt）——亮描边（2pt）压在它上面，读起来像「通电的环」。
-    static let mainLineWidth: CGFloat = 5
-    /// 亮描边线宽（2pt）：**比主环亮**，是进度的那一笔。
-    static let highlightLineWidth: CGFloat = 2
-    /// 主环的不透明度：比亮描边暗一档（同一支指标色，"环带 + 灯丝"的层次）。
-    static let mainRingOpacity: Double = 0.45
-    /// 环轨不透明度（与既有 `TodoScopeRing` 的 `white.opacity(0.15)` 同族，机制八 取 0.12）。
+    /// 轨/弧的不透明度（与既有 `TodoScopeRing` 同族）。
     static let trackOpacity: Double = 0.12
-    /// 亮描边的发光半径（2.5 ≈ 机制八 的 2–3）。
-    static let glowRadius: CGFloat = 2.5
-
-    /// 环心百分比的字号：直径退档时**跟着退**（对齐 `TodoScopeRing` 的「环心字号随直径退档」）。
-    ///
-    /// 46 → 11 而不是 12：`22.8%` 这类值在 46 的环里用 12pt 会顶到 5pt 环带的内侧（实测宽 38.5 >
-    /// 内径 36），11pt 才是「读数即焦点」又不压环带的那一档。
-    static func counterFontSize(forDiameter diameter: CGFloat) -> CGFloat {
-        diameter >= regularRingDiameter ? 11 : 10
-    }
-
-    /// 环心文字的**可用宽度**（= 环内径 − 两侧各 2pt 呼吸）。
-    ///
-    /// 视图把这条件当作 `Text` 的最大宽：`100.0%` 这种偏长的值靠 `minimumScaleFactor` 收进来，
-    /// **永远不压到 5pt 的环带上**（这条与 `counterFontSize` 一起保证环心可读）。
-    static func counterMaxWidth(forDiameter diameter: CGFloat) -> CGFloat {
-        max(0, diameter - 2 * (mainLineWidth + 2))
-    }
-
-    /// 三环横排的总宽（含间距）——**「不裁」的判据**：任何块宽下都该 `<= 块宽`
-    /// （生产档：220 → 158、180 → 140）。
-    static func rowWidth(forWidth width: CGFloat, spacing: CGFloat = ringSpacing) -> CGFloat {
-        3 * ringDiameter(forWidth: width) + 2 * max(0, spacing)
-    }
 }
 
-// MARK: - 首页块（三环并排）
+// MARK: - 首页块（单行紧凑）
 
 /// 三环的三个指标：**顺序即显示顺序（CPU → 内存 → GPU）**。
 ///
@@ -340,16 +294,20 @@ enum StatsHomeBlockLayout {
     static let rows: [Row] = Row.allCases
 }
 
-/// 首页块：**三环并排**——CPU / 内存 / GPU 各一个环（环心百分比、环下标签）。
+/// 首页块：**单行紧凑**——CPU / 内存 / GPU 各一支「指标色圆点 + 标签 + 读数」（2026-10-10 / docs/37 D-04）。
 ///
-/// 只读、无控件（这正是用户判定「没有控制按钮 → 改为首页小部件」的理由）、无空态：
-/// `StatsManager` 的三个用量在没有采样时是 `0.0`（首帧），采样一起来就是真值。
+/// **形态改判**（改前是「三环并排」，块高 96 的紧凑档 + 最小宽 220 / 理想 300）：用户反馈
+/// 「cpu 统计这些一共就三项，结果占了很大的区域」——三环的内容（环 46 + 标签 9）在 96 高的
+/// 块里只占约 68pt，观感是大片留白；改单行后块高由 `homeBlockHeight` 申报为 36，宽度也收窄
+/// （`homeBlockWidth` 220/300 → 200/240）。
 ///
-/// **形态为什么是环**（用户 2026-09-30 追加指示 / 机制八）：三行横条太占空间，环在同样信息量下
-/// 更矮、且「读数即焦点」（百分比在环心）；形态与配色对齐既有 `TodoScopeRing` 先例。
+/// 三条保留：**恒三项、顺序不变（CPU → 内存 → GPU）**、**指标色**（青 / 紫 / 琥珀）、
+/// **读数口径**（`Row.valueText`，与统计页同一个 `StatsManager`）。圆点外圈有一道
+/// **用量亮弧**（`trim`，指标色、直径 14）——把「进度」这一层信息从 46pt 的环里收进 14pt；
+/// 百分比读数从环心移到数字位（等宽、右对齐）。
 ///
-/// **顶部让出 `homeBlockTopInset`**（2026-10-06）：环的墨迹比布局框大（描边以路径为中心 +
-/// 发光），而块内容贴板顶、宿主在块框上裁剪——不让位就被切平（该常量处有几何与上屏实测）。
+/// **顶部让出 `homeBlockTopInset`**：与其余各块同一档（`HomeBlockChrome.contentInsetTopText` 的
+/// 图形/文字三档之外的独立常量，见该常量处）。
 ///
 /// **采样驱动**（口径 6）：块的 `.task` 里跑一个只做一件事的看门狗——`isMonitoring` 为假就
 /// `startMonitoring()`（上游 `ContentView` 在「面板打开且不在统计 tab」时会 0.1s 后停掉采样，
@@ -362,27 +320,18 @@ private struct StatsHomeBlockView: View {
     @ObservedObject private var stats = StatsManager.shared
 
     var body: some View {
-        // 宽度用 `GeometryReader` 读**放置后**的尺寸（不是测量）：直径据此退档（`StatsRingMetrics`），
-        // 三个环的总宽因此永远 ≤ 块宽——「不裁」由纯函数保证，视图不再自己算。
-        GeometryReader { proxy in
-            let diameter = StatsRingMetrics.ringDiameter(forWidth: proxy.size.width)
-
-            HStack(alignment: .top, spacing: StatsRingMetrics.ringSpacing) {
-                ForEach(StatsHomeBlockLayout.rows) { row in
-                    StatsRingView(
-                        row: row,
-                        valueText: row.valueText(in: stats),
-                        progress: row.progressValue(in: stats),
-                        diameter: diameter
-                    )
-                }
+        HStack(spacing: StatsRingMetrics.metricSpacing) {
+            ForEach(StatsHomeBlockLayout.rows) { row in
+                StatsMetricRow(
+                    row: row,
+                    valueText: row.valueText(in: stats),
+                    progress: row.progressValue(in: stats)
+                )
             }
-            // **顶部让位**（`homeBlockTopInset`）：环的墨迹比布局框大 `drawingOverhang`，
-            // 而块内容贴板顶（宿主纵向内缩恒 0）——不让这 8pt 的话，环顶的描边与发光会被
-            // 块框的 `.clipped()` 切平（2026-10-06 用户反馈的那条）。
-            .padding(.top, StatsRingMetrics.homeBlockTopInset)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // **顶部让位**（`homeBlockTopInset`）：与改前同一条口径（内容与板顶之间的余量）。
+        .padding(.top, StatsRingMetrics.homeBlockTopInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await driveSampling() }
         .onDisappear { StatsManager.shared.stopMonitoring() }
     }
@@ -403,66 +352,52 @@ private struct StatsHomeBlockView: View {
     }
 }
 
-/// 一个指标环：**环轨 + 主环（5pt）+ 亮描边（2pt + 淡发光）+ 环心百分比 + 环下 9pt 标签**。
+/// 一个指标（单行紧凑形态）：**指标色圆点（含用量亮弧）+ 标签 + 读数**。
 ///
-/// 「科技风」只做三件事（机制八，克制、可维护、不引第三方）：
-/// ① 按指标分色（`Row.ringColor`，取自面板既有的系统色家族）；
-/// ② 细描边 + 淡发光（2pt 的亮描边压在 5pt 的主环上，外加深色 `shadow`）；
-/// ③ 等宽数字（`monospacedDigit()`，刷新时不跳动）。
-///
-/// 直径与字号都由 `StatsRingMetrics` 给（纯函数，有用例）；环心文字的可用宽度也由它给
-/// （`counterMaxWidth`）——超长的值（如 `100.0%`）在这条宽度里缩放，**不压环带、不撑破环**。
-private struct StatsRingView: View {
+/// 视觉机制逐字沿用三环时代的「科技风」（按指标分色 + 等宽数字，`Row.ringColor` / `monospacedDigit()`），
+/// 只是把 46pt 的环收成 14pt 的「点 + 弧」、把环心百分比移到数字位（等宽、右对齐）——
+/// 三项合计的宽从 `3 × 46 + 2 × 10 = 158` 收到约 210 的**内容宽**，高从 68 收到 22（docs/37 D-04）。
+private struct StatsMetricRow: View {
     let row: StatsHomeBlockLayout.Row
     let valueText: String
     let progress: Double
-    let diameter: CGFloat
 
     var body: some View {
-        VStack(spacing: 2) {
+        HStack(spacing: StatsRingMetrics.metricInnerSpacing) {
             ZStack {
-                // ① 环轨（与既有 `TodoScopeRing` 同一族的白，机制八 取 0.12）。
+                // ① 外圈：暗轨道（与三环时代同一族的白）。
                 Circle()
-                    .stroke(.white.opacity(StatsRingMetrics.trackOpacity), lineWidth: StatsRingMetrics.mainLineWidth)
+                    .stroke(.white.opacity(StatsRingMetrics.trackOpacity), lineWidth: StatsRingMetrics.dotTrackLineWidth)
 
-                // ② 主环（进度那一笔的底色，同一支指标色但暗一档）。
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(
-                        row.ringColor.opacity(StatsRingMetrics.mainRingOpacity),
-                        style: StrokeStyle(lineWidth: StatsRingMetrics.mainLineWidth, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-
-                // ③ 亮描边 + 淡发光：叠在主环上的细一笔，「通电的环」。
+                // ② 用量弧：从 12 点方向按比例画，指标色的细一笔（14pt 直径下仍可读）。
                 Circle()
                     .trim(from: 0, to: progress)
                     .stroke(
                         row.ringColor,
-                        style: StrokeStyle(lineWidth: StatsRingMetrics.highlightLineWidth, lineCap: .round)
+                        style: StrokeStyle(lineWidth: StatsRingMetrics.dotTrackLineWidth, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
-                    .shadow(color: row.ringColor.opacity(0.8), radius: StatsRingMetrics.glowRadius)
 
-                // 环心：百分比（先拼 String 再给 Text，走 verbatim 重载，不做本地化查表）。
-                Text(verbatim: valueText)
-                    .font(.system(
-                        size: StatsRingMetrics.counterFontSize(forDiameter: diameter),
-                        weight: .semibold,
-                        design: .rounded
-                    ))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(maxWidth: StatsRingMetrics.counterMaxWidth(forDiameter: diameter))
+                // ③ 中心实心点：指标色，把「这是哪个指标」钉在颜色上（标签之外的第二重编码）。
+                Circle()
+                    .fill(row.ringColor)
+                    .frame(width: StatsRingMetrics.dotCoreDiameter, height: StatsRingMetrics.dotCoreDiameter)
             }
-            .frame(width: diameter, height: diameter)
+            .frame(width: StatsRingMetrics.dotDiameter, height: StatsRingMetrics.dotDiameter)
 
             Text(LocalizedStringKey(row.labelKey))
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
+                .fixedSize()
+
+            // 读数：先拼 String 再给 `Text`（走 verbatim 重载，不做本地化查表）；等宽数字刷新不跳。
+            Text(verbatim: valueText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 }

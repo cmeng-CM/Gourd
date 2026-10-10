@@ -68542,13 +68542,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The full-width calendar row at the bottom of the home screen (month grid on the left, today list on the right). The same switch also controls the Calendar page in the expanded panel."
+            "value" : "The full-width calendar row at the bottom of the home screen (month grid on the left, today list on the right). Independent from the Calendar page in the expanded panel (that one has its own switch in the components section)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首页下方的全宽日历行（左整月网格 + 右当日清单）；展开面板的「日历」页同受这一个开关控制（同一个开关管两处）"
+            "value" : "首页下方的全宽日历行（左整月网格 + 右当日清单）；与展开面板的「日历」页互相独立（那一处有自己的开关，见组件页）"
           }
         }
       }
@@ -82365,6 +82365,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "今日无待办"
+          }
+        }
+      }
+    },
+    "module.todos.homeEventCount" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d events"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 项日程"
+          }
+        }
+      }
+    },
+    "module.todos.homeAllDay" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All-day"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全天"
           }
         }
       }

@@ -387,6 +387,13 @@ public final class ModuleRegistry: ObservableObject {
         moduleTypes[id]?.homeFormFactor ?? .compact
     }
 
+    /// 该模块声明的**首页块高度**（docs/37-home-layout-v2.md D-01）：`.formFactor` = 沿用形态
+    /// 档高（由宿主换算）、`.points(n)` = 块按内容自报的固定高。**未注册的 id 一律答 `.formFactor`**
+    /// （与 `homeFormFactor(for:)` 的缺省口径对齐）。同样是每次读现问一次（不缓存）。
+    public func homeBlockHeight(for id: String) -> ModuleHomeBlockHeight {
+        moduleTypes[id]?.homeBlockHeight ?? .formFactor
+    }
+
     // MARK: - UI 投影
 
     /// 展开面板的 tab 列表：仅 `active` 且 `surfaces` 含 `.expanded`、且**没有被用户在这个面上摘掉**

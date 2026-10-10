@@ -47,6 +47,26 @@ public enum HomeFormFactor: String, Sendable, CaseIterable {
     case compact
 }
 
+/// 首页块的**高度声明**（docs/37-home-layout-v2.md §做法 机制一 / D-01）。
+///
+/// 自 p12 起块高由**块自己申报**（原先只有宿主写死的两档：紧凑 96 / 大块 140）——
+/// 「能看到多少内容」不该由「这一行里有没有镜子」决定（用户 2026-10-10 第 1 条反馈的原话
+/// 就是「前台应用开镜子显示得多、关了显示得少，要显示全」）。
+///
+/// - `.formFactor`（缺省）：沿用旧口径——按 `homeFormFactor` 取宿主档高（`.large` 140 /
+///   `.compact` 96）。**不申报高度的模块行为逐字不变**；
+/// - `.points(n)`：块按内容算出的固定高（在**理想宽**下量出的自然高，口径见 docs/37 §接口）；
+/// - 只留这两个取值（没有「随可用高伸缩」这一档）：高度要可预期，块内自己按拿到的高截断。
+///
+/// 谁用：`GourdModule.homeBlockHeight` 钩子（缺省 `.formFactor`）声明它；
+/// `ModuleRegistry.homeBlockHeight(for:)` 原样取给宿主，宿主把它交给 `HomeFlowLayout.Item.height`。
+public enum ModuleHomeBlockHeight: Sendable, Equatable {
+    /// 沿用形态档高（宿主 `HomeFlowView.blockHeight(for:)`：`.large` 140 / `.compact` 96）。
+    case formFactor
+    /// 块自己按内容申报的固定高（pt）；非有限或 ≤ 0 的取值由宿主按 `.formFactor` 兜底。
+    case points(CGFloat)
+}
+
 /// 首页块宽度的**内核侧**取值形态（`min` = 低于它不如不显示，`ideal` = 富余时用它）。
 ///
 /// 谁用：接管模块的 `GourdModule.homeBlockWidth` 钩子（docs/20-component-page.md §接口与数据形状 1）

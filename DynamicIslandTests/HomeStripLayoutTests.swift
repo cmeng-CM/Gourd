@@ -1990,6 +1990,90 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
+    /// **块高由块申报**（docs/37 D-01 / 机制一）：`.points(n)` 的块按自己申报的高走，
+    /// 与同行的其它块互不影响——这条正是用户第 1 条反馈（「开镜子显示得多、关了显示得少」）
+    /// 的几何判据：**镜子在不在同一行，前台应用块拿到的高都一样**。
+    func testDeclaredBlockHeightIsIndependentOfNeighbours() {
+        let frontApp = HomeFlowLayout.Item(min: 180, ideal: 240, height: 148)   // 申报高
+        let mirror = HomeFlowLayout.Item(min: 140, ideal: 140, height: 140)    // 大块档高
+        let stats = HomeFlowLayout.Item(min: 220, ideal: 240, height: 36)      // 申报高（很矮）
+
+        // ① 镜子在场：这一行高 = max(148, 140) = 148（前台应用说了算）
+        let withMirror = HomeFlowLayout.plan(
+            items: [mirror, frontApp], availableWidth: 964, availableHeight: 1000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(withMirror.rows[0].height, 148, "镜子在场：行高 = 前台应用的申报高")
+
+        // ② 镜子不在：只剩前台应用，行高仍是 148（**块自己说了算**）
+        let withoutMirror = HomeFlowLayout.plan(
+            items: [frontApp], availableWidth: 964, availableHeight: 1000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(withoutMirror.rows[0].height, 148, "镜子不在：行高不变——显示多少与邻居无关")
+
+        // ③ 矮块不会把同行的高块压扁：统计 36 与前台应用 148 同行 → 行高 148
+        let mixed = HomeFlowLayout.plan(
+            items: [frontApp, stats], availableWidth: 964, availableHeight: 1000,
+            calendarHeight: 0, metrics: flowMetrics
+        )
+        XCTAssertEqual(mixed.rows[0].height, 148, "行高取最大，矮块不拉低同行")
+
+        // ④ 宿主侧的换算：`.points` 生效、`.formFactor` 回落档高、坏值也回落
+        XCTAssertEqual(HomeFlowView.declaredHeight(.points(148), formFactor: .compact), 148)
+        XCTAssertEqual(
+            HomeFlowView.declaredHeight(.formFactor, formFactor: .large),
+            HomeFlowView.largeBlockHeight,
+            ".formFactor 走旧口径（行为不变的承诺）"
+        )
+        XCTAssertEqual(
+            HomeFlowView.declaredHeight(.points(.nan), formFactor: .compact),
+            HomeFlowView.compactBlockHeight,
+            "非有限申报值回落档高（坏输入不画零高块）"
+        )
+        XCTAssertEqual(
+            HomeFlowView.declaredHeight(.points(0), formFactor: .compact),
+            HomeFlowView.compactBlockHeight,
+            "≤ 0 的申报值同样回落"
+        )
+    }
+
+    /// 四块的**申报高与各自预算的反解一致**（docs/37 D-02…D-05）：申报高下必须能画满目标行数，
+    /// 少一行 = 最后一排被裁、多一行 = 白申报。
+    func testFourBlocksDeclareHeightsThatFitTheirBudgets() {
+        XCTAssertEqual(
+            FrontAppModule.homeBlockHeight,
+            .points(FrontAppGridBudget.maximumBlockHeight),
+            "前台应用：申报高 = 块内预算上限高（148）"
+        )
+        XCTAssertEqual(
+            FrontAppGridBudget.rowCount(forHeight: FrontAppGridBudget.maximumBlockHeight),
+            FrontAppGridBudget.maximumRows,
+            "申报高下画满 4 行"
+        )
+
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.blockHeight,
+            16 + 4 + 4 * 30 + 3 * 5,
+            "通知：表头 16 + 间距 4 + 4 × 30 + 3 × 5 = 155"
+        )
+        XCTAssertEqual(
+            NotificationsModule.homeBlockHeight,
+            .points(NotificationsHomeBlockLayout.blockHeight),
+            "通知模块的申报与预算同源"
+        )
+
+        XCTAssertEqual(
+            TodosHomeBlockLayout.scheduleRowCount(
+                fittingHeight: TodosHomeBlockLayout.blockHeight - HomeBlockChrome.contentInsetTopListHeader
+            ),
+            TodosHomeBlockLayout.maximumScheduleRows,
+            "待办：申报高（扣掉顶部内缩）下画满 6 条"
+        )
+        XCTAssertEqual(TodosHomeBlockLayout.scheduleRowCount(fittingHeight: 0), 0, "取不到高度 → 0 行（先只画表头）")
+        XCTAssertEqual(TodosHomeBlockLayout.scheduleRowCount(fittingHeight: .nan), 0, "非有限高度 → 0 行（不拿 NaN 解行数）")
+    }
+
     /// **按最小宽贪心换行**：装不下就换行，**不丢块**（行数够时）。
     func testFlowWrapsInsteadOfDropping() {
         let items = (0..<5).map { _ in flowItem(180, 240, 96) }

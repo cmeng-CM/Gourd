@@ -80,6 +80,7 @@
 //
 
 import AppKit
+import Defaults
 import EventKit
 import SwiftUI
 
@@ -699,6 +700,14 @@ final class TodosModule: GourdModule {
     private let context: ModuleContext
     private let store: TodoStore
 
+    /// 首页块**高度申报**（docs/37 D-05）：固定 = 顶部内缩 + 表头 + 6 行（按日程行高 30）。
+    ///
+    /// 改前不申报（紧凑档 96）——96 里只放得下表头 + 4 行待办，日程根本没有位置
+    /// （用户 2026-10-10 反馈「应该显示今日日程，而不是光待办」「显示的区域过小」）。
+    static var homeBlockHeight: ModuleHomeBlockHeight {
+        .points(TodosHomeBlockLayout.blockHeight)
+    }
+
     init(context: ModuleContext) {
         self.context = context
         self.store = TodoStore(logger: context.logger)
@@ -1102,6 +1111,46 @@ enum TodosHomeBlockLayout {
     /// 清单的行数上限：块再高也不超过它（D-02 的钳位）。
     static let maximumRows = 8
 
+    // MARK: - 首页块尺寸（2026-10-10 / docs/37 D-05：今日日程与待办同一清单）
+
+    /// **今日日程行**的高度（图标/色条 + 标题 + 时间，两行式）。
+    static let eventRowHeight: CGFloat = 30
+    /// **今日待办行**的高度（在混合清单里与日程行**等高**：行高不齐会让清单读起来散。
+    /// 状态圈 + 标题在 30 里居中——比旧 `rowHeight`(16) 松，因此不再复用 `rowCount` 的算术）。
+    static let todoRowHeightInSchedule: CGFloat = 30
+    /// 清单里**混合**（日程在前、待办在后）时的行数上限——块高按它申报。
+    ///
+    /// 6 = 「今天要看的日程 + 待办」在 210pt 的块里能放下的条数（`blockHeight` 的算式）；
+    /// 再多就与首页「一眼看完」的定位冲突，
+    /// 完整清单看展开 tab 与日历行。
+    static let maximumScheduleRows = 6
+
+    /// 首页块申报的**固定高**（`TodosModule.homeBlockHeight` 引用它）。
+    ///
+    /// = 表头 16 + 间距 4 + 6 × 30 + **顶部内缩 7** = **207**（向上取证 **210**：留 3pt 给越界的
+    /// 行距与字体行高，也让「申报高 → 行数」的反解有余量）。
+    /// 视图侧的 `scheduleRowCount(fittingHeight:)` 吃的是**扣掉内缩之后**的高（与
+    /// `ProgressHomeBlockLayout` 同一条口径：按真正拿到的高算行数），两条算式因此对齐——
+    /// 申报高下必然画满 6 行。
+    static var blockHeight: CGFloat {
+        HomeBlockChrome.contentInsetTopListHeader
+            + headerHeight + listSpacing
+            + CGFloat(maximumScheduleRows) * eventRowHeight
+            + 3
+    }
+
+    /// **混合清单**的行数（块高 → 行数）：`floor((高 − 表头 − 间距) / 行高)`，钳 `0…maximumScheduleRows`。
+    ///
+    /// 与 `blockHeight` 是同一个算式的两个方向：`scheduleRowCount(fittingHeight: blockHeight) == 6`。
+    /// 高度取不到（首帧 0 / NaN / ±∞）→ 0（先只画表头，下一帧就有真值）。
+    static func scheduleRowCount(fittingHeight height: CGFloat) -> Int {
+        guard height.isFinite else { return 0 }
+        let usable = height - headerHeight - listSpacing
+        guard usable > 0 else { return 0 }
+        let fit = Int((usable / eventRowHeight).rounded(.down))
+        return min(max(fit, 0), maximumScheduleRows)
+    }
+
     /// 块高 → 清单行数：`floor((height − headerHeight − listSpacing) / rowHeight)`，钳 `0...maximumRows`。
     ///
     /// 高度取不到（首帧 `GeometryReader` 给 0 / NaN / ±∞）→ 0：那时布局还没算出来，先只画表头；
@@ -1160,57 +1209,149 @@ enum TodosHomeBlockLayout {
         let rows = listedItems(todayItems, count: rowCount)
         return rows.isEmpty ? .empty : .rows(rows)
     }
+
+    // MARK: - 混合清单（今日日程 + 今日待办，docs/37 D-05）
+
+    /// 混合清单里的一条：**日程在前、待办在后**（同一条清单，两种行形态）。
+    enum ScheduleEntry: Equatable, Identifiable {
+        case event(EventModel)
+        case todo(TodoBucketing.Item)
+
+        var id: String {
+            switch self {
+            case .event(let event): return "event:" + event.id
+            case .todo(let item): return "todo:" + item.id
+            }
+        }
+    }
+
+    /// 混合清单要画的条目（纯函数）：**日程按时间排在前面**（全天在最前，与日历卡片的 `ordered`
+    /// 同一条口径——`partitionEvents` 的等价简化：全天在前、各自按 `start` 升序），待办按
+    /// `TodoBucketing` 的既有次序接在后面；总数截到 `rowCount`。
+    ///
+    /// **未授权（`hasFullAccess == false`）时待办侧不给条目**——那读的是「读不到」而不是「今天没事」，
+    /// 与 `todayContent` 的第一条判据同源；**日程侧不看这个开关**（日历事件走 EventKit 自己那条授权，
+    /// 与提醒事项是两回事）。
+    static func listedEntries(
+        events: [EventModel],
+        todos: [TodoBucketing.Item],
+        hasFullAccess: Bool,
+        rowCount: Int
+    ) -> [ScheduleEntry] {
+        guard rowCount > 0 else { return [] }
+        let eventEntries = events
+            .sorted { lhs, rhs in
+                if lhs.isAllDay != rhs.isAllDay { return lhs.isAllDay }
+                return lhs.start < rhs.start
+            }
+            .map(ScheduleEntry.event)
+        let todoEntries = hasFullAccess ? todos.map(ScheduleEntry.todo) : []
+        return Array((eventEntries + todoEntries).prefix(rowCount))
+    }
+
+    /// 空态（「今天没有安排」）该不该画：**有完整授权 + 有一行的位置 + 日程与待办都确实为空**。
+    ///
+    /// 与旧 `todayContent` 的 `.empty` 判据同源，只多了一条「日程也为空」——日程有内容时清单非空、
+    /// 这条本来就不会被问到。
+    static func emptyStateShows(
+        hasFullAccess: Bool,
+        rowCount: Int,
+        eventCount: Int,
+        todoCount: Int
+    ) -> Bool {
+        hasFullAccess && rowCount > 0 && eventCount == 0 && todoCount == 0
+    }
 }
 
-/// 首页块：**表头一行 + 今日清单**（[29](../../docs/29-home-blocks-and-panel.md) D-01 / D-02）。
+/// 首页块：**一行表头 + 今日清单**（[29](../../docs/29-home-blocks-and-panel.md) D-01 / D-02）。
 ///
-/// 与展开 tab **同源**：聚合是同一个 `TodoBucketing.classify`（**不另写一套统计**），今日条目
-/// 与展开 tab 的「今天」徽标因此天然一致；三环（`TodoScopeRing` 一族）本批起不进首页块。
+/// **2026-10-10 / docs/37 D-05 改判：今日清单里先是「今日日程」（日历事件），再是「今日待办」**
+/// ——用户原话「应该显示今日日程，而不是光待办……显示的方式不一样就可以，参考日历」。
+/// 两段**同一个清单**（不是两个折叠区），行形态各按自己的词汇：日程行 = 日历那条**色条 + 标题 +
+/// 时间**（沿用 `CalendarEventCard` 的视觉词汇），待办行 = 状态圈 + 标题 + 已过期（原样）。
+/// 块的**高度也随之上调**（`homeBlockHeight` 申报 `blockHeight` = 表头 + 6 行日程档高）。
+///
+/// 与展开 tab **同源**：待办聚合是同一个 `TodoBucketing.classify`（**不另写一套统计**）、
+/// 日程取 `CalendarManager.events`（当天窗口，与首页日历行右栏同一份数据、同一套过滤）。
 ///
 /// **只读**（控制器裁决 2）：勾选 / 新增 / 删除都留在展开 tab，这里不挂任何手势——首页块是
-/// 「一眼看进度」，不是第二个操作台。
+/// 「一眼看今天」，不是第二个操作台。
 ///
 /// 尺寸用 `GeometryReader` 读**放置后**的尺寸（不是测量）：**高度**决定画几行
 /// （`rowCount(fittingHeight:)`），**宽度**只决定行形态（`listTier(forWidth:)`）。
 ///
-/// **表头之下画什么由 `TodosHomeBlockLayout.todayContent(todayItems:hasFullAccess:rowCount:)` 定**
-/// （审查 2 / 3 的修复轮）：未授权时 `store.items` 为空是「读不到」而不是「今天没事」，那里一律
-/// **只留表头**、不画空态文案（首页块也不引导授权——授权入口在展开 tab，这里没有交互面）；
-/// 块矮到连一行都放不下时同样只留表头。今日确实 0 条且有位置时才画 `module.todos.home.empty`。
+/// **表头之下画什么由 `TodosHomeBlockLayout` 的两条判据合起来定**：待办侧沿用 `todayContent`
+/// （未授权 / 一行都放不下 / 今日确实 0 条三档）；**日程侧独立**——日历没授权时它本来就取不到
+/// 条目（`CalendarManager.events` 为空），不需要第二条判据。
 ///
 /// 重绘走本模块既有做法——观察 `store` 的 `@Published`（折叠态那 60s 的 `TimelineView` 是给**常驻**视图
-/// 跨零点用的；首页块只在展开面板里存在，每次出现 `.task` 重取一次数即可，不去新建定时器）。
+/// 跨零点用的；首页块只在展开面板里存在，每次出现 `.task` 重取一次数即可，不去新建定时器）；
+/// 日程那一份观察 `CalendarManager`（面板打开时它本来就在被日历行驱动刷新）。
 private struct TodosHomeBlockView: View {
     @ObservedObject var store: TodoStore
+    /// **观测源**：日程数据（`events` 是当天窗口，由日历行的选中日驱动；首页块只读不写）。
+    @ObservedObject private var calendarManager = CalendarManager.shared
 
     /// 分类在每次重算时按**当下**做（与展开 tab 同口径）。
     private var summary: TodoBucketing.Summary { TodoBucketing.classify(store.items) }
 
+    /// 今日日程：`CalendarManager.events`（**当天窗口**，与首页日历行右栏同一份数据）经
+    /// **与日历页同一套过滤**（隐藏全天 / 已完成提醒）后**只留真正落在今天的那些**。
+    ///
+    /// 为什么要再过一道「落在今天」：`events` 的窗口跟**月历的选中日**走（用户在首页日历行点了
+    /// 别的日期，它就不是今天了），而本块的口径是「今天」——不跟随选中日（用户 2026-10-10 的
+    /// 原话是「应该显示今日日程」，日程的含义就是今天）。
+    private var todayEvents: [EventModel] {
+        let filtered = CalendarEventFilters.filtered(
+            events: calendarManager.events,
+            hideCompletedReminders: hideCompletedReminders,
+            hideAllDayEvents: hideAllDayEvents
+        )
+        let today = Date()
+        let startOfToday = Calendar.autoupdatingCurrent.startOfDay(for: today)
+        guard let startOfTomorrow = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: startOfToday) else {
+            return []
+        }
+        // 判定与日历页同一条口径：**日程看起点落在今天**（跨天日程由它自己的起点那天承接）。
+        return filtered.filter { $0.start >= startOfToday && $0.start < startOfTomorrow }
+    }
+
+    /// 今日待办（`TodoBucketing` 的「今天」类别，与展开 tab 同一份聚合）。
+    private var todayTodos: [TodoBucketing.Item] { summary.today.items }
+
+    @Default(.hideCompletedReminders) private var hideCompletedReminders
+    @Default(.hideAllDayEvents) private var hideAllDayEvents
+
     var body: some View {
         GeometryReader { proxy in
-            // 行数与行形态都在**同一层**算：高度决定画几行，宽度只决定行的形态（D-02）。
+            // 行数与行形态都在**同一层**算：高度决定画几行，宽度只决定待办行的形态。
             let tier = TodosHomeBlockLayout.listTier(forWidth: proxy.size.width)
-            // **扣掉内容顶部内缩再算行数**（D-23）：内缩把可用高减少了 `contentInsetTopListHeader`，
-            // 按剩下的高度算，最后一行不会被块壳 `.clipped()` 裁成半个字。
-            let content = TodosHomeBlockLayout.todayContent(
-                todayItems: summary.today.items,
+            let rowCount = TodosHomeBlockLayout.scheduleRowCount(
+                fittingHeight: proxy.size.height - HomeBlockChrome.contentInsetTopListHeader
+            )
+            let entries = TodosHomeBlockLayout.listedEntries(
+                events: todayEvents,
+                todos: todayTodos,
                 hasFullAccess: store.hasFullAccess,
-                rowCount: TodosHomeBlockLayout.rowCount(
-                    fittingHeight: proxy.size.height - HomeBlockChrome.contentInsetTopListHeader
-                )
+                rowCount: rowCount
             )
 
             VStack(alignment: .leading, spacing: TodosHomeBlockLayout.listSpacing) {
-                TodoHomeHeader(result: summary.today)
+                TodoHomeHeader(result: summary.today, eventCount: todayEvents.count)
 
-                switch content {
-                case .rows(let items):
-                    TodoHomeTodayList(items: items, tier: tier)
-                case .empty:
-                    TodoHomeEmptyRow()
-                case .nothing:
-                    // 未授权（读到的是「读不到」）或块高放不下：只留表头，什么都不加。
-                    EmptyView()
+                if entries.isEmpty {
+                    // 今日确实什么都没有（且块高放得下这一行）→ 空态文案；未授权时 `entries`
+                    // 恒空但**不该说话**（读不到 ≠ 没有），判据在 `emptyStateShows`。
+                    if TodosHomeBlockLayout.emptyStateShows(
+                        hasFullAccess: store.hasFullAccess,
+                        rowCount: rowCount,
+                        eventCount: todayEvents.count,
+                        todoCount: todayTodos.count
+                    ) {
+                        TodoHomeEmptyRow()
+                    }
+                } else {
+                    TodoHomeTodayList(entries: entries, tier: tier)
                 }
             }
             // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：改前表头贴着板顶（上屏读数 3.5pt 的行首留白
@@ -1222,13 +1363,18 @@ private struct TodosHomeBlockView: View {
     }
 }
 
-/// 首页块的表头一行：类别名（`今天`）+ `已办/总量` + **细进度条**（吃掉剩余宽度）。
+/// 首页块的表头一行：类别名（`今天`）+ `已办/总量` + （有日程时）`N 项日程` + 细进度条。
 ///
 /// 计数与细条都取 `BucketResult` 的派生值（`counterText` / `progress`），与展开 tab 的今日数、
 /// 旧三环的环心**同一份聚合**——「表头计数与展开面板今日数不一致」因此不是两个数各算一遍的问题，
 /// 而是同一个数。字号比清单行略小（10）、加粗，让它在视觉上是一行**表头**而不是清单的一条。
+///
+/// **2026-10-10 / docs/37 D-05**：清单里加了「今日日程」之后，表头也要交代日程有几条
+///（`N 项日程`，只有日程非空时才出现——没有日程时不画一个恒为 0 的计数）。
 private struct TodoHomeHeader: View {
     let result: TodoBucketing.BucketResult
+    /// 今日日程条数（0 = 不画那一段）。
+    let eventCount: Int
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1244,6 +1390,14 @@ private struct TodoHomeHeader: View {
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .fixedSize()
+
+            if eventCount > 0 {
+                Text(String(format: TodoText.localized("module.todos.homeEventCount"), eventCount))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
 
             ProgressView(value: result.progress)
                 .progressViewStyle(.linear)
@@ -1274,35 +1428,73 @@ private struct TodoHomeEmptyRow: View {
 
 /// 首页块的今日清单：**只读**的简化行（勾选圈只是状态字形，不是按钮）。
 ///
-/// 画的是 `TodoBucketing` 的「今日」类别——含过期未完成 / 今天完成的，与展开 tab 的「今天」视图
-/// **同一份成员**；画几条由调用方按块高算好（`TodosHomeBlockLayout.listedItems(_:count:)`），
-/// 空清单这里什么都不画（空态是 `TodoHomeEmptyRow` 的事，见 `TodosHomeBlockView`）。
+/// **两种行形态同列**（docs/37 D-05）：日程行 = 色条 + 标题 + 时间（视觉词汇与 `CalendarEventCard`
+/// 同族）；待办行 = 状态圈 + 标题 + 已过期红字（原样）。顺序由 `listedEntries` 定（日程在前），
+/// 本视图只按条目类型选行视图。
 ///
-/// 行形态按档（`TodosHomeBlockLayout.Tier`）：完整行 = 状态圈 + 标题 + 已过期红字；
-/// 紧凑行 = **只标题单行尾部截断**（窄块里先牺牲固定宽度的状态圈与红字）。
-/// 行与行之间**不留间距**（间距已含在 `rowHeight` 里，见 `TodosHomeBlockLayout.rowCount`）。
+/// 画几条由调用方按块高算好，空清单这里什么都不画（空态是 `TodoHomeEmptyRow` 的事）。
+///
+/// 行形态按档（`TodosHomeBlockLayout.Tier`，只作用于**待办行**；日程行任何宽度下都是完整形态
+/// ——它的固定元素（色条 3 + 时间列）比待办的状态圈更窄，窄块里也放得下）。
 private struct TodoHomeTodayList: View {
-    let items: [TodoBucketing.Item]
-    /// 当前行形态。
+    let entries: [TodosHomeBlockLayout.ScheduleEntry]
+    /// 当前行形态（待办行用）。
     let tier: TodosHomeBlockLayout.Tier
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(items) { item in
-                row(for: item)
+            ForEach(entries) { entry in
+                switch entry {
+                case .event(let event):
+                    TodoHomeEventRow(event: event)
+                case .todo(let item):
+                    switch tier {
+                    case .full:
+                        TodoHomeRow(item: item)
+                    case .compact:
+                        TodoHomeCompactRow(item: item)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    @ViewBuilder
-    private func row(for item: TodoBucketing.Item) -> some View {
-        switch tier {
-        case .full:
-            TodoHomeRow(item: item)
-        case .compact:
-            TodoHomeCompactRow(item: item)
+/// 首页块的**日程行**（docs/37 D-05）：左侧日历色条（4×22）+ 标题 + 右侧时间列。
+///
+/// 视觉词汇与两处日历的 `CalendarEventCard` 同族（色条取 `event.calendar.color`、时间列在右、
+/// 标题 `.semibold`），但按首页块的密度收小：卡片是 50pt 起的两行大卡，行是 30pt 的一行。
+/// 全天条目的时间列显示 `All-day`（`module.todos.homeAllDay`，与日历卡片同一口语文案）。
+///
+/// 行高钉在 `TodosHomeBlockLayout.eventRowHeight`（行数是按预算算的，行高必须是真的）。
+private struct TodoHomeEventRow: View {
+    let event: EventModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // 日历色条（与卡片同形的 4pt 宽圆角条，高度按行内容收短）。
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color(event.calendar.color))
+                .frame(width: 4, height: 24)
+
+            Text(event.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 6)
+
+            Text(TodoText.eventTimeLabel(for: event))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.6))
+                .lineLimit(1)
+                .fixedSize()
         }
+        .frame(height: TodosHomeBlockLayout.eventRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1310,7 +1502,8 @@ private struct TodoHomeTodayList: View {
 ///
 /// 是展开 tab `TodoRow` 的简化形态：去掉勾选按钮（只读）、去掉所属列表名与到期时刻
 /// （今日条目都到期在今天，逐行重复同一个日期只是噪音），保留「已完成置灰 + 删除线」与「已过期」。
-/// 行高钉死在 `TodosHomeBlockLayout.rowHeight`（行数就是按它算的）。
+/// 行高钉死在 `TodosHomeBlockLayout.todoRowHeightInSchedule`（混合清单里行高必须是真的，
+/// 见那边的算式）。
 private struct TodoHomeRow: View {
     let item: TodoBucketing.Item
 
@@ -1336,7 +1529,7 @@ private struct TodoHomeRow: View {
                     .fixedSize()
             }
         }
-        .frame(height: TodosHomeBlockLayout.rowHeight)
+        .frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
     }
 }
 
@@ -1346,7 +1539,7 @@ private struct TodoHomeRow: View {
 /// 它们各占一段**不会被压缩**的宽度，窄块里先牺牲它们，把宽度全留给标题。
 /// 「已完成」的线索只靠标题本身的样式（置灰 + 删除线），不另加元素。
 /// 条目的成员与顺序与完整档**同一份**（`TodoBucketing` 的今日类别，不在这里筛）。
-/// 行高同样钉在 `TodosHomeBlockLayout.rowHeight`。
+/// 行高同样钉在 `TodosHomeBlockLayout.todoRowHeightInSchedule`。
 private struct TodoHomeCompactRow: View {
     let item: TodoBucketing.Item
 
@@ -1358,7 +1551,7 @@ private struct TodoHomeCompactRow: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: TodosHomeBlockLayout.rowHeight)
+            .frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
     }
 }
 
@@ -1836,9 +2029,34 @@ enum TodoDueLabel: Equatable {
 ///
 /// 计数徽标的数字与 `已办/总量` 都**先拼成 String 再给 `Text`**——走 `Text(_: String)` 的 verbatim
 /// 重载，不会把这些形态当成本地化 key 去查表。日历口径与 `TodoBucketing` 一致：`.autoupdatingCurrent`。
-private enum TodoText {
+/// 模块内文字口径（计数、过期判定、日程时间列）——**不是 private**：这几条是纯函数，
+/// 单测直接钉住（`ModuleKernelTests` 的 `testTodoTextEventTimeLabel` 一族）。
+enum TodoText {
     /// 计数徽标 / 看板标题上的数字（verbatim：`3` 不该去查本地化表）。
     static func countText(_ count: Int) -> String { "\(count)" }
+
+    /// 模块内动态文案的本地化出口（查不到时 `Bundle` 原样返回 key，与 `NotificationText.localized` 同款）。
+    static func localized(_ key: String) -> String {
+        Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    /// **日程行右侧的时间列文案**（docs/37 D-05 的纯函数，单测直接钉）：
+    /// 全天 → `全天`（`module.todos.homeAllDay`，与日历卡片的时间列同一口径）；
+    /// 定时 → `9:30`（起点）或 `9:30 – 10:30`（同一天内、止点大于起点时给区间）。
+    ///
+    /// 跨天日程的时间列只给起点（首页块是「今天」的清单，跨天那一段的语义在卡片里有完整呈现）。
+    static func eventTimeLabel(
+        for event: EventModel,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> String {
+        if event.isAllDay { return localized("module.todos.homeAllDay") }
+        let start = event.start.formatted(date: .omitted, time: .shortened)
+        guard calendar.isDate(event.end, inSameDayAs: event.start), event.end > event.start else {
+            return start
+        }
+        let end = event.end.formatted(date: .omitted, time: .shortened)
+        return start + " – " + end
+    }
 
     /// 是否已过期 = 有到期时间、**到期 < 今天 00:00**、且未完成。
     ///

@@ -1418,9 +1418,10 @@ final class ModuleKernelTests: XCTestCase {
         // 而「进 homeEntries」要求模块 `.active`——不置夹具的话镜子不激活、块名单里没有它，断言必红。
         // 音乐接管（T5）同理：真源是 `showStandardMediaControls`（上游默认 `true`，但本机**测试域缺键**，
         // 缺键走默认 true；缺键的机器与显式写过 false 的机器必须走同一条断言，故同样置定值）。
-        // 日历接管（P3 冻结批次 / T6）同理：真源是 `showCalendar`（上游默认 `true`，本机测试域同样缺键）
-        // ——缺键的机器与显式写过 false 的机器必须走同一条断言，故也置定值（置 true：与其余四个接管
-        // 模块同向，让日历模块在本条用例里也走完整条「注册 → 过门 → 进 tab 投影 → 取到 .view」的路）。
+        // 日历（P3 冻结批次 / T6；**docs/37 D-06 改判为非接管**）：改前真源是 `showCalendar`，
+        // 与首页日历行共用一个键；解耦后它走 `moduleEnableOverrides` 缺省 → `defaultEnabled: true`，
+        // 因此 `showCalendar` 这颗夹具键对它的启用**不再有影响**（本条仍置它：另一条
+        // `testHomeCalendarRowAndPanelTabAreDecoupled` 用它钉「首页行 != 面板页」）。
         // 统计接管（p3-widgets / T2）同理：真源是 `enableStatsFeature`（上游默认 `false`，本机测试域
         // 可能是任意值）——同样置定值（true：让它走完整条链，进首页块投影并取到 .view），
         // 让「统计的启用门读上游键」这件事在本条真组合根路径上也有覆盖。
@@ -1523,7 +1524,11 @@ final class ModuleKernelTests: XCTestCase {
             "音乐的真源是 `showStandardMediaControls`（夹具 true）——不看 `defaultEnabled` 的登记值"
         )
         XCTAssertNotNil(registry.instance(for: musicID) as? MusicModule, "过门的音乐照常实例化")
-        XCTAssertEqual(registry.states[calendarID], .active, "日历的真源是 `showCalendar`（夹具 true）——不看 `defaultEnabled` 的登记值")
+        XCTAssertEqual(
+            registry.states[calendarID],
+            .active,
+            "日历自 docs/37 D-06 起**非接管**（面板日历页与首页日历行解耦）：启用门走 `moduleEnableOverrides` 缺省 → `defaultEnabled: true`"
+        )
         XCTAssertNotNil(registry.instance(for: calendarID) as? CalendarModule, "过门的日历照常实例化")
         XCTAssertEqual(registry.states[statsID], .active, "统计的真源是 `enableStatsFeature`（夹具 true）——不看 `defaultEnabled` 的登记值")
         XCTAssertNotNil(registry.instance(for: statsID) as? StatsModule, "过门的统计照常实例化")
@@ -3412,6 +3417,185 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertTrue(TodosHomeBlockLayout.listedItems([], count: 8).isEmpty, "今日 0 条 → 空表（空态行由视图画）")
     }
 
+    // MARK: - 首页块：今日日程 + 待办混合清单（docs/37 D-05）
+
+    /// 混合清单的顺序与截断（纯函数）：**日程在前**（全天最前、各自按 `start` 升序）、
+    /// **待办接在后面**（沿用 `TodoBucketing` 的既有次序），总数截到 `rowCount`；
+    /// **未授权时日程照常、待办一条不给**（待办的授权状态读的是「读不到」，与日程那条 EventKit 授权
+    /// 是两回事）。
+    func testTodosHomeBlockMixedEntriesOrderAndTruncation() {
+        let calendar = todoTestCalendar()
+        let morning = todoTestEvent(
+            id: "e-morning",
+            start: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 9, minute: 30),
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 10, minute: 0)
+        )
+        let allDay = todoTestEvent(
+            id: "e-allday",
+            start: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 0),
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 11, hour: 0),
+            isAllDay: true
+        )
+        let afternoon = todoTestEvent(
+            id: "e-afternoon",
+            start: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 14),
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 15)
+        )
+        let todos = (1...3).map { TodoBucketing.Item(id: "t\($0)", title: "t\($0)") }
+
+        // 乱序传入：全天 → 上午 → 下午 → 待办
+        let entries = TodosHomeBlockLayout.listedEntries(
+            events: [afternoon, morning, allDay],
+            todos: todos,
+            hasFullAccess: true,
+            rowCount: 10
+        )
+        XCTAssertEqual(
+            entries.map(\.id),
+            ["event:e-allday", "event:e-morning", "event:e-afternoon", "todo:t1", "todo:t2", "todo:t3"],
+            "日程按（全天在前、各自 start 升序）排，待办接在后面"
+        )
+
+        // 截断：只要前 2 条 → 两条日程（待办一条都进不来）
+        XCTAssertEqual(
+            TodosHomeBlockLayout.listedEntries(
+                events: [afternoon, morning, allDay], todos: todos, hasFullAccess: true, rowCount: 2
+            ).map(\.id),
+            ["event:e-allday", "event:e-morning"]
+        )
+        // 0 行 / 负数 → 空表（不崩）
+        XCTAssertTrue(
+            TodosHomeBlockLayout.listedEntries(events: [morning], todos: todos, hasFullAccess: true, rowCount: 0).isEmpty
+        )
+        XCTAssertTrue(
+            TodosHomeBlockLayout.listedEntries(events: [morning], todos: todos, hasFullAccess: true, rowCount: -2).isEmpty
+        )
+        // 未授权：日程照常，待办不画（读不到就是不知道——与 todayContent 的第 ① 条同源）
+        XCTAssertEqual(
+            TodosHomeBlockLayout.listedEntries(
+                events: [morning], todos: todos, hasFullAccess: false, rowCount: 10
+            ).map(\.id),
+            ["event:e-morning"],
+            "未授权时待办不给条目，日程不受影响（两条授权是两回事）"
+        )
+    }
+
+    /// 空态判据（docs/37 D-05）：**有完整授权 + 有一行位置 + 日程与待办都为空** 才画
+    /// 「今天没有安排」；未授权、放不下、或任一侧有内容都不画。
+    func testTodosHomeBlockEmptyStateGatesOnBothSidesBeingEmpty() {
+        XCTAssertTrue(
+            TodosHomeBlockLayout.emptyStateShows(hasFullAccess: true, rowCount: 4, eventCount: 0, todoCount: 0)
+        )
+        XCTAssertFalse(
+            TodosHomeBlockLayout.emptyStateShows(hasFullAccess: true, rowCount: 4, eventCount: 1, todoCount: 0),
+            "有日程 → 不画空态"
+        )
+        XCTAssertFalse(
+            TodosHomeBlockLayout.emptyStateShows(hasFullAccess: true, rowCount: 4, eventCount: 0, todoCount: 2),
+            "有待办 → 不画空态"
+        )
+        XCTAssertFalse(
+            TodosHomeBlockLayout.emptyStateShows(hasFullAccess: false, rowCount: 4, eventCount: 0, todoCount: 0),
+            "未授权：读不到 ≠ 没有（旧 todayContent 的第 ① 条判据）"
+        )
+        XCTAssertFalse(
+            TodosHomeBlockLayout.emptyStateShows(hasFullAccess: true, rowCount: 0, eventCount: 0, todoCount: 0),
+            "块矮到一行都放不下 → 空态行同样溢出，不画"
+        )
+    }
+
+    /// 日程行的时间列文案（纯函数）：全天 → `全天`；同日内定时 → `9:30 – 10:30`；
+    /// 跨天 / 止点不晚于起点 → 只给起点。
+    func testTodoTextEventTimeLabel() {
+        let calendar = todoTestCalendar()
+        let start = todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 9, minute: 30)
+
+        let allDay = todoTestEvent(
+            id: "allday",
+            start: start,
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 11, hour: 0),
+            isAllDay: true
+        )
+        XCTAssertEqual(
+            TodoText.eventTimeLabel(for: allDay),
+            TodoText.localized("module.todos.homeAllDay"),
+            "全天条目给「全天」（与日历卡片的时间列同一口径）"
+        )
+
+        let timed = todoTestEvent(
+            id: "timed",
+            start: start,
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 10, hour: 10, minute: 30)
+        )
+        let label = TodoText.eventTimeLabel(for: timed)
+        XCTAssertTrue(label.contains("–"), "同日内定时给区间：\(label)")
+
+        let crossDay = todoTestEvent(
+            id: "cross",
+            start: start,
+            end: todoTestTime(calendar, year: 2026, month: 10, day: 11, hour: 12)
+        )
+        XCTAssertFalse(TodoText.eventTimeLabel(for: crossDay).contains("–"), "跨天只给起点")
+
+        let zeroLength = todoTestEvent(id: "zero", start: start, end: start)
+        XCTAssertFalse(TodoText.eventTimeLabel(for: zeroLength).contains("–"), "止点不晚于起点只给起点")
+    }
+
+    // MARK: - 混合清单的夹具（docs/37 D-05；与网格用例的夹具分开命名，避免与别的测试类撞名）
+
+    /// 固定周一起点的测试日历（与 `HomeStripLayoutTests` 的夹具同款口径）。
+    private func todoTestCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    /// 固定日历下的一个时刻。
+    private func todoTestTime(
+        _ calendar: Calendar,
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int = 0
+    ) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    /// 一个日程条目（头衔 = id；系统色；非提醒）。
+    private func todoTestEvent(
+        id: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool = false
+    ) -> EventModel {
+        EventModel(
+            id: id,
+            start: start,
+            end: end,
+            title: id,
+            location: nil,
+            notes: nil,
+            url: nil,
+            isAllDay: isAllDay,
+            type: .event(.accepted),
+            calendar: CalendarModel(
+                accountName: "Test",
+                id: "test.calendar",
+                title: "Test",
+                color: .systemBlue,
+                isSubscribed: false,
+                isReminder: false
+            ),
+            participants: [],
+            timeZone: TimeZone(secondsFromGMT: 0),
+            hasRecurrenceRules: false,
+            priority: nil,
+            conferenceURL: nil
+        )
+    }
+
     /// `TODO` 日期选项的文案 key 与 `DueOption` 同源（加选项必须同时给 key，否则面板上出现裸 key）。
     func testTodoComposerDueOptionLabelKeys() {
         XCTAssertEqual(
@@ -4072,35 +4256,52 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
-    /// 首页块的取舍与文案（纯函数）：**最近 3 条**（新的在前，不在这里重排）、
-    /// 行文案「App 名 · 标题」（标题为空不留悬空分隔符、换行压成空格）、
+    /// 首页块的取舍与文案（纯函数）：**最近 4 条**（新的在前，不在这里重排）、
+    /// 两行式文案（第一行 App 名、第二行「标题 · 正文预览」，空串不留悬空分隔符、换行压成空格）、
     /// 标题行「通知 · 最近 N 条」（N == 0 只留模块名，不画空态文案）、
     /// 不可读 / 无权限时的那一行提示（可读给 nil——两种情形必须能区分开）。
     func testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader() {
-        XCTAssertEqual(NotificationsHomeBlockLayout.maxListRows, 3, "最近 3 条是规格值（行数上限固定，不按块宽分档）")
+        XCTAssertEqual(NotificationsHomeBlockLayout.maxListRows, 4, "最近 4 条是规格值（docs/37 D-03；行数上限固定，不按块宽分档）")
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.blockHeight,
+            16 + 4 + 4 * 30 + 3 * 5,
+            "申报的块高 = 表头 16 + 间距 4 + 4 条 × 30 + 3 个条间距 5"
+        )
 
-        // 清单：按列表顺序取前 3（`store.items` 已是新的在前），第 4 条起不画
+        // 清单：按列表顺序取前 4（`store.items` 已是新的在前），第 5 条起不画
         let items = (1...5).map { notificationItem(Int64($0), title: "标题\($0)") }
         XCTAssertEqual(
             NotificationsHomeBlockLayout.listedItems(items).map(\.id),
-            [1, 2, 3],
-            "首页块只画最近 3 条，顺序与 store.items 一致（不在这里重排）"
+            [1, 2, 3, 4],
+            "首页块只画最近 4 条，顺序与 store.items 一致（不在这里重排）"
         )
         XCTAssertTrue(NotificationsHomeBlockLayout.listedItems([]).isEmpty, "空列表给空（不画空态文案）")
-        XCTAssertEqual(NotificationsHomeBlockLayout.listedItems(Array(items.prefix(2))).map(\.id), [1, 2], "不足 3 条时原样")
+        XCTAssertEqual(NotificationsHomeBlockLayout.listedItems(Array(items.prefix(2))).map(\.id), [1, 2], "不足 4 条时原样")
 
-        // 行文案：App 名 · 标题
+        // 第一行：App 名（App 名为空时退到标题，不留悬空分隔符）
+        XCTAssertEqual(NotificationsHomeBlockLayout.sourceLabel(appName: "邮件", title: "构建完成"), "邮件")
+        XCTAssertEqual(NotificationsHomeBlockLayout.sourceLabel(appName: "", title: "只有标题"), "只有标题")
+        XCTAssertEqual(NotificationsHomeBlockLayout.sourceLabel(appName: "  ", title: "只有标题"), "只有标题")
+        XCTAssertEqual(NotificationsHomeBlockLayout.sourceLabel(appName: "", title: ""), "", "两边都空给空串")
+
+        // 第二行：标题 · 正文预览（docs/37 D-03 起正文可见）
         XCTAssertEqual(
-            NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "构建完成"),
-            "邮件 · 构建完成"
+            NotificationsHomeBlockLayout.detailLabel(title: "构建完成", body: "产物已上传"),
+            "构建完成 · 产物已上传"
         )
-        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "  "), "邮件", "标题为空不留悬空分隔符")
-        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "", title: "只有标题"), "只有标题")
-        XCTAssertEqual(NotificationsHomeBlockLayout.rowLabel(appName: "", title: ""), "", "两边都空给空串（不画分隔符）")
         XCTAssertEqual(
-            NotificationsHomeBlockLayout.rowLabel(appName: "邮件", title: "第一行\n第二行"),
-            "邮件 · 第一行 第二行",
-            "标题里的换行压成空格（行只有一行的预算）"
+            NotificationsHomeBlockLayout.detailLabel(title: "构建完成", body: "  "),
+            "构建完成",
+            "正文为空不留悬空分隔符"
+        )
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.detailLabel(title: "", body: "只有正文"),
+            "只有正文"
+        )
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.detailLabel(title: "第一行\n第二行", body: "正文\n换行"),
+            "第一行 第二行 · 正文 换行",
+            "标题与正文里的换行都压成空格（第二行只有一行的预算）"
         )
 
         // 标题行：条数 > 0 → 「通知 · 最近 N 条」；== 0 → 只剩模块名（不画空态文案）

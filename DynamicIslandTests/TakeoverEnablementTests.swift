@@ -1817,31 +1817,26 @@ final class TakeoverEnablementTests: XCTestCase {
             "上游这个开关默认是开的（方向也要钉住，避免它被悄悄改成保守值）"
         )
         XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属：零新增能力请求（日历数据仍走上游那条权限）")
-        XCTAssertNil(manifest.config, "口径 3：不登记 config（唯一相关的上游键就是 takeoverEnableKey 本身）")
+        XCTAssertNil(manifest.config, "口径 3：不登记 config（日历没有自己的键）")
 
-        // 两条取值型钩子：真源 = 上游那颗日历总开关；不接首页块 → 不声明块宽
-        XCTAssertEqual(CalendarModule.takeoverEnableKey?.name, Defaults.Keys.showCalendar.name)
+        // 两条取值型钩子：**2026-10-10 / docs/37 D-06 起不再是接管模块**（面板页与首页行解耦，
+        // 见 `testCalendarPanelTabIsDecoupledFromTheHomeCalendarRow`）；不接首页块 → 不声明块宽
+        XCTAssertNil(CalendarModule.takeoverEnableKey, "非接管：启用状态由 moduleEnableOverrides 承载")
         XCTAssertNil(CalendarModule.homeBlockWidth, "只接展开 tab（宿主统一宽度）")
 
         // 字面量 manifest 也能走 JSON（与宿主读 descriptor 同一条路）
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// **接管键 read-through**：日历的启用真源是上游 `showCalendar`，不是它自己的 `defaultEnabled`
-    /// （登记值 `true`）——两个方向都走一遍，且**经真组合根的门**（`KernelBootstrap.enablementGate`）。
+    /// **非接管 read-through**：日历自 docs/37 D-06 起走 `moduleEnableOverrides` 口径，
+    /// 两个方向都走一遍，且**经真组合根的门**（`KernelBootstrap.enablementGate`）。
     ///
-    /// 三点刻意写死（改动前先读）：
-    /// 1. **自己置全夹具**：`showCalendar` 读的是**测试域**（Debug 域 `com.cmeng.gourd.dev`）盘上的值，
-    ///    本机该域**缺键**（缺键走上游默认 `true`）——缺键的机器与显式写过 `false` 的机器必须走同一条
-    ///    断言，故两个方向都显式置定值，`defer` 逐字还原（原本有键写回原值、原本没键删键）；
-    /// 2. **注册走真门**：旧门（`manifests[$0]?.defaultEnabled`）读不到上游键，键关闭时也会放行；
-    /// 3. **不调 `KernelBootstrap.bootstrap()`**（文件头口径 2：那个入口会写开发机真实的
-    ///    `enableScreenAssistant`），只调注册表自己的 `bootstrap()`。
-    ///
-    /// 变异验证（T6 报告 §3）：把 `CalendarModule.takeoverEnableKey` 换成别的键或去掉 → 本条红
-    /// （第 ① 档的 `.disabled` 与 `tabEntries.isEmpty` 都会破）。
-    func testCalendarModuleEnablementReadsThroughShowCalendar() async throws {
-        let keys = [Defaults.Keys.showCalendar.name]
+    /// 与改前（接管键 `showCalendar`）的差别正是本次要修的东西：`showCalendar` 现在**只管首页
+    /// 那条全宽日历行**，与面板 tab 的启用互不影响——解耦本身另有
+    /// `testCalendarPanelTabIsDecoupledFromTheHomeCalendarRow` 专钉，本用例钉的是
+    /// 「非接管口径下注册表这一侧照常工作」（补位：改前这条路径由接管键那条用例覆盖）。
+    func testCalendarModuleEnablementReadsThroughModuleOverrides() async throws {
+        let keys = [Defaults.Keys.moduleEnableOverrides.name]
         let originals = snapshotValues(of: keys)
         defer { restoreValues(originals, for: keys) }
 
@@ -1849,25 +1844,25 @@ final class TakeoverEnablementTests: XCTestCase {
         let id = CalendarModule.moduleID
         let expandedRequest = ContentRequest(surface: .expanded, phase: .expanded, reason: .initial)
 
-        // ① 键关着 → 门不放行：**不看** manifest 的 `defaultEnabled`（登记值 true）
-        Defaults[.showCalendar] = false
+        // ① 显式关掉 → 门不放行：进不了 tab 投影、展开请求降级为 `.unavailable`
+        Defaults[.moduleEnableOverrides] = [id: false]
         registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
         await registry.bootstrap()
 
-        XCTAssertEqual(registry.states[id], .disabled, "接管键 false → 启用门不放行（不看过 manifest 默认 true）")
+        XCTAssertEqual(registry.states[id], .disabled, "显式关掉 → 启用门不放行")
         XCTAssertNil(registry.instance(for: id), "未启用的模块不实例化")
-        XCTAssertTrue(registry.tabEntries.isEmpty, "关掉 showCalendar → 日历 tab 不在投影里（与首页那条日历行一起消失）")
+        XCTAssertTrue(registry.tabEntries.isEmpty, "关掉面板日历 → 日历 tab 不在投影里")
         guard case .unavailable = registry.content(for: id, request: expandedRequest) else {
             return XCTFail("未激活的模块，展开请求应降级为 .unavailable（06 §3.2）")
         }
 
-        // ② 键开着 → 放行：进 tab 投影，展开请求拿到那个孤儿视图
-        Defaults[.showCalendar] = true
+        // ② 键缺省 → 回落 `defaultEnabled: true`：进 tab 投影，展开请求拿到那个孤儿视图
+        Defaults[.moduleEnableOverrides] = [:]
         await registry.deactivateAll()
         registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
         await registry.bootstrap()
 
-        XCTAssertEqual(registry.states[id], .active, "接管键 true → 启用门放行")
+        XCTAssertEqual(registry.states[id], .active, "缺键回落 defaultEnabled: true（老用户升级后行为不变）")
         XCTAssertNotNil(registry.instance(for: id) as? CalendarModule, "过门的日历照常实例化")
         XCTAssertEqual(registry.tabEntries.map(\.id), [id], "日历的展开 tab 由模块投影产出")
         guard case .view = registry.content(for: id, request: expandedRequest) else {
@@ -1936,8 +1931,13 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(StatsModule.takeoverEnableKey?.name, Defaults.Keys.enableStatsFeature.name)
         XCTAssertEqual(
             StatsModule.homeBlockWidth,
-            ModuleHomeBlockWidth(min: 220, ideal: 300),
-            "首页块宽度声明（26 §做法 机制一：统计比进度宽一档）"
+            ModuleHomeBlockWidth(min: 220, ideal: 240),
+            "首页块宽度声明（docs/37 D-04：单行形态收窄一档）"
+        )
+        XCTAssertEqual(
+            StatsModule.homeBlockHeight,
+            .points(36),
+            "首页块高度申报（docs/37 D-04：单行紧凑，改前不申报 = 紧凑档 96）"
         )
         // 可见性钩子**刻意不重写**（缺省 true）：本模块不声明 `expanded`，投影先按 `surfaces` 过滤，
         // 它永远不被问到——写一条 `= true` 只会让读者以为本模块有 tab（与 mirror / music 同一口径，
@@ -1969,83 +1969,70 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// 三环的**直径分档**：宽 ≥ 200 用 46、更窄退 40；宽取不到（0 / NaN / 无穷）一律退小档
-    /// ——宁可画小一点，也不要画出三个被裁的环。
+    /// 单行形态的**几何刻度**（docs/37 D-04，2026-10-10 改判；改前是三环 46/40 + 环心文字）。
     ///
-    /// 变异验证（T9 §变异）：`ringDiameter(forWidth:)` 改成恒 46 → 本条与下面那条「不裁」一起红。
-    func testStatsRingDiameterStepsDownInNarrowBlocks() {
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 300), 46)
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 220), 46, "宿主给的最小宽仍是常规档")
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 200), 46, "阈值取闭区间下界：200 不收缩")
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 199.9), 40, "刚过阈值就退一档")
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 180), 40)
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: 0), 40, "首帧取不到宽")
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: -10), 40)
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: .nan), 40)
-        XCTAssertEqual(StatsRingMetrics.ringDiameter(forWidth: .infinity), 40)
-    }
-
-    /// **「不裁」是一句可断言的话**：三环 + 两个间距的总宽必须 ≤ 块宽——生产档两处都过一遍
-    /// （220 = `StatsModule.homeBlockWidth.min` → 158；180 = 模块统一最小档 → 140）。
-    ///
-    /// 变异验证（T9 §变异）：`ringDiameter(forWidth:)` 恒 46 → 窄档这条的 140 变 158（断言红）。
-    func testThreeRingsNeverExceedTheAvailableBlockWidth() {
-        XCTAssertEqual(StatsModule.homeBlockWidth, ModuleHomeBlockWidth(min: 220, ideal: 300), "口径 3 的定值")
-        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 220), 158, "3 × 46 + 2 × 10")
-        XCTAssertLessThanOrEqual(StatsRingMetrics.rowWidth(forWidth: 220), 220, "220 最小宽下不裁")
-        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 180), 140, "3 × 40 + 2 × 10")
-        XCTAssertLessThanOrEqual(StatsRingMetrics.rowWidth(forWidth: 180), 180, "180 档下也不裁")
-        XCTAssertEqual(StatsRingMetrics.rowWidth(forWidth: 0), 140, "取不到宽时按小档算总宽")
-    }
-
-    /// 三环的**线宽 / 环轨 / 环心**三项刻度（机制八「科技风只做三件事」的可断言部分）：
-    /// 主环 5pt + 亮描边 2pt、环轨 `white.opacity(0.12)`、环心字号随直径退档、
-    /// 环心文字的可用宽**在环带内侧**（文字不压环带）。
-    func testStatsRingLineWidthsAndCounterMetrics() {
-        XCTAssertEqual(StatsRingMetrics.mainLineWidth, 5)
-        XCTAssertEqual(StatsRingMetrics.highlightLineWidth, 2)
+    /// 三组 = 点 12（线宽 2、实心 4）+ 标签 + 读数；组内间距 4、组间距 8。断言全部对常量本身——
+    /// 形态（怎么摆）由视图负责，常量（摆多大）钉在这里。
+    func testStatsMetricDotGeometryIsPinned() {
+        XCTAssertEqual(StatsRingMetrics.dotDiameter, 12)
+        XCTAssertEqual(StatsRingMetrics.dotTrackLineWidth, 2)
+        XCTAssertEqual(StatsRingMetrics.dotCoreDiameter, 4)
+        XCTAssertEqual(StatsRingMetrics.metricSpacing, 8)
+        XCTAssertEqual(StatsRingMetrics.metricInnerSpacing, 4)
         XCTAssertEqual(StatsRingMetrics.trackOpacity, 0.12)
-        XCTAssertEqual(StatsRingMetrics.ringSpacing, 10)
 
-        XCTAssertEqual(StatsRingMetrics.counterFontSize(forDiameter: 46), 11)
-        XCTAssertEqual(StatsRingMetrics.counterFontSize(forDiameter: 40), 10, "直径退档时字号跟着退")
-        XCTAssertEqual(StatsRingMetrics.counterMaxWidth(forDiameter: 46), 32)
-        XCTAssertLessThan(
-            StatsRingMetrics.counterMaxWidth(forDiameter: 46),
-            46 - 2 * StatsRingMetrics.mainLineWidth,
-            "环心文字的可用宽必须落在 5pt 环带的内侧"
-        )
-    }
-
-    /// **环不被块框裁掉**（2026-10-06 用户反馈「cpu 这三个上边距太小，顶部被遮盖了」的回归判据）。
-    ///
-    /// 算术：`Circle().stroke(lineWidth:)` 以路径为中心 → 环的墨迹向框外每一侧各溢出
-    /// `drawingOverhang`（主环 5/2 + 亮描边发光 2.5 = **5pt**）；而宿主给块内容的**纵向**内缩恒 0
-    /// （`HomeBlockChrome.contentInsetVertical`——那条判据出自进度块的 94/96，见 docs/32 D-20），
-    /// 于是环的框顶 = 板顶 → **不让位就被 `HomeStripBlock` 的 `.clipped()` 齐平切掉**
-    /// （上屏实测：三个环的亮描边都从板顶边 y=392px@2× 开始，且最上行是 16–18px 宽的切口弦）。所以：
-    /// ① `homeBlockTopInset ≥ drawingOverhang` 是「顶不裁」的充要条件；② 让位之后内容仍装得进紧凑块。
-    func testStatsRingsClearTheBlockTopEdge() {
-        XCTAssertEqual(StatsRingMetrics.drawingOverhang, 5, "主环描边 2.5 + 亮描边发光 2.5")
+        // 顶部让位：与图形起始的各块同档（`HomeBlockChrome.contentInsetTopGraphics`）；
+        // 点 12 / 线宽 2 的外溢只有 1pt，7 覆盖得住。
+        XCTAssertEqual(StatsRingMetrics.homeBlockTopInset, 7)
         XCTAssertGreaterThanOrEqual(
             StatsRingMetrics.homeBlockTopInset,
-            StatsRingMetrics.drawingOverhang,
-            "上内边距小于绘制外溢 → 环顶的描边（与整圈发光）被块框裁平，就是本次回归"
+            StatsRingMetrics.dotTrackLineWidth / 2,
+            "上内边距小于绘制外溢 → 点顶的描边被块框裁平（2026-10-06 那条回归的同一条判据）"
         )
-        XCTAssertEqual(StatsRingMetrics.homeBlockTopInset, 8, "定稿值：外溢 5 + 与左右同口径的 3pt 余量")
+    }
 
-        // 让位之后仍要装进紧凑块（96pt）——上内边距不是「想加多少加多少」：
-        // 环 46 + 环与标签的间距 2（`StatsRingView` 的 VStack spacing）+ 9pt 标签行高 + 上内边距。
-        let labelLineHeight: CGFloat = 12   // 9pt 系统字体的行高上界（实测 ≈11）
-        let ringLabelSpacing: CGFloat = 2
-        let contentHeight = StatsRingMetrics.regularRingDiameter
-            + ringLabelSpacing
-            + labelLineHeight
-            + StatsRingMetrics.homeBlockTopInset
+    /// **申报的块高装得下内容**：内容 = 顶部让位 7 + 点 12 / 文字行 ~14 的较大者；
+    /// 申报 36 必须 ≥ 内容高，否则读数会被块壳 `.clipped()` 裁掉一行。
+    func testStatsHomeBlockHeightFitsItsSingleRowContent() {
+        let textLineHeight: CGFloat = 14   // 11pt 系统字体的行高上界（实测 ≈13）
+        let contentHeight = max(StatsRingMetrics.dotDiameter, textLineHeight)
+        guard case .points(let declaredHeight) = StatsModule.homeBlockHeight else {
+            XCTFail("统计块应按内容申报固定高（docs/37 D-04）")
+            return
+        }
+        XCTAssertGreaterThanOrEqual(
+            declaredHeight,
+            contentHeight + StatsRingMetrics.homeBlockTopInset,
+            "申报的块高必须 ≥ 顶部让位 + 内容高"
+        )
         XCTAssertLessThanOrEqual(
-            contentHeight,
-            HomeFlowView.compactBlockHeight,
-            "上内边距把内容顶出块高只会换一种裁法；窄块退 40pt 档时内容更矮，这条上界自动成立"
+            contentHeight + StatsRingMetrics.homeBlockTopInset,
+            declaredHeight,
+            "内容 + 顶部让位装不进申报高 → 换一种裁法，本批的收窄就白做"
+        )
+    }
+
+    /// **圆点不被块框裁掉 / 不被裁成半个字**（2026-10-06「顶部被遮盖」那条回归的同一条判据，
+    /// docs/37 D-04 改判后重写）：点 12 / 线宽 2 → 绘制外溢 1pt，`homeBlockTopInset`（7）覆盖得住；
+    /// 横向不裁由**申报宽 ≥ 最坏内容宽**保证（三组「点 + 标签 + 读数」+ 组间距）。
+    func testStatsSingleRowContentFitsItsBlock() {
+        let dotDrawingOverhang = StatsRingMetrics.dotTrackLineWidth / 2
+        XCTAssertLessThanOrEqual(
+            dotDrawingOverhang,
+            StatsRingMetrics.homeBlockTopInset,
+            "点的描边溢出必须落在顶部让位之内，否则点顶被块框裁平"
+        )
+
+        // 最坏内容宽：三组各自「点 12 + 4 + 标签 + 4 + 读数」——按最长的一组估（标签两字 CJK
+        // ≈ 18、「100.0%」量级读数 ≈ 28），组间 = `metricSpacing`（8）。
+        let worstGroupWidth = StatsRingMetrics.dotDiameter
+            + 2 * StatsRingMetrics.metricInnerSpacing
+            + 18 + 28
+        let worstRowWidth = 3 * worstGroupWidth + 2 * StatsRingMetrics.metricSpacing
+        XCTAssertLessThanOrEqual(
+            worstRowWidth,
+            StatsModule.homeBlockWidth?.min ?? .infinity,
+            "最坏内容宽必须落在申报的最小宽之内（横向不裁）"
         )
     }
 
@@ -2138,6 +2125,59 @@ final class TakeoverEnablementTests: XCTestCase {
             "统计开关不改变 tab 计数（上游那条 +1 已删；模块只声明 home → 不进 tabEntries 投影）"
         )
         XCTAssertEqual(registry.tabEntries.count, 0, "统计开着也不进 tab 投影（D-02）")
+    }
+
+    /// **首页日历行与面板日历页解耦**（docs/37 D-06，2026-10-10 用户反馈「两个开关关一个就都关了」）。
+    ///
+    /// 三条一起钉：
+    /// ① 日历模块**不再是接管模块**（`takeoverEnableKey == nil`）——改前它答 `showCalendar`，
+    ///    那颗键同时管首页那条行，于是「关首页行 → 面板页也没了」；
+    /// ② 面板页的启用改由 `moduleEnableOverrides[calendar]` 承载：显式置 `false` 时 tab 投影里
+    ///    没有它，而 `showCalendar` 照旧为真（首页行不受影响）；缺键时回落 `defaultEnabled: true`
+    ///    （老用户升级后行为不变）；
+    /// ③ 反向：`showCalendar = false` 时模块**照常启用**（面板页在，首页行不在）——
+    ///    这正是解耦的那一面。
+    func testCalendarPanelTabIsDecoupledFromTheHomeCalendarRow() async throws {
+        XCTAssertNil(
+            CalendarModule.takeoverEnableKey,
+            "日历自 docs/37 D-06 起非接管：启用状态由 moduleEnableOverrides 承载"
+        )
+
+        let keys = [Defaults.Keys.showCalendar.name, Defaults.Keys.moduleEnableOverrides.name]
+        let originals = snapshotValues(of: keys)
+        defer { restoreValues(originals, for: keys) }
+
+        let registry = ModuleRegistry.shared
+        let id = CalendarModule.moduleID
+
+        // 缺键（老用户盘上没有这条）→ 回落 defaultEnabled: true
+        Defaults[.moduleEnableOverrides] = [:]
+        Defaults[.showCalendar] = true
+        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[id], .active, "缺键回落 defaultEnabled: true（升级后行为不变）")
+        XCTAssertTrue(registry.tabEntries.contains { $0.id == id }, "面板 tab 里有日历")
+
+        // ② 只关面板那一处：tab 没了，而首页那颗键仍然为真（互不影响）
+        Defaults[.moduleEnableOverrides] = [id: false]
+        await registry.deactivateAll()
+        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[id], .disabled, "显式关掉面板日历 → 模块不激活")
+        XCTAssertFalse(registry.tabEntries.contains { $0.id == id }, "面板 tab 里没有日历")
+        XCTAssertTrue(Defaults[.showCalendar], "首页那颗开关**没有被动过**（解耦：两处各关各的）")
+
+        // ③ 反向：只关首页那颗键，面板日历照常在（模块的启用与它无关）——
+        //    改前这一档会与 ② 一起把两处都关掉（同一个键），这正是用户反馈的那个 bug。
+        Defaults[.moduleEnableOverrides] = [:]
+        Defaults[.showCalendar] = false
+        await registry.deactivateAll()
+        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
+        await registry.bootstrap()
+        XCTAssertEqual(registry.states[id], .active, "首页行关掉不影响面板日历页")
+        XCTAssertTrue(registry.tabEntries.contains { $0.id == id }, "面板 tab 里仍有日历")
+
+        await registry.deactivateAll()
     }
 
     // MARK: - 组件页「功能」段已撤销（p5-home-blocks / T4；承接 T6 那条功能卡解析用例）

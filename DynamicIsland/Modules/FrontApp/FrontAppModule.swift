@@ -109,6 +109,14 @@ final class FrontAppModule: GourdModule {
     private let context: ModuleContext
     private let store: FrontAppStore
 
+    /// 首页块**高度申报**（docs/37 D-02）：固定 = 装得下 4 行网格的高（`maximumBlockHeight` 148）。
+    ///
+    /// 「不随行里别的块变」正是这条申报的存在理由：改前块高由宿主按形态给（96），与镜子同处
+    /// 一行时行高又被顶到 140——显示几行图标因此由邻居决定（用户 2026-10-10 第 1 条反馈）。
+    static var homeBlockHeight: ModuleHomeBlockHeight {
+        .points(FrontAppGridBudget.maximumBlockHeight)
+    }
+
     /// 依赖注入在构造期完成（06 §3.3 R2）：store 只拿到 config 与 logger，**不订阅、不读前台**
     /// ——那些是 `activate()` 的副作用（口径 5）。
     init(context: ModuleContext) {
@@ -231,22 +239,33 @@ private struct FrontAppHomeBlockView: View {
 
     // MARK: 下半：所有打开的常规 App（网格）
 
-    /// 其余打开的 App：**一行放几个由块宽定，放几行由块高定**（`FrontAppGridBudget`），
-    /// 两者算完还有剩的格子才不画——预算之内一个不落，预算之外一个不画。
+    /// 其余打开的 App：**固定 4 列**（`FrontAppGridBudget.columns`），行数按「有多少个 App」定，
+    /// 上限 `maximumRows` 行——装不下的尾部格子在行尾给一个 `…` 提示（不静默丢）。
     ///
     /// 一格是按钮：**点一下 = `store.activate(snapshot)`**（切到那个应用；失败的两条路径都进日志，
     /// 见 `FrontAppStore.activate(_:)`）。悬停给底色（图标本身只有 20pt，没有底色看不出哪一格是热区）。
     @ViewBuilder
     private func grid(_ apps: [FrontAppSnapshot], fitting size: CGSize) -> some View {
         let columns = FrontAppGridBudget.cellsPerRow(forWidth: size.width)
-        let items = Array(otherApps(apps).prefix(FrontAppGridBudget.capacity(forWidth: size.width, forHeight: size.height)))
+        let all = otherApps(apps)
+        let items = Array(all.prefix(FrontAppGridBudget.capacity(forWidth: size.width, forHeight: size.height)))
+        let hiddenCount = all.count - items.count
         if columns > 0, !items.isEmpty {
             VStack(alignment: .leading, spacing: FrontAppGridBudget.rowSpacing) {
-                // 每 `columns` 个一格 `HStack`（用起点做 `ForEach` 的 id：行数随块高变化，行本身没有身份）
+                // 每 `columns` 个一格 `HStack`（用起点做 `ForEach` 的 id：行数随 App 数变化，行本身没有身份）
                 ForEach(Array(stride(from: 0, to: items.count, by: columns)), id: \.self) { start in
                     HStack(spacing: FrontAppGridBudget.cellSpacing) {
                         ForEach(items[start ..< min(start + columns, items.count)]) { snapshot in
                             cell(snapshot)
+                        }
+                        // 最后一行还有装不下的：行尾一个 `…`（预告「还有 N 个没画」；点不开，
+                        // 与 `＋N` 同一条诚实性口径——提示存在，但没有第二套交互面板）。
+                        if hiddenCount > 0, start + columns >= items.count {
+                            Text(verbatim: "…")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.45))
+                                .frame(width: FrontAppGridBudget.cellSize, height: FrontAppGridBudget.cellSize)
+                                .help(Text(verbatim: "+\(hiddenCount)"))
                         }
                     }
                 }
@@ -312,14 +331,20 @@ private struct FrontAppHomeBlockView: View {
 
 // MARK: - 排版预算
 
-/// 前台应用块的**排版预算**（纯函数 + 唯一一组常量）：**宽决定一行几格、高决定几行**。
+/// 前台应用块的**排版预算**（纯函数 + 唯一一组常量）。
 ///
-/// 单独立出来是为了可被判据穷举（先前的 `capacity(forWidth:)` 是视图里的 private 方法，只能靠肉眼看
-/// 截图猜）：`FrontAppGridBudgetTests` 扫 0…400pt 每一档，钉住"画出来的格子绝不比块宽 / 块高更大"。
-/// 视图只按它算出来的格数画，因此不会出现"挤变形"（格距是常量）或"被裁"（行列都在预算内）。
+/// **p12 / docs/37 D-02 起是「固定几何」**（原先是「宽决定一行几格、高决定几行」的自适应预算）：
+/// 用户 2026-10-10 反馈「开镜子显示得多、关了显示得少，要显示全」——成因是块内行数按**拿到的高**
+/// 算，而同行的镜子（大块 140）会把整行顶高、独占一行时行高只有 96，于是显示多少由邻居决定。
+/// 改后三条一起变：
+/// 1. 块的**高度由模块自己申报**（`homeBlockHeight = .points(FrontAppGridBudget.maximumBlockHeight)`），
+///    不再随行里别的块变化；
+/// 2. 网格是**固定 4 列 × 最多 4 行**（不再按宽/高自适应）——列数固定后行数只由「有多少个 App」决定，
+///    「装不装得下」与块宽无关（最小块宽 180 也放得下 4 列：`4 × 24 + 3 × 4 = 108`）；
+/// 3. 装不下的尾部格子**如实给 `…` 提示**（旧口径是静默不画，与 `＋N` 的诚实性口径同向）。
 ///
-/// 常量来源：当前应用行高 = 它的图标 28（名称是 12pt 单行，行高由图标决定）；一格 = 图标 20 +
-/// 悬停底色的左右内边距各 2 = 24；格间距 4；行间距 6（与上半行到网格之间用的是同一个间距）。
+/// 常量来源（未变）：当前应用行高 = 它的图标 28（名称是 12pt 单行，行高由图标决定）；
+/// 一格 = 图标 20 + 悬停底色的左右内边距各 2 = 24；格间距 4；行间距 6。
 enum FrontAppGridBudget {
     /// 当前应用那一行的图标边长（也就是那一行的行高）。
     static let currentIconSize: CGFloat = 28
@@ -332,31 +357,48 @@ enum FrontAppGridBudget {
     /// 行间距（当前应用行 → 网格第一行、网格行与行之间都用它）。
     static let rowSpacing: CGFloat = 6
 
+    /// 网格的**固定列数**（D-02）：与块宽无关——最小块宽 180 也放得下
+    /// （`4 × 24 + 3 × 4 = 108 ≤ 180`），宽块也不再加列（加列会让「一行几个」又随宽变化）。
+    static let columns = 4
+    /// 网格的**最大行数**（D-02）：4 行 × 4 列 = 15 格（格子里不画当前应用那一行）。
+    static let maximumRows = 4
+
     /// 一格的边长（图标 + 左右内边距）——"画 n 格要占多宽"的唯一算法在下面两个纯函数里。
     static var cellSize: CGFloat { cellIconSize + cellPadding * 2 }
 
-    /// 一行最多放几格：`(宽 + 间距) / (格 + 间距)` 向下取整（最后一格后面不留间距）。
+    /// 网格最多画几格（= 3 行 × 4 列；超出的尾部格子给 `…` 提示，见 `grid(_:fitting:)`）。
+    static var maximumCells: Int { columns * maximumRows }
+
+    /// 块申报的固定高（= 能画满 `maximumRows` 行的高）：`当前行 28 + 间距 6 + 4 行 × 24 + 3 × 6 = 148`。
     ///
-    /// 宽到放不下一格就是 **0**：被丢的块（`HomeStripLayout` 的规则 ③ 会给它 `.zero` 提案）因此
-    /// 一格都不画，而不是画一个越界的格子——越界的部分只会被块外框裁掉，看着就像"块坏了"。
-    /// 生产档下宿主给模块块的最小宽度是 180 → 6 格、理想 240 → 8 格（与 docs/22 §3 记的旧预算同值）。
-    static func cellsPerRow(forWidth width: CGFloat) -> Int {
-        max(0, Int((width + cellSpacing) / (cellSize + cellSpacing)))
+    /// 由 `FrontAppModule.homeBlockHeight` 引用（两处一个数，模块声明与视图预算同源）。
+    static var maximumBlockHeight: CGFloat {
+        currentIconSize + rowSpacing
+            + CGFloat(maximumRows) * cellSize
+            + CGFloat(maximumRows - 1) * rowSpacing
     }
 
-    /// 网格最多放几行：**先扣掉上半的当前应用行，其余按 `格 + 行间距` 切**。
+    /// 一行最多放几格——**固定 `columns`，但宽放不下时按宽度收敛**（被丢的块拿 `.zero` 提案时
+    /// 一格都不画；窄到放不下 4 列的退化档按能放下的列数画），**上限恒为 `columns`**：
+    /// 宽度只可能让列数变少、永远不会变多——这正是「开镜子 / 关镜子显示一样多」的几何前提。
+    static func cellsPerRow(forWidth width: CGFloat) -> Int {
+        guard width.isFinite, width >= cellSize else { return 0 }
+        let fits = Int(((width + cellSpacing) / (cellSize + cellSpacing)).rounded(.down))
+        return min(max(fits, 0), columns)
+    }
+
+    /// 该高度下能画几行网格（**当前行的 28 已扣**）——`floor((高 − 28) / (格 + 行间距))`，钳 `0…maximumRows`。
     ///
     /// 推导（k 行需要的高度）：`当前应用行 28 + 行间距 6 + k×24 + (k−1)×6 = 28 + 30k`，
     /// 于是 `k ≤ (高 − 28) / 30` —— 中间那个 `+6` 与 `(k−1)×6` 末尾的 `−6` 正好抵消，
     /// 所以公式就是 `(高 − 当前行) / (格 + 行间距)`，不需要额外项。
-    ///
-    /// 152pt（strip 时代的旧样本，见 `ShortcutsFrontAppTests` 里保留的参数化样本，docs/29 D-58）
-    /// → **4 行**；**紧凑档档高 96pt → 2 行**；再矮就一行行地减，放不下任何一行时是 0（不画网格）。
     static func rowCount(forHeight height: CGFloat) -> Int {
-        max(0, Int((height - currentIconSize) / (cellSize + rowSpacing)))
+        guard height.isFinite else { return 0 }
+        let fit = Int(((height - currentIconSize) / (cellSize + rowSpacing)).rounded(.down))
+        return min(max(fit, 0), maximumRows)
     }
 
-    /// 网格一共能放几格（0 = 一格都放不下 → 不画网格；块高够、块宽不够时同样是 0）。
+    /// 网格一共能放几格。
     static func capacity(forWidth width: CGFloat, forHeight height: CGFloat) -> Int {
         cellsPerRow(forWidth: width) * rowCount(forHeight: height)
     }

@@ -304,6 +304,9 @@ struct HomeBandBlock: Identifiable {
     let width: HomeBlockWidth
     /// 形态声明（`homeFormFactor` 钩子：`.large` 进主块带、`.compact` 进小组件带）。
     let formFactor: HomeFormFactor
+    /// **高度声明**（`homeBlockHeight` 钩子，docs/37 D-01）：`.formFactor` = 沿用形态档高；
+    /// `.points(n)` = 块按内容自报的固定高（前台应用 / 通知 / 统计 / 待办答这一档）。
+    let height: ModuleHomeBlockHeight
 }
 
 /// 首页两条带的**名单**：投影 → 内容表态 → 排序 → 按形态切带。
@@ -351,7 +354,8 @@ struct HomeBandCatalog {
                     defaultOrder: entry.order,
                     content: content,
                     width: declared.map { HomeBlockWidth(min: $0.min, ideal: $0.ideal) } ?? moduleBlockWidth,
-                    formFactor: registry.homeFormFactor(for: entry.id)
+                    formFactor: registry.homeFormFactor(for: entry.id),
+                    height: registry.homeBlockHeight(for: entry.id)
                 )
             )
         }
@@ -1263,6 +1267,27 @@ struct HomeFlowView: View {
         }
     }
 
+    /// **块高 = 块的申报**（docs/37-home-layout-v2.md D-01 / 机制一）：模块答 `.points(n)` 时用
+    /// 它自报的固定高（非有限 / ≤ 0 的坏值按形态档高兜底——坏输入不该画出一块零高的块）；
+    /// 答 `.formFactor`（缺省）时逐字沿用上面那条旧口径。
+    ///
+    /// 这条取代了「高度只看形态」的旧算式：2026-10-10 用户反馈「前台应用开镜子显示得多、
+    /// 关了显示得少」——成因正是前台应用块与镜子同处一行时行高被 140 顶高、独占一行时只有 96，
+    /// 块内按拿到的高算行数，于是**显示多少由邻居决定**。改后「显示多少」只由块自己的申报决定。
+    static func blockHeight(for block: HomeBandBlock) -> CGFloat {
+        declaredHeight(block.height, formFactor: block.formFactor)
+    }
+
+    /// 申报 → pt 的**唯一换算**（纯函数，单测直接钉）：`.points` 的非有限 / ≤ 0 值回落形态档高。
+    static func declaredHeight(_ declared: ModuleHomeBlockHeight, formFactor: HomeFormFactor) -> CGFloat {
+        switch declared {
+        case .formFactor:
+            return blockHeight(for: formFactor)
+        case .points(let value):
+            return value.isFinite && value > 0 ? value : blockHeight(for: formFactor)
+        }
+    }
+
     static let largeBlockHeight: CGFloat = 140
     static let compactBlockHeight: CGFloat = 96
 
@@ -1362,7 +1387,7 @@ struct HomeBandedHomeView: View {
                 HomeFlowLayout.Item(
                     min: $0.width.min,
                     ideal: $0.width.ideal,
-                    height: HomeFlowView.blockHeight(for: $0.formFactor)
+                    height: HomeFlowView.blockHeight(for: $0)
                 )
             }
             // **画出来的那一份** plan 用的仍是当前可用高（今天那条，逐字未变）：面板多高就画多满，

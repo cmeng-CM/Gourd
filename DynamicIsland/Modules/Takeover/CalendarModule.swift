@@ -25,8 +25,10 @@
 //
 //  上游首页里那条全宽日历行**不动**（它仍是首页的一部分，由 `showCalendar` 门控、
 //  由 `NotchHomeView` 直接渲染——它的渲染接管不在本批，见 docs/20 §明确不做）：
-//  于是「日历」两处呈现（首页行 / 展开 tab）由**同一个开关**控制，
-//  关掉 `showCalendar` 两处一起消失（docs/24 §已知限制 3 点名接受的耦合）。
+//  于是「日历」两处呈现（首页行 / 展开 tab）**各自独立**——首页行走 `showCalendar`、
+//  展开 tab 走本模块的启用状态（`moduleEnableOverrides`，设置页「面板组件」节那张卡）。
+//  **2026-10-10 / docs/37 D-06 解耦前**两处共用 `showCalendar`（docs/24 §已知限制 3 点名
+//  接受的耦合），用户反馈「关一个就都关了」后改开。
 //
 //  三条刻意写死的口径（改动前先读）：
 //
@@ -95,17 +97,25 @@ final class CalendarModule: GourdModule {
         self.context = context
     }
 
-    /// 接管三件套之一：**启用真源 = 上游那颗日历总开关本身**（口径 2）。
+    /// 接管三件套之一：**2026-10-10 起留白——本模块不再是「接管键」模块**（docs/37 D-06）。
     ///
-    /// 与首页那条日历行共用同一个键：本模块不是「再开一个开关」，而是「让这个开关多管一处呈现」。
-    static var takeoverEnableKey: Defaults.Key<Bool>? { .showCalendar }
+    /// 改前这里答 `showCalendar`（上游那颗首页日历行总开关），于是「首页的日历组件」与
+    /// 「面板的日历页」**由同一个布尔量控制**，关一个两处一起消失（docs/24 §已知限制 3 点名
+    /// 接受的耦合）。用户 2026-10-10 反馈「虽然是两个开关，但关一个就都关了，这个地方应该是
+    /// 分开控制的」——本模块因此改走**非接管口径**：启用状态由 `moduleEnableOverrides`
+    /// 承载（设置页「面板组件」节里那张日历卡自己那一颗开关），首页那条行仍由 `showCalendar`
+    /// 控制，两者互不影响。
+    ///
+    /// **兼容口径**：`defaultEnabled: true` 且老用户盘上没有 `moduleEnableOverrides[calendar]`
+    /// 这条 → 键缺省即启用（`KernelBootstrap.enablementGate` 的第 3 条回落），
+    /// 因此升级后面板里的日历页照常出现，行为只在「用户分别关掉其中一处」时才与改前不同——
+    /// 那正是本次要修的东西。
+    static var takeoverEnableKey: Defaults.Key<Bool>? { nil }
 
     /// 只记一条日志：日历没有常驻副作用（事件数据与刷新都在上游 `CalendarManager` 里，
     /// 本批只搬渲染归属，不搬生命周期）。
     func activate() async throws {
-        context.logger.info(
-            "calendar 模块已激活（takeover=true，showCalendar=\(Defaults[.showCalendar])）"
-        )
+        context.logger.info("calendar 模块已激活（非接管：面板日历页由组件页那一颗开关控制）")
     }
 
     /// 没有要收的东西：本模块不起 Task、不订阅、不持有视图外的资源（见 `activate()`）。
