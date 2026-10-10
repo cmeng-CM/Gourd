@@ -221,6 +221,7 @@ final class LyricsOverlayWindowManager: ObservableObject {
 - **锁定档下右键菜单打不开**：锁定 = 整窗 `ignoresMouseEvents`（穿透），所以「Unlock position」那一项在锁定档不可达——解锁的正式入口是设置页的「Lock position」开关（T4）；菜单里保留该项纯属防御性。
 - **拖拽期间不做重排**：拖拽中任何一次 `sync()`（如播放中每 ~300ms 的行切换）都会与拖拽抢窗口位置，故重排被挂起、拖拽结束再按新偏移归位一次（D-26）；拖拽中歌词行照常推进（只窗口不动）。**连带**：挂起的是「测量 + 锚点 + `setFrame`」整段，所以拖拽中窗口**尺寸**也不跟随行窗口（切到长行时按旧宽截尾，松手即恢复）——瞬时观感，与 D-26 自洽。
 - **白名单按 bundle id 精确匹配（进程粒度）**：Electron 类播放器出声的可能不是名单里的主进程，而是其 `.helper` 子进程（bundle id 形如 `<main>.helper`）——lx-music 已按实测补上 `cn.toside.music.desktop.helper`（D-34）；换播放器可能还要按同一方式再补一项。
+- **实时波形只修到「进 tap」为止**：白名单补上 lx-music 的 `.helper` 后，tap 能建立（`CATap flowing`、target 含 helper 的 AudioObjectID），但频带读数仍全零、折叠态柱条两帧逐像素相同（2026-10-10 上屏取证，`visualizer-lx-music.png` 为阴性证据）——**「柱条随音频跳动」本轮未达成**，疑点在 tap 的 mixdown 口径或 helper 的 CoreAudio 归属，留作下一轮定位（本次改动的交付边界是白名单本身）。
 - **悬浮层的 view model 由启动路径注入**：不再走 `AppDelegate.shared`——本 App 里那条路径**恒为 nil**（`ContentView.swift:1191` 的实测注释；2026-10-10 上屏取证再证 `vmNil=true appDelegateNil=true`），不注入则 `islandClosed` 判据取不到值、层不显示（D-33）。
 
 ## 验收标准
