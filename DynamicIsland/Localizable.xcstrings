@@ -83673,6 +83673,22 @@
           }
         }
       }
+    },
+    "module.notifications.homeTotalMore": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (%d total)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（共 %d 条）"
+          }
+        }
+      }
     }
   },
   "version": "1.2"

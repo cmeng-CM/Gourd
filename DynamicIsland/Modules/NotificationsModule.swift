@@ -1454,7 +1454,7 @@ enum NotificationsHomeBlockLayout {
     }
 }
 
-/// 首页块：**标题行「通知 · 最近 N 条」+ 最近 3 条**（每行「App 名 · 标题」）。
+/// 首页块：**标题行「通知 · 最近 N 条（共 M 条）」+ 最近 6 条**（每条两行）。
 ///
 /// ## N 是什么（**口径说明，别读成「未读」**）
 /// N = `store.items.count` = **列表里的条数**（reader 按 `rec_id DESC` 取回的最近 ≤ 40 条，
@@ -1517,7 +1517,7 @@ private struct NotificationsHomeBlockView: View {
         // 见 `HomeBlockChrome`）。
         //
         // **2026-10-10 / docs/37 D-03 起行数与行高都是预算的一部分**：块高由
-        // `NotificationsHomeBlockLayout.blockHeight` 申报（表头 + 4 条两行式），本视图按预算画——
+        // `NotificationsHomeBlockLayout.blockHeight` 申报（表头 + 6 条两行式），本视图按预算画——
         // 改前块高是紧凑档 96 且行数写死 3，正文完全没地方画（用户反馈「不能显示内容」）。
         .padding(.top, HomeBlockChrome.contentInsetTopText)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1526,9 +1526,13 @@ private struct NotificationsHomeBlockView: View {
         .task { await store.refreshAll() }
     }
 
-    /// 标题行：有内容时「通知 · 最近 N 条」，0 条时只留模块名（**不画空态文案**）。
+    /// 标题行：有内容时「通知 · 最近 N 条（共 M 条）」，0 条时只留模块名（**不画空态文案**）。
+    ///
+    /// **N 与清单同一份输入**（`listedItems`，只算一次）：标题说的条数与下面画出来的条数
+    /// 因此不可能对不上（2026-10-11 修正的那一处假话就是这么来的——改前标题收的是列表总数）。
     private var header: some View {
-        Text(NotificationText.homeHeader(count: store.items.count))
+        let shownCount = NotificationsHomeBlockLayout.listedItems(store.items).count
+        return Text(NotificationText.homeHeader(shown: shownCount, total: store.items.count))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.white.opacity(0.95))
             .lineLimit(1)
@@ -1983,18 +1987,27 @@ private struct NotificationsCompactView: View {
 enum NotificationText {
     /// **纯函数**：首页块标题行的文案（T1，审查后改口径）。
     ///
-    /// - `count > 0` → `通知 · 最近 N 条`（`module.notifications.name` + `module.notifications.homeRecent`）；
-    /// - `count == 0` → 只剩模块名（复用既有 `module.notifications.name`），**不画空态文案**。
+    /// - `shown > 0` → `通知 · 最近 N 条`（`module.notifications.name` + `module.notifications.homeRecent`），
+    ///   N = **块里真的画出来的条数**（`NotificationsHomeBlockLayout.listedItems(...).count`）；
+    ///   `total > shown` 时再补一句「（共 M 条）」（`module.notifications.homeTotalMore`），
+    ///   把「为什么只有 N 条」说清楚；
+    /// - `shown == 0` → 只剩模块名（复用既有 `module.notifications.name`），**不画空态文案**。
     ///
-    /// **刻意不叫「未读」**：`count` 是「列表里的条数」（生产路径 = `store.items.count`，
-    /// 与展开 tab 状态行的「最近 N 条」同一个来源、同一个数），与折叠态铃铛的
-    /// `store.unseenCount`（自上次打开面板以来的新增数）**不是一回事**——
-    /// 用「未读」会让人以为二者应当一致，而它们本来就不该一致（见块视图的「N 是什么」）。
-    /// 函数本身不碰 store，边界因此由单测直接钉。
-    static func homeHeader(count: Int) -> String {
-        guard count > 0 else { return localized("module.notifications.name") }
-        let recent = String(format: localized("module.notifications.homeRecent"), count)
-        return localized("module.notifications.name") + " · " + recent
+    /// **2026-10-11 修正**（用户：「最近 40 条不对，这就显示 6 条」）：改前这里收的是
+    /// `store.items.count`（reader 取回的**列表总数**，可达 40），而块里最多画 6 条——
+    /// 标题因此与它下面的清单对不上（是一句假话）。现在的口径是「**标题说的是这一块显示了几条**」，
+    /// 列表总数只在还有更多时作为括注出现；完整清单仍在展开 tab 里。
+    ///
+    /// **刻意不叫「未读」**：那个数是折叠态铃铛的 `store.unseenCount`（自上次打开面板以来的新增数），
+    /// 与这里的条数不是一回事（见块视图的「N 是什么」）。函数本身不碰 store，边界因此由单测直接钉。
+    static func homeHeader(shown: Int, total: Int) -> String {
+        guard shown > 0 else { return localized("module.notifications.name") }
+        let recent = String(format: localized("module.notifications.homeRecent"), shown)
+        var text = localized("module.notifications.name") + " · " + recent
+        if total > shown {
+            text += String(format: localized("module.notifications.homeTotalMore"), total)
+        }
+        return text
     }
 
     /// **纯函数**：首页块在**不可读 / 无权限**时标题行下的那一行提示；可读（`.ok`）给 `nil`

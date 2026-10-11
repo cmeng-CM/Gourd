@@ -4237,10 +4237,10 @@ final class ModuleKernelTests: XCTestCase {
         )
 
         // 标题行：条数 > 0 → 「通知 · 最近 N 条」；== 0 → 只剩模块名（不画空态文案）
-        let zero = NotificationText.homeHeader(count: 0)
+        let zero = NotificationText.homeHeader(shown: 0, total: 12)
         XCTAssertEqual(zero, NotificationText.localized("module.notifications.name"), "0 条时只显示「通知」")
         XCTAssertFalse(zero.contains("0"), "0 不显示成「最近 0 条」：\(zero)")
-        let three = NotificationText.homeHeader(count: 3)
+        let three = NotificationText.homeHeader(shown: 3, total: 3)
         let format = NotificationText.localized("module.notifications.homeRecent")
         XCTAssertNotEqual(format, "module.notifications.homeRecent", "首页块条数文案没解析出来（catalog 未编进宿主 bundle？）")
         XCTAssertEqual(
@@ -4249,6 +4249,26 @@ final class ModuleKernelTests: XCTestCase {
             "条数走本地化格式串，拼在模块名之后（与展开 tab 的「最近 N 条」同一口径）"
         )
         XCTAssertTrue(three.contains("3"), "条数要出现在标题行：\(three)")
+
+        // **块里画几条就说几条**（2026-10-11 修正）：列表总数多于块容量时，标题的后缀是**画出来的
+        // 条数**（6），总数只作括注——改前这里收的是列表总数，标题与清单对不上（用户：
+        // 「最近 40 条不对，这就显示 6 条」）。
+        let capped = NotificationText.homeHeader(shown: 6, total: 40)
+        XCTAssertTrue(capped.contains("6"), "画了 6 条就说 6 条：\(capped)")
+        XCTAssertFalse(
+            capped.contains(String(format: NotificationText.localized("module.notifications.homeRecent"), 40)),
+            "不得把列表总数（40）说成「最近 N 条」：\(capped)"
+        )
+        XCTAssertTrue(
+            capped.contains(String(format: NotificationText.localized("module.notifications.homeTotalMore"), 40)),
+            "还有更多时补一句「共 M 条」：\(capped)"
+        )
+        XCTAssertEqual(
+            NotificationText.homeHeader(shown: 6, total: 6),
+            NotificationText.localized("module.notifications.name") + " · "
+                + String(format: NotificationText.localized("module.notifications.homeRecent"), 6),
+            "总数与画出来的条数相同时不加括注"
+        )
 
         // 不可读 / 无权限的一行提示：可读给 nil（= 不画那一行），两个非 ok 分支各给一句本地化文案
         // ——这条钉住「取不到数据」与「可读但 0 条」在块上能区分开（审查发现 2）。
