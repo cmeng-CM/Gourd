@@ -99,7 +99,7 @@ final class DynamicIslandUITests: XCTestCase {
 
     private func checkHomeTail(count: Int, reminderCount: Int) {
         let header = element("home-counts")
-        XCTAssertTrue(header.label.contains("1/\(reminderCount)"), header.label)
+        XCTAssertNotNil(header.label.range(of: "(?<![0-9])1/\(reminderCount)(?![0-9])", options: .regularExpression), header.label)
         let originalHeader = header.frame
         let tailID = String(format: "fixture-reminder-%02d", count)
         scrollTo("home-item-\(tailID)", in: "home-today-scroll")
@@ -110,7 +110,7 @@ final class DynamicIslandUITests: XCTestCase {
         XCTAssertEqual(circle.label, "Mark complete")
         click("home-complete-\(tailID)")
         wait("label == 'Mark incomplete'", on: circle)
-        XCTAssertTrue(header.label.contains("2/\(reminderCount)"), header.label)
+        XCTAssertNotNil(header.label.range(of: "(?<![0-9])2/\(reminderCount)(?![0-9])", options: .regularExpression), header.label)
         XCTAssertTrue(element("home-today-scroll").exists)
         XCTAssertFalse(element("calendar-detail-scroll").exists)
         XCTAssertTrue(visible(element("home-item-\(tailID)"), in: element("home-today-scroll")))
