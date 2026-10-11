@@ -10,15 +10,15 @@ Use Xcode on macOS 26+ with Apple Silicon (arm64). Open `DynamicIsland.xcodeproj
 
 - `sh tools/build.sh`: build Release `Gourd.app` and print its path.
 - `sh tools/build.sh --install`: build and install `/Applications/壶中天.app`, quitting the previous instance.
-- `sh tools/build.sh --dmg`: produce a DMG in `dist/`; requires stable `Gourd Local` signing, provisioned with `sh tools/setup-signing.sh`.
+- `sh tools/build.sh --dmg`: produce a DMG in `dist/`.
 
-Run the local XCTest gate from the repository root:
+Provision `Gourd Local` with `sh tools/setup-signing.sh` before running local XCTest or `--dmg`. Retain the project-configured signing identity for local tests; avoid command-line `CODE_SIGN_IDENTITY` overrides. Run tests from the repository root:
 
 ```bash
 xcodebuild test -project DynamicIsland.xcodeproj -scheme DynamicIsland \
   -destination "platform=macOS" -derivedDataPath ~/Library/Developer/Xcode/Gourd \
   -only-testing:DynamicIslandTests -skipMacroValidation -skipPackagePluginValidation \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES
 python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle
 ```
