@@ -105,6 +105,7 @@ final class CalendarPanelSession: ObservableObject {
     private var ownership: [UUID: Ownership] = [:]
     private var submission: Task<Bool, Never>?
     private var submissionID: UUID?
+    private var termination: Task<Bool, Never>?
 
     init(
         selectedDate: Date = Date(), calendar: Calendar = .autoupdatingCurrent,
@@ -330,6 +331,11 @@ final class CalendarPanelSession: ObservableObject {
 
     func save() async -> Bool {
         guard !isSubmitting, let submitted = draft, let id = draftID else { return false }
+        if submitted.kind == .reminder, submitted.eventID != nil {
+            error = String(localized: "Edit saved reminders in the system app.")
+            draftError = error
+            return false
+        }
         do {
             try submitted.validateTarget()
             if submitted.kind == .event { _ = try submitted.eventInput(calendar: calendar) }
@@ -353,10 +359,8 @@ final class CalendarPanelSession: ObservableObject {
                 else if self.draftID == id {
                     var savedBaseline = submitted
                     // 新建已成功时，后续输入必须继续指向真实记录，不能再次新建同一项。
-                    if submitted.kind == .event {
-                        savedBaseline.eventID = saved.id
-                        self.draft?.eventID = saved.id
-                    }
+                    savedBaseline.eventID = saved.id
+                    self.draft?.eventID = saved.id
                     self.baseline = savedBaseline
                     self.draftError = nil
                 }
@@ -372,7 +376,9 @@ final class CalendarPanelSession: ObservableObject {
                 return true
             } catch {
                 if self.draftID == id { self.draftError = error.localizedDescription }
-                if self.navigationGeneration == generation { self.error = error.localizedDescription }
+                if self.navigationGeneration == generation || (self.draftID == id && self.route == .editor) {
+                    self.error = error.localizedDescription
+                }
                 return false
             }
         }
@@ -441,9 +447,26 @@ final class CalendarPanelSession: ObservableObject {
 
     func resolveTermination(_ choice: CalendarTerminationChoice) async -> Bool {
         if case .cancel = choice { return false }
-        if isSubmitting { return await waitForSubmission() }
+        // 同时到达的退出请求复用首个裁决，避免等待后分别再次保存同一稿。
+        if let termination { return await termination.value }
+        let task = Task { await self.finishTermination(choice) }
+        termination = task
+        let result = await task.value
+        termination = nil
+        return result
+    }
+
+    private func finishTermination(_ choice: CalendarTerminationChoice) async -> Bool {
+        while isSubmitting {
+            guard await waitForSubmission() else { return false }
+        }
         switch choice {
-        case .save: return hasDirtyDraft ? await save() : true
+        case .save:
+            // 既有任务可能只是完成提醒，或只保存了较早输入；成功不代表剩余稿已保存。
+            while hasDirtyDraft {
+                guard await save() else { return false }
+            }
+            return true
         case .discard: discardDraft(); return true
         case .cancel: return false
         }

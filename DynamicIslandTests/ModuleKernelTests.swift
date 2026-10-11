@@ -8941,12 +8941,13 @@ final class CalendarInteractionTests: XCTestCase {
     private func panelSession(
         service: CalendarInteractionMemoryService,
         save: ((CalendarEventInput, String?) async throws -> EventModel)? = nil,
+        create: ((String, Date, String?) async throws -> EventModel)? = nil,
         complete: ((String, Bool) async throws -> EventModel)? = nil
     ) -> CalendarPanelSession {
         CalendarPanelSession(
             selectedDate: date(day: 11), calendar: testCalendar, now: { self.date(day: 11, hour: 12) },
             saveEvent: save ?? { try await service.saveEvent(input: $0, eventID: $1) },
-            createReminder: { try await service.createReminderRecord(title: $0, due: $1, listID: $2) },
+            createReminder: create ?? { try await service.createReminderRecord(title: $0, due: $1, listID: $2) },
             deleteEvent: { try await service.deleteEvent(id: $0) },
             completeReminder: complete ?? { try await service.completeReminder(id: $0, completed: $1) },
             event: { service.event(withID: $0) },
@@ -9352,6 +9353,211 @@ final class CalendarInteractionTests: XCTestCase {
             XCTAssertFalse(session.isSubmitting)
             XCTAssertEqual(session.draft != nil, shouldFail)
         }
+    }
+
+    func testPanelResumedInFlightDraftFailurePublishesErrorImmediately() async {
+        let backend = panelBackend()
+        let started = expectation(description: "save started")
+        var continuation: CheckedContinuation<EventModel, Error>?
+        let session = panelSession(service: backend, save: { _, _ in
+            try await withCheckedThrowingContinuation { continuation = $0; started.fulfill() }
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Keep failed input"
+        let submitted = session.draft
+        let baseline = session.baseline
+        let saving = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        session.suspend()
+        session.resumeDraft()
+        XCTAssertNil(session.error)
+        continuation?.resume(throwing: CalendarMutationError.readOnlyCalendar)
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft, submitted)
+        XCTAssertEqual(session.baseline, baseline)
+        XCTAssertEqual(session.error, CalendarMutationError.readOnlyCalendar.localizedDescription)
+    }
+
+    func testPanelOldFailedSaveDoesNotPublishErrorIntoReplacementEditor() async {
+        let backend = panelBackend()
+        let started = expectation(description: "save started")
+        var continuation: CheckedContinuation<EventModel, Error>?
+        let session = panelSession(service: backend, save: { _, _ in
+            try await withCheckedThrowingContinuation { continuation = $0; started.fulfill() }
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Old input"
+        let saving = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        session.beginCreate(kind: .reminder, on: date(day: 15), calendarID: "fixture-reminders")
+        session.resolveDraftConflict(.discardAndStart)
+        session.draft?.title = "New input"
+        let newDraft = session.draft
+        continuation?.resume(throwing: CalendarMutationError.readOnlyCalendar)
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft, newDraft)
+        XCTAssertNil(session.error)
+    }
+
+    func testPanelConcurrentSaveExitAfterUnrelatedCompletionSavesRemainingDraftOnce() async throws {
+        for failSave in [false, true] {
+            let backend = panelBackend()
+            let completionStarted = expectation(description: "completion started")
+            let saveStarted = expectation(description: "remaining draft save started")
+            var completionGate: CheckedContinuation<Void, Error>?
+            var saveGate: CheckedContinuation<Void, Error>?
+            var savedInputs: [CalendarEventInput] = []
+            let session = panelSession(service: backend, save: { input, id in
+                savedInputs.append(input)
+                try await withCheckedThrowingContinuation { saveGate = $0; saveStarted.fulfill() }
+                return try await backend.saveEvent(input: input, eventID: id)
+            }, complete: { id, completed in
+                try await withCheckedThrowingContinuation { completionGate = $0; completionStarted.fulfill() }
+                return try await backend.completeReminder(id: id, completed: completed)
+            })
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Save retained draft before exit"
+            session.suspend()
+            let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
+            let completing = Task { await session.complete(reminder, completed: true) }
+            await fulfillment(of: [completionStarted], timeout: 2)
+            let firstExit = Task { await session.resolveTermination(.save) }
+            let secondExit = Task { await session.resolveTermination(.save) }
+            await Task.yield()
+            XCTAssertTrue(savedInputs.isEmpty)
+            completionGate?.resume(returning: ())
+            await fulfillment(of: [saveStarted], timeout: 2)
+            XCTAssertTrue(session.isSubmitting)
+            XCTAssertNotNil(session.draft)
+            XCTAssertEqual(savedInputs.count, 1)
+            XCTAssertEqual(backend.writeAttempts, 1, "这里只完成提醒，草稿保存仍等待")
+            if failSave { backend.writeFailure = .readOnlyCalendar }
+            saveGate?.resume(returning: ())
+            let completed = await completing.value
+            let firstAllowed = await firstExit.value
+            let secondAllowed = await secondExit.value
+            XCTAssertTrue(completed)
+            XCTAssertEqual(firstAllowed, !failSave)
+            XCTAssertEqual(secondAllowed, !failSave)
+            XCTAssertEqual(savedInputs.count, 1)
+            XCTAssertEqual(backend.writeAttempts, 2, "一份提醒提交加一份草稿提交，不重复保存")
+            XCTAssertEqual(session.draft != nil, failSave)
+            XCTAssertEqual(backend.event(withID: "fixture-created-1")?.title, failSave ? nil : "Save retained draft before exit")
+        }
+    }
+
+    func testPanelDiscardExitAfterUnrelatedCompletionClearsDraftOnlyOnSuccess() async throws {
+        for failCompletion in [false, true] {
+            let backend = panelBackend()
+            let started = expectation(description: "completion started")
+            var completionGate: CheckedContinuation<Void, Error>?
+            let session = panelSession(service: backend, complete: { id, completed in
+                try await withCheckedThrowingContinuation { completionGate = $0; started.fulfill() }
+                return try await backend.completeReminder(id: id, completed: completed)
+            })
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Discard this retained draft"
+            session.suspend()
+            let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
+            let completing = Task { await session.complete(reminder, completed: true) }
+            await fulfillment(of: [started], timeout: 2)
+            let quitting = Task { await session.resolveTermination(.discard) }
+            await Task.yield()
+            let cancelled = await session.resolveTermination(.cancel)
+            XCTAssertFalse(cancelled)
+            XCTAssertNotNil(session.draft)
+            if failCompletion { backend.writeFailure = .readOnlyCalendar }
+            completionGate?.resume(returning: ())
+            let completed = await completing.value
+            let allowed = await quitting.value
+            XCTAssertEqual(completed, !failCompletion)
+            XCTAssertEqual(allowed, !failCompletion)
+            XCTAssertEqual(session.draft != nil, failCompletion)
+            XCTAssertEqual(session.baseline != nil, failCompletion)
+            XCTAssertEqual(backend.writeAttempts, 1, "放弃退出不会新增草稿写入")
+            XCTAssertNil(backend.event(withID: "fixture-created-1"))
+        }
+    }
+
+    func testPanelSaveExitAfterOlderSnapshotSavesNewerInputToSameActualRecordOnce() async {
+        let backend = panelBackend()
+        let started = expectation(description: "original save started")
+        var gate: CheckedContinuation<Void, Error>?
+        var titles: [String] = []
+        var eventIDs: [String?] = []
+        let session = panelSession(service: backend, save: { input, id in
+            titles.append(input.title)
+            eventIDs.append(id)
+            if titles.count == 1 {
+                try await withCheckedThrowingContinuation { gate = $0; started.fulfill() }
+            }
+            return try await backend.saveEvent(input: input, eventID: id)
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Original submitted snapshot"
+        let originalSave = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        session.draft?.title = "Newer retained input"
+        let firstExit = Task { await session.resolveTermination(.save) }
+        let secondExit = Task { await session.resolveTermination(.save) }
+        await Task.yield()
+        gate?.resume(returning: ())
+        let originalSaved = await originalSave.value
+        let firstAllowed = await firstExit.value
+        let secondAllowed = await secondExit.value
+        XCTAssertTrue(originalSaved)
+        XCTAssertTrue(firstAllowed)
+        XCTAssertTrue(secondAllowed)
+        XCTAssertEqual(titles, ["Original submitted snapshot", "Newer retained input"])
+        XCTAssertEqual(eventIDs, [nil, "fixture-created-1"])
+        XCTAssertEqual(backend.writeAttempts, 2)
+        XCTAssertEqual(backend.allRecords().filter { $0.id.hasPrefix("fixture-created-") }.count, 1)
+        XCTAssertEqual(backend.event(withID: "fixture-created-1")?.title, "Newer retained input")
+        XCTAssertFalse(session.hasDirtyDraft)
+        XCTAssertNil(session.draft)
+    }
+
+    func testPanelSaveExitRejectsEditingReminderCreatedByOlderSnapshotWithoutDuplicatingIt() async {
+        let backend = panelBackend()
+        let started = expectation(description: "reminder creation started")
+        var gate: CheckedContinuation<Void, Error>?
+        var creations = 0
+        let session = panelSession(service: backend, create: { title, due, id in
+            creations += 1
+            try await withCheckedThrowingContinuation { gate = $0; started.fulfill() }
+            return try await backend.createReminderRecord(title: title, due: due, listID: id)
+        })
+        session.beginCreate(kind: .reminder, on: date(day: 11), calendarID: "fixture-reminders")
+        session.draft?.title = "Original reminder snapshot"
+        let originalSave = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        session.draft?.title = "Newer reminder input"
+        let quitting = Task { await session.resolveTermination(.save) }
+        await Task.yield()
+        gate?.resume(returning: ())
+        let originalSaved = await originalSave.value
+        let allowedToQuit = await quitting.value
+        XCTAssertTrue(originalSaved)
+        XCTAssertFalse(allowedToQuit)
+        XCTAssertEqual(creations, 1)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertEqual(backend.event(withID: "fixture-created-1")?.title, "Original reminder snapshot")
+        XCTAssertEqual(session.draft?.eventID, "fixture-created-1")
+        XCTAssertEqual(session.baseline?.eventID, "fixture-created-1")
+        XCTAssertEqual(session.draft?.title, "Newer reminder input")
+        XCTAssertTrue(session.hasDirtyDraft)
+        XCTAssertEqual(session.error, String(localized: "Edit saved reminders in the system app."))
+        let retried = await session.save()
+        XCTAssertFalse(retried)
+        XCTAssertEqual(creations, 1)
+        let discarded = await session.resolveTermination(.discard)
+        XCTAssertTrue(discarded)
+        XCTAssertNil(session.draft)
+        XCTAssertEqual(backend.allRecords().filter { $0.id.hasPrefix("fixture-created-") }.count, 1)
     }
 
     func testFixtureCountsLongNotesRestrictionsAndStableGlobalTail() async throws {
