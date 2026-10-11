@@ -1479,19 +1479,25 @@ private struct TodosHomeBlockView: View {
                     Text(actionError).font(.caption).foregroundStyle(.red)
                         .accessibilityIdentifier("home-error")
                 }
-                ScrollView(.vertical) {
-                    TodoHomeTodayList(
-                        entries: entries, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
-                        canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
-                        isSubmitting: session.isSubmitting || completingItemID != nil,
-                        openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo
-                    )
-                    .scrollTargetLayout()
-                    if entries.isEmpty, store.hasFullAccess { TodoHomeEmptyRow() }
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.vertical) {
+                        TodoHomeTodayList(
+                            entries: entries, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
+                            canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
+                            isSubmitting: session.isSubmitting || completingItemID != nil,
+                            openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo
+                        )
+                        if entries.isEmpty, store.hasFullAccess { TodoHomeEmptyRow() }
+                    }
+                    .scrollPosition(id: $session.homeScrollAnchor, anchor: .top)
+                    .accessibilityIdentifier("home-today-scroll")
+                    .onAppear {
+                        if let anchor = session.homeScrollAnchor {
+                            scrollProxy.scrollTo(anchor, anchor: .top)
+                        }
+                    }
+                    .onHover { vm.setScrollGestureSuppression($0, token: scrollToken) }
                 }
-                .scrollPosition(id: $session.homeScrollAnchor, anchor: .top)
-                .accessibilityIdentifier("home-today-scroll")
-                .onHover { vm.setScrollGestureSuppression($0, token: scrollToken) }
             }
             .padding(.top, HomeBlockChrome.contentInsetTopListHeader)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1613,11 +1619,18 @@ private struct TodoHomeTodayList: View {
     let openTodo: (TodoBucketing.Item) -> Void
     let completeTodo: (TodoBucketing.Item) -> Void
 
+    private var eventEntries: [TodosHomeBlockLayout.ScheduleEntry] {
+        entries.filter { if case .event = $0 { return true }; return false }
+    }
+    private var todoEntries: [TodosHomeBlockLayout.ScheduleEntry] {
+        entries.filter { if case .todo = $0 { return true }; return false }
+    }
+
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            if entries.contains(where: { if case .event = $0 { return true }; return false }) {
+        VStack(alignment: .leading, spacing: 0) {
+            if !eventEntries.isEmpty {
                 groupHeader("calendar.quickAdd.kindEvent")
-                ForEach(entries) { entry in
+                ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
                         TodoHomeEventRow(event: event, open: { openEvent(event) })
                             .disabled(!canOpenDetail)
@@ -1625,9 +1638,9 @@ private struct TodoHomeTodayList: View {
                     }
                 }
             }
-            if entries.contains(where: { if case .todo = $0 { return true }; return false }) {
+            if !todoEntries.isEmpty {
                 groupHeader("calendar.quickAdd.kindReminder")
-                ForEach(entries) { entry in
+                ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
                         TodoHomeRow(
                             item: item, tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
@@ -1636,7 +1649,10 @@ private struct TodoHomeTodayList: View {
                     }
                 }
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Measure all today's rows so restoration uses their actual positions rather than lazy estimates.
+        .scrollTargetLayout()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func groupHeader(_ key: String) -> some View {
