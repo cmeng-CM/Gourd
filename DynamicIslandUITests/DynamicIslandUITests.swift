@@ -1,32 +1,66 @@
+import AppKit
 import XCTest
 
 final class DynamicIslandUITests: XCTestCase {
 
+    private let isolatedBundleIdentifier = "com.cmeng.gourd.calendar-tests.Gourd"
     var app: XCUIApplication!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        app = XCUIApplication()
+        app = XCUIApplication(bundleIdentifier: isolatedBundleIdentifier)
         app.launchArguments = ["--uitesting", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         if name.contains("Nine") { app.launchArguments.append("--calendar-fixture-count=9") }
         if name.contains("PermanentFailure") { app.launchArguments.append("--calendar-write-failure") }
         if name.contains("Retry") { app.launchArguments.append("--calendar-write-failure-once") }
         if name.contains("Delayed") { app.launchArguments.append("--calendar-write-delay-ms=2000") }
         app.launch()
+        guard requireIsolatedApplication() else { return }
         XCTAssertTrue(element("GourdNotch").waitForExistence(timeout: 20))
-        element("GourdNotch").hover()
+        hover(element("GourdNotch"))
         XCTAssertTrue(element("calendar-fixture-ready").waitForExistence(timeout: 25))
     }
 
     override func tearDownWithError() throws {
-        if let app, app.state != .notRunning {
+        if let app, app.state != .notRunning, requireIsolatedApplication() {
             let attachment = XCTAttachment(string: app.debugDescription)
             attachment.name = "AX final state"
             attachment.lifetime = .keepAlways
             add(attachment)
+            app.terminate()
         }
-        app?.terminate()
         app = nil
+    }
+
+    /// Public process metadata and the AX root must identify the same isolated AUT before input.
+    @discardableResult
+    private func requireIsolatedApplication(file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let processes = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == isolatedBundleIdentifier && !$0.isTerminated
+        }
+        guard processes.count == 1, let process = processes.first else {
+            XCTFail("Expected one isolated AUT for \(isolatedBundleIdentifier), found \(processes.count)", file: file, line: line)
+            return false
+        }
+        let hierarchy = app.debugDescription
+        let expression = try! NSRegularExpression(pattern: "pid: ([0-9]+)")
+        guard let match = expression.firstMatch(in: hierarchy, range: NSRange(hierarchy.startIndex..., in: hierarchy)),
+              let range = Range(match.range(at: 1), in: hierarchy),
+              let rootPID = Int32(hierarchy[range]), rootPID == process.processIdentifier else {
+            XCTFail("AX root must belong to isolated AUT PID \(process.processIdentifier)", file: file, line: line)
+            return false
+        }
+        return true
+    }
+
+    private func hover(_ target: XCUIElement) {
+        guard requireIsolatedApplication() else { return }
+        target.hover()
+    }
+
+    private func typeApplicationKey(_ key: String, modifiers: XCUIElement.KeyModifierFlags = []) {
+        guard requireIsolatedApplication() else { return }
+        app.typeKey(key, modifierFlags: modifiers)
     }
 
     private func element(_ id: String) -> XCUIElement {
@@ -53,13 +87,17 @@ final class DynamicIslandUITests: XCTestCase {
     private func scrollTo(_ id: String, in scrollID: String, down: Bool = true) {
         let scroll = element(scrollID)
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
-        scroll.hover()
+        hover(scroll)
         if visible(element(id), in: scroll) { return }
         if !down {
-            for _ in 0..<15 { scroll.scroll(byDeltaX: 0, deltaY: 240) }
+            for _ in 0..<15 {
+                guard requireIsolatedApplication() else { return }
+                scroll.scroll(byDeltaX: 0, deltaY: 240)
+            }
         }
         for _ in 0..<45 {
             if visible(element(id), in: scroll) { return }
+            guard requireIsolatedApplication() else { return }
             scroll.scroll(byDeltaX: 0, deltaY: -160)
         }
         screenshot("unreachable-\(id)")
@@ -67,6 +105,7 @@ final class DynamicIslandUITests: XCTestCase {
     }
 
     private func click(_ id: String) {
+        guard requireIsolatedApplication() else { return }
         XCTAssertTrue(element(id).waitForExistence(timeout: 8), id)
         XCTAssertTrue(element(id).isHittable, "\(id) must be hittable")
         element(id).click()
@@ -74,9 +113,12 @@ final class DynamicIslandUITests: XCTestCase {
 
     private func replace(_ id: String, with value: String) {
         click(id)
-        app.typeKey("a", modifierFlags: .command)
-        element(id).typeText(value)
-        XCTAssertEqual(element(id).value as? String, value, "Keyboard focus must edit the actual field")
+        let field = element(id)
+        guard requireIsolatedApplication() else { return }
+        field.typeKey("a", modifierFlags: .command)
+        guard requireIsolatedApplication() else { return }
+        field.typeText(value)
+        XCTAssertEqual(field.value as? String, value, "Keyboard focus must edit the actual field")
     }
 
     private func openEvent(_ id: String = "fixture-event-01") {
@@ -284,6 +326,7 @@ final class DynamicIslandUITests: XCTestCase {
         calendarTab()
         click("calendar-add")
         XCTAssertTrue(element("calendar-kind").waitForExistence(timeout: 5))
+        guard requireIsolatedApplication() else { return }
         app.descendants(matching: .any).matching(identifier: "Event").firstMatch.click()
         replace("calendar-title", with: "Created real fixture event")
         click("calendar-save")
@@ -302,8 +345,9 @@ final class DynamicIslandUITests: XCTestCase {
     func testExternalFinderDepartureClosesAndResumesDraft() {
         editEvent()
         replace("calendar-title", with: "Draft survives Finder departure")
-        element("GourdNotch").hover()
+        hover(element("GourdNotch"))
         let openFrame = element("GourdNotch").frame
+        guard requireIsolatedApplication() else { return }
         element("GourdNotch").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
             .withOffset(CGVector(dx: 0, dy: 80)).hover()
         XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
@@ -312,7 +356,7 @@ final class DynamicIslandUITests: XCTestCase {
         XCTAssertLessThan(element("GourdNotch").frame.height, openFrame.height)
         XCTAssertNotEqual(app.state, .notRunning)
         screenshot("external-departure-closed")
-        element("GourdNotch").hover()
+        hover(element("GourdNotch"))
         XCTAssertTrue(element("calendar-fixture-ready").waitForExistence(timeout: 8))
         calendarTab()
         click("calendar-resume-draft")
@@ -323,12 +367,12 @@ final class DynamicIslandUITests: XCTestCase {
     func testNativeQuitCancelKeepsDirtyDraft() {
         editEvent()
         replace("calendar-title", with: "Cancel native quit draft")
-        app.typeKey("q", modifierFlags: .command)
+        typeApplicationKey("q", modifiers: .command)
         XCTAssertTrue(element("calendar-quit-cancel").waitForExistence(timeout: 8), "Cmd+Q must enter the normal AppDelegate termination decision")
         screenshot("native-quit-decision")
         click("calendar-quit-cancel")
         XCTAssertNotEqual(app.state, .notRunning)
-        element("GourdNotch").hover()
+        hover(element("GourdNotch"))
         XCTAssertTrue(element("calendar-fixture-ready").waitForExistence(timeout: 8))
         if !element("calendar-title").exists {
             calendarTab()
@@ -340,20 +384,20 @@ final class DynamicIslandUITests: XCTestCase {
     func testAccessibilityProbe() {
         screenshot("home-probe")
         print("T6 AX HOME\n\(app.debugDescription)")
-        element("home-item-fixture-event-01").click()
+        click("home-item-fixture-event-01")
         XCTAssertTrue(element("calendar-detail-scroll").waitForExistence(timeout: 5))
-        element("calendar-edit").click()
+        click("calendar-edit")
         XCTAssertTrue(element("calendar-title").waitForExistence(timeout: 5))
-        element("calendar-title").click()
+        click("calendar-title")
         screenshot("editor-probe")
         print("T6 AX EDITOR\n\(app.debugDescription)")
-        element("calendar-target").click()
+        click("calendar-target")
         print("T6 AX MENU\n\(app.debugDescription)")
-        app.typeKey(.escape, modifierFlags: [])
+        typeApplicationKey(XCUIKeyboardKey.escape.rawValue)
         XCTAssertTrue(element("calendar-editor-scroll").exists)
-        element("calendar-start-date").click()
+        click("calendar-start-date")
         print("T6 AX DATE\n\(app.debugDescription)")
-        app.typeKey(.escape, modifierFlags: [])
+        typeApplicationKey(XCUIKeyboardKey.escape.rawValue)
         XCTAssertTrue(element("calendar-editor-scroll").exists)
     }
 
