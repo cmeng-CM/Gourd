@@ -55,6 +55,17 @@ enum CalendarPanelDates {
     }
 }
 
+/// 页面保存入口与服务使用同一权限口径；仅新建日程可使用 EventKit 仅写授权。
+enum CalendarPanelAccess {
+    static func canSave(draft: CalendarDraft?, authorization: EKAuthorizationStatus) -> Bool {
+        guard let draft else { return false }
+        if draft.eventID == nil {
+            return CalendarAccessPolicy.canCreate(status: authorization, for: draft.kind == .event ? .event : .reminder)
+        }
+        return CalendarAccessPolicy.canRead(status: authorization)
+    }
+}
+
 /// 真实日历右栏。局部状态只描述控件呈现，所有记录与草稿均归共享会话。
 struct CalendarPanelPages: View {
     @ObservedObject var session: CalendarPanelSession
@@ -87,7 +98,9 @@ struct CalendarPanelPages: View {
         return session.draft?.kind == .reminder ? manager.liveReminderAuthorization : manager.liveCalendarAuthorization
     }
 
-    private var hasAccess: Bool { authorization == .authorized || authorization == .fullAccess }
+    private var hasAccess: Bool {
+        CalendarPanelAccess.canSave(draft: session.draft, authorization: authorization)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

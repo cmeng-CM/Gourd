@@ -8613,6 +8613,40 @@ final class CalendarInteractionTests: XCTestCase {
                       start: start, end: end, isAllDay: allDay, calendarID: "events")
     }
 
+    func testCalendarPageNewEventSaveSupportsFullAndWriteOnlyAccess() {
+        let draft = pageDraft(start: date(day: 11, hour: 9), end: date(day: 11, hour: 10))
+        XCTAssertTrue(CalendarPanelAccess.canSave(draft: draft, authorization: .fullAccess))
+        XCTAssertTrue(CalendarPanelAccess.canSave(draft: draft, authorization: .writeOnly))
+    }
+
+    func testCalendarPageExistingEventSaveRequiresReadAccess() {
+        var draft = pageDraft(start: date(day: 11, hour: 9), end: date(day: 11, hour: 10))
+        draft.eventID = "existing-event"
+        XCTAssertTrue(CalendarPanelAccess.canSave(draft: draft, authorization: .fullAccess))
+        XCTAssertFalse(CalendarPanelAccess.canSave(draft: draft, authorization: .writeOnly))
+    }
+
+    func testCalendarPageReminderSaveNeverUsesWriteOnlyAccess() {
+        var draft = pageDraft(start: date(day: 11), end: date(day: 12))
+        draft.kind = .reminder
+        XCTAssertTrue(CalendarPanelAccess.canSave(draft: draft, authorization: .fullAccess))
+        XCTAssertFalse(CalendarPanelAccess.canSave(draft: draft, authorization: .writeOnly))
+        draft.eventID = "existing-reminder"
+        XCTAssertFalse(CalendarPanelAccess.canSave(draft: draft, authorization: .writeOnly))
+    }
+
+    func testCalendarPageSaveRejectsMissingDraftAndUnavailableAuthorization() {
+        XCTAssertFalse(CalendarPanelAccess.canSave(draft: nil, authorization: .fullAccess))
+        XCTAssertFalse(CalendarPanelAccess.canSave(draft: nil, authorization: .writeOnly))
+        let event = pageDraft(start: date(day: 11, hour: 9), end: date(day: 11, hour: 10))
+        var reminder = event
+        reminder.kind = .reminder
+        for status: EKAuthorizationStatus in [.notDetermined, .denied, .restricted] {
+            XCTAssertFalse(CalendarPanelAccess.canSave(draft: event, authorization: status))
+            XCTAssertFalse(CalendarPanelAccess.canSave(draft: reminder, authorization: status))
+        }
+    }
+
     func testCalendarPageTimedCrossDayRangeRemainsValid() throws {
         let draft = pageDraft(start: date(day: 11, hour: 23), end: date(day: 12, hour: 2))
         let input = try draft.eventInput(calendar: testCalendar)
