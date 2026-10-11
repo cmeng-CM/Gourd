@@ -183,7 +183,7 @@ final class DynamicIslandUITests: XCTestCase {
         let backFrame = element("calendar-back").frame
         let editFrame = element("calendar-edit").frame
         scrollTo("calendar-notes-end", in: "calendar-detail-scroll")
-        let fullNotes = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "END OF NOTES fixture-event-01")).firstMatch
+        let fullNotes = app.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", "END OF NOTES fixture-event-01")).firstMatch
         XCTAssertTrue(fullNotes.exists, "Complete note text must include its final source line")
         XCTAssertTrue(visible(element("calendar-notes-end"), in: element("calendar-detail-scroll")))
         XCTAssertEqual(element("calendar-back").frame.minY, backFrame.minY, accuracy: 2)
