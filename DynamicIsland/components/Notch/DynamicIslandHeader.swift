@@ -78,6 +78,11 @@ struct DynamicIslandHeader: View {
             HStack(spacing: 4) {
                 if vm.notchState == .open && !enableMinimalisticUI {
                     if Defaults[.showMirror] {
+                        // **镜子的浮动预览**（p13 / docs/38-home-v5-layout.md D-08）：镜子自本批起
+                        // 不再占首页组件（那个块与 `MirrorModule` 一并退场），改由这枚按钮弹一块
+                        // **面板内的浮动镜子**（`MirrorFloatingPreview`，挂在 `ContentView` 的面板
+                        // 内容上）——动作仍是上游那个 `vm.toggleCameraPreview()`（它同时起 / 停采集
+                        // 会话并翻 `vm.isCameraExpanded`，浮动镜子按那个标记显隐）。
                         Button(action: {
                             vm.toggleCameraPreview()
                         }) {

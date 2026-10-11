@@ -394,6 +394,19 @@ public final class ModuleRegistry: ObservableObject {
         moduleTypes[id]?.homeBlockHeight ?? .formFactor
     }
 
+    /// 该模块声明的**首页块区**（docs/38-home-v5-layout.md D-01~D-03）：`.environment` = 环境带
+    /// （固定第一排）、`.flow` = 可变流。**未注册的 id 一律答缺省 `.flow`**（与上面两条同口径：
+    /// 宿主拿到的都是「这个 id 的区」这一个答案）。同样是每次读现问一次（不缓存）。
+    public func homeZone(for id: String) -> ModuleHomeZone {
+        moduleTypes[id]?.homeZone ?? .flow
+    }
+
+    /// 该模块声明的**首页块是否吸收所在行的剩余宽度**（docs/38 D-04）。**未注册的 id 一律答 false**
+    /// （= 余量留在行尾，改动前的行为）。
+    public func homeBlockAbsorbsSurplus(for id: String) -> Bool {
+        moduleTypes[id]?.homeBlockAbsorbsSurplus ?? false
+    }
+
     // MARK: - UI 投影
 
     /// 展开面板的 tab 列表：仅 `active` 且 `surfaces` 含 `.expanded`、且**没有被用户在这个面上摘掉**

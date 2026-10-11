@@ -879,6 +879,20 @@ struct ContentView: View {
             .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
             .padding(.top, isIslandMode ? 0 : notchTopScreenBleedAmount)
             .background(panelBackground)
+            // **镜子的浮动镜子**（p13 / docs/38 D-08）：顶栏那枚按钮翻 `vm.isCameraExpanded`，
+            // 浮层就挂在面板内容之上、落在 `clipShape` **之内**（因此不会出到面板圆角外）。
+            // 展开 + 非极简才画（折叠态没有镜子按钮这个入口）；位置与拖动把手同侧但不同角，
+            // 尺寸由 `MirrorFloatingPreview.totalSide` 钉死（浮层不参与面板的尺寸账本）。
+            .overlay(alignment: .topTrailing) {
+                if vm.notchState == .open, !Defaults[.enableMinimalisticUI], vm.isCameraExpanded {
+                    MirrorFloatingPreview()
+                        .padding(.top, 8)
+                        .padding(.trailing, 10)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                        .animation(.smooth(duration: 0.18), value: vm.isCameraExpanded)
+                        .allowsHitTesting(true)
+                }
+            }
             .clipShape(resolvedClipShape)
             // 展开态右下角的拖动把手（D-29）：画在 `clipShape` **之后**（不受裁剪影响，位置由
             // `panelResizeHandleEdgeInset` 保证落在面板内）与 `compositingGroup` / `shadow` 之前。

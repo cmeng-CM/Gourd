@@ -172,22 +172,24 @@ final class MusicModule: GourdModule {
 
     /// 接管三件套之三：宽度声明（D-10）——接管时是**被接管块原本的宽度** `300/420`；
     /// **p5-home-blocks / T3 起降档为 `240/300`**，**p6-ui-polish / T2 再缩为 `200/250`**（D-03：
-    /// 用户「首页音乐播放宽度可以进一步减小」）。
+    /// 用户「首页音乐播放宽度可以进一步减小」），**p13 因搬进环境带定为 `260/260`（固定）**
+    /// （docs/38-home-v5-layout.md：环境带三块里音乐是**不弹性**的那一档——它被拉宽只会把
+    /// 「封面 + 控制键」拉开成一片空档，第二排前台应用那一片网格才是该吃余量的地方）。
     ///
     /// 两个数落成**命名常量**（`homeBlockMinWidth` / `homeBlockIdealWidth`）：测试与设计文档回写
     /// 引用它们，别处不再复写这两个字面量。
     ///
-    /// `min` 200 的依据：**封面打开那一档**一行里要放得下「封面 + 封面距 + 五键 + 四道键距」——
-    /// 装宽度 `5×26 + 4×6 + 36 + 6 = 196 ≤ 200`（余量 4，不裁）——算式与各档取值见
-    /// `MusicControlsView.CompactMetrics.albumArtRowInstallWidth`
-    /// （`HomeStripLayoutTests.testMusicBlockWidthAndCompactControlsFitTheMinimum` 把两边钉在一起）。
-    /// `ideal` 250 是它富余时愿意占的宽度（不再是 300/420：那两档是配大封面选的，封面降成 36pt
-    /// 小图之后只会把同一行的其它块挤走）。
+    /// `min` 的依据：**封面打开那一档**一行里要放得下「封面 + 封面距 + 五键 + 四道键距」——
+    /// 装宽度 `5×26 + 4×6 + 36 + 6 = 196`（算式与各档取值见
+    /// `MusicControlsView.CompactMetrics.albumArtRowInstallWidth`）；p13 取 **260** 是 v5 设计稿里
+    /// 那一档的观感宽度（比最低安装宽宽出 64pt，进度条与曲名因此有呼吸空间），`min == ideal`
+    /// 意味着它在任何宽度下都保持这一档、不参与压缩（环境带另有弹性块承担宽窄变化）。
     ///
     /// **块高不再由它推**：上一版 `HomeStripView.minimumUsableHeight` 的 152 是从 420 宽下的封面
-    /// 边长量出来的（见那边的注释），音乐降档后那个来源消失——现在的档高由镜子的方形边长选定。
-    static let homeBlockMinWidth: CGFloat = 200
-    static let homeBlockIdealWidth: CGFloat = 250
+    /// 边长量出来的（见那边的注释），音乐降档后那个来源消失——p13 起环境带三块都由
+    /// `HomeEnvironmentBand.height`（96）定档。
+    static let homeBlockMinWidth: CGFloat = 260
+    static let homeBlockIdealWidth: CGFloat = 260
 
     static var homeBlockWidth: ModuleHomeBlockWidth? {
         ModuleHomeBlockWidth(min: homeBlockMinWidth, ideal: homeBlockIdealWidth)
@@ -197,8 +199,15 @@ final class MusicModule: GourdModule {
     /// （D-09）。上一版答 `.large` 是因为「封面 + 控制需要面积」，而封面已降成小图、块宽也降到
     /// `200/250`（T3 的 `240/300` → T2 再缩一档）：一条 96 高的紧凑条正好放下「小封面 + 曲名 +
     /// 进度 + 控制键」，再占大块档只是白撑整行高度（这也是「音乐块仍占整行高」那条失败信号的判据）。
-    /// 形态只声明「它是什么」，摆法（档高 140 由镜子定义）仍是宿主的事（docs/29 §做法 机制四 / D-10）。
+    /// 形态只声明「它是什么」，摆法仍是宿主的事（docs/29 §做法 机制四 / D-10）。
     static var homeFormFactor: HomeFormFactor { .compact }
+
+    /// 首页块的**区**（docs/38 D-02）：音乐是**环境带**第一块——它落在固定第一排，
+    /// 不参与可变流的换行（常看的东西不该因为「开了另一个块」被挤到第二排去）。
+    static var homeZone: ModuleHomeZone { .environment }
+
+    /// 音乐**不吃余量**（docs/38 D-04）：固定 260。理由见 `homeBlockMinWidth` 的注释。
+    static var homeBlockAbsorbsSurplus: Bool { false }
 
     /// 音乐块的**存在性判据**（纯函数，便于单测：口径 3）。
     ///

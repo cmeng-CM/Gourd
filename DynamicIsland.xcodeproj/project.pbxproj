@@ -34,6 +34,7 @@
 		AA11BB22CC33DD44EE55F002 /* ModuleKernelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55F001 /* ModuleKernelTests.swift */; };
 		BB22CC33DD44EE55FF66A002 /* HomeStripLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB22CC33DD44EE55FF66A001 /* HomeStripLayoutTests.swift */; };
 		BD33EE44FF55AA66BB77C002 /* PanelAutoHeightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD33EE44FF55AA66BB77C001 /* PanelAutoHeightTests.swift */; };
+		AA38FF21C0DE5A11BB550001 /* HomeTodayBandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA38FF21C0DE5A11BB550002 /* HomeTodayBandTests.swift */; };
 		BD33EE44FF55AA66BB77C004 /* PanelLayoutDefaultsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD33EE44FF55AA66BB77C003 /* PanelLayoutDefaultsTests.swift */; };
 		CC33DD44EE55FF66AA77B002 /* ModuleToggleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC33DD44EE55FF66AA77B001 /* ModuleToggleTests.swift */; };
 		DD44EE55FF66AA77BB88C002 /* TakeoverEnablementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD44EE55FF66AA77BB88C001 /* TakeoverEnablementTests.swift */; };
@@ -92,6 +93,7 @@
 		AA11BB22CC33DD44EE55F001 /* ModuleKernelTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ModuleKernelTests.swift; sourceTree = "<group>"; };
 		BB22CC33DD44EE55FF66A001 /* HomeStripLayoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeStripLayoutTests.swift; sourceTree = "<group>"; };
 		BD33EE44FF55AA66BB77C001 /* PanelAutoHeightTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PanelAutoHeightTests.swift; sourceTree = "<group>"; };
+		AA38FF21C0DE5A11BB550002 /* HomeTodayBandTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeTodayBandTests.swift; sourceTree = "<group>"; };
 		BD33EE44FF55AA66BB77C003 /* PanelLayoutDefaultsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PanelLayoutDefaultsTests.swift; sourceTree = "<group>"; };
 		CC33DD44EE55FF66AA77B001 /* ModuleToggleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ModuleToggleTests.swift; sourceTree = "<group>"; };
 		DD44EE55FF66AA77BB88C001 /* TakeoverEnablementTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TakeoverEnablementTests.swift; sourceTree = "<group>"; };
@@ -203,6 +205,7 @@
 				AA11BB22CC33DD44EE55F001 /* ModuleKernelTests.swift */,
 				BB22CC33DD44EE55FF66A001 /* HomeStripLayoutTests.swift */,
 				BD33EE44FF55AA66BB77C001 /* PanelAutoHeightTests.swift */,
+				AA38FF21C0DE5A11BB550002 /* HomeTodayBandTests.swift */,
 				BD33EE44FF55AA66BB77C003 /* PanelLayoutDefaultsTests.swift */,
 				CC33DD44EE55FF66AA77B001 /* ModuleToggleTests.swift */,
 				DD44EE55FF66AA77BB88C001 /* TakeoverEnablementTests.swift */,
@@ -484,6 +487,7 @@
 				AA11BB22CC33DD44EE55F002 /* ModuleKernelTests.swift in Sources */,
 				BB22CC33DD44EE55FF66A002 /* HomeStripLayoutTests.swift in Sources */,
 				BD33EE44FF55AA66BB77C002 /* PanelAutoHeightTests.swift in Sources */,
+				AA38FF21C0DE5A11BB550001 /* HomeTodayBandTests.swift in Sources */,
 				BD33EE44FF55AA66BB77C004 /* PanelLayoutDefaultsTests.swift in Sources */,
 				CC33DD44EE55FF66AA77B002 /* ModuleToggleTests.swift in Sources */,
 				DD44EE55FF66AA77BB88C002 /* TakeoverEnablementTests.swift in Sources */,

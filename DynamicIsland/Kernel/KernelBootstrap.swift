@@ -40,9 +40,8 @@
 //  投影 + `content(for: .home)` 产出，块宽由 `homeBlockWidth` 钩子继承（docs/20 §做法 机制一）。
 //
 //  P3 冻结批次 / T6：`builtinModules` 加 `CalendarModule`——给孤儿视图 `StandaloneCalendarView`
-//  接线（展开面板的「日历」tab），启用真源 = 上游那颗总开关 `showCalendar`；上游首页那条全宽
-//  日历行**不动**（它仍由 `NotchHomeView` 直接渲染），两处呈现共用一个开关
-//  （docs/24-release-freeze.md §做法 机制三）。
+//  接线（展开面板的「日历」tab）。**p13 起月历是它唯一的入口**（docs/38 D-07：首页那条全宽
+//  日历行整条退休，`showCalendar` 键随之删除）。
 //
 //  p3-widgets 批次 / T2：`builtinModules` 加 `StatsModule`——统计从「展开 tab」改成**首页块**
 //  （启用真源不变，仍是上游 `enableStatsFeature`），上游 `TabSelectionView` 里那条 Stats tab
@@ -66,9 +65,16 @@ public enum KernelBootstrap {
     ///
     /// 顺序与用户可见顺序**无关**（那个由 `defaultPlacement.order` 定，见 `ModuleRegistry.tabEntries`）；
     /// 它只影响 `register` 的落表顺序与日志可读性，这里按批次先后排。
+    /// **p13 起两条退场**（docs/38-home-v5-layout.md D-06 / D-08）：
+    /// - `ProgressModule`（工作日统计）：读数搬进首页今天带右侧那一行小字，块本身退场；
+    /// - `MirrorModule`（镜子）：它的渲染点是首页块，而镜子改由**顶栏按钮 + 浮动预览**呈现
+    ///   （`DynamicIslandHeader`），模块一个 surface 都不占了。
+    ///
+    /// 两条的文件与用例都留着（可逆：把这两行加回本数组即恢复），只是不再注册——留一个
+    /// 「注册了但什么都不渲染」的模块只会让组件页多一张拨了没反应的卡。
     static let builtinModules: [any GourdModule.Type] = [
-        ProgressModule.self, TodosModule.self, NotificationsModule.self, LauncherModule.self,
-        TimerModule.self, MirrorModule.self, MusicModule.self, ShortcutsModule.self,
+        TodosModule.self, NotificationsModule.self, LauncherModule.self,
+        TimerModule.self, MusicModule.self, ShortcutsModule.self,
         FrontAppModule.self, CalendarModule.self, StatsModule.self,
     ]
 

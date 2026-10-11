@@ -621,7 +621,6 @@ final class TakeoverEnablementTests: XCTestCase {
         // 这里仍把它一起压假只是沿用「所有 tab 输入置假」的夹具形态，不影响结论。
         let upstreamKeys = [
             Defaults.Keys.showStandardMediaControls.name,
-            Defaults.Keys.showCalendar.name,
             Defaults.Keys.showMirror.name,
             Defaults.Keys.dynamicShelf.name,
             Defaults.Keys.enableStatsFeature.name,
@@ -637,7 +636,6 @@ final class TakeoverEnablementTests: XCTestCase {
         defer { restoreValues(originals, for: keys) }
 
         Defaults[.showStandardMediaControls] = false
-        Defaults[.showCalendar] = false
         Defaults[.showMirror] = false
         Defaults[.dynamicShelf] = false
         Defaults[.enableStatsFeature] = false
@@ -657,14 +655,14 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(registry.states[timerID], .active, "接管键 true → 启用门放行")
         XCTAssertTrue(TimerModule.isTabVisible(), "显示方式选 tab → 此刻该在 tab 列表里")
         XCTAssertEqual(registry.tabEntries.map(\.id), [timerID], "接管的 tab 由模块投影产出（上游分支已删）")
-        XCTAssertEqual(enabledStandardTabCount(), 1, "① 计时器的贡献 = 1")
+        XCTAssertEqual(enabledStandardTabCount(), 2, "① 首页恒 1（p13 / docs/38 D-14）+ 计时器 1 = 2")
 
         // ② 功能开 + 显示方式改选 popover → 贡献 0（模块仍 active：可见性 ≠ 启用）
         Defaults[.timerDisplayMode] = .popover
         XCTAssertEqual(registry.states[timerID], .active, "可见性只在投影层过滤，不改模块状态")
         XCTAssertFalse(TimerModule.isTabVisible(), "显示方式不是 tab → 不该在 tab 列表里")
         XCTAssertTrue(registry.tabEntries.isEmpty, "投影随之消失")
-        XCTAssertEqual(enabledStandardTabCount(), 0, "② 计时器的贡献 = 0")
+        XCTAssertEqual(enabledStandardTabCount(), 1, "② 只剩首页那 1（计时器的贡献 0）")
 
         // ③ 功能关 → 贡献 0（门直接读上游键 → 模块不激活）
         Defaults[.timerDisplayMode] = .tab
@@ -674,7 +672,7 @@ final class TakeoverEnablementTests: XCTestCase {
         await registry.bootstrap()
 
         XCTAssertEqual(registry.states[timerID], .disabled, "接管键 false → 启用门不放行（不看 overrides / manifest 默认）")
-        XCTAssertEqual(enabledStandardTabCount(), 0, "③ 计时器的贡献 = 0")
+        XCTAssertEqual(enabledStandardTabCount(), 1, "③ 只剩首页那 1（计时器的贡献 0）")
     }
 
     // MARK: - 计时器页判据：第二入口与 250pt 高度档（T3）
@@ -1008,13 +1006,13 @@ final class TakeoverEnablementTests: XCTestCase {
                 + "防止它被悄悄翻回 true）"
         )
 
-        // 三条取值型声明（T3 成套改；块宽 T2 再缩一档）：真源 = 上游总开关；块宽 200/250；形态紧凑档
+        // 取值型声明（p13 成套改）：真源 = 上游总开关；块宽 260/260（环境带固定档）；形态紧凑档
         XCTAssertEqual(MusicModule.takeoverEnableKey?.name, Defaults.Keys.showStandardMediaControls.name)
         XCTAssertEqual(
             MusicModule.homeBlockWidth,
-            ModuleHomeBlockWidth(min: 200, ideal: 250),
-            "T2 起 200/250（T3 是 240/300、更早是 300/420：那两档是配大封面选的；"
-                + "200 的下界由封面档装宽度 5×26 + 4×6 + 36 + 6 = 196 + 4pt 余量定，见 "
+            ModuleHomeBlockWidth(min: 260, ideal: 260),
+            "p13 起 260/260（沿革：300/420 → 240/300 → 200/250 → 本批 260 固定；"
+                + "下界由封面档装宽度 5×26 + 4×6 + 36 + 6 = 196 兜住，见 "
                 + "MusicControlsView.CompactMetrics.albumArtRowInstallWidth）"
         )
         XCTAssertEqual(
@@ -1125,12 +1123,9 @@ final class TakeoverEnablementTests: XCTestCase {
                 "com.cmeng.gourd.shortcuts.showOutput",
                 "com.cmeng.gourd.shortcuts.timeoutSeconds",
                 "com.cmeng.gourd.frontapp.maxRecentApps",
-                "com.cmeng.gourd.progress.visibleScopes",
-                "com.cmeng.gourd.progress.workStart",
-                "com.cmeng.gourd.progress.workEnd",
-                "com.cmeng.gourd.progress.workdays",
             ],
-            "十一条 = docs/24 §做法 机制四 点名的七个键 + docs/29 §做法 机制二 的 visibleScopes + docs/31 §接口与数据形状 4 的工作日三键（顺序不动，去/改任意一条都会红）"
+            "七条 = docs/24 §做法 机制四 点名的七个键（顺序不动，去/改任意一条都会红）；"
+                + "p13 起进度那四条（visibleScopes + 工作日三键）随模块退场删除，见 docs/38 D-06"
         )
 
         // ①②③ 数据源 = 注册表里的真 manifest（先补注册：`setUp` 的 `deactivateAll()` 把
@@ -1491,142 +1486,6 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertResolves(control.titleKey)
     }
 
-    /// **进度卡那一行的界面入口**（p5-home-blocks / T2，docs/29 §做法 机制二 / D-05）：模块 id /
-    /// config 键 / 控件类型 / 选项与文案 / 行标题五項对生产事实——数据源是**生产表本身**
-    /// （同 `testMusicAlbumArtControlMatchesManifestAndCatalog` 的口径）。
-    ///
-    /// 选项与文案 key 都取自 `ProgressCalculator.Scope.allCases`：**顺序即模块的声明顺序**，
-    /// 也即「勾满五档而块放不下时画前三个」那个顺序（模块侧 `listedScopes` 取的是前缀）。
-    /// 类型那一档在允许清单用例里已按 kind 分档断言（`.multiSelect` ↔ manifest 的 `list`），
-    /// 这里把**具体取值**钉死：选项写错一个字 / 少一档（比如漏了 quarter），这里就红。
-    func testProgressVisibleScopesControlMatchesManifestAndCatalog() throws {
-        let control = try XCTUnwrap(
-            ModuleSettingsSection.configControls.first { $0.moduleID == "com.cmeng.gourd.progress" && $0.key == "visibleScopes" },
-            "进度卡必须有一条「显示的尺度」控件（D-05 要的就是这个入口）"
-        )
-
-        XCTAssertEqual(control.moduleID, ProgressModule.manifest.id, "模块 id 必须是真模块那一份字面量")
-        XCTAssertEqual(control.key, "visibleScopes", "落盘键名就是模块侧 `get` 读的那一个字面量")
-        XCTAssertEqual(control.titleKey, "settings.modules.progress.visibleScopes")
-
-        // 五档选项 + 一一对应的文案 key（都取自模块侧，不在设置页另抄一份）
-        XCTAssertEqual(
-            control.multiSelectOptions.map(\.value),
-            ProgressCalculator.Scope.allCases.map(\.rawValue),
-            "选项顺序 = `Scope.allCases`（勾满而块放不下时画前三个的那个顺序）"
-        )
-        XCTAssertEqual(
-            control.multiSelectOptions.map(\.titleKey),
-            ProgressCalculator.Scope.allCases.map(\.labelKey),
-            "文案 key 复用模块侧的行标签（`module.progress.scope.<rawValue>`）"
-        )
-        XCTAssertEqual(
-            control.multiSelectOptions.map(\.value),
-            ["day", "week", "month", "quarter", "year"],
-            "五档逐条写死（漏一档 / 改名即红）"
-        )
-
-        let properties = try XCTUnwrap(ProgressModule.manifest.config?.properties)
-        let node = try XCTUnwrap(
-            properties[control.key],
-            "控件的键名必须与 manifest config 的那一键逐字一致（`\(control.key)` 不在 schema 里）"
-        )
-        XCTAssertEqual(node.type, "list", "这个键写的是字符串表")
-        XCTAssertEqual(node.itemType, "string")
-        XCTAssertEqual(
-            node.default,
-            ConfigValue.strings(["day", "week", "month"]),
-            "manifest 那一键的默认值 = 出厂三档（`ProgressCalculator.defaultVisibleScopes`）"
-        )
-
-        XCTAssertResolves(control.titleKey)
-    }
-
-    /// **进度卡工作日三行**（p7 / T3，docs/31 §接口与数据形状 4 / D-08）：模块 id / config 键 /
-    /// 控件类型与区间 / 选项与文案 / 行标题五项对生产事实——数据源是**生产表本身**
-    /// （同 `testProgressVisibleScopesControlMatchesManifestAndCatalog` 的口径）。
-    ///
-    /// 三行各自钉死：
-    /// - `workStart` / `workEnd`：`.integer(range: WorkdayCalendar.workHourRange)`
-    ///   ——区间**单一来源**（模块读侧的越界回落与滑块共用这一个常量，这里再写一个数字即红）；
-    /// - `workdays`：`.multiSelect`，选项 = ISO 1…7、文案 key = `module.progress.weekday.<ISO>`
-    ///   （七条逐字写死，改名 / 漏一天即红），`multiSelectEffectiveSet` 接
-    ///   `WorkdayCalendar.resolveWorkdays`——卡上勾中的一组 = 块判定用的那一组
-    ///   （空表 / 全坏值 → 一~五；野值不会变成点不掉的勾）。
-    ///
-    /// 类型那一档在允许清单用例里已按 kind 分档断言（`.integer` ↔ manifest 的 `integer`、
-    /// `.multiSelect` ↔ `list`），这里把**具体取值**钉死。
-    func testProgressWorkdayControlsMatchManifestAndCatalog() throws {
-        let controls = ModuleSettingsSection.configControls.filter { $0.moduleID == "com.cmeng.gourd.progress" }
-        func control(_ key: String) throws -> ModuleConfigControl {
-            try XCTUnwrap(
-                controls.first { $0.key == key },
-                "进度卡必须有一条 `\(key)` 控件（docs/31 §接口 4 的工作日三行）"
-            )
-        }
-
-        // 上下班时间：整点滑块，区间取模块侧常量（不写第二份字面量）
-        let start = try control("workStart")
-        XCTAssertEqual(start.moduleID, ProgressModule.manifest.id, "模块 id 必须是真模块那一份字面量")
-        XCTAssertEqual(start.kind, .integer(range: WorkdayCalendar.workHourRange), "区间 = workHourRange（单一来源）")
-        XCTAssertEqual(start.titleKey, "settings.modules.progress.workStart")
-        XCTAssertResolves(start.titleKey)
-        let end = try control("workEnd")
-        XCTAssertEqual(end.kind, .integer(range: WorkdayCalendar.workHourRange))
-        XCTAssertEqual(end.titleKey, "settings.modules.progress.workEnd")
-        XCTAssertResolves(end.titleKey)
-
-        // 工作日：ISO 1…7 的七枚胶囊，文案 key 逐条钉死
-        let workdays = try control("workdays")
-        XCTAssertEqual(workdays.titleKey, "settings.modules.progress.workdays")
-        XCTAssertResolves(workdays.titleKey)
-        XCTAssertEqual(
-            workdays.multiSelectOptions.map(\.value),
-            ["1", "2", "3", "4", "5", "6", "7"],
-            "选项 = ISO 编号 1…7（1 = 周一；漏一天 / 改名即红）"
-        )
-        XCTAssertEqual(
-            workdays.multiSelectOptions.map(\.titleKey),
-            (1...7).map { "module.progress.weekday.\($0)" },
-            "文案 key 形态 `module.progress.weekday.<ISO>`"
-        )
-        for option in workdays.multiSelectOptions {
-            XCTAssertResolves(option.titleKey)
-        }
-
-        // manifest 三键：类型与默认值（workStart / workEnd 的默认值 = 模块侧常量）
-        let properties = try XCTUnwrap(ProgressModule.manifest.config?.properties)
-        XCTAssertEqual(properties["workStart"]?.type, "integer")
-        XCTAssertEqual(properties["workStart"]?.default, ConfigValue.int(WorkdayCalendar.defaultWorkStartHour))
-        XCTAssertEqual(properties["workEnd"]?.type, "integer")
-        XCTAssertEqual(properties["workEnd"]?.default, ConfigValue.int(WorkdayCalendar.defaultWorkEndHour))
-        XCTAssertEqual(properties["workdays"]?.type, "list")
-        XCTAssertEqual(properties["workdays"]?.itemType, "string")
-        XCTAssertEqual(
-            properties["workdays"]?.default,
-            ConfigValue.strings(WorkdayCalendar.defaultWorkdays.sorted().map(String.init)),
-            "默认值 = 模块侧 defaultWorkdays（ISO 一~五）"
-        )
-
-        // 多选的有效值解析：空表 / 全坏值 → 一~五；合法子集按 ISO 升序（= 选项声明顺序）
-        let config = RecordingConfigHandle(schema: ["workdays"])
-        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "缺键 → 一~五")
-        XCTAssertTrue(config.set("workdays", to: [String]()))
-        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "空表 → 一~五（与块判定同一处）")
-        XCTAssertTrue(config.set("workdays", to: ["bogus", "0", "8"]))
-        XCTAssertEqual(workdays.selectedOptions(from: config), ["1", "2", "3", "4", "5"], "全坏值 → 一~五")
-        XCTAssertTrue(config.set("workdays", to: ["7", "bogus", "6", "6"]))
-        XCTAssertEqual(
-            workdays.selectedOptions(from: config),
-            ["6", "7"],
-            "野值丢弃 + 去重 + 按选项声明顺序（= ISO 升序）"
-        )
-        // 最后一枚不许关（与尺度多选同一条既有口径）：只剩「6」时点它是拒绝、盘上不动
-        XCTAssertTrue(config.set("workdays", to: ["6"]))
-        XCTAssertFalse(workdays.toggleMultiSelect("6", config: config), "最后一枚拒绝取消")
-        XCTAssertEqual(workdays.selectedOptions(from: config), ["6"], "拒绝之后盘上一个字节没动")
-    }
-
     /// **启动台上区两条新 key**（p7 / T5，docs/31 §接口与数据形状 5 / D-18）：`module.launcher.quickLaunch`
     /// 与 `.quickLaunchHint`——zh-Hans / en 两个值逐字写死、都落 `translated`，并在宿主 bundle 的
     /// zh-Hans 一份里**解析得出**（视图里是 `Text(LocalizedStringKey(...))` 直查，键写错 / 文案没编进去
@@ -1666,80 +1525,6 @@ final class TakeoverEnablementTests: XCTestCase {
         }
     }
 
-    /// **卡片与模块算的是同一组尺度**（T2 审查的 Important 的回归用例）：卡片上「勾中的那一组」
-    /// 必须经模块的**公开解析**（`ProgressCalculator.resolveScopes`，登记在
-    /// `multiSelectEffectiveSet`）算出，因此它按构造等于**块真正会画的那一组**——
-    /// 空表 / 全是坏值 → 出厂三档（不是「一个都没勾」），有真值 → 按真值（去重 + 按选项声明顺序）。
-    ///
-    /// 另钉住「最后一档不许关」：`toggleMultiSelect` 在只剩一档时**拒绝**（返回 false、不落盘）
-    /// ——一组都没有的块一行都不画，而「写空表 + 让模块回落」会让卡片与块在那一次点击上又分叉。
-    ///
-    /// 读侧只经 `ConfigHandle.get`，所以这里的假体（`RecordingConfigHandle`）够了：
-    /// **不碰**开发机真实的 `com.cmeng.gourd.module.progress` 域。
-    func testProgressVisibleScopesCardShowsTheEffectiveSet() throws {
-        let control = try XCTUnwrap(
-            ModuleSettingsSection.configControls.first { $0.moduleID == "com.cmeng.gourd.progress" && $0.key == "visibleScopes" },
-            "进度卡必须有一条「显示的尺度」控件"
-        )
-        let config = RecordingConfigHandle(schema: ["visibleScopes"])
-
-        // ① 一条覆盖值都没有（`get` 给 nil）→ 出厂三档
-        //    （真句柄在同样情形下回落到 manifest 默认，值也是这三档——两条路都对得上）
-        XCTAssertEqual(control.selectedOptions(from: config), ["day", "week", "month"], "缺键 → 出厂三档")
-
-        // ② 覆盖值是**空表** → 仍然是出厂三档（修掉的那一条：旧实现只做过滤，这里给 []）
-        XCTAssertTrue(config.set("visibleScopes", to: [String]()))
-        XCTAssertEqual(
-            control.selectedOptions(from: config),
-            ["day", "week", "month"],
-            "空表 → 有效值仍是出厂三档（与块画出来的三行一致，不是「一个都没勾」）"
-        )
-
-        // ③ 覆盖值**全是坏值** → 同上（模块侧的回落口径与卡片逐字同一处）
-        XCTAssertTrue(config.set("visibleScopes", to: ["bogus", "Month"]))
-        XCTAssertEqual(control.selectedOptions(from: config), ["day", "week", "month"], "全坏值 → 出厂三档")
-
-        // ④ 有真值 → 按真值：野值丢弃、去重、顺序按选项声明顺序（不是写入顺序）
-        XCTAssertTrue(config.set("visibleScopes", to: ["year", "bogus", "day", "day"]))
-        XCTAssertEqual(
-            control.selectedOptions(from: config),
-            ["day", "year"],
-            "野值丢弃 + 去重 + 按选项声明顺序（存进去的先后不参与）"
-        )
-
-        // ⑤ 只剩一档时**拒绝取消**（不落盘：盘上还是原来那一档）
-        XCTAssertTrue(config.set("visibleScopes", to: ["year"]))
-        XCTAssertEqual(control.selectedOptions(from: config), ["year"])
-        XCTAssertFalse(control.toggleMultiSelect("year", config: config), "最后一档拒绝取消")
-        XCTAssertEqual(control.selectedOptions(from: config), ["year"], "拒绝之后盘上一个字节没动")
-        // 从一档出发**加**一档照常，写盘顺序仍按选项声明顺序
-        XCTAssertTrue(control.toggleMultiSelect("day", config: config), "从一档加一档")
-        XCTAssertEqual(control.selectedOptions(from: config), ["day", "year"])
-        // 两档时取消回到一档；再到一档又拒绝
-        XCTAssertTrue(control.toggleMultiSelect("day", config: config), "两档时可以取消")
-        XCTAssertEqual(control.selectedOptions(from: config), ["year"])
-
-        // ⑥ 手改配置文件写成空表之后点一下：**从有效三档出发**（不是从空表出发）
-        XCTAssertTrue(config.set("visibleScopes", to: [String]()))
-        XCTAssertTrue(control.toggleMultiSelect("quarter", config: config), "空表上勾一档")
-        XCTAssertEqual(
-            control.selectedOptions(from: config),
-            ["day", "week", "month", "quarter"],
-            "落盘的是「有效三档 + 本季」——空表在点击这一下就被治好"
-        )
-        XCTAssertEqual(
-            try JSONDecoder().decode([String].self, from: try XCTUnwrap(config.storage["visibleScopes"])),
-            ["day", "week", "month", "quarter"],
-            "盘上也是这四项（顺序 = 选项声明顺序）"
-        )
-    }
-
-    /// 注册表侧的接管查询对**音乐模块**同样成立（docs/20 §接口与数据形状 2）：`homeBlockWidth(for:)`
-    /// 取回 200/250（`HomeStripView` 就靠它给音乐块 T2 缩宽后的宽度）、`takeoverEnableKey(for:)`
-    /// 取回 `showStandardMediaControls`（启用真源）。
-    ///
-    /// 注册走**真门**（`KernelBootstrap.enablementGate`），但**不 bootstrap**：门只读，
-    /// 本用例不写任何真实偏好（音乐当前的启用状态与断言无关）。
     func testMusicModuleHooksReadThroughTheRegistry() {
         let registry = ModuleRegistry.shared
         registry.register(
@@ -1749,8 +1534,8 @@ final class TakeoverEnablementTests: XCTestCase {
 
         XCTAssertEqual(
             registry.homeBlockWidth(for: MusicModule.moduleID),
-            ModuleHomeBlockWidth(min: 200, ideal: 250),
-            "音乐块宽度声明经注册表原样取给宿主（200/250：T2 缩宽后的那一档）"
+            ModuleHomeBlockWidth(min: 260, ideal: 260),
+            "音乐块宽度声明经注册表原样取给宿主（260/260：p13 环境带那一档）"
         )
         XCTAssertEqual(
             registry.takeoverEnableKey(for: MusicModule.moduleID)?.name,
@@ -1808,13 +1593,9 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertNil(manifest.defaultPlacement, "tab 落模块段（无 placement → Int.max，按 id 字典序排在 launcher 之前）")
         XCTAssertEqual(
             manifest.defaultEnabled,
-            Defaults.Keys.showCalendar.defaultValue,
-            "= 上游 `showCalendar` 的默认值（接管键读不到时才不生效）"
-        )
-        XCTAssertEqual(
-            manifest.defaultEnabled,
             true,
-            "上游这个开关默认是开的（方向也要钉住，避免它被悄悄改成保守值）"
+            "默认开（方向也要钉住，避免它被悄悄改成保守值）——改前这里是「= 上游 `showCalendar` 的"
+                + "默认值」，那颗键随月历退出首页退休（docs/38 D-13），值仍是 true、口径变成「非接管的裸默认」"
         )
         XCTAssertTrue(manifest.permissions.isEmpty, "本批只搬渲染归属：零新增能力请求（日历数据仍走上游那条权限）")
         XCTAssertNil(manifest.config, "口径 3：不登记 config（日历没有自己的键）")
@@ -1927,18 +1708,23 @@ final class TakeoverEnablementTests: XCTestCase {
             )
         }
 
-        // 三条取值型钩子：真源 = 上游那颗统计总开关；宽度 = 26 §做法 机制一 给统计的定值 220 / 300
+        // 三条取值型钩子：真源 = 上游那颗统计总开关；宽度 / 高度 = 环境带那一档（p13 / docs/38 D-04 / D-10）
         XCTAssertEqual(StatsModule.takeoverEnableKey?.name, Defaults.Keys.enableStatsFeature.name)
         XCTAssertEqual(
             StatsModule.homeBlockWidth,
-            ModuleHomeBlockWidth(min: 220, ideal: 240),
-            "首页块宽度声明（docs/37 D-04：单行形态收窄一档）"
+            ModuleHomeBlockWidth(
+                min: StatsRingMetrics.blockWidth,
+                ideal: StatsRingMetrics.blockWidth
+            ),
+            "首页块宽度声明：固定 145（三行纵向形态的算式见 `StatsRingMetrics`）"
         )
         XCTAssertEqual(
             StatsModule.homeBlockHeight,
-            .points(36),
-            "首页块高度申报（docs/37 D-04：单行紧凑，改前不申报 = 紧凑档 96）"
+            .points(HomeEnvironmentBand.height),
+            "首页块高度申报 = 环境带档高（96）：三块等高才是一条带"
         )
+        XCTAssertEqual(StatsModule.homeZone, .environment, "p13：系统读数是环境带第三块（docs/38 D-02）")
+        XCTAssertFalse(StatsModule.homeBlockAbsorbsSurplus, "p13：不吃余量（余量归前台应用，D-04）")
         // 可见性钩子**刻意不重写**（缺省 true）：本模块不声明 `expanded`，投影先按 `surfaces` 过滤，
         // 它永远不被问到——写一条 `= true` 只会让读者以为本模块有 tab（与 mirror / music 同一口径，
         // 那两处也没写断言）。
@@ -1969,70 +1755,55 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(try ModuleManifest.decode(from: try JSONEncoder().encode(manifest)), manifest)
     }
 
-    /// 单行形态的**几何刻度**（docs/37 D-04，2026-10-10 改判；改前是三环 46/40 + 环心文字）。
+    /// **三行纵向形态的几何刻度**（p13 / docs/38-home-v5-layout.md D-10，2026-10-11 改判；
+    /// 沿革：三环 46/40 → 单行横向 36 高 → 本批三行纵向、环境带档高 96）。
     ///
-    /// 三组 = 点 12（线宽 2、实心 4）+ 标签 + 读数；组内间距 4、组间距 8。断言全部对常量本身——
-    /// 形态（怎么摆）由视图负责，常量（摆多大）钉在这里。
+    /// 一行 = 点 12（线宽 2、实心 4）+ 间距 8 + 标签 …… 右对齐读数；行高 18、行距 8。
+    /// 断言全部对常量本身——形态（怎么摆）由视图负责，常量（摆多大）钉在这里。
     func testStatsMetricDotGeometryIsPinned() {
         XCTAssertEqual(StatsRingMetrics.dotDiameter, 12)
         XCTAssertEqual(StatsRingMetrics.dotTrackLineWidth, 2)
         XCTAssertEqual(StatsRingMetrics.dotCoreDiameter, 4)
-        XCTAssertEqual(StatsRingMetrics.metricSpacing, 8)
-        XCTAssertEqual(StatsRingMetrics.metricInnerSpacing, 4)
+        XCTAssertEqual(StatsRingMetrics.rowHeight, 18)
+        XCTAssertEqual(StatsRingMetrics.rowSpacing, 8)
+        XCTAssertEqual(StatsRingMetrics.labelSpacing, 8)
         XCTAssertEqual(StatsRingMetrics.trackOpacity, 0.12)
+        XCTAssertEqual(StatsRingMetrics.blockWidth, 145, "环境带第二排里那一档（用户：cpu 那三个宽度要降低）")
 
-        // 顶部让位：与图形起始的各块同档（`HomeBlockChrome.contentInsetTopGraphics`）；
-        // 点 12 / 线宽 2 的外溢只有 1pt，7 覆盖得住。
-        XCTAssertEqual(StatsRingMetrics.homeBlockTopInset, 7)
-        XCTAssertGreaterThanOrEqual(
-            StatsRingMetrics.homeBlockTopInset,
-            StatsRingMetrics.dotTrackLineWidth / 2,
-            "上内边距小于绘制外溢 → 点顶的描边被块框裁平（2026-10-06 那条回归的同一条判据）"
-        )
+        // 块高 = 环境带档高（三块等高）
+        guard case .points(let declaredHeight) = StatsModule.homeBlockHeight else {
+            XCTFail("统计块应申报固定高（环境带档高）")
+            return
+        }
+        XCTAssertEqual(declaredHeight, HomeEnvironmentBand.height, "统计块与音乐 / 前台应用同为环境带档高（96）")
     }
 
-    /// **申报的块高装得下内容**：内容 = 顶部让位 7 + 点 12 / 文字行 ~14 的较大者；
-    /// 申报 36 必须 ≥ 内容高，否则读数会被块壳 `.clipped()` 裁掉一行。
-    func testStatsHomeBlockHeightFitsItsSingleRowContent() {
-        let textLineHeight: CGFloat = 14   // 11pt 系统字体的行高上界（实测 ≈13）
-        let contentHeight = max(StatsRingMetrics.dotDiameter, textLineHeight)
+    /// **三行内容装得进申报高、且纵向留白对称**：内容高 = 3 × 18 + 2 × 8 = 70，块高 96 →
+    /// 上下各余 13（视图按 `.center` 居中）。内容高于块高时读数会被块壳 `.clipped()` 裁掉一行。
+    func testStatsHomeBlockHeightFitsItsThreeRows() {
+        let contentHeight = StatsRingMetrics.contentHeight
+        XCTAssertEqual(contentHeight, 3 * 18 + 2 * 8, "三行 + 两道行距 = 70")
         guard case .points(let declaredHeight) = StatsModule.homeBlockHeight else {
-            XCTFail("统计块应按内容申报固定高（docs/37 D-04）")
+            XCTFail("统计块应按内容所在的环境带申报固定高（docs/38 D-10）")
             return
         }
         XCTAssertGreaterThanOrEqual(
-            declaredHeight,
-            contentHeight + StatsRingMetrics.homeBlockTopInset,
-            "申报的块高必须 ≥ 顶部让位 + 内容高"
-        )
-        XCTAssertLessThanOrEqual(
-            contentHeight + StatsRingMetrics.homeBlockTopInset,
-            declaredHeight,
-            "内容 + 顶部让位装不进申报高 → 换一种裁法，本批的收窄就白做"
+            declaredHeight, contentHeight,
+            "申报的块高必须 ≥ 三行内容高（96 ≥ 70），否则纵向居中之后上下一起被裁"
         )
     }
 
-    /// **圆点不被块框裁掉 / 不被裁成半个字**（2026-10-06「顶部被遮盖」那条回归的同一条判据，
-    /// docs/37 D-04 改判后重写）：点 12 / 线宽 2 → 绘制外溢 1pt，`homeBlockTopInset`（7）覆盖得住；
-    /// 横向不裁由**申报宽 ≥ 最坏内容宽**保证（三组「点 + 标签 + 读数」+ 组间距）。
-    func testStatsSingleRowContentFitsItsBlock() {
-        let dotDrawingOverhang = StatsRingMetrics.dotTrackLineWidth / 2
+    /// **横向不裁**：最坏一行 = 点 12 + 间距 8 + 最坏标签（`Memory`，10.5pt ≈ 44）+
+    /// 弹性 ≥ 8 + 最坏读数（`100.0%`，12pt 等宽 ≈ 44）。断言它 ≤ 申报宽 − 两侧内容内缩。
+    func testStatsRowContentFitsItsBlock() {
+        let worstRowWidth = StatsRingMetrics.dotDiameter
+            + StatsRingMetrics.labelSpacing
+            + 44 + 8 + 44
+        let available = (StatsModule.homeBlockWidth?.min ?? .infinity)
+            - 2 * HomeBlockChrome.contentInsetHorizontal
         XCTAssertLessThanOrEqual(
-            dotDrawingOverhang,
-            StatsRingMetrics.homeBlockTopInset,
-            "点的描边溢出必须落在顶部让位之内，否则点顶被块框裁平"
-        )
-
-        // 最坏内容宽：三组各自「点 12 + 4 + 标签 + 4 + 读数」——按最长的一组估（标签两字 CJK
-        // ≈ 18、「100.0%」量级读数 ≈ 28），组间 = `metricSpacing`（8）。
-        let worstGroupWidth = StatsRingMetrics.dotDiameter
-            + 2 * StatsRingMetrics.metricInnerSpacing
-            + 18 + 28
-        let worstRowWidth = 3 * worstGroupWidth + 2 * StatsRingMetrics.metricSpacing
-        XCTAssertLessThanOrEqual(
-            worstRowWidth,
-            StatsModule.homeBlockWidth?.min ?? .infinity,
-            "最坏内容宽必须落在申报的最小宽之内（横向不裁）"
+            worstRowWidth, available,
+            "最坏一行 \(worstRowWidth) 必须落在申报宽的可用区 \(available) 之内（横向不裁）"
         )
     }
 
@@ -2127,23 +1898,21 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(registry.tabEntries.count, 0, "统计开着也不进 tab 投影（D-02）")
     }
 
-    /// **首页日历行与面板日历页解耦**（docs/37 D-06，2026-10-10 用户反馈「两个开关关一个就都关了」）。
+    /// **面板日历页的启用与首页无关**（docs/37 D-06 起解耦；**p13 / docs/38 D-07 之后更彻底**：
+    /// 首页那条全宽日历行本身也退休了，`showCalendar` 键整颗删除）。
     ///
-    /// 三条一起钉：
-    /// ① 日历模块**不再是接管模块**（`takeoverEnableKey == nil`）——改前它答 `showCalendar`，
-    ///    那颗键同时管首页那条行，于是「关首页行 → 面板页也没了」；
-    /// ② 面板页的启用改由 `moduleEnableOverrides[calendar]` 承载：显式置 `false` 时 tab 投影里
-    ///    没有它，而 `showCalendar` 照旧为真（首页行不受影响）；缺键时回落 `defaultEnabled: true`
-    ///    （老用户升级后行为不变）；
-    /// ③ 反向：`showCalendar = false` 时模块**照常启用**（面板页在，首页行不在）——
-    ///    这正是解耦的那一面。
-    func testCalendarPanelTabIsDecoupledFromTheHomeCalendarRow() async throws {
+    /// 两条一起钉：
+    /// ① 日历模块**不是接管模块**（`takeoverEnableKey == nil`）——改前它答 `showCalendar`，
+    ///    那颗键同时管首页那条行，于是「关首页行 → 面板页也没了」（用户 2026-10-10 反馈的那个 bug）；
+    /// ② 面板页的启用由 `moduleEnableOverrides[calendar]` 承载：显式置 `false` 时 tab 投影里没有它；
+    ///    缺键时回落 `defaultEnabled: true`（老用户升级后行为不变）。
+    func testCalendarPanelTabEnablementIsIndependentOfAnythingHome() async throws {
         XCTAssertNil(
             CalendarModule.takeoverEnableKey,
             "日历自 docs/37 D-06 起非接管：启用状态由 moduleEnableOverrides 承载"
         )
 
-        let keys = [Defaults.Keys.showCalendar.name, Defaults.Keys.moduleEnableOverrides.name]
+        let keys = [Defaults.Keys.moduleEnableOverrides.name]
         let originals = snapshotValues(of: keys)
         defer { restoreValues(originals, for: keys) }
 
@@ -2152,30 +1921,18 @@ final class TakeoverEnablementTests: XCTestCase {
 
         // 缺键（老用户盘上没有这条）→ 回落 defaultEnabled: true
         Defaults[.moduleEnableOverrides] = [:]
-        Defaults[.showCalendar] = true
         registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
         await registry.bootstrap()
         XCTAssertEqual(registry.states[id], .active, "缺键回落 defaultEnabled: true（升级后行为不变）")
         XCTAssertTrue(registry.tabEntries.contains { $0.id == id }, "面板 tab 里有日历")
 
-        // ② 只关面板那一处：tab 没了，而首页那颗键仍然为真（互不影响）
+        // 显式关掉面板那一处：tab 没了（本批之后首页不再有「日历行」这一处，因此没有第二颗开关要对账）
         Defaults[.moduleEnableOverrides] = [id: false]
         await registry.deactivateAll()
         registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
         await registry.bootstrap()
         XCTAssertEqual(registry.states[id], .disabled, "显式关掉面板日历 → 模块不激活")
         XCTAssertFalse(registry.tabEntries.contains { $0.id == id }, "面板 tab 里没有日历")
-        XCTAssertTrue(Defaults[.showCalendar], "首页那颗开关**没有被动过**（解耦：两处各关各的）")
-
-        // ③ 反向：只关首页那颗键，面板日历照常在（模块的启用与它无关）——
-        //    改前这一档会与 ② 一起把两处都关掉（同一个键），这正是用户反馈的那个 bug。
-        Defaults[.moduleEnableOverrides] = [:]
-        Defaults[.showCalendar] = false
-        await registry.deactivateAll()
-        registry.register([CalendarModule.self], enabled: KernelBootstrap.enablementGate(registry: registry))
-        await registry.bootstrap()
-        XCTAssertEqual(registry.states[id], .active, "首页行关掉不影响面板日历页")
-        XCTAssertTrue(registry.tabEntries.contains { $0.id == id }, "面板 tab 里仍有日历")
 
         await registry.deactivateAll()
     }
@@ -2257,29 +2014,6 @@ final class TakeoverEnablementTests: XCTestCase {
             "锁屏页那一行的键必须是 `Defaults.Keys` 里那一个对象（另造同名字面量即红）"
         )
         XCTAssertResolves("Show lock screen weather")
-    }
-
-    /// **首页日历行**（`HomeCalendarSettingsRow`）的两个 key 能解析，且它**不在**「面板组件」的宿主行表里。
-    ///
-    /// 用户 2026-09-30：「首页的日历组件也要在首页组件控制区域进行开关控制」——它从「功能」段那张
-    /// 卡搬进「首页组件」节，**键仍是同一个 `showCalendar`**（没有第二份状态）。这条用例钉三件事：
-    /// ① 文案 key 能解析；② 它的效果行走 `settings.modules.*` 这一族（不再是功能段的
-    /// `settings.features.effect.<键名>`）；③ 它**没有挂在别的表上**（两边都挂 = 同一页两个开关管一件事）
-    /// ——功能段那张表已随段删除（见上一条用例），剩下可查的是「面板组件」的宿主行表（日历不是面板
-    /// 宿主元素）。
-    func testHomeCalendarSettingsRowKeysResolveAndItIsNotAHostPanelRow() {
-        XCTAssertResolves(HomeCalendarSettingsRow.effectKey)
-        XCTAssertResolves(HomeCalendarSettingsRow.nameKey)
-
-        XCTAssertEqual(
-            HomeCalendarSettingsRow.effectKey,
-            "settings.modules.calendarRow.effect",
-            "效果行 key 的形态与本页其余组件文案一致（settings.modules.*）"
-        )
-        XCTAssertFalse(
-            ModuleSettingsSection.hostPanelRows.contains { $0.key.name == Defaults.Keys.showCalendar.name },
-            "首页日历行不是面板宿主元素（它在「首页组件」节末），不该出现在宿主行表里"
-        )
     }
 
     // MARK: - 「面板组件」节的宿主行（p5-home-blocks / T5）
@@ -2540,7 +2274,7 @@ final class TakeoverEnablementTests: XCTestCase {
         let todoID = "com.cmeng.gourd.todos"
         let progressID = "com.cmeng.gourd.progress"
         let defaultSlots = PanelTabSequence.slots(
-            home: "home",             // homeTabVisible = enableMinimalisticUI || showStandardMediaControls || showCalendar || showMirror
+            home: "home",             // homeTabVisible：p13 / docs/38 D-14 起恒 true（首页三带恒有内容）
             shelf: "shelf",           // dynamicShelf
             usage: "usage",           // enableLLMUsageFeature
             clipboard: "clipboard",   // enableClipboardManager && clipboardDisplayMode == .separateTab
@@ -2849,10 +2583,6 @@ final class TakeoverEnablementTests: XCTestCase {
         XCTAssertEqual(
             table[TimerModule.manifest.id], "settings.modules.effect.timer",
             "计时器的效果行 key——上一轮这条在用例里是字面量，映射侧写错抓不到"
-        )
-        XCTAssertEqual(
-            table[MirrorModule.manifest.id], "settings.modules.effect.mirror",
-            "镜子的效果行 key（同形）"
         )
         XCTAssertEqual(
             table[MusicModule.manifest.id], "settings.modules.effect.music",

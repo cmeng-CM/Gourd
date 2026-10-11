@@ -134,7 +134,7 @@ enum PanelTabSequence {
     }
 
     /// 面板条的**槽位骨架**（唯一一份）：顺序 = 改动前 `TabSelectionView.tabs` 逐字——
-    /// Home（`enableMinimalisticUI || showStandardMediaControls || showCalendar || showMirror`）→
+    /// Home（**恒在**：p13 / docs/38 D-14——环境带与今天带是宿主自己的，没有「三个开关都没开」那一档）→
     /// 暂存器（`dynamicShelf`）→ 用量（`enableLLMUsageFeature`）→ 剪贴板
     /// （`enableClipboardManager && clipboardDisplayMode == .separateTab`）→ 终端（`enableTerminalFeature`）
     /// → 扩展 tab（`enableThirdPartyExtensions && enableExtensionNotchExperiences && enableExtensionNotchTabs`）
@@ -215,10 +215,10 @@ struct TabSelectionView: View {
     @Default(.enableThirdPartyExtensions) private var enableThirdPartyExtensions
     @Default(.enableExtensionNotchExperiences) private var enableExtensionNotchExperiences
     @Default(.enableExtensionNotchTabs) private var enableExtensionNotchTabs
-    @Default(.showCalendar) private var showCalendar
-    @Default(.showMirror) private var showMirror
-    @Default(.showStandardMediaControls) private var showStandardMediaControls
-    @Default(.enableMinimalisticUI) private var enableMinimalisticUI
+    // **`showCalendar` / `showMirror` / `showStandardMediaControls` 三条已不是本视图的门槛**
+    // （p13 / docs/38 D-14）：首页 tab 恒在（`homeTabVisible`），而 `showMirror` 与
+    // `showStandardMediaControls` 只影响首页**块**的名单（音乐块 / 镜子块），那是接缝的事，
+    // 本视图不读它们——这里因此连观察都不挂（读一份与自己无关的偏好只会多一条重绘链）。
     // **宿主门槛键**（p5-home-blocks / T5）：面板左列的暂存器 / 剪贴板 / 终端三条 tab 由它们直接门控。
     // 用 `@Default` 而不是裸 `Defaults[...]`：设置页「面板组件」节的宿主行拨了开关，本视图必须
     // **当场**重绘（裸读不订阅，得等下一次别的状态变化才轮到它）。名单见文件末尾的 `hostPanelGateKeys`。
@@ -369,11 +369,12 @@ struct TabSelectionView: View {
         extensionNotchExperienceManager.activeExperiences.filter { $0.descriptor.tab != nil }
     }
 
+    /// 首页 tab **恒在**（p13 / docs/38 D-14）：首页自本批起是「环境带 + 今天带 + 可变流」三带，
+    /// 前两带是宿主自己的（音乐关掉、镜子关掉、日历页关掉之后，今天带照样有日期与下一个日程），
+    /// 因此不再有「三个开关都没开就没有首页」这一档——**只有极简 UI 那一档例外**（它走的是
+    /// `MinimalisticMusicPlayerView`，首页 tab 仍是出口）。
     private var homeTabVisible: Bool {
-        if enableMinimalisticUI {
-            return true
-        }
-        return showStandardMediaControls || showCalendar || showMirror
+        true
     }
 
     private func isSelected(_ tab: TabModel) -> Bool {
@@ -426,8 +427,8 @@ extension TabSelectionView {
     /// **这份名单是给用例反查的方向**：设置页「面板组件」节的宿主行表
     /// （`ModuleSettingsSection.hostPanelRows`）登记的键必须落在本名单与
     /// `DynamicIslandHeader.hostPanelGateKeys` 的并集里——方向是「登记的键都真的在用」，
-    /// **不是**「用到的全部门槛键都在这里」（用量 tab 的 `enableLLMUsageFeature`、镜子
-    /// `showMirror` 等各有归属，见枚举表；删掉任何一条门槛时必须同步改这份名单）。
+    /// **不是**「用到的全部门槛键都在这里」（用量 tab 的 `enableLLMUsageFeature` 等各有归属，
+    /// 见枚举表；删掉任何一条门槛时必须同步改这份名单）。
     ///
     /// **不是 `private`**：用例直接读它（与组件页那几张生产表同一条口径）。
     static let hostPanelGateKeys: [Defaults.Key<Bool>] = [

@@ -67,6 +67,22 @@ public enum ModuleHomeBlockHeight: Sendable, Equatable {
     case points(CGFloat)
 }
 
+/// 首页块的**区**（docs/38-home-v5-layout.md §做法 一 / D-01~D-03）：它进**哪一排**。
+///
+/// 首页自 p13 起分三带：**环境带**（固定第一排）→ **今天带**（宿主直渲，不是模块）→
+/// **可变流**（其余块换行）。区只决定「在哪一排」，**不决定「谁先谁后」**——带内顺序仍按
+/// 用户的 `homeBlockOrder`（D-03：两件事分开，用户排过一次的顺序不因区而失效）。
+///
+/// - `.environment`：常看的环境三块（音乐 / 前台应用 / 系统读数）——**不参与流的换行**，
+///   因此在窄面板下也不会被挤到第二排；
+/// - `.flow`（缺省）：可变流。新增模块一律落这一档（什么都不用声明）。
+public enum ModuleHomeZone: String, Sendable, Equatable, CaseIterable {
+    /// 环境带（固定第一排）。
+    case environment
+    /// 可变流（缺省）。
+    case flow
+}
+
 /// 首页块宽度的**内核侧**取值形态（`min` = 低于它不如不显示，`ideal` = 富余时用它）。
 ///
 /// 谁用：接管模块的 `GourdModule.homeBlockWidth` 钩子（docs/20-component-page.md §接口与数据形状 1）

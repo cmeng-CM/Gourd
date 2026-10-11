@@ -48,10 +48,16 @@ public enum HomeStripLayoutMath {
         public let min: CGFloat
         /// 该块的理想宽度（富余时就用它，不放大）。
         public let ideal: CGFloat
+        /// **是否吸收所在行的剩余宽度**（docs/38-home-v5-layout.md D-04）。
+        ///
+        /// 真 = 规则 ①′：规则 ① 之后剩下的余量按**弹性块的 `ideal`** 等比分给它；
+        /// 假（缺省）= 余量留在行尾（改动前的行为）。
+        public let flexible: Bool
 
-        public init(min: CGFloat, ideal: CGFloat) {
+        public init(min: CGFloat, ideal: CGFloat, flexible: Bool = false) {
             self.min = min
             self.ideal = ideal
+            self.flexible = flexible
         }
     }
 
@@ -131,6 +137,9 @@ public enum HomeStripLayoutMath {
     ///
     /// 1. **富余**（`available >= sum(ideal) + spacing × (n-1)`）：`widths == ideal`——
     ///    块保持理想宽度、**不拉伸**（D-02），余量留在尾部。
+    ///    **规则 ①′（p13 / docs/38 D-04）**：若这一行里有**弹性块**（`Item.flexible`），
+    ///    余量按弹性块的 `ideal` 等比分给它们（向下取整到 0.5pt，与规则 ② 同一档精度）；
+    ///    没有弹性块 → 逐字是改动前的行为（余量留尾部）。
     /// 2. **不足但够最小宽度和**（`available >= sum(min) + spacing × (n-1)`）：按可压缩量等比压缩，
     ///    每块 `min + (ideal - min) × (1 - deficit / compressible)`，再**向下取整到 0.5pt**
     ///   （`floor(x × 2) / 2`：乘以 2 是精确的 2 的幂缩放，向下取整后每块必 ≤ 压缩前的值，
@@ -165,8 +174,19 @@ public enum HomeStripLayoutMath {
         let visibleCount: Int
 
         if available >= sumIdeal + gaps {
-            // ① 富余：不放大，余量留尾部
-            widths = items.map(\.ideal)
+            // ① 富余：不放大，余量留尾部——**有弹性块时改走 ①′**（余量按弹性块的 ideal 等比分）。
+            let surplus = available - sumIdeal - gaps
+            let flexibleIndices = items.indices.filter { items[$0].flexible && items[$0].ideal > 0 }
+            if surplus > 0, !flexibleIndices.isEmpty {
+                let flexibleIdealSum = flexibleIndices.reduce(CGFloat.zero) { $0 + items[$1].ideal }
+                widths = items.indices.map { index in
+                    guard flexibleIndices.contains(index) else { return items[index].ideal }
+                    let share = items[index].ideal / flexibleIdealSum * surplus
+                    return ((items[index].ideal + share) * 2).rounded(.down) / 2
+                }
+            } else {
+                widths = items.map(\.ideal)
+            }
             visibleCount = count
         } else if available >= sumMin + gaps {
             // ② 不足但够最小宽度和：按可压缩量等比压缩，向下取整到 0.5pt

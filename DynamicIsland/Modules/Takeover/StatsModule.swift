@@ -154,14 +154,29 @@ final class StatsModule: GourdModule {
     // 接管三件套之二 `isTabVisible()`：本模块**不重写**它——它不声明 `expanded`，投影先按
     // `surfaces` 过滤，可见性钩子对它永远不被问到（与 mirror / music 同一口径）。这里刻意留白。
 
-    /// 接管三件套之三：首块宽度声明（口径 3 在 docs/37 D-04 收窄）——单行形态下三组
-    /// 「点 + 标签 + 读数」的最坏内容宽约 205，**220 / 240**（原 220 / 300 是三环口径的取值）。
-    static var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 220, ideal: 240) }
-
-    /// 首页块**高度申报**（docs/37 D-04）：单行形态 = 内容约 28 + 顶部让位 7 → 申报 **36**。
+    /// 接管三件套之三：宽度声明——**p13 起固定 145**（docs/38-home-v5-layout.md D-04 / §做法 五）。
     ///
-    /// 改前不申报（紧凑档 96）——三环形态下内容只占 68，用户 2026-10-10 反馈「就三项占了很大的区域」。
-    static var homeBlockHeight: ModuleHomeBlockHeight { .points(36) }
+    /// 沿革：原 220/300 是三环口径；docs/37 D-04 单行形态收到 220/240；p13 改**三行纵向**形态后
+    /// 内容宽只要「12 点 + 8 + 标签 + 弹性 + 读数」约 96（最坏；见 `StatsRingMetrics` 的算式），
+    /// 因此按 v5 设计稿取 **145 且不弹性**——环境带第一排的余量整份留给前台应用（用户原话：
+    /// 「cpu 那三个宽度要降低，可以把第一排大部分内容留给前台应用」）。
+    static var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(min: StatsRingMetrics.blockWidth, ideal: StatsRingMetrics.blockWidth)
+    }
+
+    /// 首页块**高度申报**（p13 / docs/38 D-10）：三行纵向 = 环境带档高（96）。
+    ///
+    /// 改前是单行 36（docs/37 D-04 把三环压成一行）；p13 用户要求三块在环境带里等高，
+    /// 而三行「点 + 标签 …… 读数」的内容高是 70（`StatsRingMetrics.contentHeight`），
+    /// 在 96 里纵向居中——余量在上下两侧各 13pt，正是设计稿里那三道行的位置。
+    static var homeBlockHeight: ModuleHomeBlockHeight { .points(HomeEnvironmentBand.height) }
+
+    /// 首页块的**区**（docs/38 D-02）：系统读数是**环境带**第三块。
+    static var homeZone: ModuleHomeZone { .environment }
+
+    /// **不吃余量**（D-04）：固定 145。三行读数的右缘与标签左缘之间本来就是弹性空隙，
+    /// 拉宽只会把读数推得更远、更不好扫读。
+    static var homeBlockAbsorbsSurplus: Bool { false }
 
     /// 只记一条日志：本模块不采样、不起 Task、不持有定时器（数据源是上游 `StatsManager.shared`）。
     func activate() async throws {
@@ -185,45 +200,49 @@ final class StatsModule: GourdModule {
     }
 }
 
-// MARK: - 三环的尺寸与取舍
+// MARK: - 尺寸（三行纵向，p13 / docs/38 D-10）
 
-/// 三环的**尺寸与取舍**（纯函数，无 SwiftUI 依赖；单测在 `TakeoverEnablementTests` 的统计一节）。
+/// 统计块的**尺寸**（纯函数，无 SwiftUI 依赖；单测在 `TakeoverEnablementTests` 的统计一节）。
 ///
-/// 口径（docs/37-home-layout-v2.md §做法 机制四 / D-04，2026-10-10 改判；改前是 docs/26 的三环形态）：
-/// **单行**三个指标组并排，每组 = 指标色圆点（直径 **12pt**，含用量弧）+ 标签 + 读数；
-/// 组间距 **12pt**、组内元素间距 **5pt**；圆点中心实心、外圈按用量 `trim`。
+/// 口径（docs/38-home-v5-layout.md §做法 五 / D-10，2026-10-11 改判）：**三行纵向**，一行 = 指标色
+/// 圆点（直径 12，含用量弧）+ 标签，右端是等宽读数；行高 18、行距 8、点距标签 8。
 ///
-/// **「不裁」是一句可断言的话**（不是感觉）：宿主给统计块的最小宽是 220
-/// （`StatsModule.homeBlockWidth.min`），而单行的**最坏内容宽**约 205（三组 × 最长文案
-/// 「内存 · 83.4%」量级 + 组间距）≤ 220——算得出来、钉得住，因此不必靠上屏目测。
+/// 沿革：三环并排（docs/26）→ 单行横向（docs/37 D-04，「就三项占了很大的区域」）→ **三行纵向**
+/// （本批，用户「cpu 那三个宽度要降低……不要用进度条展示，改展现形式」）。改回纵向不是回到三环：
+/// **没有 46pt 的环**，只有 12pt 的点 + 一道用量弧，读数是文字（不是环心百分比）。
+///
+/// **块宽 145 的算式**（必须容得下最坏一行，改常量时一起看用例）：
+/// `点 12 + 点距 8 + 最坏标签（Memory，10.5pt ≈ 44）+ 弹性 + 最坏读数（「100.0%」，12pt 等宽 ≈ 44）`
+/// = **108 ≤ 145 − 2 × 内容内缩 5 = 135**，余 27pt 弹性（右对齐的读数因此不会贴到标签上）。
 enum StatsRingMetrics {
-    /// 指标圆点直径（D-04：46pt 的三环收成 12pt 的点 + 弧）。
+    /// 指标圆点直径。
     static let dotDiameter: CGFloat = 12
     /// 圆点外圈的线宽（轨道 + 用量弧）。
     static let dotTrackLineWidth: CGFloat = 2
     /// 圆点中心的实心直径。
     static let dotCoreDiameter: CGFloat = 4
 
-    /// 三组之间的间距（组 = 点 + 标签 + 读数）。取 8：三组的**最坏内容宽**
-    /// （含「100.0%」量级读数与两字 CJK 标签 + 组内两处 4pt 间距）约 `3 × 80 + 2 × 8 = 256`…
-    /// 这条算式由 `testStatsSingleRowContentFitsItsBlock` 逐项加出——**它必须 ≤ 220**
-    /// （`StatsModule.homeBlockWidth.min`），改常量时要一起看那个用例。
-    static let metricSpacing: CGFloat = 8
-    /// 组内元素间距（点 → 标签、标签 → 读数）。
-    static let metricInnerSpacing: CGFloat = 4
-
-    /// 内容与板顶之间的余量（模块侧的唯一取值处；与其余各块的顶部内缩同档，见 `HomeBlockChrome`）。
-    ///
-    /// 改判前这一条是 8（= 46pt 三环的绘制外溢 5 + 3，用户 2026-10-06 反馈「cpu 这三个上边距太小、
-    /// 顶部被遮盖」驱动）；单行形态下圆点只有 12pt、线宽 2（外溢 1pt），取值回归
-    /// `HomeBlockChrome.contentInsetTopGraphics` 那一档（7）——与前台应用等图形起始的块一致。
-    static let homeBlockTopInset: CGFloat = 7
+    /// 一行的行高（点 / 标签 / 读数在这一档里居中）。
+    static let rowHeight: CGFloat = 18
+    /// 行与行之间的间距。
+    static let rowSpacing: CGFloat = 8
+    /// 点与标签之间的间距。
+    static let labelSpacing: CGFloat = 8
 
     /// 轨/弧的不透明度（与既有 `TodoScopeRing` 同族）。
     static let trackOpacity: Double = 0.12
+
+    /// 块的固定宽（`StatsModule.homeBlockWidth` 两个数都取它）。
+    static let blockWidth: CGFloat = 145
+
+    /// 三行的内容高（`3 × 18 + 2 × 8 = 70`）——块高 96 时上下各余 13（纵向居中）。
+    static var contentHeight: CGFloat {
+        CGFloat(StatsHomeBlockLayout.rows.count) * rowHeight
+            + CGFloat(max(0, StatsHomeBlockLayout.rows.count - 1)) * rowSpacing
+    }
 }
 
-// MARK: - 首页块（单行紧凑）
+// MARK: - 首页块（三行纵向）
 
 /// 三环的三个指标：**顺序即显示顺序（CPU → 内存 → GPU）**。
 ///
@@ -294,20 +313,22 @@ enum StatsHomeBlockLayout {
     static let rows: [Row] = Row.allCases
 }
 
-/// 首页块：**单行紧凑**——CPU / 内存 / GPU 各一支「指标色圆点 + 标签 + 读数」（2026-10-10 / docs/37 D-04）。
+/// 首页块：**三行纵向**——CPU / 内存 / GPU 各一行「指标色圆点（含用量弧）+ 标签 …… 读数」
+/// （2026-10-11 / docs/38 D-10）。
 ///
-/// **形态改判**（改前是「三环并排」，块高 96 的紧凑档 + 最小宽 220 / 理想 300）：用户反馈
-/// 「cpu 统计这些一共就三项，结果占了很大的区域」——三环的内容（环 46 + 标签 9）在 96 高的
-/// 块里只占约 68pt，观感是大片留白；改单行后块高由 `homeBlockHeight` 申报为 36，宽度也收窄
-/// （`homeBlockWidth` 220/300 → 200/240）。
+/// **形态改判沿革**：三环并排（docs/26，内容只占 68pt 而块高 96，观感是大片留白）→ 单行横向
+/// （docs/37 D-04，块高 36）→ **本批三行纵向 + 环境带档高 96**。用户 2026-10-11 的两条原话是
+/// 「cpu 那三个宽度要降低，可以把第一排大部分内容留给前台应用」与「不要用进度条展示，没意义，
+/// 改展现形式」——因此本批量的是**窄列里的三行**：宽 145 固定、点 + 标签在左、读数右对齐。
 ///
 /// 三条保留：**恒三项、顺序不变（CPU → 内存 → GPU）**、**指标色**（青 / 紫 / 琥珀）、
-/// **读数口径**（`Row.valueText`，与统计页同一个 `StatsManager`）。圆点外圈有一道
-/// **用量亮弧**（`trim`，指标色、直径 14）——把「进度」这一层信息从 46pt 的环里收进 14pt；
-/// 百分比读数从环心移到数字位（等宽、右对齐）。
+/// **读数口径**（`Row.valueText`，与统计页同一个 `StatsManager`）。**进度不用进度条**——
+/// 它是圆点外圈的那道**用量弧**（`trim`，指标色）：环里只剩「有多少」这一层信息，
+/// 读数走等宽数字右对齐。
 ///
-/// **顶部让出 `homeBlockTopInset`**：与其余各块同一档（`HomeBlockChrome.contentInsetTopText` 的
-/// 图形/文字三档之外的独立常量，见该常量处）。
+/// **纵向居中**（不再有 `homeBlockTopInset`）：三行内容高 70，块高 96，上下各余 13——
+/// 与 v5 设计稿里那三道行的位置一致；顶部那 7pt 内缩的旧口径专为「图形贴板顶」而设，
+/// 纵向居中之后没有要守的边界了。
 ///
 /// **采样驱动**（口径 6）：块的 `.task` 里跑一个只做一件事的看门狗——`isMonitoring` 为假就
 /// `startMonitoring()`（上游 `ContentView` 在「面板打开且不在统计 tab」时会 0.1s 后停掉采样，
@@ -320,7 +341,7 @@ private struct StatsHomeBlockView: View {
     @ObservedObject private var stats = StatsManager.shared
 
     var body: some View {
-        HStack(spacing: StatsRingMetrics.metricSpacing) {
+        VStack(alignment: .leading, spacing: StatsRingMetrics.rowSpacing) {
             ForEach(StatsHomeBlockLayout.rows) { row in
                 StatsMetricRow(
                     row: row,
@@ -329,9 +350,7 @@ private struct StatsHomeBlockView: View {
                 )
             }
         }
-        // **顶部让位**（`homeBlockTopInset`）：与改前同一条口径（内容与板顶之间的余量）。
-        .padding(.top, StatsRingMetrics.homeBlockTopInset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .task { await driveSampling() }
         .onDisappear { StatsManager.shared.stopMonitoring() }
     }
@@ -352,24 +371,24 @@ private struct StatsHomeBlockView: View {
     }
 }
 
-/// 一个指标（单行紧凑形态）：**指标色圆点（含用量亮弧）+ 标签 + 读数**。
+/// 一个指标（三行纵向里的一行）：**指标色圆点（含用量弧）+ 标签 + 右对齐等宽读数**。
 ///
 /// 视觉机制逐字沿用三环时代的「科技风」（按指标分色 + 等宽数字，`Row.ringColor` / `monospacedDigit()`），
-/// 只是把 46pt 的环收成 14pt 的「点 + 弧」、把环心百分比移到数字位（等宽、右对齐）——
-/// 三项合计的宽从 `3 × 46 + 2 × 10 = 158` 收到约 210 的**内容宽**，高从 68 收到 22（docs/37 D-04）。
+/// 只是把 46pt 的环收成 12pt 的「点 + 弧」、把百分比从环心移到行尾——一行的高从 68 收到 18，
+/// 宽从 46 收到「点 + 标签 + 读数」（docs/38 D-10）。
 private struct StatsMetricRow: View {
     let row: StatsHomeBlockLayout.Row
     let valueText: String
     let progress: Double
 
     var body: some View {
-        HStack(spacing: StatsRingMetrics.metricInnerSpacing) {
+        HStack(spacing: 0) {
             ZStack {
                 // ① 外圈：暗轨道（与三环时代同一族的白）。
                 Circle()
                     .stroke(.white.opacity(StatsRingMetrics.trackOpacity), lineWidth: StatsRingMetrics.dotTrackLineWidth)
 
-                // ② 用量弧：从 12 点方向按比例画，指标色的细一笔（14pt 直径下仍可读）。
+                // ② 用量弧：从 12 点方向按比例画，指标色的细一笔（12pt 直径下仍可读）。
                 Circle()
                     .trim(from: 0, to: progress)
                     .stroke(
@@ -386,18 +405,23 @@ private struct StatsMetricRow: View {
             .frame(width: StatsRingMetrics.dotDiameter, height: StatsRingMetrics.dotDiameter)
 
             Text(LocalizedStringKey(row.labelKey))
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
                 .fixedSize()
+                .padding(.leading, StatsRingMetrics.labelSpacing)
+
+            Spacer(minLength: 4)
 
             // 读数：先拼 String 再给 `Text`（走 verbatim 重载，不做本地化查表）；等宽数字刷新不跳。
             Text(verbatim: valueText)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .fixedSize()
         }
+        .frame(height: StatsRingMetrics.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -135,3 +135,44 @@ struct CameraPreviewLayerView: NSViewRepresentable {
 #Preview {
     CameraPreviewView(webcamManager: WebcamManager.shared)
 }
+
+// MARK: - 镜子的浮动预览（p13 / docs/38-home-v5-layout.md D-08）
+
+/// 顶栏镜子按钮弹出的**浮动镜子**：一块固定边长的 `CameraPreviewView`（自带「点一下开 / 关采集」，
+/// 消失时停会话），外面套一层深色圆角底 + 柔影——它浮在**面板内容之上**（由 `ContentView` 挂在
+/// 面板内容根上、落在 `clipShape` 之内），因此不会出到面板圆角外面。
+///
+/// **为什么不是 popover**（p13 上屏实测）：popover 在**非激活面板**里撑不住——实测浮层出现后
+/// ~0.3s 就被系统收掉（同一块面板里另外三枚 popover 也是这个处境，只是它们的入口在用户的档位下
+/// 不可达）。面板内浮层没有这条不确定性：它就在面板自己的窗口里，显隐只由 `vm.isCameraExpanded` 决定。
+///
+/// **边长 212**（= 预览 200 + 两侧 6pt 内边距）：够看清自己的姿势（这是镜子的用途），
+/// 又不会盖住大半块面板。不跟 `mirrorShape` 走：那个键管的是首页块的形状（圆 / 方），
+/// 本层是浮层的容器，圆角固定取系统浮层那一档。
+struct MirrorFloatingPreview: View {
+    @ObservedObject var webcamManager = WebcamManager.shared
+
+    /// 镜面（预览）边长（唯一取值处）。
+    static let side: CGFloat = 200
+    /// 深色底与预览之间的一圈内边距。
+    static let padding: CGFloat = 6
+    /// 浮层总边长 = 预览 + 两侧内边距。
+    static var totalSide: CGFloat { side + padding * 2 }
+
+    var body: some View {
+        CameraPreviewView(webcamManager: webcamManager)
+            .frame(width: Self.side, height: Self.side)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(Self.padding)
+            // 最外层钉死尺寸：浮层按内容尺寸排版，而 `CameraPreviewView` 的根是 `GeometryReader`
+            // （理想尺寸 10×10）——只在里面钉 `.frame` 会得到一个 ~80pt 的小方块（p13 实测的一版）。
+            .frame(width: Self.totalSide, height: Self.totalSide)
+            .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text(LocalizedStringKey("module.mirror.name")))
+    }
+}

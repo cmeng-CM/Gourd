@@ -700,13 +700,28 @@ final class TodosModule: GourdModule {
     private let context: ModuleContext
     private let store: TodoStore
 
-    /// 首页块**高度申报**（docs/37 D-05）：固定 = 顶部内缩 + 表头 + 6 行（按日程行高 30）。
+    /// 首页块**高度申报**（docs/37 D-05；p13 按 docs/38 §做法 五 调到与通知块对齐）：
+    /// 固定 = 顶部内缩 + 表头 + 6 行（按日程行高 34）= **228**。
     ///
     /// 改前不申报（紧凑档 96）——96 里只放得下表头 + 4 行待办，日程根本没有位置
     /// （用户 2026-10-10 反馈「应该显示今日日程，而不是光待办」「显示的区域过小」）。
     static var homeBlockHeight: ModuleHomeBlockHeight {
         .points(TodosHomeBlockLayout.blockHeight)
     }
+
+    /// 首页块**宽度申报**（p13 / docs/38-home-v5-layout.md D-04 / D-12）：`420 / 470` + **弹性**。
+    ///
+    /// 470 是 v5 设计稿里「今日清单 + 通知并排」那一档（470 + 377 + 8 = 855 = 887 面板的可用宽）；
+    /// 通知关掉时它独占整行（弹性块吃满富余），这正是「用户少开一块时不留大片空白」的做法。
+    static var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(
+            min: TodosHomeBlockLayout.minimumBlockWidth,
+            ideal: TodosHomeBlockLayout.idealBlockWidth
+        )
+    }
+
+    /// **吃余量**（docs/38 D-04）：第三排两块都弹性，富余按各自 ideal 等比分配。
+    static var homeBlockAbsorbsSurplus: Bool { true }
 
     init(context: ModuleContext) {
         self.context = context
@@ -1101,6 +1116,11 @@ enum TodosHomeBlockLayout {
     /// 元素（10pt 状态圈 + 6pt 间距、`fixedSize` 的「已过期」红字），先牺牲它们把宽度让给标题。
     /// 判据取**放置后**的宽度（`GeometryReader`），不用测量。
     static let compactListWidth: CGFloat = 160
+
+    /// 首页块的**宽度申报**（p13 / docs/38 D-04）：最小 420（再窄就装不下「色条 + 标题 + 时间列」的
+    /// 完整日程行与右侧时间列），理想 470（v5 设计稿与通知并排那一档）。
+    static let minimumBlockWidth: CGFloat = 420
+    static let idealBlockWidth: CGFloat = 470
     /// 表头一行的高度（`今天` + `已办/总量` + 细进度条）。
     static let headerHeight: CGFloat = 16
     /// 清单一行的高度：完整行与紧凑行**都钉在这个高度上**（行数是按它算的，行高必须是真的）。
@@ -1113,22 +1133,27 @@ enum TodosHomeBlockLayout {
 
     // MARK: - 首页块尺寸（2026-10-10 / docs/37 D-05：今日日程与待办同一清单）
 
-    /// **今日日程行**的高度（图标/色条 + 标题 + 时间，两行式）。
-    static let eventRowHeight: CGFloat = 30
+    /// **今日日程行**的高度（图标/色条 + 标题 + 时间，两行式）。p13 由 30 抬到 **34**：
+    /// 与通知块（6 × 30）并排时两块申报高对齐（228 vs 225），行高不再差出一行。
+    static let eventRowHeight: CGFloat = 34
     /// **今日待办行**的高度（在混合清单里与日程行**等高**：行高不齐会让清单读起来散。
-    /// 状态圈 + 标题在 30 里居中——比旧 `rowHeight`(16) 松，因此不再复用 `rowCount` 的算术）。
-    static let todoRowHeightInSchedule: CGFloat = 30
+    /// 状态圈 + 标题在 34 里居中——比旧 `rowHeight`(16) 松，因此不再复用 `rowCount` 的算术）。
+    static let todoRowHeightInSchedule: CGFloat = 34
     /// 清单里**混合**（日程在前、待办在后）时的行数上限——块高按它申报。
     ///
-    /// 6 = 「今天要看的日程 + 待办」在 210pt 的块里能放下的条数（`blockHeight` 的算式）；
+    /// 6 = 「今天要看的日程 + 待办」在 228pt 的块里能放下的条数（`blockHeight` 的算式）；
     /// 再多就与首页「一眼看完」的定位冲突，
-    /// 完整清单看展开 tab 与日历行。
+    /// 完整清单看展开 tab 与日历页。
     static let maximumScheduleRows = 6
 
     /// 首页块申报的**固定高**（`TodosModule.homeBlockHeight` 引用它）。
     ///
-    /// = 表头 16 + 间距 4 + 6 × 30 + **顶部内缩 7** = **207**（向上取证 **210**：留 3pt 给越界的
-    /// 行距与字体行高，也让「申报高 → 行数」的反解有余量）。
+    /// = **顶部内缩 4 + 表头 16 + 间距 4 + 6 × 34 = 228**（p13：行高 30 → **34**，
+    /// docs/38-home-v5-layout.md §做法 五）。
+    ///
+    /// **为什么要与通知块对齐**：第三排是「今日清单 + 通知」**并排**（v5 设计稿），
+    /// 行高 = 行内最高块——两块申报 228 / 225 时行高 228，短的（通知）余 3pt 落板底；
+    /// 若沿用改前的 207，两块会差 20 余 pt 的空白，一眼就看得出没对齐。
     /// 视图侧的 `scheduleRowCount(fittingHeight:)` 吃的是**扣掉内缩之后**的高（与
     /// `ProgressHomeBlockLayout` 同一条口径：按真正拿到的高算行数），两条算式因此对齐——
     /// 申报高下必然画满 6 行。
@@ -1136,7 +1161,6 @@ enum TodosHomeBlockLayout {
         HomeBlockChrome.contentInsetTopListHeader
             + headerHeight + listSpacing
             + CGFloat(maximumScheduleRows) * eventRowHeight
-            + 3
     }
 
     /// **混合清单**的行数（块高 → 行数）：`floor((高 − 表头 − 间距) / 行高)`，钳 `0…maximumScheduleRows`。

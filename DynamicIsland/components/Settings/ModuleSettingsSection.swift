@@ -196,7 +196,8 @@ struct ModuleSettingsSection: View {
     @Default(.panelOrder) private var panelOrder
 
     // 内置块的开关级门控（`showStandardMediaControls` / `showMirror`）在 T6 收敛后**不再需要**：
-    // 音乐与镜子已是模块块，两节的名单里只有模块（详见 `homeRows`）。
+    // 音乐与镜子已是模块块，两节的名单里只有模块（详见 `homeRows`）。**p13 起连「首页日历行」
+    // 那张内置卡也没有了**（月历退出首页，docs/38 D-07/D-13）——「内置块」这一整类今天为空。
 
     /// 数据源 = 注册表**全量** manifest（含未启用），按 `id` 升序（docs/17 §改动点设计 5）。
     private var manifests: [ModuleManifest] {
@@ -205,8 +206,8 @@ struct ModuleSettingsSection: View {
 
     var body: some View {
         Form {
-            // 内置块里只剩首页日历行（音乐 / 镜子已是模块）——它**就在本页**「首页组件」节的最后一行
-            // （`HomeCalendarSettingsRow`：有开关、没有 ↑↓）。docs/17 §已知限制 5 的缓解措施。
+            // **内置块已经一个都不剩**（p13 / docs/38 D-07）：音乐 / 镜子早已是模块块，最后那个
+            // 「首页日历行」随月历退出首页一并退休——「首页组件」节今天**只有模块卡**。
             Section {
                 Text(LocalizedStringKey("settings.modules.builtinHint"))
                     .font(.caption)
@@ -381,12 +382,12 @@ struct ModuleSettingsSection: View {
     /// `configControls` 同一条口径（表侧写错必须能被用例抓到）。
     ///
     /// 未命中（将来注册的第三方模块）返回 nil，**整行不显示**——不猜它出现在哪。
+    /// **p13 起少两条**（docs/38 D-06 / D-08）：progress（工作日统计）与 mirror（镜子）两个模块
+    /// 退场（不再注册 → 组件页没有它们的卡 → 效果行也没有接收者）；四条 key 本身仍留在 catalog 里。
     static let effectKeysByModuleID: [String: String] = [
         "com.cmeng.gourd.todos": "settings.modules.effect.todos",
         "com.cmeng.gourd.notifications": "settings.modules.effect.notifications",
-        "com.cmeng.gourd.progress": "settings.modules.effect.progress",
         "com.cmeng.gourd.timer": "settings.modules.effect.timer",
-        "com.cmeng.gourd.mirror": "settings.modules.effect.mirror",
         "com.cmeng.gourd.music": "settings.modules.effect.music",
     ]
 
@@ -472,63 +473,10 @@ struct ModuleSettingsSection: View {
             kind: .integer(range: FrontAppHistory.limitRange),
             titleKey: "settings.modules.frontapp.maxRecentApps"
         ),
-        // 进度卡：**尺度多选**（p5-home-blocks / T2，docs/29 §做法 机制二 / D-05）。
-        // 选项与文案 key 都取自 `ProgressCalculator.Scope.allCases`（模块侧的**声明顺序**）——
-        // 卡上从左到右那一排就是块里从上到下那几行，勾满而块放不下时「画前三个」的顺序因此确定。
-        // 模块 id 写**字面量**（与启动台三行同口径）：`ProgressModule` 没有 `moduleID` 常量，
-        // 解析用例把它对回注册表，写错即红。
-        //
-        // `multiSelectEffectiveSet` 直接接模块那个公开纯函数：卡片勾中的一组 = 块要画的一组
-        // （空表 / 全坏值 → 出厂三档，见 `ModuleConfigControl.selectedOptions` 的注释）。
-        ModuleConfigControl(
-            moduleID: "com.cmeng.gourd.progress",
-            key: "visibleScopes",
-            kind: .multiSelect(
-                options: ProgressCalculator.Scope.allCases.map(\.rawValue),
-                titleKeys: ProgressCalculator.Scope.allCases.map(\.labelKey)
-            ),
-            titleKey: "settings.modules.progress.visibleScopes",
-            multiSelectEffectiveSet: { raw in
-                ProgressCalculator.resolveScopes(from: raw).map(\.rawValue)
-            }
-        ),
-        // 工作日统计三行（p7 / T3，docs/31 §接口与数据形状 4 / D-08）：
-        // - 上下班时间：整点滑块，区间取 `WorkdayCalendar.workHourRange`（**单一来源**，
-        //   与模块读侧的越界判定共用这一个区间——这里一个字面量都不写）；
-        // - 工作日：多选，选项 = ISO 编号 1…7（1 = 周一），文案 key 逐条写死为
-        //   `module.progress.weekday.<ISO>`；`multiSelectEffectiveSet` 直接接模块那个公开纯函数
-        //   `WorkdayCalendar.resolveWorkdays`——卡上勾中的一组 = 块判定用的那一组
-        //   （空表 / 全坏值回落一~五，手改配置塞的野值不会变成点不掉的勾）。
-        // 模块 id 与上面那条同款写**字面量**（`ProgressModule` 没有 `moduleID` 常量）。
-        ModuleConfigControl(
-            moduleID: "com.cmeng.gourd.progress",
-            key: "workStart",
-            kind: .integer(range: WorkdayCalendar.workHourRange),
-            titleKey: "settings.modules.progress.workStart"
-        ),
-        ModuleConfigControl(
-            moduleID: "com.cmeng.gourd.progress",
-            key: "workEnd",
-            kind: .integer(range: WorkdayCalendar.workHourRange),
-            titleKey: "settings.modules.progress.workEnd"
-        ),
-        ModuleConfigControl(
-            moduleID: "com.cmeng.gourd.progress",
-            key: "workdays",
-            kind: .multiSelect(
-                options: ["1", "2", "3", "4", "5", "6", "7"],
-                titleKeys: [
-                    "module.progress.weekday.1", "module.progress.weekday.2",
-                    "module.progress.weekday.3", "module.progress.weekday.4",
-                    "module.progress.weekday.5", "module.progress.weekday.6",
-                    "module.progress.weekday.7",
-                ]
-            ),
-            titleKey: "settings.modules.progress.workdays",
-            multiSelectEffectiveSet: { raw in
-                WorkdayCalendar.resolveWorkdays(from: raw).sorted().map(String.init)
-            }
-        ),
+        // **p13 起进度那四条已删**（docs/38 D-06）：工作日统计模块退场（读数搬进首页今天带
+        // 右侧那一行小字），组件页不再有它的卡——四条控件的接收者随之消失。
+        // `WorkdayCalendar.workHourRange` / `resolveWorkdays` 仍是模块侧（今天是宿主今天带）读侧的
+        // 单一来源，只是不再有卡片控件写它们——这是本批的一处**能力收缩**（docs/38 §已知限制 1）。
     ]
 
     /// 命中本卡片的 config 控件（**可能多行**：启动台卡三行、快捷指令卡两行）。
@@ -587,9 +535,8 @@ struct ModuleSettingsSection: View {
     /// 不存在第二套口径。
     ///
     /// **内置块今天为空**（「内置块 + 声明 `home` 的模块」这句话在今天的产品里只剩后半句）：
-    /// strip 上的音乐 / 镜子已是模块块，唯一的内置块是**首页日历行**——它是 strip 之外的全宽行
-    /// （`HomeCalendarSettingsRow`），顺序固定在最下、不在 `homeBlockOrder` 的语义里（给它两个点不动的
-    /// 上移 / 下移比不列它更坏），它的开关就渲染在**本节的末尾**（`surfaceSection(.home)` 里那一行）。
+    /// strip 上的音乐 / 镜子已是模块块，最后一个内置块（首页日历行）随月历退出首页退休
+    /// （p13 / docs/38 D-07）——本节的名单因此就是「声明 `.home` 的模块」。
     /// 将来若有内置块真的进 strip，在 `homeRows` 里补一行、并让 `HomeBlockOrdering` 认它即可。
     private var homeRows: [SurfaceRow] {
         HomeBlockOrdering.sorted(
@@ -695,12 +642,6 @@ struct ModuleSettingsSection: View {
                         )
                     )
                 }
-            }
-            // 首页的**内置块**（不是模块）：全宽日历行。列在本节末尾——它是流下方那一条全宽行，
-            // 与"块与块之间"的顺序表（`homeBlockOrder`）不是一回事，因此**只有开关、没有 ↑↓**
-            // （docs/28 §5；用户 2026-09-30：「首页的日历组件也要在首页组件控制区域进行开关控制」）。
-            if group == .home {
-                HomeCalendarSettingsRow()
             }
         } header: {
             Text(LocalizedStringKey(group.titleKey))
@@ -1550,59 +1491,6 @@ private struct ModuleSymbolChip: View {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color.accentColor.opacity(0.12))
                 )
-        }
-    }
-}
-
-// MARK: - 首页的内置块：全宽日历行
-
-/// 首页的**内置块**（它不是模块）：整月网格 + 当日清单的那条**全宽行**。
-///
-/// **在本节里的行形态与模块卡一致**（图标 + 名称 + 效果行 + 开关），但**没有上移 / 下移**：
-/// `homeBlockOrder` 是「块与块之间」的顺序表，而日历行是首页下方那一整条全宽行，不在那份名单里
-/// ——给它两个点不动的箭头比不给更坏（docs/26 §实际交付 10、docs/28 §5）。等首页改成单条流
-/// （docs/28 §4）它进了流，再补排序。
-///
-/// 开关读写上游那一个 `showCalendar`：**同一个键同时管首页这条行与展开面板的「日历」页**
-/// （docs/26 §做法 机制四），效果行因此必须把两处都写出来。
-///
-/// 本行原先只是「功能」段里的一张卡（那张表已在 p5 / T4 随整段撤销），用户 2026-09-30 要求
-/// 「首页的日历组件也要在首页组件控制区域进行开关控制」之后搬到这里——**键没有变、也没有第二份状态**。
-///
-/// **两个 key 是 `static let`（不是内联字面量）**：解析用例直接读它们，与本文件其余几张表的
-/// 口径一致（表侧写错字才会红）。
-struct HomeCalendarSettingsRow: View {
-    /// 名称 key：**逐字沿用上游设置页那一项的字面量**（与其余组件卡的取名口径一致）。
-    static let nameKey = "Show calendar"
-    /// 效果行 key（搬进「首页组件」节时改取 `settings.modules.*` 这一族，不再用功能段的
-    /// `settings.features.effect.<键名>`——那一族的五条已随功能段删除）。
-    static let effectKey = "settings.modules.calendarRow.effect"
-
-    @Default(.showCalendar) private var showCalendar
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // 日历**不在 `PanelIconTable` 里**（docs/34 §明确不做 3：日历那枚是最标准的日历表示，
-            // 本次换的是「跟它撞脸的那一枚」），按 `PanelIcon` 类型包一层即可。
-            ModuleSymbolChip(icon: .symbol("calendar"))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey(Self.nameKey))
-                    .fontWeight(.medium)
-
-                Text(LocalizedStringKey(Self.effectKey))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 12)
-
-            Toggle(isOn: $showCalendar) {
-                Text(LocalizedStringKey(Self.nameKey))
-            }
-            .labelsHidden()
-            .toggleStyle(.switch)
         }
     }
 }

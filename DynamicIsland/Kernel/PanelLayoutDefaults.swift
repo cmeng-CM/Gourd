@@ -66,7 +66,6 @@ enum PanelLayoutDefaults {
         Defaults.Keys.hiddenHomeModules.name,
         Defaults.Keys.hiddenPanelModules.name,
         Defaults.Keys.moduleEnableOverrides.name,
-        Defaults.Keys.showCalendar.name,
         Defaults.Keys.enableStatsFeature.name,
         Defaults.Keys.dynamicShelf.name,
         Defaults.Keys.enableTerminalFeature.name,

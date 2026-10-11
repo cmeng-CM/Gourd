@@ -109,6 +109,20 @@ public protocol GourdModule: AnyObject {
     /// 于是「块显示多少内容」只由块自己的声明决定，不再受同一行里别的块（例如镜子）影响
     /// （2026-10-10 用户反馈：前台应用「开镜子显示得多、关了显示得少」）。
     static var homeBlockHeight: ModuleHomeBlockHeight { get }
+
+    /// 首页块的**区**（缺省 `.flow`，docs/38-home-v5-layout.md D-01~D-03）：它进环境带
+    /// （固定第一排）还是可变流。**只声明「在哪一排」**，带内顺序仍是用户的 `homeBlockOrder`。
+    static var homeZone: ModuleHomeZone { get }
+
+    /// 首页块在**它所在的那一行**里是否**吸收剩余宽度**（缺省 false，docs/38 D-04）。
+    ///
+    /// 一行的宽度分配（`HomeStripLayoutMath`）在「富余」档下先把各块给到 `ideal`，多余的部分
+    /// 按**弹性块的 `ideal`** 等比分配——**没有弹性块时余量留在行尾**（改动前的行为）。
+    ///
+    /// 谁答真：前台应用（环境带的富余都归它——「cpu 那三个宽度降低，第一排大部分留给前台应用」）、
+    /// 今日清单与通知（并排时按比例分富余）。**固定的块（音乐 260 / 系统读数 145）答 false**：
+    /// 它们被拉宽只会变形，不会更好用。
+    static var homeBlockAbsorbsSurplus: Bool { get }
 }
 
 /// 接管三件套的**缺省语义**（docs/20-component-page.md §接口与数据形状 1 逐字）：
@@ -140,6 +154,15 @@ public extension GourdModule {
     /// **不申报的模块行为逐字不变**；按内容要高度的四块（前台应用 / 通知 / 统计 / 待办）
     /// 答 `.points(...)`，取值口径见各自模块与 docs/37 §接口与数据形状。
     static var homeBlockHeight: ModuleHomeBlockHeight { .formFactor }
+
+    /// 首页块的区（缺省 `.flow` = 可变流，docs/38 §接口）。**只有环境带那三块重写它**
+    /// （音乐 / 前台应用 / 统计答 `.environment`）；新增模块什么都不用声明。
+    /// 与另外几条钩子同一条理由进协议要求而不是只放扩展里：元类型取用走的是具体模块的实现。
+    static var homeZone: ModuleHomeZone { .flow }
+
+    /// 首页块是否吸收所在行的剩余宽度（缺省 false = 余量留在行尾，docs/38 D-04）。
+    /// **只有「宽一点更好用」的块重写它**（前台应用 / 今日清单 / 通知）。
+    static var homeBlockAbsorbsSurplus: Bool { false }
 }
 
 /// 06 §3.1 的内容请求（本批去掉事件相关字段——事件总线属 P1-3）。

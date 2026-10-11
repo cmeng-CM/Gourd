@@ -241,16 +241,17 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
 
         // 面板尺寸的重算触发（函数名里的「侧歌词」是旧档遗留；侧歌词一族已随 T5/T6 退休）。
         // 本链保留：下面每个成员仍会改变 `calculateDynamicNotchSize()` 的输出，逐条给出处——
-        // - `showCalendar` / `showStandardMediaControls` / `showMirror`：`enabledStandardTabCount()`
-        //   （matters.swift:128）读它们 → 推荐最小宽度 → `openNotchSize.width`；
+        // - `showStandardMediaControls` / `showMirror`：首页**块**的存在性判据（音乐块 / 镜子块，
+        //   见下一条）→ 块名单 → 自然高 → `openNotchSize.height`。**首页 tab 自己的那一条已不读
+        //   任何键**（p13 / docs/38 D-14：Home 恒有一枚，`enabledStandardTabCount()` 直接 +1）；
         // - `showMirror` / `autoHideInactiveNotchMediaPlayer` / `WebcamManager.$cameraAvailable` /
         //   `isPlaying` / `songTitle` / `artistName`：首页块的存在性判据（`MirrorModule.isVisible` /
         //   `MusicModule.isVisible`；音乐那条经 `MusicManager.hasActiveSession`，MusicManager.swift:489）
         //   → 块名单 → 接缝算出的自然高 → 高度账本（`PanelContentHeight.current`，matters.swift:86 读）
         //   → `openNotchSize.height`。
-        // 已删成员：`enableLyrics`（T5/T6 后没有一条尺寸路径读它）与侧歌词档的两枚旧键（键定义同批删除）。
+        // 已删成员：`enableLyrics`（T5/T6 后没有一条尺寸路径读它）与侧歌词档的两枚旧键
+        // （键定义同批删除）、`showCalendar`（p13 / docs/38 D-13：月历退出首页，键定义同批删除）。
         Publishers.MergeMany(
-            Defaults.publisher(.showCalendar, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.showStandardMediaControls, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.autoHideInactiveNotchMediaPlayer, options: []).map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.showMirror, options: []).map { _ in () }.eraseToAnyPublisher(),
@@ -434,6 +435,15 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
         }
     }
     
+    /// 顶栏镜子按钮的动作（p13 / docs/38-home-v5-layout.md D-08 是本批的新口径）。
+    ///
+    /// **两条 p13 改动**（改前只起 / 停采集会话，首页块负责显示——首页块已退场）：
+    /// 1. `isCameraExpanded` 是**浮动镜子**的显隐开关（`ContentView` 按它画
+    ///    `MirrorFloatingPreview`）：**只要按钮被按下它就要有可见的反应**——不然用户看到的是
+    ///    「点了没反应」（p13 上屏实测：摄像头没就绪时旧实现一个像素都不变）；
+    /// 2. 因此「已授权 + 摄像头可用」才起会话，**其余情况照样翻标记**，
+    ///    浮层里那块占位（`CameraPreviewView` 自带：未起会话显示 `Mirror` / 被拒显示 `Access Denied`，
+    ///    点它一次就是授权 / 起会话）负责把原因说清楚。
     func toggleCameraPreview() {
         if isRequestingAuthorization {
             return
@@ -441,15 +451,24 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
 
         switch webcamManager.authorizationStatus {
         case .authorized:
-            if webcamManager.isSessionRunning {
-                webcamManager.stopSession()
+            if isCameraExpanded {
+                // 第二下：收起浮层并停会话（不看了就别占着摄像头）。
                 isCameraExpanded = false
-            } else if webcamManager.cameraAvailable {
+                webcamManager.stopSession()
+                return
+            }
+            isCameraExpanded = true
+            if webcamManager.isSessionRunning {
+                // 会话已在跑（别处起的）：只把浮层放出来。
+                return
+            }
+            if webcamManager.cameraAvailable {
                 webcamManager.startSession()
-                isCameraExpanded = true
             }
 
         case .denied, .restricted:
+            // 浮层照样放出来（占位会写 `Access Denied`），随后的系统提示说明怎么开权限。
+            isCameraExpanded = true
             DispatchQueue.main.async {
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
@@ -466,9 +485,18 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
 
         case .notDetermined:
             isRequestingAuthorization = true
-            webcamManager.checkAndRequestVideoAuthorization()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                self.isRequestingAuthorization = false
+            isCameraExpanded = true
+            // 与 `.denied` 那一档同一条先例：**先把应用唤到前台**再请求——非激活面板里发出的
+            // 授权请求不保证压得住别的窗口（p13 上屏实测：提示没出现，用户看到的是「点了没反应」）。
+            DispatchQueue.main.async {
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+                self.webcamManager.checkAndRequestVideoAuthorization()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    self.isRequestingAuthorization = false
+                    NSApp.setActivationPolicy(.accessory)
+                    NSApp.deactivate()
+                }
             }
 
         default:

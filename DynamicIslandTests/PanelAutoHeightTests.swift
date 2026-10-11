@@ -242,58 +242,38 @@ final class PanelAutoHeightTests: XCTestCase {
 
     // MARK: - 内容高与自然高预算
 
-    func testContentHeightAddsCalendarSeamAndHeader() {
+    /// **p13 起口径**（docs/38 D-01/D-07）：内容高 = 流方案的内容高 + **宿主两带（环境带 + 今天带 +
+    /// 两道缝）** + 表头。改前那一项是「日历行 + 缝」，月历退出首页后由 `hostBandsHeight` 承接。
+    func testContentHeightAddsHostBandsAndHeader() {
         let metrics = HomeFlowLayout.Metrics(columnSpacing: 8, rowSpacing: 8, tailReserve: 34)
         let items = [HomeFlowLayout.Item(min: 140, ideal: 140, height: 140)]
 
-        // 关掉日历行（`calendarHeight` 传 0）：内容高 = 流的内容高 + 表头。
-        let noCalendar = HomeFlowLayout.plan(
-            items: items, availableWidth: 700, availableHeight: 600,
-            calendarHeight: 0, metrics: metrics
+        // 流放得下：内容高 = 流 + 两带 + 表头。
+        let plan = HomeFlowLayout.plan(
+            items: items, availableWidth: 700, availableHeight: 600, metrics: metrics
         )
         XCTAssertEqual(
-            PanelAutoHeight.contentHeight(
-                from: noCalendar, calendarHeight: 294, calendarSpacing: 8, headerHeight: 32
-            ),
-            140 + 32,
-            "没有日历行时只加表头（缝不加）"
+            PanelAutoHeight.contentHeight(from: plan, hostBandsHeight: 56, headerHeight: 32),
+            140 + 56 + 32,
+            "流内容高 + 两带高 + 表头"
         )
 
-        // 开了日历行且放得下：内容高 = 流 + 缝 + 行高 + 表头。
-        let withCalendar = HomeFlowLayout.plan(
-            items: items, availableWidth: 700, availableHeight: 600,
-            calendarHeight: 294, metrics: metrics
-        )
-        XCTAssertTrue(withCalendar.showsCalendarRow, "600 高放得下 140 + 8 + 294")
-        XCTAssertEqual(
-            PanelAutoHeight.contentHeight(
-                from: withCalendar, calendarHeight: 294, calendarSpacing: 8, headerHeight: 32
-            ),
-            140 + 8 + 294 + 32,
-            "流内容高 + 缝 + 日历行高 + 表头"
-        )
-
-        // 高度不够时流方案自己先把日历行收掉（既有取舍）：内容高里因此不含它。
+        // 高度不够时流方案自己丢掉尾部行（既有取舍）：内容高里因此只含画出来的那部分。
         let tooTight = HomeFlowLayout.plan(
-            items: items, availableWidth: 700, availableHeight: 200,
-            calendarHeight: 294, metrics: metrics
+            items: items, availableWidth: 700, availableHeight: 100, metrics: metrics
         )
-        XCTAssertFalse(tooTight.showsCalendarRow, "200 高放不下日历行（既有口径：日历行先让位）")
+        XCTAssertEqual(tooTight.visibleCount, 0, "100 高放不下 140 的行")
         XCTAssertEqual(
-            PanelAutoHeight.contentHeight(
-                from: tooTight, calendarHeight: 294, calendarSpacing: 8, headerHeight: 32
-            ),
-            140 + 32,
-            "方案没收日历行时不加它"
+            PanelAutoHeight.contentHeight(from: tooTight, hostBandsHeight: 56, headerHeight: 32),
+            56 + 32,
+            "一行都没画时只剩两带与表头"
         )
 
         // 非有限项按 0（不让一个坏数把面板尺寸打掉）。
         XCTAssertEqual(
-            PanelAutoHeight.contentHeight(
-                from: noCalendar, calendarHeight: .nan, calendarSpacing: .nan, headerHeight: .nan
-            ),
+            PanelAutoHeight.contentHeight(from: plan, hostBandsHeight: .nan, headerHeight: .nan),
             140,
-            "表头 / 缝 / 行高非有限 → 各自按 0"
+            "两带 / 表头非有限 → 各自按 0"
         )
     }
 

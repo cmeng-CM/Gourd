@@ -862,7 +862,6 @@ struct SettingsView: View {
             SettingsSearchEntry(tab: .media, title: "Enable album art parallax effect", keywords: ["parallax", "parallax effect", "album art"], highlightID: SettingsTab.media.highlightID(for: "Enable album art parallax effect")),
 
             // Calendar
-            SettingsSearchEntry(tab: .calendar, title: "Show calendar", keywords: ["calendar", "events"], highlightID: SettingsTab.calendar.highlightID(for: "Show calendar")),
             SettingsSearchEntry(tab: .calendar, title: "Enable reminder live activity", keywords: ["reminder", "live activity"], highlightID: SettingsTab.calendar.highlightID(for: "Enable reminder live activity")),
             SettingsSearchEntry(tab: .calendar, title: "Countdown style", keywords: ["reminder countdown"], highlightID: SettingsTab.calendar.highlightID(for: "Countdown style")),
             SettingsSearchEntry(tab: .calendar, title: "Show lock screen reminder", keywords: ["lock screen", "reminder widget"], highlightID: SettingsTab.calendar.highlightID(for: "Show lock screen reminder")),
@@ -3251,7 +3250,6 @@ private extension Color {
 
 struct CalendarSettings: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
-    @Default(.showCalendar) var showCalendar: Bool
     @Default(.enableReminderLiveActivity) var enableReminderLiveActivity
     @Default(.reminderPresentationStyle) var reminderPresentationStyle
     @Default(.reminderLeadTime) var reminderLeadTime
@@ -3308,11 +3306,9 @@ struct CalendarSettings: View {
                     }
                 }
 
-                Defaults.Toggle(key: .showCalendar) {
-                    Text("Show calendar")
-                }
-                .settingsHighlight(id: highlightID("Show calendar"))
-
+                // **「Show calendar」这一项已退休**（p13 / docs/38 D-13）：它开的是首页那条全宽
+                // 日历行，而月历已退出首页（D-07）——留着就是一个「拨了没反应」的死开关。
+                // 日历数据的来源选择、全天 / 已完成的口径仍在本页下面几节。
                 Section(header: Text("Event List")) {
                     Toggle("Hide completed reminders", isOn: $hideCompletedReminders)
                         .settingsHighlight(id: highlightID("Hide completed reminders"))
@@ -3325,7 +3321,6 @@ struct CalendarSettings: View {
                 Section(header: Text("All-Day Events")) {
                     Toggle("Hide all-day events", isOn: $hideAllDayEvents)
                         .settingsHighlight(id: highlightID("Hide all-day events"))
-                        .disabled(!showCalendar)
 
                     Text("Turn this off to include all-day entries in the notch calendar and reminder live activity.")
                         .font(.caption)
@@ -3452,7 +3447,6 @@ struct CalendarSettings: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.mini)
-                            .disabled(!showCalendar)
                         }) {
                             ForEach(accountCalendars, id: \.id) { calendar in
                                 Toggle(isOn: Binding(
@@ -3470,7 +3464,6 @@ struct CalendarSettings: View {
                                         Text(calendar.title)
                                     }
                                 }
-                                .disabled(!showCalendar)
                             }
                         }
                     }
@@ -5150,7 +5143,7 @@ struct Appearance: View {
     /// 「恢复默认」按下并确认之后实际做的事：重置 + 既有的「设置已改」收尾。
     ///
     /// 重置清单里有订阅的那几个键（`panelHeightMode` / `hiddenHomeModules` / `homeBlockOrder` /
-    /// `moduleEnableOverrides` / `showCalendar` / `openNotchWidth` / `enableStatsFeature` …）自己会
+    /// `moduleEnableOverrides` / `openNotchWidth` / `enableStatsFeature` …）自己会
     /// 触发 `DynamicIslandApp` 的窗口尺寸重算；**`openNotchHeight` 没有订阅**（与两个滑块同一条：
     /// 高度那一档的下一次生效点在展开时），所以照那两个滑块的收尾补一条 `notchHeightChanged`
     /// （窗口重新定位 / 同步多屏）——不新开第二条 resize 链。

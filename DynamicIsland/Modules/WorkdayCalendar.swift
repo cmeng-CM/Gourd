@@ -95,6 +95,76 @@ enum WorkdayCalendar {
         )
     ]
 
+    // MARK: - 节假日名（首页今天带用；p13 / docs/38 §做法 三）
+
+    /// 一个节日的**名字 + 它占的公历日**（`holidays` 里那一段连续日期）。
+    struct HolidayRun: Equatable {
+        let name: String
+        let month: Int
+        let days: ClosedRange<Int>
+    }
+
+    /// 年份 → 该年节日名（**与 `holidayTables` 同年同源**：表里每一段放假都有一条 run，
+    /// 由 `testHolidayNamesCoverEveryHolidayDay` 逐日对齐——两张表不许各说一套）。
+    ///
+    /// 名字按**中文专名**给出（`元旦` / `春节` / `清明节` / `劳动节` / `端午节` / `中秋节` / `国庆节`）：
+    /// 首页今天带那一行是中文日历的呈现（docs/38 §做法 三 口径 ①），不分语言。
+    /// **表外的年份没有名字**：消费点（`TodayHeadline.holidayLabel`）据此不画那一段，不猜也不画「未知」。
+    static let holidayRuns: [Int: [HolidayRun]] = [
+        2026: [
+            HolidayRun(name: "元旦", month: 1, days: 1...3),
+            HolidayRun(name: "春节", month: 2, days: 15...23),
+            HolidayRun(name: "清明节", month: 4, days: 4...6),
+            HolidayRun(name: "劳动节", month: 5, days: 1...5),
+            HolidayRun(name: "端午节", month: 6, days: 19...21),
+            HolidayRun(name: "中秋节", month: 9, days: 25...27),
+            HolidayRun(name: "国庆节", month: 10, days: 1...7),
+        ]
+    ]
+
+    /// 这一天是**调休上班日**（在 `makeupWorkdays` 里）。表外年份恒 false。
+    ///
+    /// 首页今天带据此给节日名加一个「（班）」后缀——调休日往往紧贴节日（2026 的 10/10 紧接国庆），
+    /// 只写「国庆节」会让人以为放假。
+    static func isMakeupWorkday(_ date: Date, calendar: Calendar = .autoupdatingCurrent) -> Bool {
+        let year = calendar.component(.year, from: date)
+        guard let table = holidayTables[year] else { return false }
+        return table.makeupWorkdays.contains(dayKey(of: date, calendar: calendar))
+    }
+
+    /// 该年**调休上班日 → 它归属的节日名**（与 `holidayTables.makeupWorkdays` 同一个键集，
+    /// 由 `testHolidayNamesCoverEveryMakeupDay` 钉住）。
+    ///
+    /// 这里是**逐天写死归属**（而不是算「最近的节日」）：2026 的 2/14 与 2/28 都是春节的调休、
+    /// 9/20 归中秋、1/4 归元旦、5/9 归劳动节、10/10 归国庆——「最近」这条规则在多节日相邻时
+    /// 并不比一张表更可靠，而这张表只有六行。
+    static let makeupDayNames: [Int: [String: String]] = [
+        2026: [
+            "1/4": "元旦",
+            "2/14": "春节",
+            "2/28": "春节",
+            "5/9": "劳动节",
+            "9/20": "中秋节",
+            "10/10": "国庆节",
+        ]
+    ]
+
+    /// 这一天的**节日名**（放假日落在某条 run 里、或它是表内登记过的调休日 → 名字；
+    /// 表外年份 / 平常日子 → nil）。
+    ///
+    /// 两类都答名字是刻意的：调休日只答「不是休息日」还不够用——首页那一行要说的正是
+    /// 「今天上班，因为这是国庆节的调休」（`国庆节（班）`），名字落在哪一天是**数据**，不是推算。
+    static func holidayName(of date: Date, calendar: Calendar = .autoupdatingCurrent) -> String? {
+        let year = calendar.component(.year, from: date)
+        let month = calendar.component(.month, from: date)
+        let day = calendar.component(.day, from: date)
+        if let runs = holidayRuns[year],
+           let run = runs.first(where: { $0.month == month && $0.days.contains(day) }) {
+            return run.name
+        }
+        return makeupDayNames[year]?[dayKey(of: date, calendar: calendar)]
+    }
+
     // MARK: - 判定
 
     /// 某个时刻所在自然日是否工作日。

@@ -169,23 +169,24 @@ enum PanelAutoHeight {
         return min(max(contentHeight + homeVerticalPadding, openNotchHeightRange.lowerBound), upper)
     }
 
-    /// 首页内容高（接缝口径）= 流方案的内容高 + 画了日历行时那一段「缝 + 行高」+ **面板表头**。
+    /// 首页内容高（接缝口径）= **环境带 + 今天带 + 流方案的内容高** + **面板表头**。
     ///
     /// 表头折在这里是刻意的（见 `homeVerticalPadding` 的注释）：`panelHeight(...)` 只加那 16pt 的
     /// 上下内边距，表头这一块随屏变化，只能由知道 `vm.effectiveClosedNotchHeight` 的那一层
-    /// （接缝）折进内容高。`plan.showsCalendarRow` 是流方案按预算自己的取舍结果（关掉日历行时
-    /// 调用方传的 `calendarHeight` 为 0，方案自然不画那一行）。
-    static func contentHeight(
+    /// （接缝）折进内容高。
+    ///
+    /// **`hostBandsHeight`（p13 / docs/38 D-01）** = 环境带高 + 一道缝 + 今天带高 + 一道缝——
+    /// 即「流以上那两条固定带连同它们与流之间的间距」。改前这里算的是流下方那条全宽日历行
+    /// （`calendarHeight` / `calendarSpacing`，按当月的 `36N + 52`）；月历退出首页之后由本参数
+    /// 承接同一件事（口径不变：**两者都只是「流之外那一段固定的高度」**）。
+    /// 三带都不画时（块全关）传 0。
+    public static func contentHeight(
         from plan: HomeFlowLayout.Plan,
-        calendarHeight: CGFloat,
-        calendarSpacing: CGFloat,
+        hostBandsHeight: CGFloat,
         headerHeight: CGFloat
     ) -> CGFloat {
         var height = max(0, plan.heightUsed.isFinite ? plan.heightUsed : 0)
-        if plan.showsCalendarRow {
-            height += max(0, calendarSpacing.isFinite ? calendarSpacing : 0)
-            height += max(0, calendarHeight.isFinite ? calendarHeight : 0)
-        }
+        height += max(0, hostBandsHeight.isFinite ? hostBandsHeight : 0)
         height += max(0, headerHeight.isFinite ? headerHeight : 0)
         return height
     }

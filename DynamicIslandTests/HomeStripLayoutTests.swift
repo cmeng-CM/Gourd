@@ -56,7 +56,7 @@
 //  - 顺序的正面判据：可用高度从高到低逐 pt 扫，**让位顺序恒为 日历行 → 主块带 → 小组件带**；
 //  - **空带不进取舍**（T7）：没有紧凑块时四档**退化成旧三档**（`.both` ≡ 旧 both、`.noCalendar` ≡
 //    旧 stripOnly、`.none` ≡ 旧 calendarOnly——旧 calendarOnly 那一档本就不画日历行，见
-//    `HomeCalendarRow.rowHeight`（T8 起按当月周数，2026-10 = 232）> `HomeStripView.minimumUsableHeight`（140））；
+//    `MonthGridLayout.monthGridHeight`（T8 起按当月周数，2026-10 = 232）> `HomeStripView.minimumUsableHeight`（140））；
 //  - 日历行关掉时（行高按 0 传）不存在取舍：剩下的几样拿全部可用高度；
 //  - 退化输入：`available == 0` 与负值都判成什么都不画（负值按 0 处理）。
 //
@@ -744,18 +744,21 @@ final class HomeStripLayoutTests: XCTestCase {
     // MARK: - 首页各带的高度取舍（T2 / docs/23-home-fit.md §做法 机制二；T7 四档 / docs/26 §做法 机制六）
 
     /// 生产档的入参（与 `HomeBandedHomeView` 传的逐字同源）：日历行**按当月周数**算高
-    /// （`HomeCalendarRow.rowHeight`，2026-10 = 5 周 → 232；T8 前是「最坏 6 周」的固定 294；T8 tune
+    /// （`MonthGridLayout.monthGridHeight`，2026-10 = 5 周 → 232；T8 前是「最坏 6 周」的固定 294；T8 tune
     /// 按控制器上屏实测把网格上方两段多预留 + 网格底部 2pt 收回，见 `MonthGridLayout.monthGridHeight`）、
     /// 接缝间距 8、主块带最小可用高度 140（= 大块档 `HomeFlowView.largeBlockHeight`，T3 起）、
     /// 小组件带行高 96 / 行距 8。
     ///
-    /// **钉在一个固定月份上**（2026-10，周日-first）：`HomeCalendarRow.rowHeight` 随当月走，
+    /// **钉在一个固定月份上**（2026-10，周日-first）：那个算式随当月走，
     /// 断言里的阈值链因此必须拿一个与运行日无关的月份来算，否则换个 6 周月这份文件整片红。
-    private static let calendarRowHeight: CGFloat = HomeCalendarRow.rowHeight(
-        forMonth: calendarRowMonth(calendarRowCalendar(firstWeekday: 1), year: 2026, month: 10),
-        calendar: calendarRowCalendar(firstWeekday: 1)
-    )
-    private static let rowSpacing: CGFloat = HomeCalendarRow.rowSpacing
+    /// **2026-10 那一档的行高 = 232**：改前它由 `HomeCalendarRow.rowHeight(forMonth:)` 现算，
+    /// 那条行随「月历退出首页」整条退休（docs/38 D-07）——本文件里还用它的只剩 `HomeVerticalFit`
+    /// 那批**分带时代的**用例（拆带那套已不在生产路径上）。算式本体仍在
+    /// `MonthGridLayout.monthGridHeight`（面板「日历」页的左栏用它），由下面
+    /// `testMonthGridHeightStillFeedsTheCalendarPageTab` 守着同一个数。
+    private static let calendarRowHeight: CGFloat = 232
+    /// 三带之间的缝（改前是 `HomeCalendarRow.rowSpacing`，值不变、换了个家）。
+    private static let rowSpacing: CGFloat = HomeTodayBandLayout.rowSpacing
     private static let stripMinimumHeight: CGFloat = HomeStripView.minimumUsableHeight
     private static let widgetRowHeight: CGFloat = HomeStripView.widgetRowHeight
     private static let widgetRowSpacing: CGFloat = HomeStripView.widgetRowSpacing
@@ -844,7 +847,7 @@ final class HomeStripLayoutTests: XCTestCase {
     ///    11 月（leading days = 0）；
     /// 3. **周起点跟随 `firstWeekday`**：同一月份在周日-first 与周一-first 下的周数按各自网格算
     ///    （2026-05 就是一个 6 / 5 不同的月份）——行高不按任何写死的「最多 6 周」拍脑袋。
-    func testHomeCalendarRowHeightFollowsTheMonthWeeks() throws {
+    func testMonthGridHeightFollowsTheMonthWeeks() throws {
         let sunday = Self.calendarRowCalendar(firstWeekday: 1)
         let monday = Self.calendarRowCalendar(firstWeekday: 2)
 
@@ -866,7 +869,7 @@ final class HomeStripLayoutTests: XCTestCase {
                 file: file, line: line
             )
             XCTAssertEqual(
-                HomeCalendarRow.rowHeight(forMonth: monthDate, calendar: calendar),
+                MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: calendar),
                 36 * CGFloat(weeks) + 52,
                 "行高 = 36N + 52（\(weeks) 周）", file: file, line: line
             )
@@ -876,13 +879,13 @@ final class HomeStripLayoutTests: XCTestCase {
         assertMonth(sunday, 2026, 8, weeks: 6)
         assertMonth(sunday, 2026, 10, weeks: 5)
         XCTAssertEqual(
-            HomeCalendarRow.rowHeight(
+            MonthGridLayout.monthGridHeight(
                 forMonth: Self.calendarRowMonth(sunday, year: 2026, month: 10), calendar: sunday
             ),
             232, "10 月 5 周 → 232（T8 tune 后的设计值；T8 前固定 294、T8 首版 258）"
         )
         XCTAssertEqual(
-            HomeCalendarRow.rowHeight(
+            MonthGridLayout.monthGridHeight(
                 forMonth: Self.calendarRowMonth(sunday, year: 2026, month: 8), calendar: sunday
             ),
             268, "8 月 6 周 → 268（T8 tune 后；旧固定值 294 恰好是这一档）"
@@ -917,14 +920,14 @@ final class HomeStripLayoutTests: XCTestCase {
         assertMonth(monday, 2026, 10, weeks: 5)
 
         // 生产入口（无月参的那一个）与纯函数逐字同值：宿主 plan 的预算与行的 frame 读的是同一份。
-        XCTAssertEqual(HomeCalendarRow.rowHeight, HomeCalendarRow.rowHeight(forMonth: Date()), "静态入口 = 当前月的纯函数值")
+        XCTAssertEqual(MonthGridLayout.monthGridHeight(forMonth: Date()), 232, "2026-10（当前月）仍是 5 周那一档：36 × 5 + 52 = 232")
 
         // 两处宿主同源（首页行 / 独立日历页左栏）：`MonthGridLayout.monthGridHeight` 就是行高算式
         // 的那一份——两处不可能各写一套（`StandaloneCalendarView.monthGridHeight` 直接调它）。
         for month in [8, 10] {
             let monthDate = Self.calendarRowMonth(sunday, year: 2026, month: month)
             XCTAssertEqual(
-                HomeCalendarRow.rowHeight(forMonth: monthDate, calendar: sunday),
+                MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: sunday),
                 MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: sunday),
                 "首页日历行高与独立日历页左栏高同源（\(month) 月）"
             )
@@ -937,20 +940,20 @@ final class HomeStripLayoutTests: XCTestCase {
     ///
     /// 期望值按**宿主机时区**造月首（默认参数 = 宿主机时区那一档）；GMT 夹具（`calendarRowCalendar`）
     /// 继续只服务显式注入日历的判据。
-    func testHomeCalendarRowHeightDefaultsToTheDisplayCalendar() {
+    func testMonthGridHeightDefaultsToTheDisplayCalendar() {
         let november = Self.calendarRowMonth(Calendar.gourdDisplay, year: 2026, month: 11)
         XCTAssertEqual(
-            HomeCalendarRow.rowHeight(forMonth: november),
-            HomeCalendarRow.rowHeight(forMonth: november, calendar: .gourdDisplay),
+            MonthGridLayout.monthGridHeight(forMonth: november),
+            MonthGridLayout.monthGridHeight(forMonth: november, calendar: .gourdDisplay),
             "默认参数 = 显式 `.gourdDisplay`（静态入口与显示日历同源）"
         )
         XCTAssertEqual(
-            HomeCalendarRow.rowHeight(forMonth: november), 268,
+            MonthGridLayout.monthGridHeight(forMonth: november), 268,
             "2026-11 周一档 = 6 周 → 36 × 6 + 52（周日起始档是 5 周 → 232）"
         )
     }
 
-    /// **行高下网格恰好装下整月**（p6-ui-polish / T8 tune 的结构护栏）：在 `HomeCalendarRow.rowHeight`
+    /// **行高下网格恰好装下整月**（p6-ui-polish / T8 tune 的结构护栏）：在 `MonthGridLayout.monthGridHeight`
     /// 给定的行高里挂**真的** `MonthGridView`，量日格那个 `NSScrollView` 的视口——它必须恰好等于
     /// 「整月网格内容」= `36N − 6`（`LazyVGrid` 的 N 行 + (N−1) 道行距；T8 tune 去掉了额外的
     /// `.padding(.bottom, 2)`），且网格底**贴住行底**（上方两段 chrome 的余量都落在网格上方）。
@@ -969,7 +972,7 @@ final class HomeStripLayoutTests: XCTestCase {
         let calendar = Self.calendarRowCalendar(firstWeekday: 2)
         for (year, month, weeks) in [(2026, 10, 5), (2026, 11, 6), (2026, 8, 6)] {
             let monthDate = Self.calendarRowMonth(calendar, year: year, month: month)
-            let rowHeight = HomeCalendarRow.rowHeight(forMonth: monthDate, calendar: calendar)
+            let rowHeight = MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: calendar)
             XCTAssertEqual(rowHeight, 36 * CGFloat(weeks) + 52, "前提：\(year)-\(month) = \(weeks) 周")
 
             var selected = monthDate
@@ -1592,7 +1595,6 @@ final class HomeStripLayoutTests: XCTestCase {
             items: Self.flowItems(items),
             availableWidth: bandWidth,
             availableHeight: height,
-            calendarHeight: 0,
             metrics: HomeFlowLayout.Metrics(
                 columnSpacing: HomeStripLayout.spacing,
                 rowSpacing: HomeStripView.widgetRowSpacing,
@@ -1646,8 +1648,7 @@ final class HomeStripLayoutTests: XCTestCase {
                 items: Self.flowItems(items),
                 availableWidth: bandWidth,
                 availableHeight: height,
-                calendarHeight: 0,
-                metrics: HomeFlowLayout.Metrics(
+                    metrics: HomeFlowLayout.Metrics(
                     columnSpacing: HomeStripLayout.spacing,
                     rowSpacing: HomeStripView.widgetRowSpacing,
                     tailReserve: HomeStripView.droppedHintWidth
@@ -1781,49 +1782,55 @@ final class HomeStripLayoutTests: XCTestCase {
     ///
     /// 这条是**行为护栏**，不是常数断言：面板高由生产函数 `PanelAutoHeight.panelHeight(...)` 算，
     /// 首页真拿到的 frame 由面板内**每一项**折出来（下面逐项注明出处），再用生产 plan 在同一个
-    /// frame 上判「日历行还在不在」，最后真渲染一遍。常数只要少一段，frame 就低于需求、日历行被
+    /// frame 上判「流那一行还在不在」，最后真渲染一遍。常数只要少一段，frame 就低于需求、尾部行被
     /// 整行丢掉——实机那次（`homeVerticalPadding` 漏掉 `NotchLayout` 里表头与内容之间那道 8pt 缝）
     /// 就是这么丢的：AX 树里 0 个日格、面板下方空出约 300pt。
+    ///
+    /// **p13 改判**（docs/38 D-01/D-07）：需求那一项从「流 + 日历行 + 缝」换成
+    /// 「流 + **宿主两带（环境带 + 今天带 + 两道缝）** + 表头」——月历退出首页之后，
+    /// 流上方那两条固定带就是同一类「流之外那一段固定的高度」。
     func testAutoPanelHeightLeavesTheHomeTheHeightItsOwnPlanNeeds() async {
         homeBlockSizeLog.reset()
         registerProbes([HomeCompactAProbeModule.self])
         await ModuleRegistry.shared.bootstrap()
 
-        let savedShowCalendar = Defaults[.showCalendar]
-        Defaults[.showCalendar] = true
-        defer { Defaults[.showCalendar] = savedShowCalendar }
-
-        // 夹具：一块紧凑块（宿主统一档 180/240、档高 96）+ 日历行（按当月周数算高，见
-        // `HomeCalendarRow.rowHeight`——T8 起 2026-10 = 232）。
+        // 夹具：一块紧凑块（宿主统一档 180/240、档高 96）。今天带恒在（宿主直渲），环境带在本用例里
+        // 为空（夹具模块申报缺省区 `.flow`），因此 `hostBandsHeight` = 今天带 + 一道缝。
         let available = Self.panelWidth770StripWidth
         let bandWidth = Self.bandContentWidth(forHostingWidth: available)
         let items = [flowItem(180, 240, HomeFlowView.compactBlockHeight)]
         // 表头高取实机的 `max(24, closedNotchHeight)` 那一档；它在**内容侧**（`contentHeight(...)`
         // 把它折进内容高），所以下面对 frame 的两处减法里都不该再出现它第二遍。
         let headerHeight: CGFloat = 28
+        let hostBands = HomeBandedHomeView.hostBandsHeight(environmentHeight: 0, hasEnvironment: false)
+        XCTAssertEqual(
+            hostBands, HomeTodayBandLayout.height + HomeTodayBandLayout.rowSpacing,
+            "没有环境块时两带高度 = 今天带 + 一道缝"
+        )
 
         // ① 自然内容高（与接缝同一套生产调用：`naturalFlowBudget` 预算下的 plan → `contentHeight`）
         let naturalPlan = HomeFlowLayout.plan(
             items: items,
             availableWidth: bandWidth,
-            availableHeight: PanelAutoHeight.naturalFlowBudget(
-                hostChrome: headerHeight + PanelAutoHeight.homeVerticalPadding,
-                screenVisibleHeight: nil
+            availableHeight: max(
+                0,
+                PanelAutoHeight.naturalFlowBudget(
+                    hostChrome: headerHeight + PanelAutoHeight.homeVerticalPadding,
+                    screenVisibleHeight: nil
+                ) - hostBands
             ),
-            calendarHeight: HomeCalendarRow.rowHeight,
             metrics: flowMetrics
         )
         let content = PanelAutoHeight.contentHeight(
             from: naturalPlan,
-            calendarHeight: HomeCalendarRow.rowHeight,
-            calendarSpacing: HomeCalendarRow.rowSpacing,
+            hostBandsHeight: hostBands,
             headerHeight: headerHeight
         )
         let requirement = content - headerHeight
         XCTAssertEqual(
             requirement,
-            HomeFlowView.compactBlockHeight + HomeCalendarRow.rowSpacing + HomeCalendarRow.rowHeight,
-            "自然内容 = 流（96）+ 缝（8）+ 日历行（`HomeCalendarRow.rowHeight`，T8 起按当月周数）+ 表头（28）——先把这个等式钉住，下面的 frame 才有意义"
+            HomeFlowView.compactBlockHeight + hostBands,
+            "自然内容 = 流（96）+ 宿主两带（今天带 56 + 缝 8）+ 表头（28）——先把这个等式钉住，下面的 frame 才有意义"
         )
 
         // ② 面板高走**生产函数**（auto 档；上界取不到屏 → 850，不触界）
@@ -1848,27 +1855,21 @@ final class HomeStripLayoutTests: XCTestCase {
         let frame = panelHeight - headerHeight - chainBelowHeader
         XCTAssertGreaterThanOrEqual(
             frame, requirement,
-            "自动高度下面板必须给得住首页它自己那份 plan 的需求（少一段 → 日历行整行被丢）"
+            "自动高度下面板必须给得住首页它自己那份 plan 的需求（少一段 → 尾部行整行被丢）"
         )
 
-        // ④ 同一个 frame 上跑一遍**生产 plan**：它想要的行必须一行不少（那块紧凑块 + 日历行）
+        // ④ 同一个 frame 上跑一遍**生产 plan**：它想要的行必须一行不少（那块紧凑块）
         let drawnPlan = HomeFlowLayout.plan(
             items: items,
             availableWidth: bandWidth,
-            availableHeight: frame,
-            calendarHeight: HomeCalendarRow.rowHeight,
+            availableHeight: max(0, frame - hostBands),
             metrics: flowMetrics
         )
-        XCTAssertTrue(
-            drawnPlan.showsCalendarRow,
-            "frame ≥ 需求时日历行必须留下（plan 的阈值是闭区间；实机那次它是被丢掉的那一行）"
-        )
-        XCTAssertEqual(drawnPlan.rowsDrawn, 1, "紧凑块那一行也在，且不被丢")
-        XCTAssertEqual(drawnPlan.droppedCount, 0, "两块（一块 + 日历行）都不丢")
+        XCTAssertEqual(drawnPlan.rowsDrawn, 1, "紧凑块那一行在（frame − 两带 ≥ 96）")
+        XCTAssertEqual(drawnPlan.droppedCount, 0, "一块都不丢")
 
         // ⑤ 真渲染一遍（同一个 frame、同一份夹具）：接缝把块摆出来（不是零提案的空布局）。
-        //    用带 `vm` 的那只挂载壳——这一档的 frame 放得下日历行，它会被真的构造出来。
-        renderCalendarBearingHome(available: available, height: frame)
+        renderRealHomeStrip(available: available, height: frame)
         // T2 起探针报的是**内容区**（见 `assertRenderedSizesMatchFlowPlan`）：档高 96 是格子 / 板矩形
         // 的数（逐字未变），内容区再减去上下两段内缩。
         let compactInsets = HomeBlockChrome.contentInsets(includeVertical: true)
@@ -1896,30 +1897,6 @@ final class HomeStripLayoutTests: XCTestCase {
     /// 把**真的接缝**放进 `NSHostingView`，夹具是**紧凑块**（走小组件带）——换行那条渲染真值用它。
     private func renderBandedWidgets(available: CGFloat, height: CGFloat) {
         renderRealHomeStrip(available: available, height: height)
-    }
-
-    /// **带日历行的挂载壳**（T6 的自动高度用例专用）：比上面那个多给一样环境对象——`vm`。
-    /// `HomeCalendarRow` 用 `@EnvironmentObject var vm`，而其余渲染用例的 frame 都放不下日历行
-    /// （它从不被构造），只有「日历行真的画出来」的那一条会撞上它：不给就崩在 `EnvironmentObject` 上，
-    /// 用例的断言根本走不到（T6 实测：`Fatal error: No ObservableObject of type DynamicIslandViewModel found`）。
-    private struct CalendarBearingHomeHost: View {
-        private let viewModel = DynamicIslandViewModel()
-        @Namespace private var albumArtNamespace
-
-        var body: some View {
-            HomeBandedHomeView(
-                albumArtNamespace: albumArtNamespace,
-                panelHeaderHeight: 28
-            )
-            .environmentObject(viewModel)
-        }
-    }
-
-    /// 把带日历行的那个挂载壳放进 `NSHostingView` 跑一趟布局（与 `renderRealHomeStrip` 同形）。
-    private func renderCalendarBearingHome(available: CGFloat, height: CGFloat) {
-        let host = NSHostingView(rootView: CalendarBearingHomeHost().frame(width: available, height: height))
-        host.frame = CGRect(x: 0, y: 0, width: available, height: height)
-        host.layoutSubtreeIfNeeded()
     }
 
     /// 挂载壳：接缝要一条 matchedGeometry 命名空间（宿主本来是 `ContentView` 给的），
@@ -1981,7 +1958,7 @@ final class HomeStripLayoutTests: XCTestCase {
         // 可用 964：大块 300 + 8 + 180 + 8 + 180 = 676 ≤ 964，再塞统计 220 → 904 ≤ 964 ✓（一行四块）
         let plan = HomeFlowLayout.plan(
             items: items, availableWidth: 964, availableHeight: 1000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(plan), [[0, 1, 2, 3]], "四块按最小宽 904 ≤ 964，全在头一行")
         XCTAssertEqual(
@@ -2001,21 +1978,21 @@ final class HomeStripLayoutTests: XCTestCase {
         // ① 镜子在场：这一行高 = max(148, 140) = 148（前台应用说了算）
         let withMirror = HomeFlowLayout.plan(
             items: [mirror, frontApp], availableWidth: 964, availableHeight: 1000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(withMirror.rows[0].height, 148, "镜子在场：行高 = 前台应用的申报高")
 
         // ② 镜子不在：只剩前台应用，行高仍是 148（**块自己说了算**）
         let withoutMirror = HomeFlowLayout.plan(
             items: [frontApp], availableWidth: 964, availableHeight: 1000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(withoutMirror.rows[0].height, 148, "镜子不在：行高不变——显示多少与邻居无关")
 
         // ③ 矮块不会把同行的高块压扁：统计 36 与前台应用 148 同行 → 行高 148
         let mixed = HomeFlowLayout.plan(
             items: [frontApp, stats], availableWidth: 964, availableHeight: 1000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(mixed.rows[0].height, 148, "行高取最大，矮块不拉低同行")
 
@@ -2038,24 +2015,35 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
-    /// 四块的**申报高与各自预算的反解一致**（docs/37 D-02…D-05）：申报高下必须能画满目标行数，
-    /// 少一行 = 最后一排被裁、多一行 = 白申报。
-    func testFourBlocksDeclareHeightsThatFitTheirBudgets() {
+    /// 各块的**申报高与各自预算的反解一致**（docs/37 D-02…D-05；p13 按 docs/38 §做法 五 重调）：
+    /// 申报高下必须能画满目标行数，少一行 = 最后一排被裁、多一行 = 白申报。
+    func testBlocksDeclareHeightsThatFitTheirBudgets() {
         XCTAssertEqual(
             FrontAppModule.homeBlockHeight,
-            .points(FrontAppGridBudget.maximumBlockHeight),
-            "前台应用：申报高 = 块内预算上限高（148）"
+            .points(HomeEnvironmentBand.height),
+            "前台应用：环境带档高（96）——三块等高，第一排才是一条带"
         )
         XCTAssertEqual(
-            FrontAppGridBudget.rowCount(forHeight: FrontAppGridBudget.maximumBlockHeight),
-            FrontAppGridBudget.maximumRows,
-            "申报高下画满 4 行"
+            StatsModule.homeBlockHeight,
+            .points(HomeEnvironmentBand.height),
+            "系统读数：同为环境带档高（96）"
+        )
+        XCTAssertGreaterThanOrEqual(
+            FrontAppGridBudget.rowCount(
+                forHeight: HomeEnvironmentBand.height - HomeBlockChrome.contentInsetTopGraphics
+            ),
+            2,
+            "环境带档高下至少画两行图标（96 − 顶部内缩 7 = 89 → 2 行 × 28 + 4 = 60）"
         )
 
         XCTAssertEqual(
             NotificationsHomeBlockLayout.blockHeight,
-            16 + 4 + 4 * 30 + 3 * 5,
-            "通知：表头 16 + 间距 4 + 4 × 30 + 3 × 5 = 155"
+            HomeBlockChrome.contentInsetTopText
+                + NotificationsHomeBlockLayout.headerHeight
+                + NotificationsHomeBlockLayout.listSpacing
+                + CGFloat(NotificationsHomeBlockLayout.maxListRows) * NotificationsHomeBlockLayout.entryHeight
+                + CGFloat(NotificationsHomeBlockLayout.maxListRows - 1) * NotificationsHomeBlockLayout.entrySpacing,
+            "通知：内缩 5 + 表头 16 + 间距 4 + 6 × 30 + 5 × 4 = 225"
         )
         XCTAssertEqual(
             NotificationsModule.homeBlockHeight,
@@ -2072,6 +2060,13 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(TodosHomeBlockLayout.scheduleRowCount(fittingHeight: 0), 0, "取不到高度 → 0 行（先只画表头）")
         XCTAssertEqual(TodosHomeBlockLayout.scheduleRowCount(fittingHeight: .nan), 0, "非有限高度 → 0 行（不拿 NaN 解行数）")
+
+        // 第三排两块（今日清单 + 通知）申报高要对齐：行高 = 行内最高块，差得多就会出现一块板底空一大截。
+        XCTAssertLessThanOrEqual(
+            abs(TodosHomeBlockLayout.blockHeight - NotificationsHomeBlockLayout.blockHeight),
+            8,
+            "今日清单（\(TodosHomeBlockLayout.blockHeight)）与通知（\(NotificationsHomeBlockLayout.blockHeight)）的高度差不超过 8pt"
+        )
     }
 
     /// **按最小宽贪心换行**：装不下就换行，**不丢块**（行数够时）。
@@ -2080,7 +2075,7 @@ final class HomeStripLayoutTests: XCTestCase {
         // 可用 560：180 + 8 + 180 = 368 ✓，再塞第三块 368 + 8 + 180 = 556 ≤ 560 ✓ → 一行三块
         let plan = HomeFlowLayout.plan(
             items: items, availableWidth: 560, availableHeight: 1000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(plan), [[0, 1, 2], [3, 4]], "3 + 2 两行；换行不丢块")
         XCTAssertEqual(plan.droppedCount, 0, "高度够时一块都不丢")
@@ -2095,7 +2090,7 @@ final class HomeStripLayoutTests: XCTestCase {
         // ——**特意避开"提示位把本行挤掉一块"那条口径**（那条单独由下一个用例钉）。
         let plan = HomeFlowLayout.plan(
             items: items, availableWidth: 600, availableHeight: 100,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(plan), [[0, 1, 2]], "第二行整行不画（**不切半行**——P4 的病根）")
         XCTAssertEqual(plan.droppedCount, 2, "第二行那两块计入丢弃")
@@ -2110,95 +2105,201 @@ final class HomeStripLayoutTests: XCTestCase {
         // 可用 560：三块 = 556 ≤ 560 本来放得下；但留 34 位后只剩 526 < 556 → 末行只放得下两块
         let plan = HomeFlowLayout.plan(
             items: items, availableWidth: 560, availableHeight: 100,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(plan), [[0, 1]], "为 ＋N 让出 34pt → 这一行只放得下两块")
         XCTAssertEqual(plan.droppedCount, 3, "两块在被丢掉的那一行 + 一块被提示位挤掉")
     }
 
-    /// **日历行优先让位**（沿用 D-02）：放不下时先收日历行，再收流的尾部行。
-    func testFlowCalendarRowYieldsFirst() {
-        // 一行两块：大块样本 300/420 + 模块块 180/240 → 行高 = 档高
-        let items = [
-            flowItem(300, 420, HomeFlowView.largeBlockHeight),
-            flowItem(180, 240, 96),
-        ]
-        // 日历行 232（2026-10 那一档）+ 缝 8 + 档高 140 = 380
-        let fits = HomeFlowLayout.plan(
-            items: items, availableWidth: 964, availableHeight: 460,
-            calendarHeight: Self.calendarRowHeight, metrics: flowMetrics
-        )
-        XCTAssertTrue(fits.showsCalendarRow, "460 ≥ 380 → 日历行在")
-        XCTAssertEqual(flowRows(fits), [[0, 1]])
+    // MARK: - 弹性块吃富余（p13 / docs/38 D-04）
 
-        let tight = HomeFlowLayout.plan(
-            items: items, availableWidth: 964, availableHeight: 300,
-            calendarHeight: Self.calendarRowHeight, metrics: flowMetrics
+    /// **规则 ①′**：富余时先给每块 `ideal`，余量按**弹性块的 `ideal`** 等比分掉；
+    /// **没有弹性块时逐字是改动前的行为**（余量留行尾）。
+    func testFlexibleItemsAbsorbTheRowSurplus() {
+        // ① 没有弹性块：余量留尾部（D-02 的既有口径，一个字没改）
+        let rigid = HomeStripLayoutMath.plan(
+            items: [
+                HomeStripLayoutMath.Item(min: 260, ideal: 260),
+                HomeStripLayoutMath.Item(min: 145, ideal: 145),
+            ],
+            available: 855,
+            spacing: 8
         )
-        XCTAssertFalse(tight.showsCalendarRow, "300 < 380 → **先收日历行**")
-        XCTAssertEqual(flowRows(tight), [[0, 1]], "流那一行留着（日历行比它先让位）")
-        XCTAssertEqual(tight.droppedCount, 0, "只收日历行不算丢块")
+        XCTAssertEqual(rigid.widths, [260, 145], "两块都固定 → 各拿 ideal，余量留尾部")
+        XCTAssertEqual(rigid.leftover, 442, "余量如实报出（渲染侧据此留白）")
 
-        let both = HomeFlowLayout.plan(
-            items: items, availableWidth: 964, availableHeight: 100,
-            calendarHeight: Self.calendarRowHeight, metrics: flowMetrics
+        // ② 一块弹性：它独吞余量
+        let oneFlexible = HomeStripLayoutMath.plan(
+            items: [
+                HomeStripLayoutMath.Item(min: 260, ideal: 260),
+                HomeStripLayoutMath.Item(min: 300, ideal: 434, flexible: true),
+                HomeStripLayoutMath.Item(min: 145, ideal: 145),
+            ],
+            available: 1000,
+            spacing: 8
         )
-        XCTAssertFalse(both.showsCalendarRow)
-        XCTAssertEqual(flowRows(both), [], "连第一行（档高 140）都放不下 → 流也不画")
-        XCTAssertEqual(both.droppedCount, 2)
+        XCTAssertEqual(oneFlexible.widths[0], 260, "固定块不涨")
+        XCTAssertEqual(oneFlexible.widths[2], 145, "固定块不涨")
+        XCTAssertEqual(oneFlexible.widths[1], 434 + (1000 - 16 - 839), "弹性块吃掉全部余量 145（两道缝 16）")
+        XCTAssertEqual(oneFlexible.leftover, 0, "吃满之后没有余量")
+
+        // ③ 两块弹性：按 ideal 等比分配（floor 到 0.5）
+        let twoFlexible = HomeStripLayoutMath.plan(
+            items: [
+                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+            ],
+            available: 1000,
+            spacing: 8
+        )
+        let surplus: CGFloat = 1000 - 8 - 847
+        XCTAssertEqual(twoFlexible.widths[0], 470 + (surplus * 470 / 847 * 2).rounded(.down) / 2, accuracy: 0.5)
+        XCTAssertEqual(twoFlexible.widths[1], 377 + (surplus * 377 / 847 * 2).rounded(.down) / 2, accuracy: 0.5)
+        let used: CGFloat = twoFlexible.widths.reduce(0, +) + 8
+        XCTAssertLessThanOrEqual(used, 1000, "不变量：总和 + 间隙 ≤ 可用宽")
+
+        // ④ 恰好吃满（余量为 0）：走规则 ①，弹性声明不影响结果
+        let exact = HomeStripLayoutMath.plan(
+            items: [
+                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+            ],
+            available: 855,
+            spacing: 8
+        )
+        XCTAssertEqual(exact.widths, [470, 377], "470 + 8 + 377 = 855，余量 0 → 各拿 ideal")
+
+        // ⑤ 压缩档（规则 ②）不看弹性：按可压缩量等比压缩，逐字是改动前的行为
+        let compressed = HomeStripLayoutMath.plan(
+            items: [
+                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+            ],
+            available: 800,
+            spacing: 8
+        )
+        XCTAssertEqual(compressed.visibleCount, 2, "800 ≥ 768（最小宽之和）→ 两块都在")
+        XCTAssertLessThan(compressed.widths[0], 470, "被压缩而不是被拉宽")
+        XCTAssertGreaterThanOrEqual(compressed.widths[0], 420, "不低于最小宽")
     }
 
-    /// **用户实况那一档的分布**（面板 1041×853，全部组件开着；docs/28 §4.2 的预期表）。
+    /// **名单按区劈开，不重不漏**：`environment` 与 `flow` 合起来必须逐字等于 `blocks`
+    /// （p13 / docs/38 D-03——区只决定「在哪一排」，顺序与成员都不丢）。
+    func testCatalogSplitsZonesWithoutLossOrOverlap() async {
+        registerProbes([
+            HomeEnvironmentProbeModule.self,
+            HomeCompactAProbeModule.self,
+            HomeCompactBProbeModule.self,
+        ])
+        await ModuleRegistry.shared.bootstrap()
+
+        let catalog = HomeBandCatalog.resolve(registry: ModuleRegistry.shared, overrides: [:])
+        XCTAssertEqual(
+            catalog.environment.map(\.id),
+            [HomeEnvironmentProbeModule.manifest.id],
+            "只有申报 .environment 的那一块进环境带"
+        )
+        XCTAssertEqual(
+            catalog.flow.map(\.id),
+            [HomeCompactAProbeModule.manifest.id, HomeCompactBProbeModule.manifest.id],
+            "其余（缺省 .flow）进可变流，且仍是全局序"
+        )
+        XCTAssertEqual(
+            (catalog.environment + catalog.flow).map(\.id),
+            catalog.blocks.map(\.id),
+            "两份合起来 = 整份名单（不重不漏）"
+        )
+    }
+
+    /// **环境带的带高算式**（`HomeBandedHomeView.hostBandsHeight`）：有环境带时 = 带高 + 缝 + 今天带 + 缝；
+    /// 三块全关（空带）时不留那一道缝。
+    func testHostBandsHeightAccountsForTheEnvironmentBand() {
+        let withBand = HomeBandedHomeView.hostBandsHeight(
+            environmentHeight: HomeEnvironmentBand.height,
+            hasEnvironment: true
+        )
+        XCTAssertEqual(
+            withBand,
+            HomeEnvironmentBand.height + HomeTodayBandLayout.rowSpacing
+                + HomeTodayBandLayout.height + HomeTodayBandLayout.rowSpacing,
+            "环境带 96 + 缝 8 + 今天带 56 + 缝 8"
+        )
+        XCTAssertEqual(
+            HomeBandedHomeView.hostBandsHeight(environmentHeight: 0, hasEnvironment: false),
+            HomeTodayBandLayout.height + HomeTodayBandLayout.rowSpacing,
+            "空环境带只留今天带与它下面那道缝"
+        )
+        XCTAssertEqual(
+            HomeBandedHomeView.hostBandsHeight(environmentHeight: .nan, hasEnvironment: true),
+            HomeTodayBandLayout.height + HomeTodayBandLayout.rowSpacing,
+            "非有限带高按 0 → 与「没有环境带」同形（不留那道缝，不让一个坏读数打掉整页高度）"
+        )
+        XCTAssertEqual(
+            HomeBandedHomeView.hostBandsHeight(environmentHeight: 0, hasEnvironment: true),
+            HomeTodayBandLayout.height + HomeTodayBandLayout.rowSpacing,
+            "零高带同样不占位"
+        )
+    }
+
+    /// **可变流那一档的分布**（p13 / docs/38 §做法 五）：流里今天是**今日清单 + 通知**两块，
+    /// 两块都弹性——可用宽大于「ideal 之和 + 缝」时富余按各自 ideal 等比分配（规则 ①′）。
     ///
-    /// 名单是**当前生产声明**（p5-home-blocks / T3 之后：音乐紧凑、镜子 140/140 方形大块、
-    /// 其余模块块走宿主统一 180/240、统计 220/300；T2 起音乐缩为 200/250）。
-    /// 可用宽 = 1041 − 2 × 8（容器内边距）= 1025；可用高取 560
-    ///（该档实测的内容高只有 ≈536：日历行 232（当月周数那一档）+ 缝 8 + 两行流（140 + 8 + 96）= 484
-    /// ≤ 536 就装得下，取 560 是留一点余量——**恰好放得下**是这条用例要的题面）。
+    /// 名单取**当前生产声明**（`TodosModule.homeBlockWidth` 420/470、`NotificationsModule.homeBlockWidth`
+    /// 340/377，两块申报高 228 / 225）。可用宽取默认面板那一档的 **855**（887 − 两侧内边距）：
+    /// `470 + 8 + 377 = 855` **恰好放满** → 这一档余量为 0，两块各拿自己的 ideal（正是 v5 设计稿的分布）。
     func testFlowDistributionAtUserPanelSize() {
-        let items = [
-            flowItem(200, 250, 96),    // 音乐（T2 起再缩一档：200/250、96）
-            flowItem(140, 140, HomeFlowView.largeBlockHeight),   // 镜子（方形大块：边长 = 档高）
-            flowItem(180, 240, 96),    // 待办
-            flowItem(180, 240, 96),    // 前台应用
-            flowItem(180, 240, 96),    // 进度
-            flowItem(180, 240, 96),    // 通知
-            flowItem(220, 300, 96),    // 统计
-        ]
-        let plan = HomeFlowLayout.plan(
-            items: items, availableWidth: 1025, availableHeight: 560,
-            calendarHeight: Self.calendarRowHeight, metrics: flowMetrics
+        let todos = HomeFlowLayout.Item(
+            min: TodosModule.homeBlockWidth?.min ?? 0,
+            ideal: TodosModule.homeBlockWidth?.ideal ?? 0,
+            height: TodosHomeBlockLayout.blockHeight,
+            flexible: TodosModule.homeBlockAbsorbsSurplus
         )
-        // 行1：音乐 200 + 8 + 镜子 140 + 8 + 待办 180 + 8 + 前台 180 + 8 + 进度 180 = 912 ≤ 1025 ✓
-        // 行2：通知 180 + 8 + 统计 220 = 408 ✓
-        XCTAssertEqual(
-            flowRows(plan), [[0, 1, 2, 3, 4], [5, 6]],
-            "全开时仍是「一行五块 + 一行两块」——音乐缩宽后第一行的成员没变"
+        let notifications = HomeFlowLayout.Item(
+            min: NotificationsModule.homeBlockWidth?.min ?? 0,
+            ideal: NotificationsModule.homeBlockWidth?.ideal ?? 0,
+            height: NotificationsHomeBlockLayout.blockHeight,
+            flexible: NotificationsModule.homeBlockAbsorbsSurplus
         )
-        XCTAssertEqual(
-            plan.rows[0].height, HomeFlowView.largeBlockHeight,
-            "第一行含大块（镜子 140）→ 行高 = 档高"
+        let items = [todos, notifications]
+
+        let exact = HomeFlowLayout.plan(
+            items: items, availableWidth: 855, availableHeight: 1000, metrics: flowMetrics
         )
-        XCTAssertEqual(plan.rows[1].height, 96, "第二行全是紧凑块 → 96")
-        XCTAssertEqual(plan.droppedCount, 0, "一块都不丢")
+        XCTAssertEqual(flowRows(exact), [[0, 1]], "两块并排成第三排（v5 的「今日清单 + 通知」）")
+        XCTAssertEqual(exact.rows[0].widths, [470, 377], "855 = 470 + 8 + 377 → 恰好吃满，各拿 ideal")
+        XCTAssertEqual(exact.rows[0].height, TodosHomeBlockLayout.blockHeight, "行高 = 行内最高块（今日清单 228）")
+
+        // 更宽：富余只给弹性块，且按 ideal 等比分配（多出来的一份不会全落到一块头上）。
+        let wider = HomeFlowLayout.plan(
+            items: items, availableWidth: 1000, availableHeight: 1000, metrics: flowMetrics
+        )
+        let surplus: CGFloat = 1000 - 8 - (470 + 377)
+        let widths = wider.rows[0].widths
+        XCTAssertEqual(widths.count, 2)
+        let expectedTodosShare: CGFloat = (surplus * 470 / 847 * 2).rounded(.down) / 2
+        let expectedNotificationsShare: CGFloat = (surplus * 377 / 847 * 2).rounded(.down) / 2
+        XCTAssertEqual(widths[0] - 470, expectedTodosShare, accuracy: 0.5, "今日清单按 ideal 占比分富余")
+        XCTAssertEqual(widths[1] - 377, expectedNotificationsShare, accuracy: 0.5, "通知按 ideal 占比分富余")
+        let usedTotal: CGFloat = widths[0] + 8 + widths[1]
+        XCTAssertLessThanOrEqual(usedTotal, 1000, "分配不越界（规则 ①′ 的不变量）")
+
+        // 窄到最小宽之和（420 + 8 + 340 = 768）以下：按可压缩量等比压缩，两块都还在。
+        let compressed = HomeFlowLayout.plan(
+            items: items, availableWidth: 800, availableHeight: 1000, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(compressed), [[0, 1]], "800 ≥ 768 → 仍是并排两块（压缩而不是丢块）")
+        XCTAssertLessThan(compressed.rows[0].widths[0], 470, "富余没了 → 今日清单被压窄")
     }
 
-    /// 空名单：没有块时不产生任何行（日历行仍按自己的高度单独存活）。
+    /// 空名单：没有块时不产生任何行（今天带与环境带不在这里——它们是宿主直渲的，不经过本方案）。
     func testFlowEmptyItems() {
         let plan = HomeFlowLayout.plan(
-            items: [], availableWidth: 964, availableHeight: 300,
-            calendarHeight: Self.calendarRowHeight, metrics: flowMetrics
+            items: [], availableWidth: 964, availableHeight: 300, metrics: flowMetrics
         )
         XCTAssertTrue(plan.rows.isEmpty)
         XCTAssertEqual(plan.rowsNeeded, 0)
         XCTAssertEqual(plan.droppedCount, 0)
-        XCTAssertTrue(plan.showsCalendarRow, "没有块时日历行单独存活")
-
-        let noCalendar = HomeFlowLayout.plan(
-            items: [], availableWidth: 964, availableHeight: 300,
-            calendarHeight: 0, metrics: flowMetrics
-        )
-        XCTAssertFalse(noCalendar.showsCalendarRow)
+        XCTAssertEqual(plan.heightUsed, 0)
     }
 
     /// `rowsNeeded` 与 `plan` 的行划分**同一份**（改一个就会红）。
@@ -2207,7 +2308,7 @@ final class HomeStripLayoutTests: XCTestCase {
         let needed = HomeFlowLayout.rowsNeeded(items: items, availableWidth: 560, columnSpacing: 8)
         let plan = HomeFlowLayout.plan(
             items: items, availableWidth: 560, availableHeight: 10_000,
-            calendarHeight: 0, metrics: flowMetrics
+            metrics: flowMetrics
         )
         XCTAssertEqual(needed, plan.rowsNeeded)
         XCTAssertEqual(needed, 3, "7 块 / 一行 3 块 = 3 行")
@@ -2466,14 +2567,14 @@ final class HomeStripLayoutTests: XCTestCase {
     ///    ——进度块为此把行距 6 → 5 腾出 4pt（5×14 + 4×5 + 5 = 95 ≤ 96）。宿主这一层仍不动垂直：
     ///    它不认识"首行是图形还是文字"，一刀切就把统计块（已经让了 8pt）顶到 13pt。纵向余量其余
     ///    仍由各块既有排版给出。
-    /// ③ **两站点共用同一取值处**——用**渲染真值**钉两个调用点（不是把工厂的返回值再读一遍）：
-    ///    - **单条流格子**：`HomeFlowView` 的格子渲染后，探针块报出的**内容宽**必须 = 该块分到的宽 −
-    ///      `2 × contentInsetHorizontal`（探针 `GeometryReader` 在 padding 之内，报的就是内容区）；
-    ///    - **日历行**：行内的月历网格（`MonthGridView` 里那个 `NSScrollView`）在宿主坐标里的**左缘**，
-    ///      比**单独挂**同一张网格时靠右 `contentInsetHorizontal`（网格自身的水平内边距两次相同，
-    ///      差就是这一层的水平内缩 = 行内容的起点）。网格那 6pt 内边距因此不用写死在断言里。
+    /// ③ **取值处唯一**——用**渲染真值**钉调用点（不是把工厂的返回值再读一遍）：
+    ///    **单条流格子 / 环境带格子**：渲染后探针块报出的**内容宽**必须 = 该块分到的宽 −
+    ///    `2 × contentInsetHorizontal`（探针 `GeometryReader` 在 padding 之内，报的就是内容区）。
+    ///    **改前还有第二个站点（日历行）**，月历随那条行一起退休（docs/38 D-07），
+    ///    它的观测已删；今天带不吃板、水平内缩自己收一道（`HomeTodayBandLayout.horizontalInset`），
+    ///    那条由今天带的用例钉。
     ///
-    /// 调用点若把内缩写死成别的数、或挪到不该在的层（例如挪到格子 `.frame` 之外），这两条都会红。
+    /// 调用点若把内缩写死成别的数、或挪到不该在的层（例如挪到格子 `.frame` 之外），这条会红。
     /// 内缩的**左右对称**由 `contentInsets(includeVertical:)` 一处给出（同一个值喂 leading / trailing），
     /// 钉住一侧即钉住来源；另一侧与逐块余量由上屏像素承担。
     ///
@@ -2510,7 +2611,6 @@ final class HomeStripLayoutTests: XCTestCase {
             items: Self.flowItems(Self.syntheticFourBlockItems),
             availableWidth: Self.bandContentWidth(forHostingWidth: available),
             availableHeight: height,
-            calendarHeight: 0,
             metrics: flowMetrics
         )
         homeBlockSizeLog.reset()
@@ -2530,18 +2630,6 @@ final class HomeStripLayoutTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(observedBlocks, 0, "夹具在 770pt / 212 高下必须至少摆出一块（否则这条观测是空跑）")
-
-        // ③ 站点二：日历行（渲染真值：行内月历网格的左缘 vs 单独挂同一张网格的左缘）。
-        guard let bareGridX = bareMonthGridLeadingEdge(width: 900),
-              let rowGridX = calendarGridLeadingEdge(rowWidth: 900) else {
-            XCTFail("宿主里找不到月历网格的 NSScrollView —— 站点二的观测失效（上屏像素见 evidence/inset-measure.txt）")
-            return
-        }
-        XCTAssertEqual(
-            rowGridX - bareGridX, horizontal, accuracy: 0.5,
-            "日历行站点：行内月历网格比单独挂时靠右 \(horizontal)pt（= 行内容的起点，网格自身内边距两次相消），"
-                + "实到 \(rowGridX - bareGridX)"
-        )
     }
 
     /// **内容顶部内缩一族**（2026-10-07 / docs/32 D-22）。
@@ -2596,40 +2684,6 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
-    /// 把 `HomeCalendarRow` 单独挂进 `NSHostingView`（宽 = `rowWidth`），返回行内**月历网格**的左缘在
-    /// **宿主坐标**里的 x（找不到那个 `NSScrollView` 时返回 nil——文件里另一处同款探测的既有口径）。
-    private func calendarGridLeadingEdge(rowWidth: CGFloat) -> CGFloat? {
-        let host = NSHostingView(
-            rootView: HomeCalendarRow()
-                .frame(width: rowWidth)
-                .environmentObject(DynamicIslandViewModel())
-        )
-        host.frame = CGRect(x: 0, y: 0, width: rowWidth, height: HomeCalendarRow.rowHeight)
-        host.layoutSubtreeIfNeeded()
-        withExtendedLifetime(host) {}
-        guard let grid = firstScrollView(in: host) else { return nil }
-        return host.convert(grid.bounds, from: grid).minX
-    }
-
-    /// 同一张月历网格**单独挂**（站点二的对照基线）：它的左缘 = 网格自己的水平内边距，
-    /// 「行内 − 单独」两次相减就把那 6pt 消掉，断言的差值只剩内缩这一层。
-    private func bareMonthGridLeadingEdge(width: CGFloat) -> CGFloat? {
-        let grid = MonthGridView(
-            selectedDate: .constant(Date()),
-            scrollTarget: .constant(nil),
-            monthNavigationMovesSelection: false,
-            monthEvents: .empty,
-            onDisplayedMonthChange: { _ in },
-            showsScrollFades: false
-        )
-        .frame(width: width, height: HomeCalendarRow.rowHeight)
-        let host = NSHostingView(rootView: grid)
-        host.frame = CGRect(x: 0, y: 0, width: width, height: HomeCalendarRow.rowHeight)
-        host.layoutSubtreeIfNeeded()
-        guard let scrollView = firstScrollView(in: host) else { return nil }
-        return host.convert(scrollView.bounds, from: scrollView).minX
-    }
-
     /// NSView 树里第一个 `NSScrollView`（`MonthGridView` 的日格网格是它——SwiftUI 里只有
     /// `ScrollView` 这一类会落成 NSView，其余内容由宿主层直接绘制）。
     private func firstScrollView(in host: NSView) -> NSScrollView? {
@@ -2659,13 +2713,15 @@ final class HomeStripLayoutTests: XCTestCase {
     func testMusicBlockWidthAndCompactControlsFitTheMinimum() throws {
         typealias Metrics = MusicControlsView.CompactMetrics
 
-        // ① min/ideal 取值（上屏调参由控制器回写；本用例钉当前档 200/250）
+        // ① min/ideal 取值（上屏调参由控制器回写；p13 起是环境带那一档 260/260 固定）
         let declared = try XCTUnwrap(MusicModule.homeBlockWidth, "音乐模块必须声明块宽（接管模块的那一档）")
-        XCTAssertEqual(declared.min, 200, "T2 起 min 200（T3 是 240：封面档只剩 10pt 余量）")
-        XCTAssertEqual(declared.ideal, 250, "T2 起 ideal 250（T3 是 300：那一档是配大封面选的）")
-        XCTAssertEqual(MusicModule.homeBlockMinWidth, declared.min, "声明从命名常量装（两个 200 不许漂开）")
-        XCTAssertEqual(MusicModule.homeBlockIdealWidth, declared.ideal, "声明从命名常量装（两个 250 不许漂开）")
-        XCTAssertEqual(MusicModule.homeFormFactor, .compact, "宽度与形态同批（T2 只缩宽，不换档）")
+        XCTAssertEqual(declared.min, 260, "p13：环境带第一块（docs/38 §做法 五）——music 200/250 → 260/260 固定")
+        XCTAssertEqual(declared.ideal, 260, "min == ideal：它不参与压缩 / 不吸收余量（弹性块是前台应用）")
+        XCTAssertEqual(MusicModule.homeBlockMinWidth, declared.min, "声明从命名常量装（两个 260 不许漂开）")
+        XCTAssertEqual(MusicModule.homeBlockIdealWidth, declared.ideal, "声明从命名常量装（两个 260 不许漂开）")
+        XCTAssertEqual(MusicModule.homeFormFactor, .compact, "形态仍是紧凑档（档高 96 = 环境带档高）")
+        XCTAssertEqual(MusicModule.homeZone, .environment, "p13：音乐是环境带第一块（docs/38 D-02）")
+        XCTAssertFalse(MusicModule.homeBlockAbsorbsSurplus, "p13：音乐不吃余量（固定 260，D-04）")
 
         // ② 封面档的装宽度：四档取值先逐个钉，再钉求和式与 ≤ min 的关系
         XCTAssertEqual(Metrics.controlKeyDiameter, 26, "T2：控制键 30 → 26")
@@ -2688,8 +2744,9 @@ final class HomeStripLayoutTests: XCTestCase {
             "封面档的装宽度必须 ≤ 块声明的 min——超了就是「封面打开时控制键被裁」"
         )
         XCTAssertEqual(
-            Metrics.albumArtRowInstallWidth + 4, declared.min,
-            "余量 4（余量变成 0 或负就是踩线：字体 / 图标度量一漂就裁）"
+            Metrics.albumArtRowInstallWidth + 64, declared.min,
+            "余量 64（p13 从 200 抬到 260：多出来的 64pt 全给曲名与进度条的呼吸空间；"
+                + "下界仍是装宽度 196 —— 余量变成 0 或负就是踩线：字体 / 图标度量一漂就裁）"
         )
 
         // ③ 紧凑高度和 ≤ 96（装宽度之外的另一半：竖着也要装得下）
@@ -2987,6 +3044,33 @@ private final class HomeCompactDProbeModule: HomeCompactProbeModule {
 
     override class var homeBlockWidth: ModuleHomeBlockWidth? {
         ModuleHomeBlockWidth(min: 220, ideal: 300)
+    }
+}
+
+/// **环境带探针**（p13 / docs/38 D-02）：申报 `.environment` + 一个固定宽——
+/// 钉「区把块放进哪一排」这一条（`homeZone` 的缺省是 `.flow`，因此只有显式申报的进环境带）。
+private final class HomeEnvironmentProbeModule: GourdModule {
+    class var manifest: ModuleManifest {
+        HomeStripFixture.manifest(shortID: "probe-environment", surfaces: [.home], order: 5)
+    }
+
+    class var homeBlockWidth: ModuleHomeBlockWidth? { ModuleHomeBlockWidth(min: 260, ideal: 260) }
+
+    class var homeZone: ModuleHomeZone { .environment }
+
+    let context: ModuleContext
+
+    required init(context: ModuleContext) {
+        self.context = context
+    }
+
+    func activate() async throws {}
+
+    func deactivate() async {}
+
+    func content(for request: ContentRequest) -> ModuleContent {
+        guard request.surface == .home else { return .none }
+        return .view(AnyView(HomeBlockSizeProbe(id: Self.manifest.id)))
     }
 }
 

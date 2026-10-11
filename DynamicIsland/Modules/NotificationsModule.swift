@@ -799,7 +799,7 @@ final class NotificationsModule: GourdModule {
     private let store: NotificationStore
     private var pollTask: Task<Void, Never>?
 
-    /// 首页块**高度申报**（docs/37 D-03）：固定 = 表头 + 4 条两行式条目。
+    /// 首页块**高度申报**（docs/37 D-03；p13 由 4 条提到 6 条）：固定 = 内缩 + 表头 + 6 条两行式条目。
     ///
     /// 改前首页块不申报高度（紧凑档 96）、行数写死 3、每条只有一行「App 名 · 标题」，
     /// 正文完全看不见（用户 2026-10-10 反馈「只能显示几条？而且还不能显示内容」）。
@@ -807,6 +807,17 @@ final class NotificationsModule: GourdModule {
     static var homeBlockHeight: ModuleHomeBlockHeight {
         .points(NotificationsHomeBlockLayout.blockHeight)
     }
+
+    /// 首页块**宽度申报**（p13 / docs/38 D-04）：`340 / 377` + **弹性**。
+    static var homeBlockWidth: ModuleHomeBlockWidth? {
+        ModuleHomeBlockWidth(
+            min: NotificationsHomeBlockLayout.minimumBlockWidth,
+            ideal: NotificationsHomeBlockLayout.idealBlockWidth
+        )
+    }
+
+    /// **吃余量**（docs/38 D-04）：今日清单关掉后它独占整行，两行式条目在宽列里铺满。
+    static var homeBlockAbsorbsSurplus: Bool { true }
     /// AX 横幅通道（**实时 + 可真关闭**那条路，见文件头「双通道口径」）。
     /// `bannerCancel` 是 `start()` 的取消闭包（拆 AXObserver + 轮询 timer），`bannerObserver`
     /// 只为持有它——模块停用/重新激活都走 `deactivate()` → `startBannerObservation()`。
@@ -1388,29 +1399,35 @@ private struct NotificationRow: View {
 /// 每行「App 名 · 标题」。**行数上限固定 3、不按块宽分档**（按宽度分档是本批之后的事）。
 /// 块宽由宿主 `HomeStripView` 统一声明（模块块 180 / 240），本模块**不声明、不读宽度**。
 enum NotificationsHomeBlockLayout {
-    /// 首页块最多画几条（2026-10-10 / docs/37 D-03：3 → 4；再多就把块顶得过高，
-    /// 完整列表仍在展开 tab）。
-    static let maxListRows = 4
+    /// 首页块最多画几条（2026-10-10 / docs/37 D-03：3 → 4；**p13 / docs/38 D-11：4 → 6**——
+    /// 用户 2026-10-11「通知改为最近 6 条」，与「今日清单」并排成第三排）。
+    static let maxListRows = 6
 
     /// 一条通知占的高度：第一行（App 名 + 相对时间，10pt）14pt + 第二行（标题 · 正文，11pt）16pt。
     static let entryHeight: CGFloat = 30
     /// 条与条之间的间距。
-    static let entrySpacing: CGFloat = 5
+    static let entrySpacing: CGFloat = 4
     /// 表头行的高度（11pt 的「通知 · 最近 N 条」）。
     static let headerHeight: CGFloat = 16
     /// 表头与第一条之间的间距。
     static let listSpacing: CGFloat = 4
 
-    /// 首页块申报的**固定高**（与视图的行高预算同源：`FrontAppModule.homeBlockHeight` 引用它）。
+    /// 首页块的**宽度申报**（p13 / docs/38 D-04）：最小 340（两行式文案在更窄的列里只剩省略号），
+    /// 理想 377（v5 设计稿与今日清单并排那一档）；**吃余量**——今日清单关掉时它独占整行。
+    static let minimumBlockWidth: CGFloat = 340
+    static let idealBlockWidth: CGFloat = 377
+
+    /// 首页块申报的**固定高**（与视图的行高预算同源）。
     ///
-    /// = 表头 16 + 间距 4 + 4 × 条目 30 + 3 × 条间距 5 = **155**。
+    /// = 顶部内缩 5 + 表头 16 + 间距 4 + 6 × 条目 30 + 5 × 条间距 4 = **225**。
     static var blockHeight: CGFloat {
-        headerHeight + listSpacing
+        HomeBlockChrome.contentInsetTopText
+            + headerHeight + listSpacing
             + CGFloat(maxListRows) * entryHeight
             + CGFloat(maxListRows - 1) * entrySpacing
     }
 
-    /// 清单要画的条目：**列表顺序的前 4 条**。
+    /// 清单要画的条目：**列表顺序的前 6 条**。
     ///
     /// 不在这里排序：`store.items` 本身就是「新的在前」（`NotificationCenterReader.fetchRecent`
     /// 走 `ORDER BY rec_id DESC`），再排一遍只会让首页块与展开 tab 的顺序出现两套口径。

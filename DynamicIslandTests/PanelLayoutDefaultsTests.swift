@@ -71,7 +71,6 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         "hiddenHomeModules",
         "hiddenPanelModules",
         "moduleEnableOverrides",
-        "showCalendar",
         "enableStatsFeature",
         "dynamicShelf",
         "enableTerminalFeature",
@@ -107,7 +106,7 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         "cachedShortcuts",
     ]
 
-    /// 改乱清单内 17 键用的值（类型与各自真源一致）。
+    /// 改乱清单内 16 键用的值（类型与各自真源一致）。
     private static let mangledInScopeValues: [(key: String, value: Any)] = [
         (Defaults.Keys.openNotchWidth.name, CGFloat(777)),
         (Defaults.Keys.openNotchHeight.name, CGFloat(555)),
@@ -117,7 +116,6 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         (Defaults.Keys.hiddenHomeModules.name, ["com.example.hidden"]),
         (Defaults.Keys.hiddenPanelModules.name, ["com.example.hiddenTab"]),
         (Defaults.Keys.moduleEnableOverrides.name, ["com.example.module": true]),
-        (Defaults.Keys.showCalendar.name, false),
         (Defaults.Keys.enableStatsFeature.name, true),
         (Defaults.Keys.dynamicShelf.name, false),
         (Defaults.Keys.enableTerminalFeature.name, true),
@@ -214,7 +212,6 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         XCTAssertEqual(Defaults[.hiddenHomeModules], [])
         XCTAssertEqual(Defaults[.hiddenPanelModules], [])
         XCTAssertEqual(Defaults[.moduleEnableOverrides], [:])
-        XCTAssertEqual(Defaults[.showCalendar], true)
         XCTAssertEqual(Defaults[.enableStatsFeature], false)
         XCTAssertEqual(Defaults[.dynamicShelf], true)
         XCTAssertEqual(Defaults[.enableTerminalFeature], false)
@@ -320,9 +317,9 @@ final class PanelLayoutDefaultsTests: XCTestCase {
     /// 顺序（**全在同一进程里同步做**：`Process.run` 期间主线程被占住，跑测的 App 那一侧没有机会
     /// 在写与导出之间插进自己的写）：
     /// ① `reset()` → 干净起点（=「改乱前」；出厂态，不是这台机器的历史状态）→ `t8-reset-before.plist`；
-    /// ② 17 键 + 对照键改乱 → `t8-reset-messed.plist`（并断言导出里**真的**看得到改乱值：
+    /// ② 16 键 + 对照键改乱 → `t8-reset-messed.plist`（并断言导出里**真的**看得到改乱值：
     ///    「导出的确读得到进程内的写」这条机制不成立的话，整份证据都不算数）；
-    /// ③ `reset()` → `t8-reset-after.plist`（并断言 17 键从持久域消失、对照键仍是改乱值）；
+    /// ③ `reset()` → `t8-reset-after.plist`（并断言 16 键从持久域消失、对照键仍是改乱值）；
     /// ④ `defer` 里逐字还原（偏好卫生）。
     ///
     /// 域 = `Bundle.main.bundleIdentifier`（跑测宿主就是 Gourd.app：Debug 档是 `com.cmeng.gourd.dev`，
@@ -347,7 +344,7 @@ final class PanelLayoutDefaultsTests: XCTestCase {
         PanelLayoutDefaults.reset()
         try exportDefaults(domain: domain, to: before)
 
-        // ② 改乱（清单内 17 键 + 清单外对照键）
+        // ② 改乱（清单内 16 键 + 清单外对照键）
         for (key, value) in Self.mangledInScopeValues + Self.mangledOutOfScopeValues {
             UserDefaults.standard.set(value, forKey: key)
         }

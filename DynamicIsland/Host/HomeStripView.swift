@@ -307,6 +307,10 @@ struct HomeBandBlock: Identifiable {
     /// **高度声明**（`homeBlockHeight` 钩子，docs/37 D-01）：`.formFactor` = 沿用形态档高；
     /// `.points(n)` = 块按内容自报的固定高（前台应用 / 通知 / 统计 / 待办答这一档）。
     let height: ModuleHomeBlockHeight
+    /// **区**（`homeZone` 钩子，docs/38 D-01~D-03）：进环境带（固定第一排）还是可变流。
+    let zone: ModuleHomeZone
+    /// **是否吸收所在行的剩余宽度**（`homeBlockAbsorbsSurplus` 钩子，docs/38 D-04）。
+    let absorbsSurplus: Bool
 }
 
 /// 首页两条带的**名单**：投影 → 内容表态 → 排序 → 按形态切带。
@@ -329,6 +333,15 @@ struct HomeBandCatalog {
     /// 等分带那批用例整体迁到流口径后一并删除。
     var main: [HomeBandBlock] { blocks.filter { $0.formFactor == .large } }
     var widgets: [HomeBandBlock] { blocks.filter { $0.formFactor == .compact } }
+
+    /// **环境带**的块（p13 / docs/38 D-01~D-03）：申报 `.environment` 的那些，顺序仍是全局序。
+    var environment: [HomeBandBlock] { blocks.filter { $0.zone == .environment } }
+
+    /// **可变流**的块：其余全部（申报 `.flow` 的，也是缺省）。
+    ///
+    /// 与 `environment` 是**互补的两份**（同一个 `blocks` 按区劈开，谁也不重不漏）——
+    /// 这条不变式由 `testCatalogSplitsZonesWithoutLossOrOverlap` 钉住。
+    var flow: [HomeBandBlock] { blocks.filter { $0.zone == .flow } }
 
     /// 模块块的**缺省**宽度由宿主统一声明（模块不参与「我在首页占多宽」的决策，D-11）：
     /// 声明值必须存在——模块块内容多为 `GeometryReader`，测量回退会把它们算成约 6pt。
@@ -355,7 +368,9 @@ struct HomeBandCatalog {
                     content: content,
                     width: declared.map { HomeBlockWidth(min: $0.min, ideal: $0.ideal) } ?? moduleBlockWidth,
                     formFactor: registry.homeFormFactor(for: entry.id),
-                    height: registry.homeBlockHeight(for: entry.id)
+                    height: registry.homeBlockHeight(for: entry.id),
+                    zone: registry.homeZone(for: entry.id),
+                    absorbsSurplus: registry.homeBlockAbsorbsSurplus(for: entry.id)
                 )
             )
         }
@@ -1092,8 +1107,10 @@ struct HomeStripView: View {
     /// 96 今天的身份是「紧凑档」的块高（`HomeFlowView.compactBlockHeight`，见 docs/26 §已知限制 7）。
     static let widgetRowHeight: CGFloat = 96
 
-    /// 小组件带的**行间距**（与列间距、与日历行的接缝同值：面板里一套 8pt 的呼吸感）。
-    static let widgetRowSpacing: CGFloat = HomeCalendarRow.rowSpacing
+    /// 小组件带的**行间距**（与列间距、与三带的接缝同值：面板里一套 8pt 的呼吸感）。
+    /// 改前取的是 `HomeCalendarRow.rowSpacing`（日历行与流之间那道缝），p13 起改取
+    /// `HomeTodayBandLayout.rowSpacing`——**值不变**（8），只是日历行退休后这个数的家换了。
+    static let widgetRowSpacing: CGFloat = HomeTodayBandLayout.rowSpacing
 
     /// 小组件带的**列间距**（同一行内格与格之间）——与主块带的块间距同一个常量：
     /// 「块与块之间是 8」这条在两条带上不该有两个数。
@@ -1328,27 +1345,28 @@ struct HomeFlowView: View {
 
 // MARK: - 标准路径首页（接缝）
 
-/// 展开面板**标准路径**的首页：主块带（上）+ 小组件带（下）+ 全宽日历行（`showCalendar` 开时）。
+/// 展开面板**标准路径**的首页：**环境带（固定第一排）+ 今天带（宿主直渲）+ 可变流**。
 ///
 /// 三条职责收在这一处（这是本文件里**唯一**持有注册表与偏好观察的地方）：
-/// 1. **名单**：`HomeBandCatalog.resolve`（投影 + 表态 + 排序 + 切带，唯一权威源）；
-/// 2. **高度**：`HomeVerticalFit.plan`（四档：三样都在 → 收日历行 → 收主块带 → 空）；
-/// 3. **摆放**：`HomeBandedLayout.plan`（主块带沿用旧 strip 语义，小组件带网格换行）。
+/// 1. **名单**：`HomeBandCatalog.resolve`（投影 + 表态 + 排序 + 分区，唯一权威源）；
+/// 2. **高度**：环境带取带内最高块、今天带取宿主常量、流拿剩下的（`HomeFlowLayout` 的
+///    尾部整行让位）；
+/// 3. **摆放**：环境带一行（`HomeEnvironmentBandView`）+ 今天带（`HomeTodayBand`）+
+///    流（`HomeFlowView`）。
 ///
-/// 三个纯函数的调用顺序是 T7 的核心（`HomeBandedLayout` 的文件头有同一份说明）：
-/// 先按**宽度**铺出小组件要几行 → 再按**高度**决定这条带拿多少（以及画不画日历行 / 主块带）→
-/// 最后按分到的高度定真正画几行。
+/// **p13 起没有日历行**（docs/38 D-07）：改前这里还要在流下方画一整条全宽日历行、并在高度
+/// 取舍里为它让位（`HomeVerticalFit` 的四档）。月历退出首页后，`showCalendar` 这个键、
+/// 那条行与那套取舍一并退休——月历的入口只剩面板「日历」页。
 ///
-/// 为什么接缝在这一层而不是 `NotchHomeView`：高度取舍要知道「小组件要几行」，而那是**宽度**的函数
-/// ——名单与宽度都在这一层（注册表投影 + 块宽声明），把它们再搬进 `NotchHomeView` 只会多一处
-/// 重复解析。`NotchHomeView` 保留的是更外面那层接缝：**极简 UI / 首发动画都不走这里**
-/// （侧歌词档一族已随 p10-lyrics-overlay 整条退休，不再有第三条支路）。
+/// 为什么接缝在这一层而不是 `NotchHomeView`：高度取舍要知道「带里最高块多高」，而那是**名单**的
+/// 函数——名单与块高都在这一层（注册表投影 + 声明），把它们再搬进 `NotchHomeView` 只会多一处
+/// 重复解析。`NotchHomeView` 保留的是更外面那层接缝：**极简 UI / 首发动画都不走这里**。
 struct HomeBandedHomeView: View {
     @ObservedObject private var registry = ModuleRegistry.shared
     /// **观测源**（不是判据）：音乐块 / 镜子块的**存在性**由 `content(for: .home)` 答不答 `.none`
     /// 决定，而那两条判据里各有一段运行期条件（音乐 `MusicManager.shared.hasActiveSession`、
     /// 镜子 `WebcamManager.shared.cameraAvailable`）——起播 / 停播、摄像头插 / 拔时除了这两个观察者
-    /// 没人会叫醒本视图，块就既不会出现也不会消失（小组件带的行数也会跟着变）。
+    /// 没人会叫醒本视图，块就既不会出现也不会消失。
     @ObservedObject private var musicManager = MusicManager.shared
     @ObservedObject private var webcamManager = WebcamManager.shared
     /// **观测源**：音乐块的存在性判据里有一段是 `Defaults[.autoHideInactiveNotchMediaPlayer]`
@@ -1356,8 +1374,6 @@ struct HomeBandedHomeView: View {
     @Default(.autoHideInactiveNotchMediaPlayer) private var autoHideInactiveNotchMediaPlayer
     /// 用户排序覆盖（P1 / T3）：`@Default` 是 `DynamicProperty`——设置页写盘后**这里立即重绘**。
     @Default(.homeBlockOrder) private var homeBlockOrder
-    /// 日历行开不开（偏好，本视图读它，取舍算术本身不认偏好，见 `HomeVerticalFit` 文件头）。
-    @Default(.showCalendar) private var showCalendar
     /// 高度模式与手动高度（p5-home-blocks / T6）：**观测源**——读到它们，尺寸层的重算才会与
     /// 「设置页拨了模式 / 拖了滑块」落到同一帧上（触发链见 `DynamicIslandApp` 里那五条 publisher）。
     @Default(.panelHeightMode) private var panelHeightMode
@@ -1377,53 +1393,62 @@ struct HomeBandedHomeView: View {
         // 名单在本轮渲染里**只取一次**：块的 `content(for:request:)`（它同时决定「有没有块」——
         // 答 `.none` 的不生成格、不留空壳）与排序都在 `HomeBandCatalog.resolve` 里算完。
         let catalog = HomeBandCatalog.resolve(registry: registry, overrides: homeBlockOrder)
-        let blocks = catalog.blocks
+        let environment = catalog.environment
+        let flowBlocks = catalog.flow
 
         GeometryReader { geometry in
-            // **流的可用宽 = 整幅容器宽**（docs/32 D-23 起）：T8 的带级容器横向 8pt 已撤（容器自 p6 起
-            // 就不画底了，这道内边距是它最后的遗留）——流的块因此与日历行左缘对齐，见 `HomeBandChrome`。
+            // **流的可用宽 = 整幅容器宽**（docs/32 D-23 起）：T8 的带级容器横向 8pt 已撤——
+            // 三带的左右缘因此都落在内容区左缘（今天带自己再收一道内容内缩，见 `HomeTodayBand`）。
             let bandWidth = max(0, geometry.size.width)
-            let items = blocks.map {
+            let items = flowBlocks.map {
                 HomeFlowLayout.Item(
                     min: $0.width.min,
                     ideal: $0.width.ideal,
-                    height: HomeFlowView.blockHeight(for: $0)
+                    height: HomeFlowView.blockHeight(for: $0),
+                    flexible: $0.absorbsSurplus
                 )
             }
-            // **画出来的那一份** plan 用的仍是当前可用高（今天那条，逐字未变）：面板多高就画多满，
+            // 环境带与今天带要占的高度 + 它们与流之间的两道缝——**流以上那一段固定高度**，
+            // 高度账本的 `hostBandsHeight` 就是它（两条算式同源，不会一处多算一处少算）。
+            let environmentHeight = environment.map { HomeFlowView.blockHeight(for: $0) }.max() ?? 0
+            let hostBandsHeight = Self.hostBandsHeight(
+                environmentHeight: environmentHeight,
+                hasEnvironment: !environment.isEmpty
+            )
+
+            // **画出来的那一份** plan 用的仍是当前可用高：面板多高就画多满，
             // 预算里装不下的行不画（`HomeFlowLayout` 的整行进出）。
             let plan = HomeFlowLayout.plan(
                 items: items,
                 availableWidth: bandWidth,
-                availableHeight: geometry.size.height,
-                calendarHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
+                availableHeight: max(0, geometry.size.height - hostBandsHeight),
                 metrics: Self.flowMetrics
             )
 
             // —— 「面板贴内容」的高度账本（p5-home-blocks / T6，docs/29 §做法 机制六）——
             // 尺寸层要的是**内容自然高**：按「流允许的最大预算」另算一份（不是无界——上界函数给的
-            // 就是有限数），流在这个预算下画满全部行与日历行。
+            // 就是有限数），流在这个预算下画满全部行。
             //
             // **为什么探针不按「当前面板高」算**（口径判断，见报告 §候选决策）：流方案在预算里装不下
             // 的行会**整行丢掉**（那是画的口径），拿它当内容高就是一条单向棘轮——面板越小 → 丢的行
             // 越多 → 算出来的内容高越小 → 面板再缩，越缩越少，最后停在「一行都不画」的不动点上；
             // 而块的高度是**声明值**（`HomeFlowView.blockHeight`），不随面板变，所以「内容自然高」
-            // 本来就是与预算无关的一个数。收敛本身仍是双向的（见 `convergedPanelHeight`）：
-            // 种子高于它 → 收缩、低于它 → 长高（今天没有例外规则，种子只进循环起点）。
+            // 本来就是与预算无关的一个数。收敛本身仍是双向的（见 `convergedPanelHeight`）。
             let hostChrome = panelHeaderHeight + PanelAutoHeight.homeVerticalPadding
             let naturalContentHeight = PanelAutoHeight.contentHeight(
                 from: HomeFlowLayout.plan(
                     items: items,
                     availableWidth: bandWidth,
-                    availableHeight: PanelAutoHeight.naturalFlowBudget(
-                        hostChrome: hostChrome,
-                        screenVisibleHeight: NSScreen.main?.visibleFrame.height
+                    availableHeight: max(
+                        0,
+                        PanelAutoHeight.naturalFlowBudget(
+                            hostChrome: hostChrome,
+                            screenVisibleHeight: NSScreen.main?.visibleFrame.height
+                        ) - hostBandsHeight
                     ),
-                    calendarHeight: showCalendar ? HomeCalendarRow.rowHeight : 0,
                     metrics: Self.flowMetrics
                 ),
-                calendarHeight: HomeCalendarRow.rowHeight,
-                calendarSpacing: HomeCalendarRow.rowSpacing,
+                hostBandsHeight: hostBandsHeight,
                 headerHeight: panelHeaderHeight
             )
             // 收敛（夹取 + 双向）：`panelHeight(...)` 把「内容高 + 内边距」夹进既有区间。**2026-10-08
@@ -1431,11 +1456,6 @@ struct HomeBandedHomeView: View {
             // 已删除（理由见 `PanelContentHeight` 文件头与 docs/00 ADR-0015）：光标在面板里是**悬浮
             // 展开的常态**，那条规则把「面板此刻多高」写进了「这一页的内容高」这个槽，切页时又被
             // 原样读回来——用户看到的正是「启动台回首页，面板不退、底下空一大片」。
-            //
-            // 种子仍取**权威的当前面板高**（`openNotchSize.height`：尺寸层此刻生效的那个值，
-            // `calculateRequiredNotchSize` / 打开面板那条 / `ContentView.dynamicNotchSize` 同源），
-            // 不是由 `geometry.size.height + 假设的宿主开销` 反推——今天它只进收敛循环的起点，
-            // 但换个真依赖面板高的探针时这条口径仍然要对。
             let seedPanelHeight = openNotchSize.height
             let convergedPanelHeight = PanelAutoHeight.convergedPanelHeight(
                 seedPanelHeight: seedPanelHeight,
@@ -1450,31 +1470,51 @@ struct HomeBandedHomeView: View {
             // 账本的口径是「尺寸层再加 `homeVerticalPadding` 就得到面板高」，所以这里减掉它。
             // 写进去的**只有内容自己的高**（不含任何面板现状成分）——切页 / 重开面板读回来的都是它。
             // 首页那一份是**权威**（`setHomeContentHeight`）：量出来的值（其它 tab 的上报）碰不到它。
-            // `let _ =`：`ViewBuilder` 不接受 Void 类型的表达式语句（`type '()' cannot conform to 'View'`），
-            // 绑定给 `_` 是声明、不是语句，这条约束因此绕开（包的 `writeHomeContentHeight` 只是语法桥）。
             let _ = writeHomeContentHeight(convergedPanelHeight - PanelAutoHeight.homeVerticalPadding)
 
-            // 流 + 日历行自上而下；接缝间距与 `HomeCalendarRow.rowSpacing` 同值（取舍算的就是这个数）。
-            // 流**不再包带级容器**（docs/32 D-23：那道横向 8pt 内边距已撤，两行的左缘因此都落在内容区左缘，
-            // 与日历行一致）——分界由每块的浮起层做（黑档柔光池 + 辉光、玻璃档玻璃板，见
-            // `homeBlockFloat()`）；日历行同样不包（它不是流的一部分）。
-            VStack(spacing: HomeCalendarRow.rowSpacing) {
+            // 三带自上而下；缝与 `HomeTodayBandLayout.rowSpacing` 同值（取舍算的就是这个数）。
+            // 每带都不包带级容器（docs/32 D-23）——分界由每块的浮起层做（黑档柔光池 + 辉光、
+            // 玻璃档玻璃板，见 `homeBlockFloat()`）；**今天带不吃板**（它不是组件，见该文件）。
+            VStack(spacing: HomeTodayBandLayout.rowSpacing) {
+                // 带高算得出来才画（`hostBandsHeight` 用的是同一个判据）——零高的环境带不画：
+                // 画一条空带只会白占一道缝。
+                if !environment.isEmpty, environmentHeight > 0 {
+                    HomeEnvironmentBandView(
+                        blocks: environment,
+                        albumArtNamespace: albumArtNamespace
+                    )
+                }
+
+                HomeTodayBand()
+
                 if !plan.rows.isEmpty {
                     HomeFlowView(
-                        blocks: blocks,
+                        blocks: flowBlocks,
                         plan: plan,
                         albumArtNamespace: albumArtNamespace,
                         columnSpacing: Self.flowMetrics.columnSpacing
                     )
                     .frame(height: plan.heightUsed, alignment: .topLeading)
                 }
-
-                if showCalendar, plan.showsCalendarRow {
-                    HomeCalendarRow()
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // 面板打开时把日历窗口对齐到**今天**（p13：改前这一步是日历行的 `.onAppear` 做的，
+        // 那条行退休后由接缝接手）——今天带与今日清单读的都是这一份窗口。
+        .task { await CalendarManager.shared.updateCurrentDate(Date()) }
+    }
+
+    /// 流以上那一段固定高度（环境带 + 今天带 + 两道缝）——**唯一算式**，账本与画都用它。
+    ///
+    /// 空环境带（三块全关）或带高算不出来（非有限 / 0）时**不留缝**——与「没画那条带」同形
+    /// （调用点用同一个判据决定画不画，两处不会一处画一处不占）。
+    static func hostBandsHeight(environmentHeight: CGFloat, hasEnvironment: Bool) -> CGFloat {
+        let environment = max(0, environmentHeight.isFinite ? environmentHeight : 0)
+        let drawsEnvironmentBand = hasEnvironment && environment > 0
+        let environmentPart = drawsEnvironmentBand ? environment + HomeTodayBandLayout.rowSpacing : 0
+        return environmentPart
+            + HomeTodayBandLayout.height
+            + HomeTodayBandLayout.rowSpacing
     }
 
     /// 流的度量（宿主常量的唯一装配点，传给 `HomeFlowLayout`）。

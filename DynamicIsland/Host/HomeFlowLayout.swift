@@ -21,8 +21,12 @@
 //
 //  首页自本批起**不再分两条带**，改成**一条可换行的流**（docs/28-home-layout-redesign.md §4）：
 //  所有块（大块与紧凑块一视同仁）按用户顺序进入同一条流，**按声明宽度贪心装行、放不下换行**；
-//  一行的**行高 = 该行最高块**；块**不被拉高填满**（音乐封面不再撑到整条带那么高）。日历行仍是
-//  流下方的一整条全宽行（`showCalendar` 开时）。
+//  一行的**行高 = 该行最高块**；块**不被拉高填满**（音乐封面不再撑到整条带那么高）。
+//
+//  **p13 起流是「可变流」**（docs/38-home-v5-layout.md D-01/D-07）：环境带（固定第一排）与
+//  今天带（宿主直渲）**不在本文件的输入里**——接缝把它们的宽度与高度扣掉之后，剩下给流的
+//  才是这里的 `availableWidth` / `availableHeight`。改前流下方那条全宽日历行**已整条退休**
+//  （月历退出首页），因此 `plan` 不再有 `calendarHeight` 参数、`Plan` 不再有 `showsCalendarRow`。
 //
 //  **为什么废掉两条带**（docs/28 §3 的四条归因）：带是"预留高度"的容器——只剩音乐时，主块带的
 //  剩余横向空间谁也借不到（P1），紧凑块只能挤在自己那条带里换行（P2）；日历行天然独占一行（P3）；
@@ -37,7 +41,8 @@
 //  `HomeFlowView` 做，规则因此能被单测穷举（`DynamicIslandTests/HomeStripLayoutTests.swift`）。
 //
 //  行内的宽度分配**复用 `HomeStripLayoutMath.plan`**（富余不拉伸 / 不足按最小宽压缩 / 仍不足按序
-//  丢尾巴 + `＋N`）——那三条规则与"谁在大块带谁在小组件带"无关，本批一字未改。
+//  丢尾巴 + `＋N`）——那三条规则一字未改，只多一条 **①′「弹性块吃行内余量」**
+//  （docs/38 D-04；`Item.flexible`，缺省 false 时逐字是改动前的行为）。
 //
 
 import CoreGraphics
@@ -47,17 +52,22 @@ public enum HomeFlowLayout {
 
     /// 流里的一块：宽度区间 + 高度。
     ///
-    /// **高度是块自己声明的**（`homeFormFactor` 钩子 → 宿主常量，见 `HomeFlowView.blockHeight(for:)`）：
-    /// 大块（音乐的封面与控制、镜子的画面）比紧凑块高一档；同一条流里两种高度可以并排。
+    /// **高度是块自己声明的**（`homeBlockHeight` 钩子 → 宿主换算，见 `HomeFlowView.blockHeight(for:)`）：
+    /// 申报固定高的块与沿用形态档高的块可以在同一行里并排。
+    ///
+    /// **`flexible` = 该块吸收**它所在那一行的剩余宽度（docs/38-home-v5-layout.md D-04）；
+    /// 缺省 false = 余量留行尾（改动前的行为）。
     public struct Item: Equatable {
         public let min: CGFloat
         public let ideal: CGFloat
         public let height: CGFloat
+        public let flexible: Bool
 
-        public init(min: CGFloat, ideal: CGFloat, height: CGFloat) {
+        public init(min: CGFloat, ideal: CGFloat, height: CGFloat, flexible: Bool = false) {
             self.min = min
             self.ideal = ideal
             self.height = height
+            self.flexible = flexible
         }
     }
 
@@ -104,8 +114,6 @@ public enum HomeFlowLayout {
         /// 行与行之间的间距（渲染侧把它交给 `VStack(spacing:)`——`heightUsed` 也用它算，
         /// 两边因此不可能出现两个数）。
         public let rowSpacing: CGFloat
-        /// 日历行画不画。**调用方仍需自己与"用户有没有开日历行"相与**（本类型不认偏好）。
-        public let showsCalendarRow: Bool
         /// 画出来的格数。
         public let visibleCount: Int
         /// 没画出来的格数（`items.count - visibleCount`）：行不够 + 行内规则 ③ 丢的两部分。
@@ -178,24 +186,23 @@ public enum HomeFlowLayout {
     ///
     /// 顺序（**先宽度、再高度、最后行内分配**）：
     /// 1. 按宽度贪心换行 → 全部行（`wrappedRows`），每行的**行高 = 行内最高块**；
-    /// 2. 高度取舍：先试"日历行 + 全部行"放得下吗——放得下就都在；放不下**先收日历行**
-    ///    （沿用 [23](../../docs/23-home-fit.md) D-02 的既有裁决：日历行是"展开看"的次内容）；
-    ///    然后在剩余高度里**从第一行起累计**，装不下的**尾部整行不画**（不切半行——P4 的病根就是
-    ///    定值行高切内容，这里改成"整行进出"）；
-    /// 3. 行内宽度交给 `HomeStripLayoutMath.plan`（同一个分配器，语义未变）；有丢弃时在**最后一行**
-    ///    末尾留出 `＋N` 提示位。
+    /// 2. 高度取舍：在可用高度里**从第一行起累计**，装不下的**尾部整行不画**
+    ///    （不切半行——P4 的病根就是定值行高切内容，这里改成"整行进出"）；
+    /// 3. 行内宽度交给 `HomeStripLayoutMath.plan`（同一个分配器，语义未变；**弹性块吃余量**
+    ///    那一档见 docs/38 D-04）；有丢弃时在**最后一行**末尾留出 `＋N` 提示位。
+    ///
+    /// **p13 起没有「日历行」这一项**（docs/38 D-07）：全宽日历行整条退休，本函数不再为它
+    /// 预留高度、也不再按它做取舍（改前是"先收日历行、再收尾部行"）。
     ///
     /// - Parameters:
     ///   - items: 全部块的声明（顺序即显示顺序）。
     ///   - availableWidth: 流的可用宽度（宿主给的是面板内扣掉内边距之后的整条宽）。
-    ///   - availableHeight: 流的可用高度。
-    ///   - calendarHeight: 日历行要占的高度（关掉日历行时传 `0`）。
+    ///   - availableHeight: 流的可用高度（**已扣掉环境带与今天带**，由接缝算好）。
     ///   - metrics: 度量（列间距 / 行间距 / 提示位宽）。
     public static func plan(
         items: [Item],
         availableWidth: CGFloat,
         availableHeight: CGFloat,
-        calendarHeight: CGFloat,
         metrics: Metrics
     ) -> Plan {
         let available = max(0, availableWidth)
@@ -203,40 +210,18 @@ public enum HomeFlowLayout {
         let columnSpacing = max(0, metrics.columnSpacing)
         let rowSpacing = max(0, metrics.rowSpacing)
         let hintWidth = max(0, metrics.tailReserve)
-        let calendarNeed = max(0, calendarHeight)
 
         let rowIndices = wrappedRows(items: items, availableWidth: available, columnSpacing: columnSpacing)
         let rowHeights: [CGFloat] = rowIndices.map { indices in
             indices.map { max(0, items[$0].height) }.max() ?? 0
         }
 
-        // 前 n 行堆起来要多少高度（行间距只存在于行与行之间）。
-        func stackHeight(_ n: Int) -> CGFloat {
-            guard n > 0 else { return 0 }
-            let rows = rowHeights.prefix(n).reduce(0, +)
-            return rows + CGFloat(n - 1) * rowSpacing
-        }
-
-        // 高度取舍：日历行优先让位，然后尾部整行让位。
-        var showsCalendarRow = false
-        var budget = height
-        if calendarNeed > 0 {
-            let rowsNeed = stackHeight(rowIndices.count)
-            if rowsNeed > 0, height >= calendarNeed + rowSpacing + rowsNeed {
-                showsCalendarRow = true
-                budget = height - calendarNeed - rowSpacing
-            } else if rowsNeed == 0, height >= calendarNeed {
-                // 没有块：日历行单独存活（它自己就是全部内容）。
-                showsCalendarRow = true
-                budget = height - calendarNeed
-            }
-        }
-
+        // 高度取舍：从第一行起累计，装不下的尾部整行不画。
         var drawnRows = 0
         var usedHeight: CGFloat = 0
         for rowHeight in rowHeights {
             let need = drawnRows == 0 ? rowHeight : usedHeight + rowSpacing + rowHeight
-            guard need <= budget else { break }
+            guard need <= height else { break }
             usedHeight = need
             drawnRows += 1
         }
@@ -252,7 +237,13 @@ public enum HomeFlowLayout {
             let showsHint = isLastDrawn && reservesHint
             let rowAvailable = showsHint ? available - hintWidth : available
             let rowPlan = HomeStripLayoutMath.plan(
-                items: indices.map { HomeStripLayoutMath.Item(min: items[$0].min, ideal: items[$0].ideal) },
+                items: indices.map {
+                    HomeStripLayoutMath.Item(
+                        min: items[$0].min,
+                        ideal: items[$0].ideal,
+                        flexible: items[$0].flexible
+                    )
+                },
                 available: rowAvailable,
                 spacing: columnSpacing
             )
@@ -271,7 +262,6 @@ public enum HomeFlowLayout {
         return Plan(
             rows: rows,
             rowSpacing: rowSpacing,
-            showsCalendarRow: showsCalendarRow,
             visibleCount: visibleCount,
             droppedCount: items.count - visibleCount,
             rowsNeeded: rowIndices.count,

@@ -124,10 +124,9 @@ func maxAllowedNotchWidth() -> CGFloat {
 func enabledStandardTabCount() -> Int {
     var count = 0
 
-    // Home tab
-    if Defaults[.showStandardMediaControls] || Defaults[.showCalendar] || Defaults[.showMirror] {
-        count += 1
-    }
+    // Home tab：**恒有一枚**（p13 / docs/38 D-14）——首页三带里环境带与今天带是宿主自己的，
+    // 「音乐 / 镜子 / 日历开关全关」也照样有日期与下一个日程，因此不再受那三个开关门控。
+    count += 1
 
     // Shelf tab
     if Defaults[.dynamicShelf] {

@@ -880,10 +880,8 @@ final class ShortcutsFrontAppTests: XCTestCase {
         for key in [
             "module.frontapp.name",
             "module.frontapp.summary",
-            "module.frontapp.current",
             "module.frontapp.switcher",
             "module.frontapp.recent",
-            "module.frontapp.emptyRecent",
         ] {
             let localized = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
             XCTAssertNotEqual(localized, key, "\(key) 没解析出文案（catalog 未编进宿主 bundle？）")
@@ -894,9 +892,10 @@ final class ShortcutsFrontAppTests: XCTestCase {
     /// 内容分发：`home` → `.view`（当前应用 + 最近切换）；**`.compact` / `.expanded` / `.lockscreen`
     /// 一律 `.none`**（不占位、不算失败——本批的契约，也是"折叠态与展开 tab 没有多出东西"的判据）。
     ///
-    /// 块宽走**宿主默认**：模块不声明 `homeBlockWidth`，注册表对"已注册但不声明"同样回 nil
-    /// （`HomeStripView` 因此用统一值 180/240，docs/17 D-11）。
-    func testFrontAppModuleServesOnlyHomeSurfaceAndFallsBackToHostWidth() async throws {
+    /// 块宽走**模块自己的声明**（p13 / docs/38 D-04 / D-09）：前台应用是环境带里唯一弹性的一块，
+    /// 因此它显式声明 300 / 434（并 `homeBlockAbsorbsSurplus = true`）——注册表原样把它取给宿主。
+    /// 改前它走宿主统一值 180/240（不参与宽度决策，docs/17 D-11），本批为「吃满第一排余量」改成显式声明。
+    func testFrontAppModuleServesOnlyHomeSurfaceAndPublishesItsBandWidth() async throws {
         let module = FrontAppModule(context: frontAppContext())
         try await module.activate()
 
@@ -913,17 +912,25 @@ final class ShortcutsFrontAppTests: XCTestCase {
         // `deactivate()` 幂等（06 §3.3 / T3 的 store）：重复调用不崩、也不再摘第二次
         await module.deactivate()
 
-        XCTAssertNil(FrontAppModule.homeBlockWidth, "只有接管模块声明块宽，新增模块不参与宽度决策（docs/17 D-11）")
+        XCTAssertEqual(
+            FrontAppModule.homeBlockWidth,
+            ModuleHomeBlockWidth(min: 300, ideal: 434),
+            "环境带里那一档（p13 / docs/38 §做法 五）：300 是十格宽的下界，434 是 v5 设计稿的档位"
+        )
+        XCTAssertTrue(FrontAppModule.homeBlockAbsorbsSurplus, "唯一吃余量的环境块（D-04）")
+        XCTAssertEqual(FrontAppModule.homeZone, .environment, "p13：前台应用是环境带第二块（D-02）")
 
-        // 注册表侧同一条回落（`HomeStripView` 的真实取法）：未注册 → nil；已注册但不声明 → 仍然 nil。
+        // 注册表侧原样取给宿主（唯一的取法）：未注册 → nil；注册后 → 模块声明的那一份。
         // 注册表是**单例**，用完 `deactivateAll()` 清干净（别的用例的 setUp 也清，这里不留尾）。
         let registry = ModuleRegistry.shared
         XCTAssertNil(registry.homeBlockWidth(for: FrontAppModule.moduleID), "未注册的 id → nil")
         registry.register([FrontAppModule.self], enabled: { _ in true })
-        XCTAssertNil(
+        XCTAssertEqual(
             registry.homeBlockWidth(for: FrontAppModule.moduleID),
-            "已注册但不声明 → nil（宿主统一值 180/240）"
+            ModuleHomeBlockWidth(min: 300, ideal: 434),
+            "已注册 → 注册表把模块的声明原样交出去"
         )
+        XCTAssertTrue(registry.homeBlockAbsorbsSurplus(for: FrontAppModule.moduleID), "弹性声明同样经注册表")
         await registry.deactivateAll()
     }
 
@@ -948,45 +955,39 @@ final class ShortcutsFrontAppTests: XCTestCase {
 
     // MARK: - T4 追加：块内排版预算（FrontAppGridBudget）
 
-    /// 预算：**固定 4 列、行数按 App 数、上限 4 行**（docs/37 D-02，2026-10-10 改判；
-    /// 改前是「宽决定一行几格、高决定几行」的自适应档）。
+
+    /// 预算：**列按宽（上限 16）、行按高（上限 4）**（p13 / docs/38 D-09，2026-10-11 改判；
+    /// 沿革：自适应 → 固定 4 列 × 4 行（docs/37 D-02）→ 本批「宽决定列」——块宽在环境带里是弹性的
+    /// （吃余量），固定列数会让多出来的宽度白留）。
     ///
-    /// 两条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，
-    /// 而不是画一格越界）；② 块宽**不再影响列数**——最小块宽 180 与理想宽 240 都是 4 列，
-    /// 这正是「开镜子 / 关镜子显示一样多」的几何前提。
-    func testFrontAppGridBudgetIsAFixedFourColumnGrid() {
-        XCTAssertEqual(FrontAppGridBudget.columns, 4, "固定列数（D-02）")
-        XCTAssertEqual(FrontAppGridBudget.maximumRows, 4, "固定行数上限（D-02）")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 180), 4, "最小块宽也是 4 列")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 240), 4, "理想块宽同样 4 列")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 400), 4, "再宽也不加列（上限恒为 columns）")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 108), 4, "刚好 4 列（4×24 + 3×4）")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 80), 3, "更窄按宽度收敛到 3 列")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 24), 1, "一格宽只画一格")
+    /// 三条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，
+    /// 而不是画一格越界）；② **列数上限 16**（再宽不加列，见 docs/38 §已知限制 4）；
+    /// ③ 高度只决定行数（上限 4），与环境带档高 96 一起给出 3 行（96 − 顶部内缩 7 = 89 →
+    /// `floor((89 + 4) / (28 + 4)) = 2`… 见下面对 `HomeEnvironmentBand.height` 的断言）。
+    func testFrontAppGridBudgetIsWidthDrivenWithCaps() {
+        XCTAssertEqual(FrontAppGridBudget.maximumColumns, 16, "列数上限（D-09 / §已知限制 4）")
+        XCTAssertEqual(FrontAppGridBudget.maximumRows, 4, "行数上限")
+        XCTAssertEqual(FrontAppGridBudget.cellSize, 28, "一格 = 图标 24 + 内边距 2 × 2")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 300), 10, "最小块宽 300 → 10 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 434), 15, "理想块宽 434 → 15 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 28), 1, "一格宽只画一格")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 27), 0, "放不下一格就是 0")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 0), 0, "`.zero` 提案 → 一格都不画（不越界）")
-        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 23), 0, "放不下一格就是 0")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: .nan), 0, "非有限宽同样不画")
+        XCTAssertEqual(
+            FrontAppGridBudget.cellsPerRow(forWidth: 4000), 16,
+            "超宽面板也钳在上限（一行 16 格以上的图标墙不好点）"
+        )
 
-        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 148), 4, "申报的块高 → 满 4 行")
-        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 58), 1, "刚好一行（28 + 6 + 24 = 58）")
-        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 57), 0, "矮一点点就一行都不画（不裁半行）")
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 89), 2, "环境带档高扣掉顶部内缩 → 2 行")
         XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 400), 4, "再高也钳在 4 行")
-        XCTAssertEqual(FrontAppGridBudget.capacity(forWidth: 180, forHeight: 148), 16, "4 × 4")
-        XCTAssertEqual(FrontAppGridBudget.maximumCells, 16, "上限格数 = 列 × 行")
-
-        // 申报的块高必须**恰好装下满行数**（少一行 = 最后一排被裁）
+        XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: .nan), 0, "非有限高 → 0 行")
         XCTAssertEqual(
-            FrontAppGridBudget.maximumBlockHeight,
-            28 + 6 + 4 * 24 + 3 * 6,
-            "块高 = 当前应用行 + 间距 + 4 行 + 3 个行间距"
-        )
-        XCTAssertEqual(
-            FrontAppGridBudget.rowCount(forHeight: FrontAppGridBudget.maximumBlockHeight),
-            4,
-            "申报高下能画满 4 行"
+            FrontAppGridBudget.capacity(forWidth: 434, forHeight: 89), 30,
+            "理想宽 × 环境带档高 → 15 列 × 2 行 = 30 格（够装下常见的「全开」）"
         )
 
-        // 逐档扫 0…400pt：把预算反推成实际占用的宽高，任何一档都不许超过块本身
+        // 逐档扫 0…400pt：把预算反推成实际占用的宽高，任何一档都不许超过格子本身
         for width in 0...400 {
             let cells = FrontAppGridBudget.cellsPerRow(forWidth: CGFloat(width))
             let used = CGFloat(cells) * FrontAppGridBudget.cellSize
@@ -995,20 +996,11 @@ final class ShortcutsFrontAppTests: XCTestCase {
         }
         for height in 0...400 {
             let rows = FrontAppGridBudget.rowCount(forHeight: CGFloat(height))
-            guard rows > 0 else { continue }   // 0 行 = 网格不画、占 0（上半那一行不归这份预算管）
-            let used = FrontAppGridBudget.currentIconSize
-                + FrontAppGridBudget.rowSpacing
-                + CGFloat(rows) * FrontAppGridBudget.cellSize
+            guard rows > 0 else { continue }   // 0 行 = 网格不画、占 0
+            let used = CGFloat(rows) * FrontAppGridBudget.cellSize
                 + CGFloat(rows - 1) * FrontAppGridBudget.rowSpacing
             XCTAssertLessThanOrEqual(used, CGFloat(height), "\(height)pt 高：\(rows) 行要占 \(used)pt")
         }
-
-        // 申报的块高（模块的钩子）与预算同源：两处必须是一个数
-        XCTAssertEqual(
-            FrontAppModule.homeBlockHeight,
-            .points(FrontAppGridBudget.maximumBlockHeight),
-            "模块申报的块高与块内预算同源"
-        )
     }
 
     // MARK: - 夹具（T2）
