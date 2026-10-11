@@ -928,6 +928,8 @@ struct ContentView: View {
             .padding(.horizontal, isIslandMode ? dynamicIslandShadowInset : 0)
             .padding(.bottom, isIslandMode ? dynamicIslandShadowInset : 0)
             .padding(.top, pillTopOffset)
+            // Give the notch its own AX container without replacing child identifiers.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("GourdNotch")
             #if DEBUG
             .overlay(alignment: .topLeading) {
