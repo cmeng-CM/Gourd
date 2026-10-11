@@ -54,6 +54,7 @@
 
 import AppKit
 import Combine
+import CoreGraphics
 
 /// 前台应用的状态源（`@MainActor`：`@Published` 的读写与 AppKit 的激活动作都在主 actor 上）。
 @MainActor
@@ -77,6 +78,8 @@ final class FrontAppStore: ObservableObject {
     private let logger: ModuleLogger
     /// 「取所有正在运行的 App」的**注入点**（先给默认值：生产走 `NSWorkspace`；用例给假体，见文件末尾）。
     private let runningAppsProvider: FrontAppRunningAppsProvider
+    /// 「这个 pid 有没有窗口」的**注入点**（p13b；见 `FrontAppWindowPresenceProvider`）。
+    private let windowPresenceProvider: FrontAppWindowPresenceProvider
 
     /// 观察者 token（`deactivate()` 清空，因此摘了还能再 `start`）。
     private var workspaceTokens: [NSObjectProtocol] = []
@@ -92,11 +95,13 @@ final class FrontAppStore: ObservableObject {
     init(
         config: ConfigHandle,
         logger: ModuleLogger,
-        runningApps: @escaping FrontAppRunningAppsProvider = FrontAppStore.systemRunningApps
+        runningApps: @escaping FrontAppRunningAppsProvider = FrontAppStore.systemRunningApps,
+        screenWindows: @escaping FrontAppWindowPresenceProvider = FrontAppStore.screenWindows
     ) {
         self.config = config
         self.logger = logger
         self.runningAppsProvider = runningApps
+        self.windowPresenceProvider = screenWindows
     }
 
     // MARK: 现取的"所有打开的常规 App"
@@ -153,19 +158,22 @@ final class FrontAppStore: ObservableObject {
 
     /// 点一个小图标 = 把那个应用切到前台（§机制三）。
     ///
-    /// **2026-10-11 / p13b 的两处修复**（用户：「有的应用点击会打开对应的应用，有的就没反应」——
-    /// 上屏实测的根因有两条，见 docs/38 §已知限制 9）：
+    /// **2026-10-11 / p13b 的修复**（用户：「有的应用点击会打开对应的应用，有的就没反应」——
+    /// 上屏取证的根因见 docs/38 §已知限制 9）：**「激活」与「屏幕上出现东西」是两件事**。
+    /// 因此本方法四步走：
     ///
-    /// 1. **`activate()` → `activate(options: [.activateAllWindows])`**：无参那一档只「让这个应用
-    ///    成为前台」，**不动它最小化的窗口**——实测窗口在 0 个（最小化 / 收在别的空间）的应用点了
-    ///    跟没点一样（菜单栏换了、屏幕上什么都不出现）。带 `.activateAllWindows` 会把它的窗口
-    ///    一起提到前面（最小化的也还原），这才是「切过去」的完整语义；
-    /// 2. **进程已不在时不再只记一条日志**：那条路径原先什么都不做（用户看到的就是「没反应」），
-    ///    现在按记录的包路径**重新打开**它（Dock 点一个没在跑的应用就是这个行为）。pid 被别的进程
-    ///    复用的情况同样走这一档——**先比 bundleID**，对不上就当成「已经不在了」。
+    /// 1. **进程还在一律先激活**，且带 `.activateAllWindows`——无参那一档只换前台应用、
+    ///    **不动最小化的窗口**（实测：改后「窗口最小化」的应用一点即还原到屏幕上）；
+    /// 2. **350ms 后复检「屏幕上有没有它的窗口」**（`FrontAppSwitcher.showsNothingOnScreen`：
+    ///    筛掉辅助窗 + 与屏幕矩形相交）：有 → 收工；没有 → 第 3 步；
+    /// 3. **补一次 reopen**（`/usr/bin/open -b <bundleID>`）：这是程序坞点一个「没有窗口 /
+    ///    窗口不在当前屏幕上」的应用时的行为——应用收到 reopen 自己开新窗口或把它救回当前屏。
+    ///    实测：无窗口的 Ghostty 用 `open -b` 立刻开出窗口，而进程内 API（含显式 `oapp`）一个都不开，
+    ///    自己发 Apple Event 又要自动化授权（本项目不新增权限面），故走 `open(1)`；
+    /// 4. **进程已不在 / pid 被别人拿走** → 直接走第 3 步的 reopen（并先用 bundleID 比对排除复用）。
     ///
-    /// **失败路径仍然只记日志、不弹窗**（2026-09-30 起，D-04）：拿不到包路径、`open` 也失败时
-    /// 用户看到的是「点了没反应」，但那一条一定在日志里——"没反应且日志里也没有"是最难查的状态。
+    /// **失败路径只记日志、不弹窗**（2026-09-30 起，D-04）：拿不到包路径、`open` 也失败时用户看到的
+    /// 是「点了没反应」，但那一条一定在日志里——"没反应且日志里也没有"是最难查的状态。
     func activate(_ snapshot: FrontAppSnapshot) {
         let running = NSRunningApplication(processIdentifier: snapshot.pid)
         let alive = running.map {
@@ -184,21 +192,61 @@ final class FrontAppStore: ObservableObject {
             } else {
                 logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——系统拒绝了 activate()")
             }
+            scheduleReopenIfStillInvisible(snapshot)
         case .reopen:
-            guard let path else { return }
-            let url = URL(fileURLWithPath: path)
-            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] app, error in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if let error {
-                        self.logger.warn("重新打开失败：\(snapshot.name)（\(snapshot.id)）——\(error.localizedDescription)")
-                    } else {
-                        self.logger.info("重新打开：\(snapshot.name)（\(snapshot.id) pid \(app?.processIdentifier ?? -1)）——原先那一份已退出")
-                    }
-                }
-            }
+            reopen(snapshot, reason: "原先那一份已退出")
         case .nothingToDo:
             logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——进程已不在，且没有可用的包路径")
+        }
+    }
+
+    /// 激活之后**复检一次**：屏幕上仍然没有它的窗口（没窗口 / 窗口在别的屏 / 被最小化且没还原）时，
+    /// 补一次 reopen。延迟 `reopenGracePeriod` 是留给「激活自己就会把窗口还原」那一档的
+    /// （实测最小化的窗口在这一档就被还原了，那时复检看得见、不会再多开一个）。
+    private func scheduleReopenIfStillInvisible(_ snapshot: FrontAppSnapshot) {
+        let pid = snapshot.pid
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reopenGracePeriod) { [weak self] in
+            guard let self else { return }
+            let windows = self.windowPresenceProvider(pid)
+            let screens = NSScreen.screens.map(\.frame)
+            guard FrontAppSwitcher.showsNothingOnScreen(windows: windows, screens: screens) else { return }
+            self.reopen(snapshot, reason: "激活后屏幕上仍没有它的窗口（窗口不在当前屏幕 / 没有窗口）")
+        }
+    }
+
+    /// 复检的宽限期：够「激活自己还原最小化窗口」跑完，又不至于让用户觉得点了要等（0.35s）。
+    static let reopenGracePeriod: TimeInterval = 0.35
+
+    /// **重新打开**：`/usr/bin/open -b <bundleID>`（无 bundleID 时 `-a <包路径>`）。
+    ///
+    /// 直接 `exec` 而非过 shell（参数由 `reopenArguments` 这个纯函数给，没有拼接、没有注入面）；
+    /// 子进程在后台队列上等它退完（`open` 是几十毫秒级的系统小工具，不占主线程）。
+    private func reopen(_ snapshot: FrontAppSnapshot, reason: String) {
+        guard let arguments = FrontAppSwitcher.reopenArguments(
+            bundleID: snapshot.bundleID,
+            bundlePath: bundlePaths[snapshot.id]
+        ) else {
+            logger.warn("重新打开失败：\(snapshot.name)（\(snapshot.id)）——\(reason)，且没有可用的 bundleID / 包路径")
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = arguments
+        process.terminationHandler = { [weak self] finished in
+            let status = finished.terminationStatus
+            Task { @MainActor in
+                guard let self else { return }
+                if status == 0 {
+                    self.logger.info("重新打开：\(snapshot.name)（\(snapshot.id)）——\(reason)")
+                } else {
+                    self.logger.warn("重新打开失败：\(snapshot.name)（\(snapshot.id)）——\(reason)，open 退出码 \(status)")
+                }
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            logger.warn("重新打开失败：\(snapshot.name)（\(snapshot.id)）——\(reason)，\(error.localizedDescription)")
         }
     }
 
@@ -232,6 +280,34 @@ final class FrontAppStore: ObservableObject {
                 bundleID: app.bundleIdentifier,
                 name: app.localizedName,
                 activationPolicy: app.activationPolicy
+            )
+        }
+    }
+
+    /// 某个 pid **在屏幕上的窗口矩形**（`FrontAppWindowPresenceProvider` 的生产实现）。
+    ///
+    /// 只读四个字段：`kCGWindowOwnerPID`、`kCGWindowLayer`（0 = 常规窗口）、`kCGWindowIsOnscreen`
+    /// 与 `kCGWindowBounds`。**不读标题**——那要屏幕录制权限，而这里只关心几何。
+    /// 列表用 `.optionAll`：**最小化的窗口也在里面**（`.optionOnScreenOnly` 会把它们排掉，
+    /// 那样「窗口都最小化了」会被误判成「没有窗口」而多开一个）。真正的判据在纯函数
+    /// `FrontAppSwitcher.showsNothingOnScreen(windows:screens:)` 里（它还要筛掉辅助窗、比屏幕）。
+    @MainActor
+    static func screenWindows(pid: pid_t) -> [CGRect] {
+        guard let list = CGWindowListCopyWindowInfo(
+            [.optionAll, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+        return list.compactMap { info in
+            guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  info[kCGWindowIsOnscreen as String] as? Bool == true,
+                  let bounds = info[kCGWindowBounds as String] as? [String: Any]
+            else { return nil }
+            return CGRect(
+                x: bounds["X"] as? Double ?? 0,
+                y: bounds["Y"] as? Double ?? 0,
+                width: bounds["Width"] as? Double ?? 0,
+                height: bounds["Height"] as? Double ?? 0
             )
         }
     }
@@ -363,6 +439,12 @@ struct FrontAppRunningApp: Equatable {
 /// `NSWorkspace`），用例传构造的条目——于是用例既不依赖跑测试这台机器上开着什么，也不起真进程。
 typealias FrontAppRunningAppsProvider = @MainActor () -> [FrontAppRunningApp]
 
+/// 「这个 pid **在屏幕上的窗口矩形**」的**注入点**（p13b）：生产实现 = `FrontAppStore.screenWindows(pid:)`
+/// （`CGWindowListCopyWindowInfo`，只读 pid / layer / bounds / onscreen 四个字段，**不读标题**——
+/// 不新增任何权限面），用例传构造值。用途见 `FrontAppSwitcher.showsNothingOnScreen`：
+/// 激活之后屏幕上仍然什么都没有时，补一次 reopen 把窗口「救」回来。
+typealias FrontAppWindowPresenceProvider = @MainActor (pid_t) -> [CGRect]
+
 /// `switcherApps` 的**纯函数口径**：过滤 → 排除自身 → 排序 → 去重。四条各管一件事（注释见实现）。
 ///
 /// 顺序就是契约（docs/23-home-fit.md §做法 机制三 / §接口与数据形状）：
@@ -372,27 +454,66 @@ enum FrontAppSwitcher {
 
     // MARK: 点一格之后该做什么（p13b / 2026-10-11）
 
-    /// 点一格的**三种结局**（纯值，用例直接钉）。
+    /// 点一格的**当下动作**（纯值，用例直接钉）。「激活之后屏幕上仍然什么都没有」那一档由
+    /// `showsNothingOnScreen(windows:screens:)` 复检、再补一次 reopen（见 `FrontAppStore.activate`）。
     ///
-    /// 用户 2026-10-11 的反馈是「有的应用点击会打开对应的应用，有的就没反应」——
-    /// 上屏实测两条根因（docs/38 §已知限制 9）：① 无参 `activate()` 不动最小化的窗口（窗口数为 0
-    /// 的应用点了跟没点一样）；② 进程已不在时旧实现什么都不做。本枚举把「该做哪件事」写成一个
-    /// 可测的判定，`FrontAppStore.activate(_:)` 只负责执行：
+    /// 用户 2026-10-11：「有的应用点击会打开对应的应用，有的就没反应」。上屏取证的结论是
+    /// **「激活」与「屏幕上出现东西」是两件事**（docs/38 §已知限制 9）：进程还在一律先激活
+    /// （`activateAllWindows`，实测能把最小化的窗口还原回来），但窗口**不在可见屏幕上**的应用
+    /// （实测多个应用的窗口停在 x = −1353 / −1833 这类**已断开的显示器**坐标上）激活了也看不见。
     enum ActivationRoute: Equatable {
-        /// 进程还在、且那个 pid 仍是同一个应用 → `activate(options: [.activateAllWindows])`
-        /// （把它的窗口一起提到前面，最小化的也还原）。
+        /// 进程还在（pid 没被复用）→ `activate(options: [.activateAllWindows])`。
         case activate
-        /// 进程已不在 / pid 已被别的应用拿走，但知道它的包路径 → **重新打开**（Dock 点没在跑的应用
-        /// 就是这个行为）。
+        /// 进程已不在 / pid 被别的应用拿走 → 走**重新打开**（程序坞点一个没在跑的应用就是这个行为）。
         case reopen
-        /// 进程已不在、又没有包路径（命令行工具那类）→ 什么都做不了（只记一条日志）。
+        /// 连包路径都没有（命令行工具那类）→ 什么都做不了（只记一条日志，不假装成功）。
         case nothingToDo
     }
 
-    /// 判据：**进程还在就切过去**；不在了就看有没有包路径。
     static func activationRoute(appAlive: Bool, hasBundlePath: Bool) -> ActivationRoute {
         if appAlive { return .activate }
         return hasBundlePath ? .reopen : .nothingToDo
+    }
+
+    /// **屏幕上有没有它的窗口**（纯函数：给窗口矩形与屏幕矩形，回答「激活之后用户看得见东西吗」）。
+    ///
+    /// 三条判据（缺一条就会把「什么都没出现」误判成「有窗口」——那正是用户报的那一档）：
+    /// 1. **像真窗**（宽 ≥ `minimumRealWindowSize.width`、高 ≥ …）：窗口列表里混着**辅助窗**
+    ///    （实测：菜单栏那条 1512×33、悬停提示 296×17、状态项 54×54），它们不是用户窗口；
+    /// 2. **与某块屏幕的 frame 相交**：窗口停在已断开的显示器坐标（负数 x）上时，CG 的
+    ///    `onscreen` 标记仍可能为真——只有几何相交才说明它真的落在看得见的屏幕里；
+    /// 3. 只要有**一个**窗口同时满足 1 与 2 → 看得见（不必是当前空间的那个）。
+    ///
+    /// 返回真 = **屏幕上什么都没有**（调用方据此补一次 reopen，把窗口「救」到当前屏幕上）。
+    static func showsNothingOnScreen(windows: [CGRect], screens: [CGRect]) -> Bool {
+        let real = windows.filter {
+            $0.width >= minimumRealWindowSize.width && $0.height >= minimumRealWindowSize.height
+        }
+        guard !real.isEmpty else { return true }
+        return !real.contains { window in screens.contains { $0.intersects(window) } }
+    }
+
+    /// 「像真窗」的尺寸下界（唯一取值处）：**第一道过滤是上游的 `onscreen` 标记**
+    /// （`FrontAppStore.screenWindows` 只收 `kCGWindowIsOnscreen == true` 的窗），这里只把
+    /// 实测见过的**屏幕上的**杂项挡掉——菜单栏那条 1512×33、悬停提示 296×17、状态项 54×54。
+    ///
+    /// **已知的取舍**：纯几何分不出「小窗的用户窗口」与「恰好 500×500 的应用内部垫底窗」
+    /// （实测见过这种尺寸、但它的 `onscreen` 是 false，因此上游那一层已经拦掉了）。
+    /// 万一有垫底窗带 `onscreen = true` 混进来，代价只是**少补一次 reopen**（点了没反应那一档），
+    /// 不会多开窗口——这个方向的误差是我们选定的。
+    static let minimumRealWindowSize = CGSize(width: 200, height: 120)
+
+    /// **重新打开的启动参数**（纯函数，用例直接钉）：有 bundleID 用 `-b`，否则退回 `-a <包路径>`。
+    ///
+    /// 为什么走 `open(1)` 而不是进程内 API（实测，2026-10-11）：**reopen 事件只能由可信发送方
+    /// （程序坞 / `open(1)`）投递**——同一个无窗口的应用（Ghostty，真实窗 0 个）上，
+    /// `NSWorkspace.openApplication` 与「显式带 `kAEOpenApplication` 的 `appleEvent` 配置」都
+    /// **一个窗口都不开**，而 `open -b com.mitchellh.ghostty` 立刻开出 5 个窗口。
+    /// 自己发 Apple Event 需要**自动化授权**（会弹「想要控制 XX」）——本项目不新增权限面，故不走。
+    static func reopenArguments(bundleID: String?, bundlePath: String?) -> [String]? {
+        if let bundleID, !bundleID.isEmpty { return ["-b", bundleID] }
+        if let bundlePath, !bundlePath.isEmpty { return ["-a", bundlePath] }
+        return nil
     }
 
     /// pid 复用的判据（纯函数）：退出后新起的进程可能拿到同一个 pid，那时

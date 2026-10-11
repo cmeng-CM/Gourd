@@ -831,12 +831,11 @@ final class ShortcutsFrontAppTests: XCTestCase {
 
     // MARK: - p13b：点一格的三种结局 + 运行名单的代次（2026-10-11）
 
-    /// **点一格的三种结局**（`FrontAppSwitcher.activationRoute`，纯函数）：进程还在就切过去；
+    /// **点一格的当下动作**（`FrontAppSwitcher.activationRoute`，纯函数）：进程还在就切过去；
     /// 不在了但有包路径就**重新打开**；都没有才什么都不做。
     ///
-    /// 用户 2026-10-11：「有的应用点击会打开对应的应用，有的就没反应」——上屏实测的两条根因
-    /// （docs/38 §已知限制 9）：无参 `activate()` **不动最小化的窗口**（窗口数 0 的应用点了跟没点
-    /// 一样）、进程已不在时旧实现什么都不做。判据本身钉在这里，执行（AppKit 那两个调用）在 store 里。
+    /// 「激活之后屏幕上仍然什么都没有」那一档**不在入口判**——它由激活后的复检
+    /// （`showsNothingOnScreen`）决定要不要补一次 reopen，见下一条用例。
     func testFrontAppActivationRouteDecidesActivateReopenOrNothing() {
         XCTAssertEqual(
             FrontAppSwitcher.activationRoute(appAlive: true, hasBundlePath: true), .activate,
@@ -853,6 +852,84 @@ final class ShortcutsFrontAppTests: XCTestCase {
         XCTAssertEqual(
             FrontAppSwitcher.activationRoute(appAlive: false, hasBundlePath: false), .nothingToDo,
             "都没了 → 什么都做不了（只记一条日志，不假装成功）"
+        )
+    }
+
+    /// **「屏幕上有没有它的窗口」的判据**（`FrontAppSwitcher.showsNothingOnScreen`，纯函数）：
+    /// 这是「激活之后用户到底看不看得见东西」的那把尺子，三条判据缺一条就会误判。
+    ///
+    /// 实测背景（2026-10-11，docs/38 §已知限制 9）：窗口列表里混着大量**辅助窗**
+    /// （菜单栏那条 1512×33、状态项 54×54、应用内部垫底窗 500×500），而多个应用的窗口停在
+    /// **已断开的显示器**坐标上（微信 −1353、飞书 −1353、Safari −1152、Code −1833）——
+    /// 那些情况下 CG 的 `onscreen` 标记仍可能为真，只有几何相交才说明它落在看得见的屏幕里。
+    func testFrontAppShowsNothingOnScreenDecision() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let normalWindow = CGRect(x: 100, y: 100, width: 900, height: 600)
+
+        XCTAssertFalse(
+            FrontAppSwitcher.showsNothingOnScreen(windows: [normalWindow], screens: [screen]),
+            "屏幕内有一个正常大小的窗口 → 看得见"
+        )
+        XCTAssertTrue(
+            FrontAppSwitcher.showsNothingOnScreen(windows: [], screens: [screen]),
+            "一个窗口都没有（Ghostty 那一档）→ 屏幕上什么都没有 → 该补 reopen"
+        )
+        XCTAssertTrue(
+            FrontAppSwitcher.showsNothingOnScreen(
+                windows: [CGRect(x: -1353, y: 112, width: 1203, height: 834)],
+                screens: [screen]
+            ),
+            "窗口停在已断开的显示器坐标上（微信那一档）→ 屏幕上什么都没有"
+        )
+        XCTAssertTrue(
+            FrontAppSwitcher.showsNothingOnScreen(
+                windows: [
+                    CGRect(x: 0, y: 0, width: 1512, height: 33),   // 菜单栏条
+                    CGRect(x: 507, y: 373, width: 296, height: 17), // 悬停提示
+                    CGRect(x: 0, y: 482, width: 54, height: 54),   // 状态项
+                ],
+                screens: [screen]
+            ),
+            "只有辅助窗（菜单栏条 / 提示条 / 状态项）时**不算有窗口**——它们不是用户能看的窗"
+            + "（第一道过滤其实是上游的 onscreen 标记，这里是把漏进来的杂项按尺寸挡掉）"
+        )
+        XCTAssertFalse(
+            FrontAppSwitcher.showsNothingOnScreen(
+                windows: [normalWindow, CGRect(x: -1353, y: 112, width: 1203, height: 834)],
+                screens: [screen]
+            ),
+            "只要有一个窗口在屏幕内就算看得见（另一个在别的屏不影响）"
+        )
+        XCTAssertFalse(
+            FrontAppSwitcher.showsNothingOnScreen(
+                windows: [normalWindow],
+                screens: [screen, CGRect(x: -1920, y: 0, width: 1920, height: 1080)]
+            ),
+            "副屏接着的时候，落在副屏上的窗口同样算看得见"
+        )
+    }
+
+    /// **重新打开的参数**（`FrontAppSwitcher.reopenArguments`，纯函数）：有 bundleID 用 `-b`，
+    /// 否则退回 `-a <包路径>`，都没有 → nil（调用方据此只记日志）。
+    func testFrontAppReopenArgumentsPreferBundleID() {
+        XCTAssertEqual(
+            FrontAppSwitcher.reopenArguments(bundleID: "com.apple.Safari", bundlePath: "/Applications/Safari.app"),
+            ["-b", "com.apple.Safari"],
+            "有 bundleID 优先用它（比路径更抗「应用被移动 / 改名」）"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.reopenArguments(bundleID: nil, bundlePath: "/Applications/Safari.app"),
+            ["-a", "/Applications/Safari.app"],
+            "没有 bundleID（命令行工具那类）→ 退回包路径"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.reopenArguments(bundleID: "", bundlePath: "/Applications/Safari.app"),
+            ["-a", "/Applications/Safari.app"],
+            "空串按没有处理"
+        )
+        XCTAssertNil(
+            FrontAppSwitcher.reopenArguments(bundleID: nil, bundlePath: nil),
+            "两个都没有 → 打不开（调用方只记一条日志）"
         )
     }
 
