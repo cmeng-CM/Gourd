@@ -66,13 +66,20 @@ final class FrontAppStore: ObservableObject {
     /// **夹取后**的历史上限（`limitRange` 3…8）：视图读它，不再自己夹（口径 3）。
     private(set) var recentLimit = FrontAppHistory.defaultLimit
 
+    /// **运行名单的代次**（2026-10-11 / p13b 修复）：`switcherApps` 是**现取**的 computed 属性，
+    /// 而视图只在 store 发布时才重算它——**启动 / 退出一个应用不改 `current` / `recent`**
+    /// （只有「前台变了」才改），此前因此没有任何人叫醒视图：退出的应用会一直留在格子里、
+    /// 新开的要等下一次切换才出现。这里代次 +1 只为发一次 `objectWillChange`，
+    /// 读它的只有视图的重算（值本身不含语义）。
+    @Published private(set) var runningGeneration = 0
+
     private let config: ConfigHandle
     private let logger: ModuleLogger
     /// 「取所有正在运行的 App」的**注入点**（先给默认值：生产走 `NSWorkspace`；用例给假体，见文件末尾）。
     private let runningAppsProvider: FrontAppRunningAppsProvider
 
-    /// 观察者 token（非 nil = 已订阅；`deactivate()` 置回 nil，因此摘了还能再 `start`）。
-    private var activationToken: NSObjectProtocol?
+    /// 观察者 token（`deactivate()` 清空，因此摘了还能再 `start`）。
+    private var workspaceTokens: [NSObjectProtocol] = []
     /// 本应用的 bundleID（`excludingSelf` 的判据；nil = 本应用没有 bundleID，那时不排除任何东西）。
     private var selfBundleID: String?
     /// id → 应用包路径：映射快照时记下——`icon(forFile:)` 要的是路径，而快照里只有 bundleID / pid。
@@ -118,7 +125,7 @@ final class FrontAppStore: ObservableObject {
     /// 无论来源是参数还是 config，**夹取只在这里做一次**（口径 3，`FrontAppHistory.clampedLimit`）。
     /// 初值取 `NSWorkspace.shared.frontmostApplication`：模块刚开就要有东西可画，不等第一次切换。
     func start(selfBundleID: String?, maxRecentApps: Int? = nil) {
-        guard activationToken == nil else { return }
+        guard workspaceTokens.isEmpty else { return }
         self.selfBundleID = selfBundleID
 
         let raw = maxRecentApps ?? config.get("maxRecentApps", as: Int.self) ?? FrontAppHistory.defaultLimit
@@ -134,9 +141,11 @@ final class FrontAppStore: ObservableObject {
     /// 只摘订阅，不清 `current` / `recent`：重新 `start` 时初值会把 `current` 换成当下的前台应用，
     /// 而"刚才切过谁"在模块关掉再打开之间仍然成立（不持久化，只活在本次运行的内存里）。
     func deactivate() {
-        guard let token = activationToken else { return }
-        NSWorkspace.shared.notificationCenter.removeObserver(token)
-        activationToken = nil
+        guard !workspaceTokens.isEmpty else { return }
+        for token in workspaceTokens {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        workspaceTokens.removeAll()
         logger.info("已摘前台变化观察者")
     }
 
@@ -144,19 +153,52 @@ final class FrontAppStore: ObservableObject {
 
     /// 点一个小图标 = 把那个应用切到前台（§机制三）。
     ///
-    /// **两条失败路径都记 `warn` 日志**（2026-09-30 起，D-04）：进程已退出（应用重启后 pid 变了、
-    /// 或它在我们取完表之后才退出）→ 找不到 `NSRunningApplication`；进程还在但系统拒绝 `activate()`。
-    /// 这两种都**不报错、不弹窗**，只在日志里留下一条可以事后追溯的记录——"点了没反应，日志里也
-    /// 没有"是上一版最难查的一种状态。
+    /// **2026-10-11 / p13b 的两处修复**（用户：「有的应用点击会打开对应的应用，有的就没反应」——
+    /// 上屏实测的根因有两条，见 docs/38 §已知限制 9）：
+    ///
+    /// 1. **`activate()` → `activate(options: [.activateAllWindows])`**：无参那一档只「让这个应用
+    ///    成为前台」，**不动它最小化的窗口**——实测窗口在 0 个（最小化 / 收在别的空间）的应用点了
+    ///    跟没点一样（菜单栏换了、屏幕上什么都不出现）。带 `.activateAllWindows` 会把它的窗口
+    ///    一起提到前面（最小化的也还原），这才是「切过去」的完整语义；
+    /// 2. **进程已不在时不再只记一条日志**：那条路径原先什么都不做（用户看到的就是「没反应」），
+    ///    现在按记录的包路径**重新打开**它（Dock 点一个没在跑的应用就是这个行为）。pid 被别的进程
+    ///    复用的情况同样走这一档——**先比 bundleID**，对不上就当成「已经不在了」。
+    ///
+    /// **失败路径仍然只记日志、不弹窗**（2026-09-30 起，D-04）：拿不到包路径、`open` 也失败时
+    /// 用户看到的是「点了没反应」，但那一条一定在日志里——"没反应且日志里也没有"是最难查的状态。
     func activate(_ snapshot: FrontAppSnapshot) {
-        guard let app = NSRunningApplication(processIdentifier: snapshot.pid) else {
-            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——进程已不在")
-            return
-        }
-        if app.activate() {
-            logger.info("激活：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）")
-        } else {
-            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——系统拒绝了 activate()")
+        let running = NSRunningApplication(processIdentifier: snapshot.pid)
+        let alive = running.map {
+            FrontAppSwitcher.isSameApp(
+                snapshotBundleID: snapshot.bundleID,
+                runningBundleID: $0.bundleIdentifier
+            )
+        } ?? false
+        let path = bundlePaths[snapshot.id]
+
+        switch FrontAppSwitcher.activationRoute(appAlive: alive, hasBundlePath: path != nil) {
+        case .activate:
+            guard let running else { return }
+            if running.activate(options: [.activateAllWindows]) {
+                logger.info("激活：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）")
+            } else {
+                logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——系统拒绝了 activate()")
+            }
+        case .reopen:
+            guard let path else { return }
+            let url = URL(fileURLWithPath: path)
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] app, error in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let error {
+                        self.logger.warn("重新打开失败：\(snapshot.name)（\(snapshot.id)）——\(error.localizedDescription)")
+                    } else {
+                        self.logger.info("重新打开：\(snapshot.name)（\(snapshot.id) pid \(app?.processIdentifier ?? -1)）——原先那一份已退出")
+                    }
+                }
+            }
+        case .nothingToDo:
+            logger.warn("激活失败：\(snapshot.name)（\(snapshot.id) pid \(snapshot.pid)）——进程已不在，且没有可用的包路径")
         }
     }
 
@@ -194,24 +236,46 @@ final class FrontAppStore: ObservableObject {
         }
     }
 
-    /// 订阅前台变化（`queue: .main` → 回调已在主线程；写法照 `DynamicIsland/DynamicIslandApp.swift:214-219`
-    /// 的既有先例：`userInfo` 里取 `NSRunningApplication`）。
+    /// 订阅**三条**工作区通知（`queue: .main` → 回调已在主线程；写法照
+    /// `DynamicIsland/DynamicIslandApp.swift:214-219` 的既有先例：`userInfo` 里取 `NSRunningApplication`）。
+    ///
+    /// - `didActivateApplicationNotification`：切换 → 更新 `current` / `recent`（原有那条）；
+    /// - `didLaunchApplicationNotification` / `didTerminateApplicationNotification`：**只叫醒视图**
+    ///   （`runningGeneration` +1）。2026-10-11 / p13b 补：`switcherApps` 是现取的 computed，
+    ///   但视图只在 store 发布时重算——应用启动 / 退出不改 `current` / `recent`，
+    ///   此前因此没人叫醒视图：退出的应用留在格子里（点了没反应）、新开的要等下一次切换才出现。
+    ///   退出的若正是 `current`，顺手清空它（新前台马上会由 `didActivate` 顶上）。
     private func observeActivations() {
-        let token = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
-                return
+        let center = NSWorkspace.shared.notificationCenter
+        func observe(_ name: NSNotification.Name, _ body: @escaping (NSRunningApplication?) -> Void) {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { notification in
+                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                // `queue: .main` 保证已在主线程，类型层的 `@MainActor` 由此落地（同 `TerminalManager` 的先例）。
+                MainActor.assumeIsolated { body(app) }
             }
-            // `queue: .main` 保证已在主线程，类型层的 `@MainActor` 由此落地（同 `TerminalManager` 的先例）。
-            MainActor.assumeIsolated {
-                self?.handleActivation(of: app)
-            }
+            workspaceTokens.append(token)
         }
-        activationToken = token
-        logger.info("已订阅前台变化（didActivateApplicationNotification）")
+
+        observe(NSWorkspace.didActivateApplicationNotification) { [weak self] app in
+            guard let app else { return }
+            self?.handleActivation(of: app)
+        }
+        observe(NSWorkspace.didLaunchApplicationNotification) { [weak self] _ in
+            self?.handleRunningSetChange(terminated: nil)
+        }
+        observe(NSWorkspace.didTerminateApplicationNotification) { [weak self] app in
+            self?.handleRunningSetChange(terminated: app)
+        }
+        logger.info("已订阅工作区通知（激活 / 启动 / 退出，共 \(workspaceTokens.count) 条）")
+    }
+
+    /// 运行名单变了（启动 / 退出）：叫醒视图重算 `switcherApps`；退出的是当前前台时顺手清空。
+    private func handleRunningSetChange(terminated: NSRunningApplication?) {
+        if FrontAppSwitcher.clearsCurrent(terminatedPid: terminated?.processIdentifier, currentPid: current?.pid) {
+            logger.info("前台应用退出：\(current?.name ?? "?")——current 清空，等系统切下一个")
+            current = nil
+        }
+        runningGeneration &+= 1
     }
 
     /// 一次前台变化：映射 → 排除自身 → 发布（`current` 与 `recent` 同一份快照，口径 2）。
@@ -305,6 +369,46 @@ typealias FrontAppRunningAppsProvider = @MainActor () -> [FrontAppRunningApp]
 /// **当前应用 → `recent` 里的次序 → 名称（本地化比较）→ pid**；最后一项只为"稳定"兜底
 /// （Swift 的 `sorted` 不保证稳定，同名同 id 时不能让两轮渲染给出不同次序）。
 enum FrontAppSwitcher {
+
+    // MARK: 点一格之后该做什么（p13b / 2026-10-11）
+
+    /// 点一格的**三种结局**（纯值，用例直接钉）。
+    ///
+    /// 用户 2026-10-11 的反馈是「有的应用点击会打开对应的应用，有的就没反应」——
+    /// 上屏实测两条根因（docs/38 §已知限制 9）：① 无参 `activate()` 不动最小化的窗口（窗口数为 0
+    /// 的应用点了跟没点一样）；② 进程已不在时旧实现什么都不做。本枚举把「该做哪件事」写成一个
+    /// 可测的判定，`FrontAppStore.activate(_:)` 只负责执行：
+    enum ActivationRoute: Equatable {
+        /// 进程还在、且那个 pid 仍是同一个应用 → `activate(options: [.activateAllWindows])`
+        /// （把它的窗口一起提到前面，最小化的也还原）。
+        case activate
+        /// 进程已不在 / pid 已被别的应用拿走，但知道它的包路径 → **重新打开**（Dock 点没在跑的应用
+        /// 就是这个行为）。
+        case reopen
+        /// 进程已不在、又没有包路径（命令行工具那类）→ 什么都做不了（只记一条日志）。
+        case nothingToDo
+    }
+
+    /// 判据：**进程还在就切过去**；不在了就看有没有包路径。
+    static func activationRoute(appAlive: Bool, hasBundlePath: Bool) -> ActivationRoute {
+        if appAlive { return .activate }
+        return hasBundlePath ? .reopen : .nothingToDo
+    }
+
+    /// pid 复用的判据（纯函数）：退出后新起的进程可能拿到同一个 pid，那时
+    /// `NSRunningApplication(processIdentifier:)` 会给出**别的应用**——把它的 bundleID 与快照比，
+    /// 对不上就当成「已经不在了」。快照没有 bundleID（命令行工具那类）时只认 pid。
+    static func isSameApp(snapshotBundleID: String?, runningBundleID: String?) -> Bool {
+        guard let expected = snapshotBundleID else { return true }
+        return runningBundleID == expected
+    }
+
+    /// 退出的那个应用是不是**当前前台**（纯函数）：是就把 `current` 清掉（新的前台马上由
+    /// `didActivate` 顶上，留着一个已退出的 pid 会让格子里第一位永远是点不动的幽灵）。
+    static func clearsCurrent(terminatedPid: pid_t?, currentPid: pid_t?) -> Bool {
+        guard let terminatedPid, let currentPid else { return false }
+        return terminatedPid == currentPid
+    }
 
     /// 条目 → 可画的 App 列表。`current` / `recent` / `selfBundleID` 都从参数进来（不读 store），
     /// 因此用例能用手造值驱动全部边界。

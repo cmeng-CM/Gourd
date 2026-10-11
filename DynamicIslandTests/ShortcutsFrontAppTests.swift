@@ -829,6 +829,100 @@ final class ShortcutsFrontAppTests: XCTestCase {
         store.deactivate()
     }
 
+    // MARK: - p13b：点一格的三种结局 + 运行名单的代次（2026-10-11）
+
+    /// **点一格的三种结局**（`FrontAppSwitcher.activationRoute`，纯函数）：进程还在就切过去；
+    /// 不在了但有包路径就**重新打开**；都没有才什么都不做。
+    ///
+    /// 用户 2026-10-11：「有的应用点击会打开对应的应用，有的就没反应」——上屏实测的两条根因
+    /// （docs/38 §已知限制 9）：无参 `activate()` **不动最小化的窗口**（窗口数 0 的应用点了跟没点
+    /// 一样）、进程已不在时旧实现什么都不做。判据本身钉在这里，执行（AppKit 那两个调用）在 store 里。
+    func testFrontAppActivationRouteDecidesActivateReopenOrNothing() {
+        XCTAssertEqual(
+            FrontAppSwitcher.activationRoute(appAlive: true, hasBundlePath: true), .activate,
+            "进程还在 → 切过去（哪怕没有包路径：激活不需要路径）"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.activationRoute(appAlive: true, hasBundlePath: false), .activate,
+            "进程还在、路径未知（快照不是本进程造的）→ 照样切"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.activationRoute(appAlive: false, hasBundlePath: true), .reopen,
+            "进程已不在但有包路径 → 重新打开（Dock 点没在跑的应用就是这个行为）"
+        )
+        XCTAssertEqual(
+            FrontAppSwitcher.activationRoute(appAlive: false, hasBundlePath: false), .nothingToDo,
+            "都没了 → 什么都做不了（只记一条日志，不假装成功）"
+        )
+    }
+
+    /// **pid 复用的防护**（`FrontAppSwitcher.isSameApp`，纯函数）：退出后新起的进程可能拿到同一个
+    /// pid——那时 `NSRunningApplication(processIdentifier:)` 给的是**别的应用**，必须按 bundleID 比对
+    /// 才算「还是它」。
+    func testFrontAppPidReuseGuardComparesBundleIDs() {
+        XCTAssertTrue(
+            FrontAppSwitcher.isSameApp(snapshotBundleID: "com.apple.Safari", runningBundleID: "com.apple.Safari"),
+            "同一个 bundleID → 还是它"
+        )
+        XCTAssertFalse(
+            FrontAppSwitcher.isSameApp(snapshotBundleID: "com.apple.Safari", runningBundleID: "com.apple.finder"),
+            "pid 被别的应用拿走 → **不是**它（走重新打开那一档，绝不误切到别人）"
+        )
+        XCTAssertFalse(
+            FrontAppSwitcher.isSameApp(snapshotBundleID: "com.apple.Safari", runningBundleID: nil),
+            "那个 pid 现在是个没有 bundleID 的进程（命令行工具）→ 不是它"
+        )
+        XCTAssertTrue(
+            FrontAppSwitcher.isSameApp(snapshotBundleID: nil, runningBundleID: "com.apple.Safari"),
+            "快照本来就没有 bundleID（命令行工具那类）→ 只认 pid"
+        )
+    }
+
+    /// **退出的应用若正是当前前台就清空 `current`**（纯函数）：留着一个已退出的 pid 会让格子里
+    /// 第一位永远是点不动的幽灵。
+    func testFrontAppTerminationClearsCurrentOnlyForTheSamePid() {
+        XCTAssertTrue(FrontAppSwitcher.clearsCurrent(terminatedPid: 101, currentPid: 101), "同一个 pid → 清")
+        XCTAssertFalse(FrontAppSwitcher.clearsCurrent(terminatedPid: 101, currentPid: 202), "别的应用退出 → 不动")
+        XCTAssertFalse(FrontAppSwitcher.clearsCurrent(terminatedPid: nil, currentPid: 101), "退出的事件没有 pid → 不动")
+        XCTAssertFalse(FrontAppSwitcher.clearsCurrent(terminatedPid: 101, currentPid: nil), "当前为空 → 无事")
+    }
+
+    /// **启动 / 退出会叫醒视图**（p13b 补的两条观察者）：`switcherApps` 是现取的 computed，
+    /// 但视图只在 store 发布时重算——应用启动 / 退出不改 `current` / `recent`，此前因此没人叫醒
+    /// 视图：退出的应用会一直留在格子里（点了没反应）、新开的要等下一次切换才出现。
+    ///
+    /// 用**真通知**驱动（往 `NSWorkspace.shared.notificationCenter` 发一条），因此连带钉住
+    /// 「订阅挂在对的中心上、且在主队列上同步执行」这两件事；用例不碰任何真应用进程。
+    func testFrontAppLaunchAndTerminateNotificationsBumpTheRunningGeneration() {
+        let stub = RunningAppsStub(entries: [runningApp("Safari", "com.apple.Safari", pid: 101)])
+        let store = FrontAppStore(
+            config: RecordingConfigHandle(schema: ["maxRecentApps"]),
+            logger: frontAppLogger(),
+            runningApps: stub.provide
+        )
+        store.start(selfBundleID: "com.cmeng.gourd.test", maxRecentApps: 5)
+        defer { store.deactivate() }
+
+        let before = store.runningGeneration
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didLaunchApplicationNotification, object: nil
+        )
+        XCTAssertEqual(store.runningGeneration, before + 1, "应用启动 → 代次 +1（视图据此重算格名单）")
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didTerminateApplicationNotification, object: nil
+        )
+        XCTAssertEqual(store.runningGeneration, before + 2, "应用退出同样 +1")
+
+        // 摘了观察者之后不再涨（`deactivate()` 幂等的那条契约的另一面）
+        store.deactivate()
+        let afterDetach = store.runningGeneration
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didLaunchApplicationNotification, object: nil
+        )
+        XCTAssertEqual(store.runningGeneration, afterDetach, "摘了观察者就不再被叫醒")
+    }
+
     // MARK: - T4：前台应用模块（manifest / 内容分发 / 块宽回落）
 
     /// manifest 逐字段对齐 docs/22 §接口与数据形状 4：**只声明 `home`**、默认关、零权限、
@@ -921,8 +1015,13 @@ final class ShortcutsFrontAppTests: XCTestCase {
         XCTAssertEqual(FrontAppModule.homeZone, .environment, "p13：前台应用是环境带第二块（D-02）")
 
         // 注册表侧原样取给宿主（唯一的取法）：未注册 → nil；注册后 → 模块声明的那一份。
-        // 注册表是**单例**，用完 `deactivateAll()` 清干净（别的用例的 setUp 也清，这里不留尾）。
+        //
+        // **先显式清空注册表**（p13 起必须）：测试宿主就是**真应用**，它在启动时经
+        // `KernelBootstrap.bootstrap()` 把 `builtinModules`（今天含 `FrontAppModule`）注册过一遍——
+        // 不清的话「未注册 → nil」这一条得靠「别的用例的 setUp 先清过」这种**执行顺序**才成立
+        // （本类单独跑时必红）。注册表是单例，跑完 `deactivateAll()` 一样清干净，这里不留尾。
         let registry = ModuleRegistry.shared
+        await registry.deactivateAll()
         XCTAssertNil(registry.homeBlockWidth(for: FrontAppModule.moduleID), "未注册的 id → nil")
         registry.register([FrontAppModule.self], enabled: { _ in true })
         XCTAssertEqual(
