@@ -68,6 +68,7 @@ enum CalendarPanelAccess {
 
 /// 真实日历右栏。局部状态只描述控件呈现，所有记录与草稿均归共享会话。
 struct CalendarPanelPages: View {
+    @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var session: CalendarPanelSession
     @ObservedObject var manager: CalendarManager
     var onReturnSource: (CalendarPanelSource) -> Void
@@ -75,13 +76,23 @@ struct CalendarPanelPages: View {
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.showFullEventTitles) private var showFullEventTitles
     @Default(.autoScrollToNextEvent) private var autoScrollToNextEvent
-    @State private var ownerID = UUID()
+    @StateObject private var lifecycle: CalendarEditorLifecycle
     @FocusState private var focusedField: Field?
     @State private var datePopover: DateField?
     @State private var deleteConfirmation = false
     @State private var targets: [CalendarModel] = []
     @State private var authorizationRevision = 0
     @State private var hoveredID: String?
+
+    init(session: CalendarPanelSession, manager: CalendarManager,
+         onReturnSource: @escaping (CalendarPanelSource) -> Void) {
+        self.session = session
+        self.manager = manager
+        self.onReturnSource = onReturnSource
+        _lifecycle = StateObject(wrappedValue: CalendarEditorLifecycle(session: session))
+    }
+
+    private var ownerID: UUID { lifecycle.ownerID }
 
     private enum Field: Hashable { case title, startTime, endTime, location, notes }
     private enum DateField: String, Identifiable { case start, end; var id: String { rawValue } }
@@ -127,21 +138,23 @@ struct CalendarPanelPages: View {
         .font(.callout)
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(CalendarEditorWindowReader(lifecycle: lifecycle).frame(width: 0, height: 0))
+        .onAppear { lifecycle.connect(to: vm) }
         .onChange(of: focusedField) { _, value in
-            session.setEditorFocus(value != nil, ownerID: ownerID)
+            lifecycle.setEditorFocus(value != nil)
         }
         .onChange(of: datePopover) { _, value in
-            session.setDatePopoverPresented(value != nil, ownerID: ownerID)
+            lifecycle.setDatePopoverPresented(value != nil)
         }
         .onChange(of: session.route) { _, _ in
             focusedField = nil
             datePopover = nil
             deleteConfirmation = false
-            session.clearOwnership(ownerID)
+            lifecycle.clearLocalInput()
         }
         .onChange(of: session.detailEvent?.id) { _, _ in deleteConfirmation = false }
         .task(id: session.draft?.kind) { await loadTargets() }
-        .onDisappear { session.clearOwnership(ownerID) }
+        .onDisappear { lifecycle.stop() }
         .onExitCommand { escape() }
     }
 
@@ -196,6 +209,7 @@ struct CalendarPanelPages: View {
             .scrollPosition(id: $session.calendarScrollAnchor, anchor: .top)
             .scrollIndicators(.never)
             .accessibilityIdentifier("calendar-list-scroll")
+            .onHover { lifecycle.setScrolling($0) }
             .onAppear { restoreListAnchor() }
             .onChange(of: events.isEmpty) { _, empty in if !empty { restoreListAnchor() } }
         }
@@ -290,6 +304,7 @@ struct CalendarPanelPages: View {
             .padding(.trailing, 4)
         }
         .accessibilityIdentifier("calendar-detail-scroll")
+        .onHover { lifecycle.setScrolling($0) }
     }
 
     private func displayDate(_ date: Date, allDay: Bool) -> String {
@@ -346,6 +361,7 @@ struct CalendarPanelPages: View {
             }
         }
         .accessibilityIdentifier("calendar-editor-scroll")
+        .onHover { lifecycle.setScrolling($0) }
         .task { focusedField = .title }
     }
 
@@ -431,7 +447,7 @@ struct CalendarPanelPages: View {
             } else {
                 CalendarPanelTargetPicker(targets: targets, selection: Binding(
                     get: { session.draft?.calendarID }, set: { session.draft?.calendarID = $0 }
-                ), session: session, ownerID: ownerID)
+                ), session: session, ownerID: ownerID, lifecycle: lifecycle)
                 .frame(height: 24).accessibilityIdentifier("calendar-target")
             }
         }
@@ -571,7 +587,7 @@ struct CalendarPanelPages: View {
         else if session.pendingConfirmation != nil { session.dismissConfirmation() }
         else if deleteConfirmation { deleteConfirmation = false }
         else if session.route != .list { goBack() }
-        // 列表 Esc 由宿主生命周期收回，T5 接入；此处不创建窗口或自行关闭。
+        else { vm.close() }
     }
 }
 
@@ -581,6 +597,7 @@ private struct CalendarPanelTargetPicker: NSViewRepresentable {
     @Binding var selection: String?
     var session: CalendarPanelSession
     var ownerID: UUID
+    var lifecycle: CalendarEditorLifecycle
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -616,7 +633,7 @@ private struct CalendarPanelTargetPicker: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSPopUpButton, coordinator: Coordinator) {
-        coordinator.parent.session.setOwnedMenuCount(0, ownerID: coordinator.parent.ownerID)
+        coordinator.parent.lifecycle.setOwnedMenuCount(0)
         nsView.menu?.delegate = nil
     }
 
@@ -627,7 +644,7 @@ private struct CalendarPanelTargetPicker: NSViewRepresentable {
             guard let id = sender.selectedItem?.representedObject as? String, !id.isEmpty else { return }
             parent.selection = id
         }
-        func menuWillOpen(_ menu: NSMenu) { parent.session.setOwnedMenuCount(1, ownerID: parent.ownerID) }
-        func menuDidClose(_ menu: NSMenu) { parent.session.setOwnedMenuCount(0, ownerID: parent.ownerID) }
+        func menuWillOpen(_ menu: NSMenu) { parent.lifecycle.setOwnedMenuCount(1) }
+        func menuDidClose(_ menu: NSMenu) { parent.lifecycle.setOwnedMenuCount(0) }
     }
 }

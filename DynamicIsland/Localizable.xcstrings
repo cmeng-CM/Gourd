@@ -1,6 +1,70 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "calendar.panel.quitTitle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit Gourd?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退出壶中天？"
+          }
+        }
+      }
+    },
+    "calendar.panel.quitQuestion": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You have an unsaved draft. Save it before quitting?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有未保存的草稿。是否保存后退出？"
+          }
+        }
+      }
+    },
+    "calendar.panel.saveAndQuit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save and Quit"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存并退出"
+          }
+        }
+      }
+    },
+    "calendar.panel.discardAndQuit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard and Quit"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "放弃并退出"
+          }
+        }
+      }
+    },
     "calendar.panel.back": {
       "localizations": {
         "en": {

@@ -8598,6 +8598,235 @@ final class CalendarQuickAddTests: XCTestCase {
 
 @MainActor
 final class CalendarInteractionTests: XCTestCase {
+    func testLifecycleViewingAndDirtyDraftAloneDoNotProtectAutoClose() {
+        let session = panelSession(service: panelBackend())
+        var protected = false
+        var hoverChecks = 0
+        let lifecycle = CalendarEditorLifecycle(session: session, setProtection: { active, _ in protected = active },
+                                                recheckHover: { hoverChecks += 1 })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Retained input"
+        lifecycle.setEditorFocus(false)
+        XCTAssertTrue(session.hasDirtyDraft)
+        XCTAssertFalse(protected)
+        lifecycle.setEditorFocus(true)
+        XCTAssertTrue(protected)
+        lifecycle.setEditorFocus(false)
+        XCTAssertFalse(protected)
+        XCTAssertEqual(hoverChecks, 1, "释放输入保护后复查 hover")
+        XCTAssertEqual(session.draft?.title, "Retained input")
+        lifecycle.stop()
+    }
+
+    func testLifecycleLocalTeardownKeepsOtherOwnerAndUnrelatedTokens() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Two windows"
+        let unrelated = UUID()
+        var protection: Set<UUID> = [unrelated]
+        var scrolling: Set<UUID> = [unrelated]
+        let lifecycleA = CalendarEditorLifecycle(session: session, setProtection: { active, token in
+            if active { protection.insert(token) } else { protection.remove(token) }
+        }, setScroll: { active, token in
+            if active { scrolling.insert(token) } else { scrolling.remove(token) }
+        })
+        let lifecycleB = CalendarEditorLifecycle(session: session)
+        lifecycleA.setEditorFocus(true)
+        lifecycleA.setScrolling(true)
+        lifecycleB.setEditorFocus(true)
+        lifecycleB.setOwnedMenuCount(1)
+        lifecycleB.setDatePopoverPresented(true)
+        XCTAssertEqual(protection.count, 2)
+        XCTAssertEqual(scrolling.count, 2)
+        lifecycleA.stop()
+        lifecycleA.stop()
+        XCTAssertEqual(protection, [unrelated])
+        XCTAssertEqual(scrolling, [unrelated])
+        XCTAssertTrue(session.editorHasFocus)
+        XCTAssertEqual(session.ownedMenuCount, 1)
+        XCTAssertTrue(session.datePopoverPresented)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft?.title, "Two windows")
+        lifecycleB.stop()
+        XCTAssertFalse(session.shouldProtectAutoClose)
+    }
+
+    func testLifecycleExternalDepartureSuspendsAllOwnersAndReleasesOwnTokens() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Keep on departure"
+        let original = session.draft
+        var protected = false
+        var scrolling = false
+        let lifecycle = CalendarEditorLifecycle(session: session, setProtection: { active, _ in protected = active },
+                                                setScroll: { active, _ in scrolling = active })
+        lifecycle.setEditorFocus(true)
+        lifecycle.setScrolling(true)
+        session.setEditorFocus(true, ownerID: UUID())
+        lifecycle.suspendForExternalDeparture()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertFalse(session.editorHasFocus)
+        XCTAssertFalse(protected)
+        XCTAssertFalse(scrolling)
+        XCTAssertEqual(session.draft, original)
+        session.resumeDraft()
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft, original)
+        lifecycle.stop()
+    }
+
+    func testLifecycleLockSuspendsBeforeClosingEveryPanelAndPreservesDraft() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Locked draft"
+        session.setEditorFocus(true, ownerID: UUID())
+        var closedPanels: [Int] = []
+        CalendarEditorLifecycle.closeForLock(session: session, closePanels: (0..<3).map { panel in
+            {
+                XCTAssertEqual(session.route, .list)
+                XCTAssertFalse(session.editorHasFocus)
+                closedPanels.append(panel)
+            }
+        })
+        XCTAssertEqual(closedPanels, [0, 1, 2])
+        XCTAssertEqual(session.draft?.title, "Locked draft")
+    }
+
+    func testTerminationControllerSerializesSavePromptAndRestartAfterSuccess() async {
+        let backend = panelBackend()
+        let started = expectation(description: "save started")
+        var gate: CheckedContinuation<Void, Never>?
+        let session = panelSession(service: backend, save: { input, id in
+            await withCheckedContinuation { gate = $0; started.fulfill() }
+            return try await backend.saveEvent(input: input, eventID: id)
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Quit once"
+        let controller = CalendarTerminationController()
+        var prompts = 0
+        var restarts = 0
+        controller.requestRestart()
+        let first = Task { await controller.resolve(session: session, choose: { prompts += 1; return .save }, restart: {
+            XCTAssertFalse(session.hasDirtyDraft)
+            XCTAssertEqual(backend.writeAttempts, 1)
+            restarts += 1
+        }) }
+        await fulfillment(of: [started], timeout: 2)
+        let second = Task { await controller.resolve(session: session, choose: { prompts += 1; return .discard }, restart: { restarts += 1 }) }
+        await Task.yield()
+        XCTAssertEqual(restarts, 0, "裁决通过前不能启动第二实例")
+        gate?.resume()
+        let firstAllowed = await first.value
+        let secondAllowed = await second.value
+        XCTAssertTrue(firstAllowed)
+        XCTAssertTrue(secondAllowed)
+        XCTAssertEqual(prompts, 1)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertEqual(restarts, 1)
+        XCTAssertFalse(controller.restartPending)
+    }
+
+    func testTerminationControllerCancellationAndSaveFailureClearPendingRestart() async {
+        for failSave in [false, true] {
+            let backend = panelBackend()
+            let session = panelSession(service: backend)
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Keep after refused quit"
+            if failSave { backend.writeFailure = .readOnlyCalendar }
+            let controller = CalendarTerminationController()
+            var restarts = 0
+            controller.requestRestart()
+            let allowed = await controller.resolve(session: session, choose: { failSave ? .save : .cancel }, restart: { restarts += 1 })
+            XCTAssertFalse(allowed)
+            XCTAssertFalse(controller.restartPending)
+            XCTAssertEqual(restarts, 0)
+            XCTAssertEqual(session.draft?.title, "Keep after refused quit")
+            XCTAssertEqual(backend.writeAttempts, failSave ? 1 : 0)
+        }
+    }
+
+    func testTerminationControllerWaitsForExistingOperationThenRechecksDraft() async throws {
+        let backend = panelBackend()
+        let started = expectation(description: "completion started")
+        var gate: CheckedContinuation<Void, Never>?
+        let session = panelSession(service: backend, complete: { id, completed in
+            await withCheckedContinuation { gate = $0; started.fulfill() }
+            return try await backend.completeReminder(id: id, completed: completed)
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Still unsaved"
+        let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
+        let completing = Task { await session.complete(reminder, completed: true) }
+        await fulfillment(of: [started], timeout: 2)
+        var prompts = 0
+        let controller = CalendarTerminationController()
+        let quitting = Task { await controller.resolve(session: session, choose: {
+            XCTAssertFalse(session.isSubmitting)
+            XCTAssertTrue(session.hasDirtyDraft)
+            prompts += 1
+            return .cancel
+        }) }
+        await Task.yield()
+        XCTAssertEqual(prompts, 0)
+        gate?.resume()
+        let completed = await completing.value
+        let allowed = await quitting.value
+        XCTAssertTrue(completed)
+        XCTAssertFalse(allowed)
+        XCTAssertEqual(prompts, 1)
+        XCTAssertEqual(backend.writeAttempts, 1, "退出只等待已有操作，不重复完成或保存")
+        XCTAssertEqual(session.draft?.title, "Still unsaved")
+    }
+
+    func testTerminationControllerFailedExistingSubmissionRefusesQuitWithoutPromptOrRestart() async {
+        let backend = panelBackend()
+        let started = expectation(description: "failing save started")
+        var gate: CheckedContinuation<Void, Never>?
+        let session = panelSession(service: backend, save: { input, id in
+            await withCheckedContinuation { gate = $0; started.fulfill() }
+            return try await backend.saveEvent(input: input, eventID: id)
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Pending failed save"
+        let saving = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        let controller = CalendarTerminationController()
+        controller.requestRestart()
+        var prompts = 0
+        var restarts = 0
+        let quitting = Task { await controller.resolve(session: session, choose: { prompts += 1; return .save }, restart: { restarts += 1 }) }
+        await Task.yield()
+        backend.writeFailure = .readOnlyCalendar
+        gate?.resume()
+        let saved = await saving.value
+        let allowed = await quitting.value
+        XCTAssertFalse(saved)
+        XCTAssertFalse(allowed)
+        XCTAssertEqual(prompts, 0)
+        XCTAssertEqual(restarts, 0)
+        XCTAssertFalse(controller.restartPending)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertNotNil(session.draft)
+    }
+
+    #if DEBUG
+    func testFixtureReadinessNeedsBothBootstrapAndRealWindowsAndPublishesOnlyAfterOpen() {
+        for windowsFirst in [false, true] {
+            let readiness = CalendarFixtureReadiness()
+            XCTAssertFalse(readiness.beginOpening())
+            if windowsFirst { readiness.didCreateWindows() } else { readiness.didBootstrap() }
+            XCTAssertFalse(readiness.beginOpening())
+            if windowsFirst { readiness.didBootstrap() } else { readiness.didCreateWindows() }
+            XCTAssertTrue(readiness.beginOpening())
+            XCTAssertFalse(readiness.ready)
+            XCTAssertFalse(readiness.beginOpening())
+            readiness.didOpen()
+            XCTAssertTrue(readiness.ready)
+            XCTAssertFalse(readiness.beginOpening())
+        }
+    }
+    #endif
+
     private var testCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!

@@ -311,6 +311,10 @@ struct ContentView: View {
     @EnvironmentObject var webcamManager: WebcamManager
 
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
+    @ObservedObject private var calendarSession = CalendarPanelSession.shared
+    #if DEBUG
+    @ObservedObject private var calendarFixtureReadiness = CalendarFixtureReadiness.shared
+    #endif
     @ObservedObject var musicManager = MusicManager.shared
     @ObservedObject var timerManager = TimerManager.shared
     @ObservedObject var reminderManager = ReminderLiveActivityManager.shared
@@ -492,6 +496,7 @@ struct ContentView: View {
     
 
     @State private var hoverTask: Task<Void, Never>?
+    @State private var calendarSubmissionToken = UUID()
     @State private var isHovering: Bool = false
     /// 面板与指针**最后一次接触**时的窗口 rect（p6-ui-polish 回归修复；判据见文件级
     /// `shouldHonorHoverExit`）。刷新点只有两处：隐藏态轮询（指针在窗口内时）与
@@ -924,6 +929,16 @@ struct ContentView: View {
             .padding(.bottom, isIslandMode ? dynamicIslandShadowInset : 0)
             .padding(.top, pillTopOffset)
             .accessibilityIdentifier("GourdNotch")
+            #if DEBUG
+            .overlay(alignment: .topLeading) {
+                if AppRuntimeEnvironment.isUITesting, calendarFixtureReadiness.ready, vm.notchState == .open {
+                    Color.clear.frame(width: 1, height: 1)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("calendar-fixture-ready"))
+                        .accessibilityIdentifier("calendar-fixture-ready")
+                }
+            }
+            #endif
     }
 
     /// 主面板底：按 `notchPanelBackgroundStyle` 三选一（2026-09-28 用户反馈「看下这个显示的内容
@@ -1461,6 +1476,7 @@ struct ContentView: View {
     private func installPrimaryRootLifecycleHandlers<Content: View>(on view: Content) -> some View {
         view
             .onAppear {
+                syncCalendarSubmissionProtection()
                 isMusicControlWindowSuppressed = vm.notchState != .closed
                     || lockScreenManager.isLocked
                     || isMusicHUDDeferredAfterUnlock
@@ -1480,6 +1496,7 @@ struct ContentView: View {
                 syncStickyTerminalOutsideClickMonitor()
             }
             .onChange(of: vm.notchState) { _, state in
+                syncCalendarSubmissionProtection()
                 if state == .open {
                     suppressMusicControlWindowUpdates()
                     cancelMusicControlWindowSync()
@@ -1488,6 +1505,13 @@ struct ContentView: View {
                     releaseMusicControlWindowUpdates(after: musicControlResumeDelay)
                     enqueueMusicControlWindowSync(forceRefresh: true, delay: 0.05)
                 }
+            }
+            .onChange(of: calendarSession.isSubmitting) { _, submitting in
+                syncCalendarSubmissionProtection()
+                if !submitting { vm.shouldRecheckHover.toggle() }
+            }
+            .onChange(of: calendarSession.route) { _, route in
+                if route == .editor { AppDelegate.shared?.cancelPendingNotchAutoClose() }
             }
             .onChange(of: musicControlWindowEnabled) { _, enabled in
                 if enabled {
@@ -2772,6 +2796,7 @@ struct ContentView: View {
     /// Cancels every long-lived task / event monitor this view owns. Called from
     /// `.onDisappear` and from `vm.onViewTeardown` on window close. Idempotent.
     private func performViewTeardown() {
+        vm.setAutoCloseSuppression(false, token: calendarSubmissionToken)
         hoverTask?.cancel()
         stopHoverClickMonitor()
         removeStickyTerminalClickMonitor()
@@ -2782,6 +2807,14 @@ struct ContentView: View {
         clearMusicControlVisibilityDeadline()
         musicControlSuppressionTask?.cancel()
         isHoveringClosedMusicWaveformControl = false
+    }
+
+    /// Survives CalendarPanelPages teardown/tab changes while the shared write is in flight.
+    private func syncCalendarSubmissionProtection() {
+        vm.setAutoCloseSuppression(calendarSession.isSubmitting && vm.notchState == .open, token: calendarSubmissionToken)
+        if calendarSession.isSubmitting || calendarSession.route == .editor {
+            AppDelegate.shared?.cancelPendingNotchAutoClose()
+        }
     }
 
     private func startHiddenEdgeHoverPolling() {
@@ -3148,7 +3181,7 @@ struct ContentView: View {
         // 手移开后补的那次 hover 复检（`hiddenEdgeHoverPolling`）同样读这条判据，因此松手瞬间
         // 也不会因为「光标还在面板外」而立刻收起——面板留在原地让用户看到结果，下一次真正的
         // hover 进入 / 离开照旧按原判据收起。
-        coordinator.firstLaunch || hasAnyActivePopovers() || vm.isAutoCloseSuppressed || ShelfSelectionModel.shared.isDragging || ClipboardManager.shared.isDraggingItem || SharingStateManager.shared.preventNotchClose || (Defaults[.terminalStickyMode] && coordinator.currentView == .terminal) || isPanelResizing
+        calendarSession.isSubmitting || coordinator.firstLaunch || hasAnyActivePopovers() || vm.isAutoCloseSuppressed || ShelfSelectionModel.shared.isDragging || ClipboardManager.shared.isDraggingItem || SharingStateManager.shared.preventNotchClose || (Defaults[.terminalStickyMode] && coordinator.currentView == .terminal) || isPanelResizing
     }
     
     // Helper to prevent rapid haptic feedback

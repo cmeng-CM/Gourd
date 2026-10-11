@@ -57,20 +57,7 @@ struct DynamicNotchApp: App {
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
             Button("Restart Gourd") {
-                guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
-
-                let workspace = NSWorkspace.shared
-
-                if let appURL = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
-                {
-
-                    let configuration = NSWorkspace.OpenConfiguration()
-                    configuration.createsNewApplicationInstance = true
-
-                    workspace.openApplication(at: appURL, configuration: configuration)
-                }
-
-                NSApplication.shared.terminate(self)
+                appDelegate.requestRestart()
             }
             Button("Quit", role: .destructive) {
                 NSApplication.shared.terminate(self)
@@ -106,7 +93,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var windows: [NSScreen: NSWindow] = [:]
     var viewModels: [NSScreen: DynamicIslandViewModel] = [:]
     var window: NSWindow?
-    let vm: DynamicIslandViewModel = .init()
+    let vm: DynamicIslandViewModel = AppDelegate.makeInitialViewModel()
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
     var whatsNewWindow: NSWindow?
     var timer: Timer?
@@ -127,8 +114,133 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var windowsHiddenForLock = false
     private var optionalShortcutHandlersRegistered = false
+    private let calendarTermination = CalendarTerminationController()
+    private var calendarTerminationTask: Task<Void, Never>?
     private weak var focusWithoutDevToolsMenuItem: NSMenuItem?
     private weak var focusUseDevToolsMenuItem: NSMenuItem?
+
+    private static var skipsExternalIntegrations: Bool {
+        AppRuntimeEnvironment.isUITesting || AppRuntimeEnvironment.isRunningTests
+    }
+
+    /// This expression runs before VM stored properties construct the shared coordinator/Timer bridge.
+    private static func makeInitialViewModel() -> DynamicIslandViewModel {
+        #if DEBUG
+        if AppRuntimeEnvironment.isUITesting {
+            guard let identifier = Bundle.main.bundleIdentifier,
+                  identifier.hasPrefix("com.cmeng.gourd.calendar-tests.") else {
+                preconditionFailure("Calendar UI fixtures require an isolated calendar-tests application bundle ID")
+            }
+            UserDefaults.standard.removePersistentDomain(forName: identifier)
+            UserDefaults.standard.set(false, forKey: "firstLaunch")
+            UserDefaults.standard.set(false, forKey: "showWhatsNew")
+            UserDefaults.standard.set(true, forKey: "alwaysShowTabs")
+            UserDefaults.standard.set(false, forKey: "openLastTabByDefault")
+            UserDefaults.standard.set(false, forKey: "hudReplacement")
+            UserDefaults.standard.set(NSScreen.main?.localizedName ?? "Unknown", forKey: "preferred_screen_name")
+            Defaults[.showOnAllDisplays] = false
+            Defaults[.automaticallySwitchDisplay] = true
+            Defaults[.enableMinimalisticUI] = false
+            Defaults[.hideNotchOption] = .never
+            Defaults[.hideNonNotchUntilHover] = false
+            Defaults[.openShelfByDefault] = false
+            Defaults[.enableClipboardManager] = false
+            Defaults[.calendarSelectionState] = .all
+            Defaults[.hideCompletedReminders] = false
+            Defaults[.hideAllDayEvents] = false
+            Defaults[.openNotchWidth] = 760
+            Defaults[.openNotchHeight] = 440
+            Defaults[.panelHeightMode] = "manual"
+            Defaults[.menubarIcon] = true
+            Defaults[.enableShortcuts] = false
+            Defaults[.enableRealTimeWaveform] = false
+            Defaults[.enableThirdPartyDDCIntegration] = false
+            Defaults[.enableBetterDisplayIntegration] = false
+            Defaults[.enableLunarIntegration] = false
+            Defaults[.mirrorSystemTimer] = false
+            Defaults[.showStandardMediaControls] = false
+            Defaults[.enableTimerFeature] = false
+            Defaults[.enableStatsFeature] = false
+            Defaults[.moduleEnableOverrides] = Dictionary(uniqueKeysWithValues: KernelBootstrap.builtinModules.map {
+                ($0.manifest.id, $0.manifest.id == CalendarModule.moduleID || $0.manifest.id == "com.cmeng.gourd.todos")
+            })
+            Defaults[.hiddenHomeModules] = []
+            Defaults[.hiddenPanelModules] = []
+            Defaults[.homeBlockOrder] = ["com.cmeng.gourd.todos": 0]
+            Defaults[.panelOrder] = [CalendarModule.moduleID: 0]
+        } else if AppRuntimeEnvironment.isRunningTests {
+            // A non-UI test host never reads Clock settings or changes persistent user preferences.
+            var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            for key in [Defaults.Keys.mirrorSystemTimer.name, Defaults.Keys.enableThirdPartyDDCIntegration.name,
+                        Defaults.Keys.enableBetterDisplayIntegration.name, Defaults.Keys.enableLunarIntegration.name] {
+                arguments[key] = false
+            }
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        }
+        #endif
+        return DynamicIslandViewModel()
+    }
+
+    func requestRestart() {
+        calendarTermination.requestRestart()
+        NSApp.terminate(self)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard calendarTerminationTask == nil else { return .terminateLater }
+        calendarTerminationTask = Task { @MainActor [weak self] in
+            guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
+            let allowed = await calendarTermination.resolve(session: .shared, choose: {
+                self.calendarTerminationChoice()
+            }, restart: {
+                // Start a replacement only after all writes and the user's quit decision succeed.
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.createsNewApplicationInstance = true
+                NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+            })
+            self.calendarTerminationTask = nil
+            sender.reply(toApplicationShouldTerminate: allowed)
+        }
+        return .terminateLater
+    }
+
+    private func calendarTerminationChoice() -> CalendarTerminationChoice {
+        let alert = NSAlert()
+        alert.messageText = String(localized: "calendar.panel.quitTitle")
+        alert.informativeText = String(localized: "calendar.panel.quitQuestion") + "\n" + (CalendarPanelSession.shared.draft?.title ?? "")
+        alert.addButton(withTitle: String(localized: "calendar.panel.saveAndQuit"))
+            .setAccessibilityIdentifier("calendar-quit-save")
+        alert.addButton(withTitle: String(localized: "calendar.panel.discardAndQuit"))
+            .setAccessibilityIdentifier("calendar-quit-discard")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+            .setAccessibilityIdentifier("calendar-quit-cancel")
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    #if DEBUG
+    private func openCalendarFixtureIfReady() {
+        guard AppRuntimeEnvironment.isUITesting, CalendarFixtureReadiness.shared.beginOpening() else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await calendarManager.reloadCalendarAndReminderLists()
+            await calendarManager.updateCurrentDate(CalendarInteractionFixtures.now)
+            CalendarPanelSession.shared.selectedDate = CalendarInteractionFixtures.now
+            coordinator.currentView = .home
+            vm.open()
+            let openedSize = vm.notchSize
+            updateWindowSizeIfNeeded()
+            adjustWindowPosition(changeAlpha: true)
+            // Positioning refreshes the closed geometry; keep the opened VM's real content size.
+            vm.notchSize = openedSize
+            CalendarFixtureReadiness.shared.didOpen()
+        }
+    }
+    #endif
     
     // Debouncing mechanism for window size updates
     private var windowSizeUpdateWorkItem: DispatchWorkItem?
@@ -282,11 +394,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // suppressing it, OSDUIHelper is SIGSTOP-frozen and the async restore in
         // enableSystemHUD() would not finish before the process dies. Resume it
         // synchronously here so it is never left frozen. (See issue #568.)
-        SystemOSDManager.resumeOSDUIHelperForTermination()
+        if !Self.skipsExternalIntegrations { SystemOSDManager.resumeOSDUIHelperForTermination() }
 
         // Cancel any pending window size updates
         windowSizeUpdateWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
+        tearDownAudioTapMusicObservers()
+        cancelPendingNotchAutoClose()
+        cancellables.removeAll()
         extensionXPCServiceHost.stop()
         extensionRPCServer.stop()
         
@@ -294,11 +410,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AudioTap.shared.stopCapture()
 
         // Restore Lunar's native OSD if integration was active
-        LunarManager.shared.appWillTerminate()
+        if !Self.skipsExternalIntegrations { LunarManager.shared.appWillTerminate() }
     }
     
     @objc func onScreenLocked(_: Notification) {
         print("Screen locked")
+        cancelPendingNotchAutoClose()
+        CalendarEditorLifecycle.closeForLock(session: .shared, closePanels: ([vm] + Array(viewModels.values)).map { model in
+            { model.closeForLockScreen() }
+        })
         hideWindowsForLock()
     }
 
@@ -712,14 +832,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
         
-        // Setup SystemHUD Manager
-        SystemHUDManager.shared.setup(coordinator: coordinator)
+        if !Self.skipsExternalIntegrations {
+            // Setup SystemHUD Manager
+            SystemHUDManager.shared.setup(coordinator: coordinator)
 
-        // Setup BetterDisplay integration
-        BetterDisplayManager.shared.configure(coordinator: coordinator)
+            // Setup BetterDisplay integration
+            BetterDisplayManager.shared.configure(coordinator: coordinator)
 
-        // Setup Lunar integration
-        LunarManager.shared.configure(coordinator: coordinator)
+            // Setup Lunar integration
+            LunarManager.shared.configure(coordinator: coordinator)
+        }
         
         // Setup 模块内核（P1 接缝 S6）：落首启默认值 + 注册内置模块 + 逐个 activate。
         // 与上面一族 `Manager...shared.setup/configure(coordinator:)` 同构；
@@ -729,21 +851,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 「哪块屏」只能由应用侧裁定，故按既有的 `activeVM` 口径解析——`showOnAllDisplays`
         // 下取鼠标所在屏的 VM（与 toggleNotchOpen / clipboard 快捷键逐字同一套写法），
         // 否则取主 VM。闭包在**调用时**才解析，启动阶段窗口还没建好也无妨；已收起时是空操作。
-        Task { await KernelBootstrap.bootstrap(collapse: { [weak self] in
-            guard let self else { return }
-            var activeVM = self.vm
-            if Defaults[.showOnAllDisplays] {
-                let mouseLocation = NSEvent.mouseLocation
-                for screen in NSScreen.screens where screen.frame.contains(mouseLocation) {
-                    if let screenViewModel = self.viewModels[screen] {
-                        activeVM = screenViewModel
-                        break
+        Task {
+            await KernelBootstrap.bootstrap(collapse: { [weak self] in
+                guard let self else { return }
+                var activeVM = self.vm
+                if Defaults[.showOnAllDisplays] {
+                    let mouseLocation = NSEvent.mouseLocation
+                    for screen in NSScreen.screens where screen.frame.contains(mouseLocation) {
+                        if let screenViewModel = self.viewModels[screen] {
+                            activeVM = screenViewModel
+                            break
+                        }
                     }
                 }
-            }
-            guard activeVM.notchState == .open else { return }
-            activeVM.close()
-        }) }
+                guard activeVM.notchState == .open else { return }
+                activeVM.close()
+            })
+            #if DEBUG
+            CalendarFixtureReadiness.shared.didBootstrap()
+            self.openCalendarFixtureIfReady()
+            #endif
+        }
 
         // Setup 模块浮层窗口宿主（D-23）：瞬时浮层不再渲染在关闭态链里，改由内核的独立窗口
         // 承载（按内容自适应 + 跟随鼠标屏 + 不被刘海裁剪，见 `Kernel/ModuleHUDWindow.swift`）。
@@ -1092,11 +1220,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 viewModel.open()
 
                 let workItem = DispatchWorkItem { [weak viewModel] in
+                    guard !CalendarPanelSession.shared.shouldProtectAutoClose,
+                          CalendarPanelSession.shared.route != .editor else { return }
                     viewModel?.close()
                 }
                 self.closeNotchWorkItem = workItem
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+                if CalendarPanelSession.shared.route != .editor && !CalendarPanelSession.shared.isSubmitting {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+                } else { self.cancelPendingNotchAutoClose() }
             case .open:
                 viewModel.close()
             }
@@ -1115,6 +1247,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             adjustWindowPosition(changeAlpha: true)
         }
+        #if DEBUG
+        CalendarFixtureReadiness.shared.didCreateWindows()
+        openCalendarFixtureIfReady()
+        #endif
         
         // Skip onboarding window and welcome sound under UI testing.
         if coordinator.firstLaunch && !AppRuntimeEnvironment.isUITesting {
