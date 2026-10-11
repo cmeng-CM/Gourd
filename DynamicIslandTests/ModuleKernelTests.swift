@@ -93,6 +93,7 @@
 import AppKit
 import ApplicationServices
 import Defaults
+import EventKit
 import SwiftUI
 import XCTest
 
@@ -8592,3 +8593,344 @@ final class CalendarQuickAddTests: XCTestCase {
     }
 }
 
+
+// MARK: - 日历安全写入与独立今日快照（docs/39 / T1）
+
+@MainActor
+final class CalendarInteractionTests: XCTestCase {
+    private var testCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return calendar
+    }
+
+    private func date(day: Int, hour: Int = 0) -> Date {
+        testCalendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))!
+    }
+
+    private func source(_ id: String = "events", reminder: Bool = false, writable: Bool = true) -> CalendarModel {
+        CalendarModel(
+            accountName: "Fixture", id: id, title: id, color: .systemBlue,
+            isSubscribed: false, isReminder: reminder, allowsContentModifications: writable
+        )
+    }
+
+    private func record(
+        _ id: String = "event", start: Date? = nil, end: Date? = nil,
+        type: EventType = .event(.unknown), writable: Bool = true,
+        recurring: Bool = false, detached: Bool = false, meeting: Bool = false
+    ) -> EventModel {
+        EventModel(
+            id: id, start: start ?? date(day: 11, hour: 9), end: end ?? date(day: 11, hour: 10),
+            title: "Fixture", location: nil, notes: nil, url: nil, isAllDay: false, type: type,
+            calendar: source(type.isReminder ? "reminders" : "events", reminder: type.isReminder, writable: writable),
+            participants: meeting ? [Participant(name: "Attendee", status: .accepted, isOrganizer: false, isCurrentUser: false)] : [],
+            timeZone: nil, hasRecurrenceRules: recurring, priority: nil, conferenceURL: nil, isDetached: detached
+        )
+    }
+
+    func testRestrictedEventsNeverInvokeTheCommonStoreWriteClosure() {
+        let cases: [(EventModel, CalendarMutationError)] = [
+            (record(writable: false), .readOnlyCalendar),
+            (record(recurring: true), .recurringEvent),
+            (record(detached: true), .detachedEvent),
+            (record(meeting: true), .meetingEvent),
+            (record(type: .birthday), .birthdayEvent),
+            (record(type: .reminder(completed: false)), .wrongRecordType)
+        ]
+        for (event, expected) in cases {
+            var writes = 0
+            XCTAssertFalse(event.canModifyInIsland)
+            XCTAssertThrowsError(try CalendarMutationPolicy.performEventWrite(event: event) { writes += 1 }) {
+                XCTAssertEqual($0 as? CalendarMutationError, expected)
+            }
+            XCTAssertEqual(writes, 0, "与真实 save/remove 相同的守卫拒绝后，写闭包调用必须为 0")
+        }
+        var writes = 0
+        let returnedID = try? CalendarMutationPolicy.performEventWrite(event: record()) {
+            writes += 1
+            return "saved-id"
+        }
+        XCTAssertEqual(returnedID, "saved-id")
+        XCTAssertEqual(writes, 1)
+    }
+
+    func testReminderWritesRequireWritableReminderTypeAndRejectRecurrence() {
+        for event in [record(), record(type: .reminder(completed: false), writable: false),
+                      record(type: .reminder(completed: false), recurring: true)] {
+            var writes = 0
+            XCTAssertFalse(event.canCompleteReminderInIsland)
+            XCTAssertThrowsError(try CalendarMutationPolicy.performReminderWrite(event: event) { writes += 1 })
+            XCTAssertEqual(writes, 0)
+        }
+        let reminder = record(type: .reminder(completed: false))
+        XCTAssertTrue(reminder.canCompleteReminderInIsland)
+        XCTAssertEqual(try CalendarMutationPolicy.performReminderWrite(event: reminder) { "reminder-id" }, "reminder-id")
+    }
+
+    func testExplicitTargetsRejectInvalidReadOnlyAndWrongTypesWithoutFallback() throws {
+        let calendars = [source("events"), source("read-only", writable: false), source("reminders", reminder: true)]
+        for (id, error) in [("missing", CalendarMutationError.invalidCalendar),
+                            ("read-only", .readOnlyCalendar), ("reminders", .wrongRecordType)] {
+            XCTAssertThrowsError(try CalendarMutationPolicy.targetCalendarID(
+                requestedID: id, defaultID: "events", calendars: calendars, isReminder: false
+            )) { XCTAssertEqual($0 as? CalendarMutationError, error) }
+        }
+        for (id, error) in [("missing", CalendarMutationError.invalidCalendar), ("events", .wrongRecordType)] {
+            XCTAssertThrowsError(try CalendarMutationPolicy.targetCalendarID(
+                requestedID: id, defaultID: "reminders", calendars: calendars, isReminder: true
+            )) { XCTAssertEqual($0 as? CalendarMutationError, error) }
+        }
+        XCTAssertThrowsError(try CalendarMutationPolicy.targetCalendarID(
+            requestedID: "read-only-list", defaultID: "reminders",
+            calendars: calendars + [source("read-only-list", reminder: true, writable: false)], isReminder: true
+        )) { XCTAssertEqual($0 as? CalendarMutationError, .readOnlyCalendar) }
+    }
+
+    func testNilEditTargetKeepsOriginalAndNilCreateUsesWritableDefaultThenFallback() throws {
+        let calendars = [source("first", reminder: true), source("default", reminder: true),
+                         source("readonly", reminder: true, writable: false)]
+        XCTAssertEqual(try CalendarMutationPolicy.targetCalendarID(
+            requestedID: nil, originalID: "first", defaultID: "default", calendars: calendars, isReminder: true
+        ), "first")
+        XCTAssertEqual(try CalendarMutationPolicy.targetCalendarID(
+            requestedID: nil, defaultID: "default", calendars: calendars, isReminder: true
+        ), "default")
+        XCTAssertEqual(try CalendarMutationPolicy.targetCalendarID(
+            requestedID: nil, defaultID: "readonly", calendars: calendars, isReminder: true
+        ), "first")
+        XCTAssertThrowsError(try CalendarMutationPolicy.targetCalendarID(
+            requestedID: nil, defaultID: nil, calendars: [], isReminder: true
+        )) { XCTAssertEqual($0 as? CalendarMutationError, .noWritableCalendar) }
+    }
+
+    func testCrossDayInputIsValidAndEmptyTitleOrInvertedRangeIsRejected() throws {
+        var input = CalendarEventInput(title: "  Overnight  ", start: date(day: 11, hour: 23), end: date(day: 12, hour: 1), isAllDay: false)
+        XCTAssertEqual(try input.validated(calendar: testCalendar).title, "Overnight")
+        input.end = input.start
+        XCTAssertThrowsError(try input.validated(calendar: testCalendar)) {
+            XCTAssertEqual($0 as? CalendarMutationError, .invalidDateRange)
+        }
+        input.end = date(day: 12)
+        input.title = "  \n "
+        XCTAssertThrowsError(try input.validated(calendar: testCalendar)) {
+            XCTAssertEqual($0 as? CalendarMutationError, .invalidTitle)
+        }
+    }
+
+    func testAllDayExclusiveEndUsesNaturalDaysAcrossDSTAndMultiDayRange() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        for (month, day, expectedHours) in [(3, 8, 23.0), (11, 1, 25.0)] {
+            let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: month, day: day)))
+            let end = try XCTUnwrap(CalendarEventInput.exclusiveAllDayEnd(including: start, calendar: calendar))
+            XCTAssertEqual(end.timeIntervalSince(start), expectedHours * 3600)
+            XCTAssertEqual(CalendarEventInput.includedAllDayEnd(exclusiveEnd: end, calendar: calendar), start)
+            XCTAssertNoThrow(try CalendarEventInput(title: "All day", start: start, end: end, isAllDay: true).validated(calendar: calendar))
+        }
+        let lastDay = date(day: 14, hour: 12)
+        let exclusiveEnd = try XCTUnwrap(CalendarEventInput.exclusiveAllDayEnd(including: lastDay, calendar: testCalendar))
+        XCTAssertEqual(exclusiveEnd, date(day: 15))
+        XCTAssertEqual(CalendarEventInput.includedAllDayEnd(exclusiveEnd: exclusiveEnd, calendar: testCalendar), date(day: 14))
+        XCTAssertNoThrow(try CalendarEventInput(title: "Trip", start: date(day: 11), end: exclusiveEnd, isAllDay: true).validated(calendar: testCalendar))
+        XCTAssertThrowsError(try CalendarEventInput(title: "Bad", start: date(day: 11, hour: 1), end: exclusiveEnd, isAllDay: true).validated(calendar: testCalendar))
+    }
+
+    func testTodaySnapshotIsIndependentIncludesOverlappingEventsAndExcludesReminders() async {
+        let service = CalendarInteractionServiceFake()
+        let manager = CalendarManager(service: service, now: { self.date(day: 11, hour: 12) }, calendar: testCalendar, startMonitoring: false)
+        let today = record("today")
+        let overnight = record("overnight", start: date(day: 10, hour: 23), end: date(day: 11, hour: 1))
+        let midnightEnd = record("ended", start: date(day: 10), end: date(day: 11))
+        let tomorrow = record("tomorrow", start: date(day: 12), end: date(day: 12, hour: 1))
+        let reminder = record("reminder", type: .reminder(completed: false))
+        let unrelated = record("selected", start: date(day: 14, hour: 10), end: date(day: 14, hour: 11))
+        service.fetch = { start, _, _ in start == self.date(day: 11) ? [today, overnight, midnightEnd, tomorrow, reminder] : [unrelated] }
+        await manager.updateTodayEvents(force: true)
+        XCTAssertEqual(manager.todayEvents.map(\.id), ["today", "overnight"])
+        await manager.updateCurrentDate(date(day: 14))
+        XCTAssertEqual(manager.events.map(\.id), ["selected"])
+        XCTAssertEqual(manager.todayEvents.map(\.id), ["today", "overnight"])
+        XCTAssertEqual(service.accessRequests, 0)
+    }
+
+    func testSelectedDateDropsOldFetchBeforePublishingTheNewDate() async {
+        let service = CalendarInteractionServiceFake()
+        let manager = CalendarManager(service: service, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let firstStarted = expectation(description: "First fetch")
+        let secondStarted = expectation(description: "Second fetch")
+        var firstResult: CheckedContinuation<[EventModel], Never>?
+        var secondResult: CheckedContinuation<[EventModel], Never>?
+        service.fetch = { start, end, _ in
+            if end.timeIntervalSince(start) != 86400 { return [] }
+            if start == self.date(day: 14) {
+                return await withCheckedContinuation { firstResult = $0; firstStarted.fulfill() }
+            }
+            if start == self.date(day: 15) {
+                return await withCheckedContinuation { secondResult = $0; secondStarted.fulfill() }
+            }
+            return []
+        }
+        let first = Task { await manager.updateCurrentDate(date(day: 14)) }
+        await fulfillment(of: [firstStarted], timeout: 2)
+        let second = Task { await manager.updateCurrentDate(date(day: 15)) }
+        await Task.yield()
+        firstResult?.resume(returning: [record("old")])
+        await fulfillment(of: [secondStarted], timeout: 2)
+        XCTAssertTrue(manager.events.isEmpty, "迟到旧结果不能在新请求完成前发布")
+        secondResult?.resume(returning: [record("new")])
+        await first.value
+        await second.value
+        XCTAssertEqual(manager.events.map(\.id), ["new"])
+    }
+
+    func testTodayDropsOlderSameDayRefreshAndRequeriesAcrossMidnight() async {
+        let service = CalendarInteractionServiceFake()
+        var now = date(day: 11, hour: 23)
+        let manager = CalendarManager(service: service, now: { now }, calendar: testCalendar, startMonitoring: false)
+        let firstStarted = expectation(description: "Old today fetch")
+        let secondStarted = expectation(description: "Latest today fetch")
+        var firstResult: CheckedContinuation<[EventModel], Never>?
+        var secondResult: CheckedContinuation<[EventModel], Never>?
+        var count = 0
+        service.fetch = { _, _, _ in
+            count += 1
+            if count == 1 { return await withCheckedContinuation { firstResult = $0; firstStarted.fulfill() } }
+            return await withCheckedContinuation { secondResult = $0; secondStarted.fulfill() }
+        }
+        let first = Task { await manager.updateTodayEvents(force: true) }
+        await fulfillment(of: [firstStarted], timeout: 2)
+        let second = Task { await manager.updateTodayEvents(force: true) }
+        await Task.yield()
+        firstResult?.resume(returning: [record("old")])
+        await fulfillment(of: [secondStarted], timeout: 2)
+        XCTAssertTrue(manager.todayEvents.isEmpty)
+        secondResult?.resume(returning: [record("latest")])
+        await first.value
+        await second.value
+        XCTAssertEqual(manager.todayEvents.map(\.id), ["latest"])
+
+        let midnightStarted = expectation(description: "Fetch before midnight")
+        var midnightResult: CheckedContinuation<[EventModel], Never>?
+        let nextDay = record("next-day", start: date(day: 12, hour: 9), end: date(day: 12, hour: 10))
+        service.fetch = { start, _, _ in
+            if start == self.date(day: 11) {
+                return await withCheckedContinuation { midnightResult = $0; midnightStarted.fulfill() }
+            }
+            XCTAssertEqual(start, self.date(day: 12))
+            return [nextDay]
+        }
+        let midnight = Task { await manager.updateTodayEvents(force: true) }
+        await fulfillment(of: [midnightStarted], timeout: 2)
+        now = date(day: 12)
+        midnightResult?.resume(returning: [record("yesterday")])
+        await midnight.value
+        XCTAssertEqual(manager.todayEvents.map(\.id), ["next-day"])
+    }
+
+    func testManagerReturnsRealRecordsRefreshesAfterSuccessAndPreservesFailure() async throws {
+        let service = CalendarInteractionServiceFake()
+        let manager = CalendarManager(service: service, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let saved = record("real-event-id")
+        let completed = record("real-reminder-id", type: .reminder(completed: true))
+        service.savedRecord = saved
+        service.reminderRecord = completed
+        service.fetch = { _, _, _ in [saved] }
+        let input = CalendarEventInput(title: "Input", start: saved.start, end: saved.end, isAllDay: false)
+        let savedResult = try await manager.saveEvent(input: input, eventID: "existing-id")
+        XCTAssertEqual(savedResult, saved)
+        XCTAssertEqual(service.lastEventID, "existing-id")
+        XCTAssertEqual(manager.todayEvents, [saved])
+        XCTAssertEqual(manager.events, [saved])
+        let createdReminder = try await manager.createReminderRecord(title: "Task", due: date(day: 11), listID: "explicit-list")
+        XCTAssertEqual(createdReminder, completed)
+        XCTAssertEqual(service.lastListID, "explicit-list")
+        let completedReminder = try await manager.completeReminder(id: completed.id, completed: true)
+        XCTAssertEqual(completedReminder, completed)
+        XCTAssertEqual(manager.event(withID: saved.id), saved)
+        try await manager.deleteEvent(id: saved.id)
+        XCTAssertEqual(service.deletedID, saved.id)
+        let fetches = service.fetchCount
+        service.writeError = .readOnlyCalendar
+        do {
+            _ = try await manager.saveEvent(input: input)
+            XCTFail("Error must be propagated")
+        } catch { XCTAssertEqual(error as? CalendarMutationError, .readOnlyCalendar) }
+        XCTAssertEqual(service.fetchCount, fetches, "失败不触发刷新")
+        XCTAssertEqual(manager.todayEvents, [saved])
+        XCTAssertEqual(service.accessRequests, 0)
+        XCTAssertEqual(manager.liveCalendarAuthorization, .fullAccess)
+    }
+
+    func testWriteFailureRollsBackMutableStateAndSuccessfulWriteDoesNotRollback() throws {
+        var title = "Original"
+        var completed = false
+        var completionDate: Date?
+        var rollbacks = 0
+        XCTAssertThrowsError(try CalendarMutationPolicy.performWithRollback(write: {
+            title = "Edited"
+            completed = true
+            completionDate = date(day: 11)
+            throw CalendarMutationError.readOnlyCalendar
+        }, rollback: {
+            title = "Original"
+            completed = false
+            completionDate = nil
+            rollbacks += 1
+        })) { XCTAssertEqual($0 as? CalendarMutationError, .readOnlyCalendar) }
+        XCTAssertEqual(title, "Original")
+        XCTAssertFalse(completed)
+        XCTAssertNil(completionDate)
+        XCTAssertEqual(rollbacks, 1)
+        let result = try CalendarMutationPolicy.performWithRollback(write: { "real-id" }, rollback: { rollbacks += 1 })
+        XCTAssertEqual(result, "real-id")
+        XCTAssertEqual(rollbacks, 1)
+    }
+}
+
+/// 完整假服务：没有 EKEventStore，授权及写入全部是内存值，无法改动用户记录。
+private final class CalendarInteractionServiceFake: CalendarServiceProviding {
+    var fetch: (Date, Date, [String]) async -> [EventModel] = { _, _, _ in [] }
+    var fetchCount = 0
+    var accessRequests = 0
+    var savedRecord: EventModel?
+    var reminderRecord: EventModel?
+    var writeError: CalendarMutationError?
+    var lastEventID: String?
+    var lastListID: String?
+    var deletedID: String?
+
+    func requestAccess() async -> Bool { accessRequests += 1; return true }
+    func requestAccess(to type: EKEntityType) async -> Bool { accessRequests += 1; return true }
+    func calendars() async -> [CalendarModel] { [] }
+    func events(from start: Date, to end: Date, calendars: [String]) async -> [EventModel] {
+        fetchCount += 1
+        return await fetch(start, end, calendars)
+    }
+    func setReminderCompleted(reminderID: String, completed: Bool) async { }
+    func saveEvent(input: CalendarEventInput, eventID: String?) async throws -> EventModel {
+        if let writeError { throw writeError }
+        lastEventID = eventID
+        return try XCTUnwrap(savedRecord)
+    }
+    func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel {
+        if let writeError { throw writeError }
+        lastListID = listID
+        return try XCTUnwrap(reminderRecord)
+    }
+    func deleteEvent(id: String) async throws {
+        if let writeError { throw writeError }
+        deletedID = id
+    }
+    func completeReminder(id: String, completed: Bool) async throws -> EventModel {
+        if let writeError { throw writeError }
+        return try XCTUnwrap(reminderRecord)
+    }
+    func event(withID id: String) -> EventModel? { savedRecord?.id == id ? savedRecord : reminderRecord }
+    func writableEventCalendars() -> [CalendarModel] { [] }
+    func writableReminderCalendars() -> [CalendarModel] { [] }
+    func defaultEventCalendarID() -> String? { nil }
+    var preferredReminderCalendarID: String? { nil }
+    func authorizationStatus(for type: EKEntityType) -> EKAuthorizationStatus { .fullAccess }
+    func setReminderPriority(reminderID: String, priority: Int) async -> Bool { false }
+}

@@ -31,10 +31,11 @@ class CalendarManager: ObservableObject {
     static let shared = CalendarManager()
 
     @Published var currentWeekStartDate: Date
-    /// **按日**窗口（`[选中日, +1 天)`）的条目：今日清单（`HomeCalendarRow` 右栏的
-    /// `CalendarEventCardList`）与独立日历面板右栏（`StandaloneEventCardList`）的数据源。
-    /// `updateEvents` 是它唯一的赋值点。**月历标记不用它**（见 `monthEvents`）。
+    /// 选中日的 `[当天零点, 次日零点)` 快照；首页使用独立的 `todayEvents`。
+    /// `updateEvents` 是唯一赋值点；月历标记使用 `monthEvents`。
     @Published var events: [EventModel] = []
+    /// 独立抓取今天重叠的日程（排除提醒）；浏览选中日期不会改变这份首页快照。
+    @Published private(set) var todayEvents: [EventModel] = []
     /// **按月**窗口的条目快照（与 `events` 完全独立的一条数据路径，2026-09-29 补）。
     ///
     /// 为什么必须单开一条：`events` 的窗口只有一天（选中日），拿它算「月历上哪些天有事件」等于
@@ -66,7 +67,16 @@ class CalendarManager: ObservableObject {
     private var requestedMonth: Date?
 
     private var selectedCalendars: [CalendarModel] = []
-    private let calendarService = CalendarService()
+    private let calendarService: any CalendarServiceProviding
+    private let now: () -> Date
+    private let calendar: Calendar
+    private var eventsRequestID = 0
+    private var todayRequestID = 0
+    private var monthRequestID = 0
+    private var listsRequestID = 0
+    private var todaySnapshotDay: Date?
+    private var lastTodayEventsFetchDate: Date?
+    private var dayChangeObservers: [NSObjectProtocol] = []
     private var lastEventsFetchDate: Date?
     private let reloadRefreshInterval: TimeInterval = 15
     private var eventStoreChangedObserver: NSObjectProtocol?
@@ -83,12 +93,33 @@ class CalendarManager: ObservableObject {
     var hasCalendarAccess: Bool { isAuthorized(calendarAuthorizationStatus) }
     var hasReminderAccess: Bool { isAuthorized(reminderAuthorizationStatus) }
 
-    private init() {
-        currentWeekStartDate = CalendarManager.startOfDay(Date())
+    /// 测试/DEBUG 夹具可完整注入服务、授权读数（服务协议）、时钟，且不启动真实观察或请求。
+    init(
+        service: any CalendarServiceProviding = CalendarService(),
+        now: @escaping () -> Date = Date.init,
+        calendar: Calendar = .autoupdatingCurrent,
+        startMonitoring: Bool = true
+    ) {
+        calendarService = service
+        self.now = now
+        self.calendar = calendar
+        currentWeekStartDate = calendar.startOfDay(for: now())
+        guard startMonitoring else { return }
         setupEventStoreChangedObserver()
+        setupDayChangeObservers()
         startLockScreenRefreshLoop()
-        Task {
-            await reloadCalendarAndReminderLists()
+        Task { await reloadCalendarAndReminderLists() }
+    }
+
+    private func setupDayChangeObservers() {
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
+            dayChangeObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.updateTodayEvents(force: true)
+                }
+            })
         }
     }
 
@@ -96,6 +127,7 @@ class CalendarManager: ObservableObject {
         if let observer = eventStoreChangedObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        for observer in dayChangeObservers { NotificationCenter.default.removeObserver(observer) }
         pendingEventStoreRefreshTask?.cancel()
         lockScreenRefreshTask?.cancel()
     }
@@ -106,7 +138,7 @@ class CalendarManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleEventStoreChanged()
+            Task { @MainActor [weak self] in self?.handleEventStoreChanged() }
         }
     }
 
@@ -151,11 +183,15 @@ class CalendarManager: ObservableObject {
 
     @MainActor
     func reloadCalendarAndReminderLists() async {
+        listsRequestID += 1
+        let requestID = listsRequestID
         let allCalendars = await calendarService.calendars()
+        guard requestID == listsRequestID else { return }
         eventCalendars = allCalendars.filter { !$0.isReminder }
         reminderLists = allCalendars.filter { $0.isReminder }
         self.allCalendars = allCalendars
         updateSelectedCalendars()
+        await updateTodayEvents(force: true)
     }
 
     @MainActor
@@ -178,7 +214,7 @@ class CalendarManager: ObservableObject {
     }
 
     func checkCalendarAuthorization() async {
-        let status = EKEventStore.authorizationStatus(for: .event)
+        let status = calendarService.authorizationStatus(for: .event)
         calendarAuthorizationStatus = status
 
         switch status {
@@ -204,7 +240,7 @@ class CalendarManager: ObservableObject {
     }
 
     func checkReminderAuthorization() async {
-        let status = EKEventStore.authorizationStatus(for: .reminder)
+        let status = calendarService.authorizationStatus(for: .reminder)
         reminderAuthorizationStatus = status
 
         switch status {
@@ -226,6 +262,9 @@ class CalendarManager: ObservableObject {
     }
 
     func updateSelectedCalendars() {
+        eventsRequestID += 1
+        todayRequestID += 1
+        monthRequestID += 1
         switch Defaults[.calendarSelectionState] {
         case .all:
             selectedCalendarIDs = Set(allCalendars.map { $0.id })
@@ -265,6 +304,7 @@ class CalendarManager: ObservableObject {
 
         Defaults[.calendarSelectionState] = selectionState
         updateSelectedCalendars()
+        await updateTodayEvents(force: true)
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
         // 月历标记走的是按 `selectedCalendars` 抓的**另一份**数据：换日历勾选后它也必须跟着换，
@@ -277,7 +317,7 @@ class CalendarManager: ObservableObject {
     }
 
     func updateCurrentDate(_ date: Date) async {
-        currentWeekStartDate = Calendar.current.startOfDay(for: date)
+        currentWeekStartDate = calendar.startOfDay(for: date)
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
     }
@@ -379,6 +419,9 @@ class CalendarManager: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
                 if Task.isCancelled { break }
+                if self.todaySnapshotDay != self.calendar.startOfDay(for: self.now()) {
+                    await self.updateTodayEvents(force: true)
+                }
                 guard self.hasCalendarAccess else { continue }
                 await self.updateLockScreenEvents(force: false)
             }
@@ -386,16 +429,18 @@ class CalendarManager: ObservableObject {
     }
 
     private func updateEvents(force: Bool = false) async {
-        let now = Date()
+        let now = now()
         if !force, let lastFetch = lastEventsFetchDate, now.timeIntervalSince(lastFetch) < reloadRefreshInterval {
             return
         }
         
         Logger.log("CalendarManager: Updating events (force: \(force))", category: .lifecycle)
 
-        let calendarIDs = selectedCalendars.map { $0.id }
+        let calendarIDs = selectedCalendarIDs.sorted()
         let startDate = currentWeekStartDate
-        guard let endDate = Calendar.current.date(byAdding: .day, value: 1, to: currentWeekStartDate) else { return }
+        guard let endDate = calendar.date(byAdding: .day, value: 1, to: startDate) else { return }
+        eventsRequestID += 1
+        let requestID = eventsRequestID
         let service = calendarService
 
         let events = await eventFetchLimiter.run {
@@ -406,8 +451,35 @@ class CalendarManager: ObservableObject {
             )
         }
 
+        guard requestID == eventsRequestID, currentWeekStartDate == startDate else { return }
         self.events = events
-        lastEventsFetchDate = Date()
+        lastEventsFetchDate = self.now()
+    }
+
+    func updateTodayEvents(force: Bool = false) async {
+        let now = now()
+        let startDate = calendar.startOfDay(for: now)
+        if !force, todaySnapshotDay == startDate,
+           let lastFetch = lastTodayEventsFetchDate, now.timeIntervalSince(lastFetch) < reloadRefreshInterval {
+            return
+        }
+        guard let endDate = calendar.date(byAdding: .day, value: 1, to: startDate) else { return }
+        todayRequestID += 1
+        let requestID = todayRequestID
+        let calendarIDs = selectedCalendarIDs.sorted()
+        let service = calendarService
+        let fetched = await eventFetchLimiter.run {
+            await service.events(from: startDate, to: endDate, calendars: calendarIDs)
+        }
+        guard requestID == todayRequestID else { return }
+        // 跨午夜迟到的响应不得发布为今天；用新的自然日重新抓取。
+        guard calendar.startOfDay(for: self.now()) == startDate else {
+            await updateTodayEvents(force: true)
+            return
+        }
+        todayEvents = fetched.filter { !$0.type.isReminder && $0.start < endDate && $0.end > startDate }
+        todaySnapshotDay = startDate
+        lastTodayEventsFetchDate = self.now()
     }
 
     /// 抓取（或复用）**某个显示月份**的按月数据，写进 `monthEvents`（窗口与理由见该属性的注释）。
@@ -431,29 +503,31 @@ class CalendarManager: ObservableObject {
         // **窗口的周起点 = 显示日历（周一）**：`monthWindow` 的 `calendar:` 默认值已指向
         // `Calendar.gourdDisplay`（2026-10-09 p9 / docs/34 §做法 机制一），这里不写代码即自动跟随
         // ——网格两端与抓取窗口必须同源，否则网格末端那格（周一起始时是下月 1 日）永远不会有事件点。
-        guard isAuthorized(EKEventStore.authorizationStatus(for: .event)),
+        guard isAuthorized(calendarService.authorizationStatus(for: .event)),
               let window = MonthGridLayout.monthWindow(forMonth: normalizedMonth)
         else { return }
 
         Logger.log("CalendarManager: Updating month events (force: \(force))", category: .lifecycle)
 
         requestedMonth = normalizedMonth
+        monthRequestID += 1
+        let requestID = monthRequestID
 
-        let calendarIDs = selectedCalendars.map { $0.id }
+        let calendarIDs = selectedCalendarIDs.sorted()
         let service = calendarService
 
         let fetched = await eventFetchLimiter.run {
             await service.events(from: window.start, to: window.end, calendars: calendarIDs)
         }
 
-        guard requestedMonth == normalizedMonth else { return }
+        guard requestID == monthRequestID, requestedMonth == normalizedMonth else { return }
         monthEvents = MonthEventSnapshot(month: normalizedMonth, events: fetched)
     }
 
     /// 把**已经要过**的那个月重抓一次（选择日历 / 事件库发生变化后调用，让月历标记跟着变）。
     /// 没人要过按月数据（`monthEvents.month == nil`）时什么也不做——不给不打开日历行的用户白查。
     private func refreshRequestedMonthEvents() async {
-        guard let month = monthEvents.month else { return }
+        guard let month = requestedMonth ?? monthEvents.month else { return }
         await updateMonthEvents(for: month, force: true)
     }
 
@@ -483,16 +557,15 @@ class CalendarManager: ObservableObject {
 
         Defaults[.calendarSelectionState] = selectionState
         updateSelectedCalendars()
+        await updateTodayEvents(force: true)
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
         await refreshRequestedMonthEvents()
     }
 
     func setReminderCompleted(reminderID: String, completed: Bool) async {
-        await calendarService.setReminderCompleted(reminderID: reminderID, completed: completed)
-        await updateEvents(force: true)
-        // 勾选/取消勾选会改变它是否被 `hideCompletedReminders` 过滤掉 → 月历上的点也要跟着变。
-        await refreshRequestedMonthEvents()
+        do { _ = try await completeReminder(id: reminderID, completed: completed) }
+        catch { print("Failed to update reminder completion: \(error)") }
     }
 
     /// 设置提醒的优先级（`EKReminder.priority`，0…9）——待办面板的行内优先级胶囊走这个入口
@@ -528,33 +601,60 @@ class CalendarManager: ObservableObject {
     /// 不重试、不回显（失败提示由表单一层落文案，T6）。
     @discardableResult
     func createReminder(title: String, due: Date) async -> Bool {
-        let dueComponents = CalendarQuickAdd.reminderDueComponents(on: due, calendar: Calendar.current)
-        let created = await calendarService.createReminder(title: title, dueDateComponents: dueComponents)
-        if created {
-            await refreshAfterCalendarWrite()
+        do {
+            _ = try await createReminderRecord(title: title, due: due)
+            return true
+        } catch {
+            print("Failed to create reminder: \(error)")
+            return false
         }
-        return created
     }
 
-    /// 新建一条日程（写系统「日历」）——两处日历内联表单的「日程」档入口。
-    ///
-    /// 起止时间与目标日历的合法性/兜底都在服务层（`CalendarService.createEvent`）与纯函数
-    /// （`CalendarQuickAdd.isValidRange` / `allDayRange`）里，这里只负责转调与「成功后刷哪些数据」。
-    /// 写成功同样显式刷新（新条目要立刻出现在首页行、面板页与月历标记三处）。
     @discardableResult
     func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool {
-        let created = await calendarService.createEvent(
-            title: title,
-            start: start,
-            end: end,
-            isAllDay: isAllDay,
-            calendarID: calendarID
-        )
-        if created {
-            await refreshAfterCalendarWrite()
+        do {
+            _ = try await saveEvent(input: CalendarEventInput(
+                title: title, start: start, end: end, isAllDay: isAllDay, calendarID: calendarID
+            ))
+            return true
+        } catch {
+            print("Failed to create event: \(error)")
+            return false
         }
-        return created
     }
+
+    func saveEvent(input: CalendarEventInput, eventID: String? = nil) async throws -> EventModel {
+        let event = try await calendarService.saveEvent(input: input, eventID: eventID)
+        await refreshAfterCalendarWrite()
+        return event
+    }
+
+    func createReminderRecord(title: String, due: Date, listID: String? = nil) async throws -> EventModel {
+        let reminder = try await calendarService.createReminderRecord(title: title, due: due, listID: listID)
+        await refreshAfterCalendarWrite()
+        return reminder
+    }
+
+    func deleteEvent(id: String) async throws {
+        try await calendarService.deleteEvent(id: id)
+        await refreshAfterCalendarWrite()
+    }
+
+    func completeReminder(id: String, completed: Bool) async throws -> EventModel {
+        let reminder = try await calendarService.completeReminder(id: id, completed: completed)
+        await refreshAfterCalendarWrite()
+        return reminder
+    }
+
+    func event(withID id: String) -> EventModel? {
+        calendarService.event(withID: id)
+    }
+
+    func writableReminderCalendars() -> [CalendarModel] {
+        calendarService.writableReminderCalendars()
+    }
+
+    var preferredReminderCalendarID: String? { calendarService.preferredReminderCalendarID }
 
     /// 新增表单可选的目标日历列表（只含**可写**日历）——转调服务层。
     ///
@@ -577,7 +677,7 @@ class CalendarManager: ObservableObject {
         return writable.first?.id
     }
 
-    /// **实时**的日历授权状态（D-12 的判据来源）：直读 `EKEventStore.authorizationStatus(for: .event)`。
+    /// **实时**的日历授权状态（D-12 的判据来源）：直读 `calendarService.authorizationStatus(for: .event)`。
     ///
     /// **为什么不用 `@Published` 的 `calendarAuthorizationStatus`**：那个属性的真值只在
     /// `checkCalendarAuthorization()` 被调过之后才有——而那条链路只挂在设置页与锁屏天气小部件上，
@@ -586,17 +686,16 @@ class CalendarManager: ObservableObject {
     /// 设置页的机器永远显示未授权。口径同 `updateMonthEvents` 里的直读注释：这里只读不写，
     /// 授权状态本身仍由既有链路（`checkCalendarAuthorization()` / `checkReminderAuthorization()`）维护。
     var liveCalendarAuthorization: EKAuthorizationStatus {
-        EKEventStore.authorizationStatus(for: .event)
+        calendarService.authorizationStatus(for: .event)
     }
 
-    /// **实时**的提醒授权状态（D-12 的判据来源）——直读 `EKEventStore.authorizationStatus(for: .reminder)`，
+    /// **实时**的提醒授权状态（D-12 的判据来源）——直读 `calendarService.authorizationStatus(for: .reminder)`，
     /// 理由与 `liveCalendarAuthorization` 逐字相同（`reminderAuthorizationStatus` 同样只在设置页链路被调过之后才有真值）。
     var liveReminderAuthorization: EKAuthorizationStatus {
-        EKEventStore.authorizationStatus(for: .reminder)
+        calendarService.authorizationStatus(for: .reminder)
     }
 
-    /// 写库成功后的**显式刷新**：新条目要立刻出现在三处数据面上——按日窗口 `events`（首页行 / 面板页右栏）、
-    /// 锁屏面板 `lockScreenEvents`、按月快照 `monthEvents`（月历标记）。
+    /// 写成功显式刷新今天、选中日、锁屏与已请求的月份，避免自诱发通知抑制窗漏掉更新。
     ///
     /// **为什么不依赖 `EKEventStoreChanged` 通知**：那是自己刚写完的变更，通知会紧随 `save` 而来，
     /// 但既有的 `handleEventStoreChanged` 有节流（`eventStoreChangeThrottle`）与**自诱发抑制窗**
@@ -608,6 +707,7 @@ class CalendarManager: ObservableObject {
     /// `refreshRequestedMonthEvents()` 自带守卫（没人要过按月数据时什么都不做）——不打开日历行
     /// 的用户不为这次刷新多付一次按月查询。
     private func refreshAfterCalendarWrite() async {
+        await updateTodayEvents(force: true)
         await updateEvents(force: true)
         await updateLockScreenEvents(force: true)
         await refreshRequestedMonthEvents()

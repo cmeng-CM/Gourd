@@ -29,10 +29,69 @@ protocol CalendarServiceProviding {
     func calendars() async -> [CalendarModel]
     func events(from start: Date, to end: Date, calendars: [String]) async -> [EventModel]
     func setReminderCompleted(reminderID: String, completed: Bool) async
+    func saveEvent(input: CalendarEventInput, eventID: String?) async throws -> EventModel
+    func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel
+    func deleteEvent(id: String) async throws
+    func completeReminder(id: String, completed: Bool) async throws -> EventModel
+    func event(withID id: String) -> EventModel?
+    func writableEventCalendars() -> [CalendarModel]
+    func writableReminderCalendars() -> [CalendarModel]
+    func defaultEventCalendarID() -> String?
+    var preferredReminderCalendarID: String? { get }
+    func authorizationStatus(for type: EKEntityType) -> EKAuthorizationStatus
+    func setReminderPriority(reminderID: String, priority: Int) async -> Bool
 }
 
 class CalendarService: CalendarServiceProviding {
     private let store = EKEventStore()
+    /// 一个 store 的全部写入（含兼容入口）顺序执行；队列内重读和复核后才 commit。
+    private let writeQueue = DispatchQueue(label: "com.cmeng.gourd.calendar.writes", qos: .userInitiated)
+
+    func authorizationStatus(for type: EKEntityType) -> EKAuthorizationStatus {
+        EKEventStore.authorizationStatus(for: type)
+    }
+
+    private func performWrite<T>(_ operation: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.async {
+                do { continuation.resume(returning: try operation()) }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private func requireAccess(to type: EKEntityType) throws {
+        guard hasAccess(to: type) else { throw CalendarMutationError.accessDenied }
+    }
+
+    private func targetCalendar(requestedID: String?, originalID: String? = nil, type: EKEntityType) throws -> EKCalendar {
+        let calendars = store.calendars(for: type)
+        // 也检查另一种类型，使错误类型与失效 ID 能明确区分，绝不改投其它源。
+        let all = calendars + store.calendars(for: type == .event ? .reminder : .event)
+        let defaultID = type == .event
+            ? store.defaultCalendarForNewEvents?.calendarIdentifier
+            : store.defaultCalendarForNewReminders()?.calendarIdentifier
+        let id = try CalendarMutationPolicy.targetCalendarID(
+            requestedID: requestedID, originalID: originalID, defaultID: defaultID,
+            calendars: all.map { CalendarModel(from: $0) }, isReminder: type == .reminder
+        )
+        guard let calendar = calendars.first(where: { $0.calendarIdentifier == id }),
+              calendar.allowedEntityTypes.contains(type == .event ? .event : .reminder) else {
+            throw CalendarMutationError.wrongRecordType
+        }
+        return calendar
+    }
+
+    private func savedModel(from item: EKCalendarItem) throws -> EventModel {
+        guard !item.calendarItemIdentifier.isEmpty else { throw CalendarMutationError.missingRecordIdentifier }
+        let model: EventModel?
+        if let event = item as? EKEvent { model = EventModel(from: event) }
+        else if let reminder = item as? EKReminder { model = EventModel(from: reminder) }
+        else { model = nil }
+        guard let model else { throw CalendarMutationError.missingRecordIdentifier }
+        return model
+    }
+
     
     @MainActor
     func requestAccess() async -> Bool {
@@ -63,7 +122,7 @@ class CalendarService: CalendarServiceProviding {
     }
     
     private func hasAccess(to entityType: EKEntityType) -> Bool {
-        let status = EKEventStore.authorizationStatus(for: entityType)
+        let status = authorizationStatus(for: entityType)
         return status == .fullAccess
     }
     
@@ -90,9 +149,11 @@ class CalendarService: CalendarServiceProviding {
         // Fetch regular events
         if hasAccess(to: .event) {
             let eventCalendars = ekCalendars.filter { store.calendars(for: .event).contains($0) }
-            let predicate = store.predicateForEvents(withStart: start, end: end, calendars: eventCalendars)
-            let ekEvents = store.events(matching: predicate)
-            events.append(contentsOf: ekEvents.compactMap { EventModel(from: $0) })
+            if !eventCalendars.isEmpty {
+                let predicate = store.predicateForEvents(withStart: start, end: end, calendars: eventCalendars)
+                let ekEvents = store.events(matching: predicate)
+                events.append(contentsOf: ekEvents.compactMap { EventModel(from: $0) })
+            }
         }
         
         // Fetch reminders
@@ -118,7 +179,7 @@ class CalendarService: CalendarServiceProviding {
                 let filtered = reminders.compactMap { reminder -> EventModel? in
                     guard let dueDate = reminder.dueDateComponents?.date,
                           dueDate >= start,
-                          dueDate <= end else {
+                          dueDate < end else {
                         return nil
                     }
                     return EventModel(from: reminder)
@@ -129,144 +190,184 @@ class CalendarService: CalendarServiceProviding {
         }
     }
 
-    @MainActor
-    func setReminderCompleted(reminderID: String, completed: Bool) async {
-        guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else { return }
-        reminder.isCompleted = completed
-        do {
-            try store.save(reminder, commit: true)
-        } catch {
-            print("Failed to update reminder completion: \(error)")
+    func event(withID id: String) -> EventModel? {
+        guard let item = store.calendarItem(withIdentifier: id) else { return nil }
+        if let event = item as? EKEvent, hasAccess(to: .event) { return EventModel(from: event) }
+        if let reminder = item as? EKReminder, hasAccess(to: .reminder) { return EventModel(from: reminder) }
+        return nil
+    }
+
+    func saveEvent(input: CalendarEventInput, eventID: String? = nil) async throws -> EventModel {
+        try await performWrite {
+            try self.requireAccess(to: .event)
+            let input = try input.validated()
+            let event: EKEvent
+            if let eventID {
+                guard let item = self.store.calendarItem(withIdentifier: eventID) else {
+                    throw CalendarMutationError.recordNotFound
+                }
+                guard let existing = item as? EKEvent else { throw CalendarMutationError.wrongRecordType }
+                event = existing
+                let original = try self.savedModel(from: event)
+                // 复核原记录发生在更换目标日历前，不能用新日历绕过只读/复杂记录限制。
+                try CalendarMutationPolicy.performEventWrite(event: original, write: {})
+            } else {
+                event = EKEvent(eventStore: self.store)
+            }
+            let calendar = try self.targetCalendar(
+                requestedID: input.calendarID, originalID: eventID == nil ? nil : event.calendar?.calendarIdentifier,
+                type: .event
+            )
+            return try CalendarMutationPolicy.performWithRollback(write: {
+                event.calendar = calendar
+                event.title = input.title
+                event.startDate = input.start
+                event.endDate = input.end
+                event.isAllDay = input.isAllDay
+                event.location = input.location
+                event.notes = input.notes
+                return try CalendarMutationPolicy.performEventWrite(event: try self.savedModelForWrite(from: event)) {
+                    try self.store.save(event, span: .thisEvent, commit: true)
+                    return try self.savedModel(from: event)
+                }
+            }, rollback: { event.rollback() })
         }
     }
 
-    /// 设置提醒的优先级（`EKReminder.priority`，0…9）。**返回成功与否**——
-    /// 找不到提醒（已在「提醒」App 里被删）或 `save` 抛错都返回 false，调用方据此回滚 UI 上的乐观值。
-    ///
-    /// **不在主线程上做磁盘 I/O**（P1 / T2 复审修）：取值与 `commit: true` 的 `save` 放进
-    /// `Task.detached(priority: .userInitiated)`，结果 hop 回调用方——因此这个方法是
-    /// `nonisolated async`：主 actor 在 `await` 期间是空的，UI 可以先画乐观值，点胶囊不会卡在落盘上。
-    /// `EKEventStore` 的存取从后台线程调用是既有的常见做法（本文件既有的 `fetchReminders(matching:)`
-    /// 也是「EventKit 回调 + 延续式包一层」的形态，那个回调本来就不在主线程）。
-    ///
-    /// 与 `setReminderCompleted` **同一条写回链**：同一个 `EKEventStore`、`commit: true`，
-    /// 不新开 store、不新增权限（[docs/18](../../docs/18-p1-todos-and-order.md) §接口与数据形状 4）。
-    /// 不写进 `CalendarServiceProviding` 协议：本批**不改对外契约**（设计分级），
-    /// 调用方 `CalendarManager` 持有的是具体类型 `CalendarService`。
-    nonisolated func setReminderPriority(reminderID: String, priority: Int) async -> Bool {
-        let store = self.store
-        return await Task.detached(priority: .userInitiated) {
-            guard let reminder = store.calendarItem(withIdentifier: reminderID) as? EKReminder else {
-                return false
-            }
-            reminder.priority = priority
-            do {
-                try store.save(reminder, commit: true)
-                return true
-            } catch {
-                print("Failed to update reminder priority: \(error)")
-                return false
-            }
-        }.value
+    /// 新记录在首次 save 前可以没有 ID，限制仍从实际 EKEvent/EKReminder 转出的模型复核。
+    private func savedModelForWrite(from event: EKEvent) throws -> EventModel {
+        guard let model = EventModel(from: event) else { throw CalendarMutationError.wrongRecordType }
+        return model
     }
 
-    // MARK: - 新增（P11 / T5：两处日历的「+」快速新增待办与日程）
-
-    /// 新建一条待办（`EKReminder`，docs/36 §做法 机制三）。
-    ///
-    /// **目标列表**：`defaultCalendarForNewReminders()` 兜第一个 `.reminder` 日历；一个都没有 → `false`
-    /// （调用方给失败提示，不重试）。`dueDateComponents` **允许 nil**——无日期的待办也是合法输入
-    /// （本批表单总是传选中日的年月日，nil 只留给直接调用这个服务的路径）。
-    ///
-    /// 写档口径与 `setReminderPriority` 完全一致：`nonisolated` + `Task.detached(priority: .userInitiated)`，
-    /// `commit: true` 的磁盘 I/O 不在主线程；成功 `true`、失败 `false` 并把细节 `print` 到控制台。
-    /// 不进 `CalendarServiceProviding` 协议（本批不改对外契约），调用方 `CalendarManager` 持有具体类型。
-    nonisolated func createReminder(title: String, dueDateComponents: DateComponents?) async -> Bool {
-        let store = self.store
-        return await Task.detached(priority: .userInitiated) {
-            guard let targetList = store.defaultCalendarForNewReminders() ?? store.calendars(for: .reminder).first else {
-                print("Failed to create reminder: no reminder list available")
-                return false
+    func deleteEvent(id: String) async throws {
+        try await performWrite {
+            try self.requireAccess(to: .event)
+            guard let item = self.store.calendarItem(withIdentifier: id) else {
+                throw CalendarMutationError.recordNotFound
             }
+            guard let event = item as? EKEvent else { throw CalendarMutationError.wrongRecordType }
+            try CalendarMutationPolicy.performEventWrite(event: try self.savedModel(from: event)) {
+                try self.store.remove(event, span: .thisEvent, commit: true)
+            }
+        }
+    }
 
-            let reminder = EKReminder(eventStore: store)
+    func completeReminder(id: String, completed: Bool) async throws -> EventModel {
+        try await performWrite {
+            try self.requireAccess(to: .reminder)
+            guard let item = self.store.calendarItem(withIdentifier: id) else {
+                throw CalendarMutationError.recordNotFound
+            }
+            guard let reminder = item as? EKReminder else { throw CalendarMutationError.wrongRecordType }
+            return try CalendarMutationPolicy.performReminderWrite(event: try self.savedModel(from: reminder)) {
+                return try CalendarMutationPolicy.performWithRollback(write: {
+                    reminder.isCompleted = completed
+                    try self.store.save(reminder, commit: true)
+                    return try self.savedModel(from: reminder)
+                }, rollback: { reminder.rollback() })
+            }
+        }
+    }
+
+    func createReminderRecord(title: String, due: Date, listID: String? = nil) async throws -> EventModel {
+        try await createReminderRecord(
+            title: title, dueDateComponents: CalendarQuickAdd.reminderDueComponents(on: due, calendar: .current),
+            listID: listID
+        )
+    }
+
+    private func createReminderRecord(title: String, dueDateComponents: DateComponents?, listID: String?) async throws -> EventModel {
+        try await performWrite {
+            try self.requireAccess(to: .reminder)
+            let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
+            let calendar = try self.targetCalendar(requestedID: listID, type: .reminder)
+            let reminder = EKReminder(eventStore: self.store)
             reminder.title = title
             reminder.dueDateComponents = dueDateComponents
-            reminder.calendar = targetList
-
-            do {
-                try store.save(reminder, commit: true)
-                return true
-            } catch {
-                print("Failed to create reminder: \(error)")
-                return false
+            reminder.calendar = calendar
+            guard let model = EventModel(from: reminder) else { throw CalendarMutationError.wrongRecordType }
+            return try CalendarMutationPolicy.performReminderWrite(event: model) {
+                try self.store.save(reminder, commit: true)
+                return try self.savedModel(from: reminder)
             }
-        }.value
+        }
     }
 
-    /// 新建一条日程（`EKEvent`，docs/36 §做法 机制三）。
-    ///
-    /// **目标日历**（逐级兜底，全无 → `false`）：
-    /// ① 给定 `calendarID` 且该日历 `allowsContentModifications` → 用它；
-    /// ② `store.defaultCalendarForNewEvents`；
-    /// ③ 第一个 `allowsContentModifications` 的 `.event` 日历。
-    ///
-    /// 写档口径同上：`nonisolated` + `Task.detached(priority: .userInitiated)`，`commit: true`；
-    /// `span: .thisEvent`（本批不建重复规则 / 不做编辑，跨度参数只是 `save` 的必填项）。
-    nonisolated func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool {
-        let store = self.store
-        return await Task.detached(priority: .userInitiated) {
-            let writableCalendars = store.calendars(for: .event).filter(\.allowsContentModifications)
+    // MARK: - 兼容写入口（相同守卫与串行队列）
 
-            let targetCalendar: EKCalendar? = {
-                if let calendarID,
-                   let requested = writableCalendars.first(where: { $0.calendarIdentifier == calendarID }) {
-                    return requested
-                }
-                if let defaultCalendar = store.defaultCalendarForNewEvents {
-                    return defaultCalendar
-                }
-                return writableCalendars.first
-            }()
-
-            guard let targetCalendar else {
-                print("Failed to create event: no writable event calendar available")
-                return false
-            }
-
-            let event = EKEvent(eventStore: store)
-            event.title = title
-            event.startDate = start
-            event.endDate = end
-            event.isAllDay = isAllDay
-            event.calendar = targetCalendar
-
-            do {
-                try store.save(event, span: .thisEvent, commit: true)
-                return true
-            } catch {
-                print("Failed to create event: \(error)")
-                return false
-            }
-        }.value
+    func setReminderCompleted(reminderID: String, completed: Bool) async {
+        do { _ = try await completeReminder(id: reminderID, completed: completed) }
+        catch { print("Failed to update reminder completion: \(error)") }
     }
 
-    /// **可写**的日程日历（`allowsContentModifications` 过滤，`CalendarModel(from:)` 复用）——新增表单的
-    /// 「目标日历」下拉只列它，避免用户选中一个订阅 / 只读日历经到保存失败。
-    ///
-    /// 同步读（主线程调用；与既有 `reloadCalendarAndReminderLists` 内部的同步读同口径）：
-    /// 一次 `calendars(for:)` 的内存过滤，不做 I/O。
+    func setReminderPriority(reminderID: String, priority: Int) async -> Bool {
+        do {
+            try await performWrite {
+                try self.requireAccess(to: .reminder)
+                guard let item = self.store.calendarItem(withIdentifier: reminderID) else {
+                    throw CalendarMutationError.recordNotFound
+                }
+                guard let reminder = item as? EKReminder else { throw CalendarMutationError.wrongRecordType }
+                try CalendarMutationPolicy.performReminderWrite(event: try self.savedModel(from: reminder)) {
+                    try CalendarMutationPolicy.performWithRollback(write: {
+                        reminder.priority = priority
+                        try self.store.save(reminder, commit: true)
+                    }, rollback: { reminder.rollback() })
+                }
+            }
+            return true
+        } catch {
+            print("Failed to update reminder priority: \(error)")
+            return false
+        }
+    }
+
+    func createReminder(title: String, dueDateComponents: DateComponents?) async -> Bool {
+        do {
+            _ = try await createReminderRecord(title: title, dueDateComponents: dueDateComponents, listID: nil)
+            return true
+        } catch {
+            print("Failed to create reminder: \(error)")
+            return false
+        }
+    }
+
+    func createEvent(title: String, start: Date, end: Date, isAllDay: Bool, calendarID: String?) async -> Bool {
+        do {
+            _ = try await saveEvent(input: CalendarEventInput(
+                title: title, start: start, end: end, isAllDay: isAllDay, calendarID: calendarID
+            ))
+            return true
+        } catch {
+            print("Failed to create event: \(error)")
+            return false
+        }
+    }
+
     func writableEventCalendars() -> [CalendarModel] {
-        store.calendars(for: .event)
-            .filter(\.allowsContentModifications)
-            .map { CalendarModel(from: $0) }
+        guard hasAccess(to: .event) else { return [] }
+        return store.calendars(for: .event).filter(\.allowsContentModifications).map { CalendarModel(from: $0) }
     }
 
-    /// 新日程的默认目标日历 id（`defaultCalendarForNewEvents`）——新增表单的初始选中项。
-    /// 同步读，理由同上；为 nil（没有默认日历的仓库）时调用方再由 `writableEventCalendars()` 兜底。
-    func defaultEventCalendarID() -> String? {
-        store.defaultCalendarForNewEvents?.calendarIdentifier
+    func writableReminderCalendars() -> [CalendarModel] {
+        guard hasAccess(to: .reminder) else { return [] }
+        return store.calendars(for: .reminder).filter(\.allowsContentModifications).map { CalendarModel(from: $0) }
     }
+
+    func defaultEventCalendarID() -> String? {
+        guard hasAccess(to: .event) else { return nil }
+        return store.defaultCalendarForNewEvents?.calendarIdentifier
+    }
+
+    var preferredReminderCalendarID: String? {
+        let writable = writableReminderCalendars()
+        if let id = store.defaultCalendarForNewReminders()?.calendarIdentifier,
+           writable.contains(where: { $0.id == id }) { return id }
+        return writable.first?.id
+    }
+
 }
 
 // MARK: - Model Extensions
@@ -279,7 +380,8 @@ extension CalendarModel {
             title: calendar.title,
             color: calendar.color,
             isSubscribed: calendar.isSubscribed || calendar.isDelegate,
-            isReminder: calendar.allowedEntityTypes.contains(.reminder)
+            isReminder: calendar.allowedEntityTypes.contains(.reminder),
+            allowsContentModifications: calendar.allowsContentModifications
         )
     }
 }
@@ -303,15 +405,16 @@ extension EventModel {
             timeZone: calendar.isSubscribed || calendar.isDelegate ? nil : event.timeZone,
             hasRecurrenceRules: event.hasRecurrenceRules || event.isDetached,
             priority: nil,
-            conferenceURL: event.extractConferenceURL()
+            conferenceURL: event.extractConferenceURL(),
+            isDetached: event.isDetached
         )
     }
     
     init?(from reminder: EKReminder) {
-        guard let calendar = reminder.calendar,
-              let dueDateComponents = reminder.dueDateComponents,
-              let date = Calendar.current.date(from: dueDateComponents)
-        else { return nil }
+        guard let calendar = reminder.calendar else { return nil }
+        let dueDateComponents = reminder.dueDateComponents
+        // 兼容无日期提醒的完成/详情入口；查询仍只收有到期日的提醒。
+        let date = dueDateComponents.flatMap { Calendar.current.date(from: $0) } ?? .distantFuture
         
         self.init(
             id: reminder.calendarItemIdentifier,
@@ -321,7 +424,7 @@ extension EventModel {
             location: reminder.location,
             notes: reminder.notes,
             url: reminder.url,
-            isAllDay: dueDateComponents.hour == nil,
+            isAllDay: dueDateComponents?.hour == nil,
             type: .reminder(completed: reminder.isCompleted),
             calendar: .init(from: calendar),
             participants: [],
@@ -335,7 +438,7 @@ extension EventModel {
 
 extension EventType {
     init(from event: EKEvent) {
-        self = event.birthdayContactIdentifier != nil ? .birthday : .event(.init(from: event.currentUser?.participantStatus))
+        self = event.birthdayContactIdentifier != nil || event.calendar?.type == .birthday ? .birthday : .event(.init(from: event.currentUser?.participantStatus))
     }
 }
 

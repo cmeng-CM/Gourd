@@ -40,6 +40,110 @@ struct EventModel: Equatable, Identifiable {
     let hasRecurrenceRules: Bool
     let priority: Priority?
     let conferenceURL: URL?
+    var isDetached: Bool = false
+}
+
+/// 保存输入使用 EventKit 的全天排他结束日期；跨日定时只要求结束晚于开始。
+struct CalendarEventInput: Equatable {
+    var title: String
+    var start: Date
+    var end: Date
+    var isAllDay: Bool
+    var location: String? = nil
+    var notes: String? = nil
+    var calendarID: String? = nil
+
+    func validated(calendar: Calendar = .current) throws -> Self {
+        var input = self
+        input.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.title.isEmpty else { throw CalendarMutationError.invalidTitle }
+        guard end > start else { throw CalendarMutationError.invalidDateRange }
+        if isAllDay {
+            guard calendar.startOfDay(for: start) == start,
+                  calendar.startOfDay(for: end) == end else {
+                throw CalendarMutationError.invalidAllDayRange
+            }
+        }
+        return input
+    }
+
+    static func exclusiveAllDayEnd(including lastDay: Date, calendar: Calendar = .current) -> Date? {
+        calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: lastDay))
+    }
+
+    static func includedAllDayEnd(exclusiveEnd: Date, calendar: Calendar = .current) -> Date? {
+        calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: exclusiveEnd))
+    }
+}
+
+enum CalendarMutationError: Error, Equatable, LocalizedError {
+    case accessDenied, invalidTitle, invalidDateRange, invalidAllDayRange
+    case recordNotFound, wrongRecordType, invalidCalendar, noWritableCalendar
+    case readOnlyCalendar, recurringEvent, detachedEvent, meetingEvent, birthdayEvent
+    case missingRecordIdentifier
+
+    var errorDescription: String? {
+        switch self {
+        case .accessDenied: return String(localized: "Calendar access is required.")
+        case .invalidTitle: return String(localized: "Enter a title.")
+        case .invalidDateRange: return String(localized: "End must be after start.")
+        case .invalidAllDayRange: return String(localized: "All-day dates must start at midnight.")
+        case .recordNotFound: return String(localized: "This item is no longer available.")
+        case .wrongRecordType: return String(localized: "This item has an unsupported type.")
+        case .invalidCalendar: return String(localized: "The selected calendar is no longer available.")
+        case .noWritableCalendar: return String(localized: "No writable calendar is available.")
+        case .readOnlyCalendar: return String(localized: "This calendar is read-only.")
+        case .recurringEvent: return String(localized: "Open recurring items in the system app.")
+        case .detachedEvent: return String(localized: "Open detached events in the system app.")
+        case .meetingEvent: return String(localized: "Open meeting invitations in the system app.")
+        case .birthdayEvent: return String(localized: "Open birthdays in the system app.")
+        case .missingRecordIdentifier: return String(localized: "The saved item could not be read.")
+        }
+    }
+}
+
+/// UI 只展示许可；服务从同一 store 重读记录后，也必须经过这些守卫才调用写入闭包。
+enum CalendarMutationPolicy {
+    static func performWithRollback<T>(write: () throws -> T, rollback: () -> Void) throws -> T {
+        do { return try write() }
+        catch {
+            rollback()
+            throw error
+        }
+    }
+
+    static func performEventWrite<T>(event: EventModel, write: () throws -> T) throws -> T {
+        if let restriction = event.modificationRestriction { throw restriction }
+        return try write()
+    }
+
+    static func performReminderWrite<T>(event: EventModel, write: () throws -> T) throws -> T {
+        guard event.type.isReminder, event.calendar.isReminder else {
+            throw CalendarMutationError.wrongRecordType
+        }
+        guard event.calendar.allowsContentModifications else { throw CalendarMutationError.readOnlyCalendar }
+        guard !event.hasRecurrenceRules else { throw CalendarMutationError.recurringEvent }
+        return try write()
+    }
+
+    /// 显式选择不兜底；编辑未指定目标时保留原源；仅新建且未指定目标才选默认可写源。
+    static func targetCalendarID(
+        requestedID: String?, originalID: String? = nil, defaultID: String?,
+        calendars: [CalendarModel], isReminder: Bool
+    ) throws -> String {
+        if let id = requestedID ?? originalID {
+            guard let target = calendars.first(where: { $0.id == id }) else {
+                throw CalendarMutationError.invalidCalendar
+            }
+            guard target.isReminder == isReminder else { throw CalendarMutationError.wrongRecordType }
+            guard target.allowsContentModifications else { throw CalendarMutationError.readOnlyCalendar }
+            return id
+        }
+        let writable = calendars.filter { $0.isReminder == isReminder && $0.allowsContentModifications }
+        if let defaultID, writable.contains(where: { $0.id == defaultID }) { return defaultID }
+        guard let id = writable.first?.id else { throw CalendarMutationError.noWritableCalendar }
+        return id
+    }
 }
 
 enum AttendanceStatus: Comparable {
@@ -97,6 +201,22 @@ extension EventModel {
     var attendance: AttendanceStatus { if case .event(let attendance) = type { return attendance } else { return .unknown } }
 
     var isMeeting: Bool { !participants.isEmpty }
+
+    var modificationRestriction: CalendarMutationError? {
+        if type.isBirthday { return .birthdayEvent }
+        if !type.isEvent || calendar.isReminder { return .wrongRecordType }
+        if !calendar.allowsContentModifications { return .readOnlyCalendar }
+        if isDetached { return .detachedEvent }
+        if hasRecurrenceRules { return .recurringEvent }
+        if isMeeting { return .meetingEvent }
+        return nil
+    }
+
+    var canModifyInIsland: Bool { modificationRestriction == nil }
+
+    var canCompleteReminderInIsland: Bool {
+        type.isReminder && calendar.isReminder && calendar.allowsContentModifications && !hasRecurrenceRules
+    }
 
     func calendarAppURL() -> URL? {
         // Check if a third-party calendar app is enabled
