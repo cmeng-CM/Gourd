@@ -178,7 +178,7 @@ T1–T5 的功能及 T6 测试代码已本地提交；本节与两份指南按 `
 
 | 检查 | 实际结果与证据 |
 |---|---|
-| 已完成的两轮全量 XCTest | `T6-unit-isolated`、`T6-unit-final` 均 exit 0，**各 651/651 通过，failed 0、skipped 0**；对应最终生产源码及 PID+UUID 隔离代码，覆盖写入守卫、日期端点、单稿/异步/退出状态、所有权及首页数据与锚点等；这是单元证据 |
+| 已完成的两轮全量 XCTest | `T6-unit-isolated`、`T6-unit-final` 均 exit 0，**各 651/651 通过，failed 0、skipped 0**；两轮均验证 D17 启动隔离，第一轮缓存目录只有 PID，第二轮覆盖最终 PID+UUID 隔离及生产源码。覆盖写入守卫、日期端点、单稿/异步/退出状态、所有权及首页数据与锚点等；这是单元证据 |
 | `69bb3a44` 后全量复验 | 此提交仅改 UI 计数断言。`T6-unit-69bb3a44` 中最终 UI 源码 SwiftCompile 成功，unit host 在 `_prepareTestConfigurationAndIDESession` 等待超过 3 分钟仍无 case 启动；仅中止自有测试进程，exit **143 / BUILD INTERRUPTED**，该轮未通过。xcresult 未完成，缺 Info.plist，summary 提取 exit 64，不能生成该轮计数 |
 | Python 回归 | `python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle` exit 0，**7 例通过** |
 | Release | 最终 `sh tools/build.sh`（`T6-release-isolated`）exit 0，BUILD SUCCEEDED，产物 `~/Library/Developer/Xcode/Gourd/Build/Products/Release/Gourd.app`；未安装或运行 |
