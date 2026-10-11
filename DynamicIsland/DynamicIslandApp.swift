@@ -170,7 +170,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Defaults[.homeBlockOrder] = ["com.cmeng.gourd.todos": 0]
             Defaults[.panelOrder] = [CalendarModule.moduleID: 0]
         } else if AppRuntimeEnvironment.isRunningTests {
-            // A non-UI test host never reads Clock settings or changes persistent user preferences.
+            // Clear only this isolated fixture host's prior UI seed before constructing the VM.
+            if let identifier = Bundle.main.bundleIdentifier,
+               identifier.hasPrefix("com.cmeng.gourd.calendar-tests.") {
+                UserDefaults.standard.removePersistentDomain(forName: identifier)
+            }
+            // Keep real user domains intact and block Clock/DDC integrations through volatile settings.
             var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
             for key in [Defaults.Keys.mirrorSystemTimer.name, Defaults.Keys.enableThirdPartyDDCIntegration.name,
                         Defaults.Keys.enableBetterDisplayIntegration.name, Defaults.Keys.enableLunarIntegration.name] {
