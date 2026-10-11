@@ -41,7 +41,7 @@ class BluetoothAudioManager: ObservableObject {
     private let coordinator = DynamicIslandViewCoordinator.shared
     private var pollingTimer: Timer?
     private let bluetoothPreferencesSuite = "/Library/Preferences/com.apple.Bluetooth"
-    private let batteryReader = BluetoothLEBatteryReader()
+    private lazy var batteryReader = BluetoothLEBatteryReader()
     private var isLiveBatteryRefreshInFlight = false
 
     private let appleVendorID: UInt16 = 0x05AC
@@ -126,7 +126,9 @@ class BluetoothAudioManager: ObservableObject {
     ]
     
     // MARK: - Initialization
+    // Tests use memory fixtures; do not start hardware observers or probes.
     private init() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         print("🎧 [BluetoothAudioManager] Initializing...")
         setupBluetoothObservers()
         setupAirPodsListeningModeObservers()

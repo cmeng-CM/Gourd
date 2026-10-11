@@ -31,6 +31,7 @@ enum CalendarInteractionFixtures {
             .flatMap { Int($0.split(separator: "=").last ?? "") } ?? 30
         let service = makeBackend(count: count, on: now)
         if CommandLine.arguments.contains("--calendar-write-failure") { service.writeFailure = .readOnlyCalendar }
+        if CommandLine.arguments.contains("--calendar-write-failure-once") { service.nextWriteFailure = .readOnlyCalendar }
         if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--calendar-write-delay-ms=") }),
            let milliseconds = UInt64(arg.split(separator: "=").last ?? "") {
             service.writeDelayNanoseconds = min(milliseconds, 60_000) * 1_000_000
@@ -79,6 +80,7 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
     private var completionDates: [String: Date]
     private var serial = 0
     private var failure: CalendarMutationError?
+    private var oneTimeFailure: CalendarMutationError?
     private var delay: UInt64 = 0
     private var openedIDs: [String] = []
     private var attempts = 0
@@ -114,6 +116,10 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
     var writeDelayNanoseconds: UInt64 {
         get { locked { delay } }
         set { locked { delay = newValue } }
+    }
+    var nextWriteFailure: CalendarMutationError? {
+        get { locked { oneTimeFailure } }
+        set { locked { oneTimeFailure = newValue } }
     }
     var writeAttempts: Int { locked { attempts } }
     var systemOpenedIDs: [String] { locked { openedIDs } }
@@ -163,6 +169,10 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
                 status: type == .event ? eventAuthorization : reminderAuthorization, type: type, creating: creating
             ) {
                 if let failure { throw failure }
+                if let oneTimeFailure {
+                    self.oneTimeFailure = nil
+                    throw oneTimeFailure
+                }
                 return try operation()
             }
         }

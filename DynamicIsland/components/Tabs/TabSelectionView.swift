@@ -336,6 +336,10 @@ struct TabSelectionView: View {
                     }
                     coordinator.currentView = tab.view
                 }
+                .accessibilityIdentifier(tab.view == .module
+                    ? "panel-tab-module-\(tab.experienceID ?? "")"
+                    : "panel-tab-\(tab.view == .home ? "home" : tab.id)")
+                .accessibilityLabel(Text(LocalizedStringKey(tab.label)))
                 .frame(height: 26)
                 .foregroundStyle(isSelected ? activeAccent : .gray)
                 .background {

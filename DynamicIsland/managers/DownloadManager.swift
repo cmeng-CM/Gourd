@@ -43,6 +43,7 @@ class DownloadManager {
     }
     
     init() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         requestDownloadsPermissionIfNeeded()
         startMonitoringIfNeeded()
         
@@ -56,6 +57,7 @@ class DownloadManager {
     }
     
     private func startMonitoringIfNeeded() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         if Defaults[.enableDownloadListener] {
             startMonitoring()
         } else {
@@ -65,6 +67,7 @@ class DownloadManager {
     }
     
     private func startMonitoring() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         guard source == nil, let downloadsDirectory else { return }
         
         hasPerformedInitialScan = false

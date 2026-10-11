@@ -197,6 +197,12 @@ class ClipboardManager: ObservableObject {
     
     // Directory for storing clipboard data files
     static let clipboardDataDirectory: URL = {
+        if AppRuntimeEnvironment.isRunningTests || AppRuntimeEnvironment.isUITesting {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("GourdClipboardTests-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory
+        }
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let clipboardDir = documentsPath.appendingPathComponent("ClipboardData")
         
@@ -207,6 +213,7 @@ class ClipboardManager: ObservableObject {
     }()
     
     private init() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         lastChangeCount = NSPasteboard.general.changeCount
         loadHistoryFromDefaults()
         cleanupOldFiles()
@@ -219,6 +226,7 @@ class ClipboardManager: ObservableObject {
     // MARK: - Public Methods
     
     func startMonitoring() {
+        guard !AppRuntimeEnvironment.isRunningTests, !AppRuntimeEnvironment.isUITesting else { return }
         guard !isMonitoring else { return }
         
         isMonitoring = true
