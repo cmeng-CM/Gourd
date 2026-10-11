@@ -28,7 +28,23 @@ import SwiftUI
 
 @MainActor
 class CalendarManager: ObservableObject {
-    static let shared = CalendarManager()
+    static let shared: CalendarManager = {
+        #if DEBUG
+        if CalendarInteractionFixtures.isEnabled {
+            let manager = CalendarManager(
+                service: CalendarInteractionFixtures.backend, now: { CalendarInteractionFixtures.now }, startMonitoring: false
+            )
+            manager.calendarAuthorizationStatus = manager.liveCalendarAuthorization
+            manager.reminderAuthorizationStatus = manager.liveReminderAuthorization
+            Task {
+                await manager.reloadCalendarAndReminderLists()
+                await manager.updateCurrentDate(CalendarInteractionFixtures.now)
+            }
+            return manager
+        }
+        #endif
+        return CalendarManager()
+    }()
 
     @Published var currentWeekStartDate: Date
     /// 选中日的 `[当天零点, 次日零点)` 快照；首页使用独立的 `todayEvents`。
