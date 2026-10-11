@@ -6,7 +6,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// 每个页面只释放自己的 ownership 和 VM 令牌；真正离开应用才暂存共享会话。
+/// 局部离开先释放自己的 ownership；另一页面仍输入时保留共享编辑上下文。
 @MainActor
 final class CalendarEditorLifecycle: ObservableObject {
     let ownerID = UUID()
@@ -24,6 +24,14 @@ final class CalendarEditorLifecycle: ObservableObject {
     private var menuCount = 0
     private var popoverPresented = false
     private var protected = false
+    private var stopped = false
+    private weak var transferDestination: CalendarEditorLifecycle?
+    private var restoreFocusWhenKey = false
+    private final class WeakOwner {
+        weak var value: CalendarEditorLifecycle?
+        init(_ value: CalendarEditorLifecycle) { self.value = value }
+    }
+    private static var activeOwners: [UUID: WeakOwner] = [:]
     private var subscriptions = Set<AnyCancellable>()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var localClickMonitor: Any?
@@ -42,6 +50,7 @@ final class CalendarEditorLifecycle: ObservableObject {
     }
 
     func connect(to viewModel: DynamicIslandViewModel) {
+        stopped = false
         self.viewModel = viewModel
         setProtection = { [weak viewModel] in viewModel?.setAutoCloseSuppression($0, token: $1) }
         setScroll = { [weak viewModel] in viewModel?.setScrollGestureSuppression($0, token: $1) }
@@ -51,13 +60,15 @@ final class CalendarEditorLifecycle: ObservableObject {
             self?.updateProtection()
         }.store(in: &subscriptions)
         viewModel.$notchState.dropFirst().sink { [weak self] state in
-            if state == .closed { self?.clearLocalInput(); self?.setScrolling(false) }
+            if state == .closed { self?.departLocally() }
         }.store(in: &subscriptions)
         updateProtection()
     }
 
     func setEditorFocus(_ focused: Bool) {
         self.focused = focused
+        restoreFocusWhenKey = false
+        if focused { transferDestination = nil }
         if focused { window?.makeKey() }
         session.setEditorFocus(focused, ownerID: ownerID)
         updateProtection()
@@ -83,6 +94,7 @@ final class CalendarEditorLifecycle: ObservableObject {
         focused = false
         menuCount = 0
         popoverPresented = false
+        restoreFocusWhenKey = false
         session.clearOwnership(ownerID)
         setScrolling(false)
         updateProtection()
@@ -91,7 +103,6 @@ final class CalendarEditorLifecycle: ObservableObject {
     private func updateProtection() {
         let next = shouldProtectAutoClose
         setProtection(next, protectionToken)
-        if next { AppDelegate.shared?.cancelPendingNotchAutoClose() }
         if protected && !next { recheckHover() }
         protected = next
     }
@@ -101,6 +112,8 @@ final class CalendarEditorLifecycle: ObservableObject {
         removeWindowMonitoring()
         self.window = window
         guard let window else { return }
+        stopped = false
+        Self.activeOwners[ownerID] = WeakOwner(self)
         let center = NotificationCenter.default
         let lostKey = center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.scheduleKeyLossCheck() }
@@ -108,21 +121,22 @@ final class CalendarEditorLifecycle: ObservableObject {
         let closed = center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
+        let gainedKey = center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restoreTransferredFocus() }
+        }
         let workspace = NSWorkspace.shared.notificationCenter
         let activated = workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
             MainActor.assumeIsolated { self?.suspendForExternalDeparture() }
         }
-        observers = [(center, lostKey), (center, closed), (workspace, activated)]
+        observers = [(center, lostKey), (center, gainedKey), (center, closed), (workspace, activated)]
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated { self?.suspendForExternalDeparture() }
         }
         // Esc remains with CalendarPanelPages so popovers and confirmations dismiss first.
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, !self.owns(event.window) else { return event }
-            if self.menuCount == 0 && !self.popoverPresented { self.suspendForExternalDeparture() }
-            else { self.scheduleKeyLossCheck() }
+            self?.handleLocalClick(in: event.window)
             return event
         }
         if focused { window.makeKey() }
@@ -133,25 +147,88 @@ final class CalendarEditorLifecycle: ObservableObject {
         var candidate = candidate
         while let current = candidate {
             if current === window { return true }
-            candidate = current.parent
+            candidate = current.parent ?? current.sheetParent
         }
         return false
     }
 
     private func scheduleKeyLossCheck() {
         keyLossCheck?.cancel()
-        guard focused || menuCount > 0 || popoverPresented else { return }
+        guard window != nil, session.route != .list else { return }
         let check = DispatchWorkItem { [weak self] in
-            guard let self, let window = self.window, !window.isKeyWindow,
-                  !self.owns(NSApp.keyWindow), self.menuCount == 0, !self.popoverPresented else { return }
-            self.suspendForExternalDeparture()
+            guard let self, let window = self.window, !window.isKeyWindow else { return }
+            self.handleKeyLoss(to: NSApp.keyWindow)
         }
         keyLossCheck = check
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: check)
     }
 
+    enum WindowContext: Equatable { case ownCalendar, otherCalendar, ownedPresentation, external }
+
+    /// Native menu windows may not expose a parent; every owner's presentation state matters.
+    func windowContext(for candidate: NSWindow?) -> WindowContext {
+        if owns(candidate) { return .ownCalendar }
+        if otherOwner(of: candidate) != nil { return .otherCalendar }
+        if session.ownedMenuCount > 0 || session.datePopoverPresented { return .ownedPresentation }
+        return .external
+    }
+
+    private func otherOwner(of candidate: NSWindow?) -> CalendarEditorLifecycle? {
+        Self.activeOwners = Self.activeOwners.filter { $0.value.value?.window != nil }
+        return Self.activeOwners.values.compactMap(\.value).first {
+            $0 !== self && $0.session === session && $0.owns(candidate)
+        }
+    }
+
+    func handleLocalClick(in candidate: NSWindow?) {
+        switch windowContext(for: candidate) {
+        case .ownCalendar: break
+        case .otherCalendar:
+            if let destination = otherOwner(of: candidate) { transferInput(to: destination) }
+        case .ownedPresentation: scheduleKeyLossCheck()
+        case .external: suspendForExternalDeparture()
+        }
+    }
+
+    func handleKeyLoss(to candidate: NSWindow?) {
+        switch windowContext(for: candidate) {
+        case .ownCalendar: break
+        case .otherCalendar:
+            if let destination = otherOwner(of: candidate) { transferInput(to: destination) }
+        case .ownedPresentation: break
+        case .external: suspendForExternalDeparture()
+        }
+    }
+
+    private func transferInput(to destination: CalendarEditorLifecycle) {
+        keyLossCheck?.cancel()
+        let shouldRestoreFocus = focused || restoreFocusWhenKey
+        clearLocalInput()
+        restoreFocusWhenKey = shouldRestoreFocus
+        // Mouse monitors run before the destination receives its click/FocusState update.
+        transferDestination = destination
+    }
+
+    func restoreTransferredFocus() {
+        transferDestination = nil
+        guard restoreFocusWhenKey, session.route == .editor else { return }
+        setEditorFocus(true)
+    }
+
+    /// No await between clearing this owner and checking the aggregate; an in-flight write keeps its task.
+    func departLocally() {
+        let isTransferring = transferDestination?.window != nil
+        if !isTransferring { transferDestination = nil }
+        clearLocalInput()
+        if !isTransferring, session.route == .editor,
+           !session.editorHasFocus, session.ownedMenuCount == 0, !session.datePopoverPresented {
+            session.suspend()
+        }
+    }
+
     func suspendForExternalDeparture() {
         keyLossCheck?.cancel()
+        transferDestination = nil
         session.suspend()
         clearLocalInput()
         setScrolling(false)
@@ -159,9 +236,12 @@ final class CalendarEditorLifecycle: ObservableObject {
     }
 
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         removeWindowMonitoring()
         subscriptions.removeAll()
-        clearLocalInput()
+        departLocally()
+        transferDestination = nil
         setProtection(false, protectionToken)
         protected = false
         setScrolling(false)
@@ -177,12 +257,24 @@ final class CalendarEditorLifecycle: ObservableObject {
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         localClickMonitor = nil
         outsideClickMonitor = nil
+        Self.activeOwners.removeValue(forKey: ownerID)
         window = nil
     }
 
     static func closeForLock(session: CalendarPanelSession, closePanels: [() -> Void]) {
         session.suspend()
         closePanels.forEach { $0() }
+    }
+}
+
+/// The app injects its actual delegate's cancellation closure, independent of NSApp.delegate wrappers.
+@MainActor
+final class CalendarShortcutCloseProtection {
+    private var subscription: AnyCancellable?
+    init(session: CalendarPanelSession, cancel: @escaping () -> Void) {
+        subscription = session.$route.combineLatest(session.$isSubmitting).sink { route, submitting in
+            if route == .editor || submitting { cancel() }
+        }
     }
 }
 

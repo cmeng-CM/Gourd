@@ -1510,9 +1510,6 @@ struct ContentView: View {
                 syncCalendarSubmissionProtection()
                 if !submitting { vm.shouldRecheckHover.toggle() }
             }
-            .onChange(of: calendarSession.route) { _, route in
-                if route == .editor { AppDelegate.shared?.cancelPendingNotchAutoClose() }
-            }
             .onChange(of: musicControlWindowEnabled) { _, enabled in
                 if enabled {
                     if musicManager.isPlaying || !musicManager.isPlayerIdle {
@@ -2812,9 +2809,6 @@ struct ContentView: View {
     /// Survives CalendarPanelPages teardown/tab changes while the shared write is in flight.
     private func syncCalendarSubmissionProtection() {
         vm.setAutoCloseSuppression(calendarSession.isSubmitting && vm.notchState == .open, token: calendarSubmissionToken)
-        if calendarSession.isSubmitting || calendarSession.route == .editor {
-            AppDelegate.shared?.cancelPendingNotchAutoClose()
-        }
     }
 
     private func startHiddenEdgeHoverPolling() {

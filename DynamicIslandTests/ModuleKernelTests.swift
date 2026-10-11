@@ -8598,6 +8598,231 @@ final class CalendarQuickAddTests: XCTestCase {
 
 @MainActor
 final class CalendarInteractionTests: XCTestCase {
+    func testLifecycleSingleOwnerLocalDepartureReturnsToListAndKeepsResumableDraft() {
+        for presentation in 0..<4 {
+            let session = panelSession(service: panelBackend())
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Local retained draft"
+            let original = session.draft
+            let lifecycle = CalendarEditorLifecycle(session: session)
+            if presentation == 0 { lifecycle.setEditorFocus(true) }
+            if presentation == 1 { lifecycle.setOwnedMenuCount(1) }
+            if presentation == 2 { lifecycle.setDatePopoverPresented(true) }
+            lifecycle.departLocally()
+            XCTAssertEqual(session.route, .list)
+            XCTAssertEqual(session.draft, original)
+            XCTAssertFalse(session.shouldProtectAutoClose)
+            lifecycle.stop()
+            lifecycle.stop()
+            session.resumeDraft()
+            XCTAssertEqual(session.route, .editor)
+            XCTAssertEqual(session.draft, original)
+            lifecycle.stop()
+            XCTAssertEqual(session.route, .editor, "已停止的旧页面不能再暂停新恢复的编辑页")
+        }
+    }
+
+    func testLifecycleLocalDepartureRespectsEveryOtherOwnerPresentation() {
+        for presentation in 0..<3 {
+            let session = panelSession(service: panelBackend())
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Other window remains active"
+            let lifecycleA = CalendarEditorLifecycle(session: session)
+            let lifecycleB = CalendarEditorLifecycle(session: session)
+            lifecycleA.setEditorFocus(true)
+            if presentation == 0 { lifecycleB.setEditorFocus(true) }
+            if presentation == 1 { lifecycleB.setOwnedMenuCount(1) }
+            if presentation == 2 { lifecycleB.setDatePopoverPresented(true) }
+            lifecycleA.departLocally()
+            lifecycleA.stop()
+            lifecycleA.stop()
+            XCTAssertEqual(session.route, .editor)
+            XCTAssertEqual(session.editorHasFocus, presentation == 0)
+            XCTAssertEqual(session.ownedMenuCount, presentation == 1 ? 1 : 0)
+            XCTAssertEqual(session.datePopoverPresented, presentation == 2)
+            XCTAssertTrue(session.shouldProtectAutoClose)
+            lifecycleB.stop()
+            XCTAssertEqual(session.route, .list)
+            XCTAssertEqual(session.draft?.title, "Other window remains active")
+        }
+    }
+
+    func testLifecycleLocalDepartureDuringSubmissionRetainsSameWriteAndRepeatedStopIsIdempotent() async {
+        let backend = panelBackend()
+        let started = expectation(description: "local departure save started")
+        var gate: CheckedContinuation<Void, Never>?
+        let session = panelSession(service: backend, save: { input, id in
+            await withCheckedContinuation { gate = $0; started.fulfill() }
+            return try await backend.saveEvent(input: input, eventID: id)
+        })
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Keep writing across local departure"
+        let lifecycle = CalendarEditorLifecycle(session: session)
+        lifecycle.setEditorFocus(true)
+        let saving = Task { await session.save() }
+        await fulfillment(of: [started], timeout: 2)
+        lifecycle.departLocally()
+        lifecycle.stop()
+        lifecycle.stop()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertTrue(session.isSubmitting)
+        XCTAssertEqual(session.draft?.title, "Keep writing across local departure")
+        gate?.resume()
+        let saved = await saving.value
+        XCTAssertTrue(saved)
+        XCTAssertFalse(session.isSubmitting)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertEqual(session.route, .list)
+    }
+
+    private func lifecycleWindow() -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    func testLifecycleCalendarWindowTransferBeforeDestinationFocusDoesNotSuspendSharedEditor() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Transfer before native click dispatch"
+        let windowA = lifecycleWindow(), windowB = lifecycleWindow()
+        let lifecycleA = CalendarEditorLifecycle(session: session)
+        let lifecycleB = CalendarEditorLifecycle(session: session)
+        lifecycleA.attach(to: windowA)
+        lifecycleB.attach(to: windowB)
+        defer { lifecycleA.stop(); lifecycleB.stop(); windowA.close(); windowB.close() }
+        lifecycleA.setEditorFocus(true)
+        XCTAssertEqual(lifecycleA.windowContext(for: windowB), .otherCalendar)
+        lifecycleA.handleLocalClick(in: windowB)
+        XCTAssertFalse(session.editorHasFocus, "目的窗口尚未发布焦点，不能伪造其 ownership")
+        XCTAssertEqual(session.route, .editor)
+        lifecycleA.departLocally()
+        lifecycleA.stop()
+        lifecycleA.stop()
+        XCTAssertEqual(session.route, .editor)
+        lifecycleB.setEditorFocus(true)
+        XCTAssertTrue(session.editorHasFocus)
+        XCTAssertEqual(session.draft?.title, "Transfer before native click dispatch")
+    }
+
+    func testLifecycleCalendarWindowAndChildKeyTransferPreservesOtherOwnerAndRestoresFocus() {
+        for presentation in 0..<3 {
+            let session = panelSession(service: panelBackend())
+            session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+            session.draft?.title = "Calendar-to-calendar transfer"
+            let windowA = lifecycleWindow(), windowB = lifecycleWindow(), child = lifecycleWindow()
+            windowB.addChildWindow(child, ordered: .above)
+            let lifecycleA = CalendarEditorLifecycle(session: session)
+            let lifecycleB = CalendarEditorLifecycle(session: session)
+            lifecycleA.attach(to: windowA)
+            lifecycleB.attach(to: windowB)
+            lifecycleA.setEditorFocus(true)
+            if presentation == 0 { lifecycleB.setEditorFocus(true) }
+            if presentation == 1 { lifecycleB.setOwnedMenuCount(1) }
+            if presentation == 2 { lifecycleB.setDatePopoverPresented(true) }
+            XCTAssertEqual(lifecycleA.windowContext(for: child), .otherCalendar)
+            lifecycleA.handleLocalClick(in: child)
+            lifecycleA.handleKeyLoss(to: child)
+            XCTAssertEqual(session.route, .editor)
+            XCTAssertEqual(session.editorHasFocus, presentation == 0)
+            XCTAssertEqual(session.ownedMenuCount, presentation == 1 ? 1 : 0)
+            XCTAssertEqual(session.datePopoverPresented, presentation == 2)
+            lifecycleA.restoreTransferredFocus()
+            XCTAssertTrue(session.editorHasFocus)
+            XCTAssertEqual(session.route, .editor)
+            lifecycleA.stop()
+            XCTAssertEqual(session.route, .editor)
+            lifecycleB.stop()
+            XCTAssertEqual(session.route, .list)
+            XCTAssertEqual(lifecycleA.windowContext(for: windowB), .external, "停止后移除弱窗口注册")
+            windowB.removeChildWindow(child)
+            child.close(); windowA.close(); windowB.close()
+        }
+    }
+
+    func testLifecycleUnparentedOwnedPresentationUsesAggregateBeforeRealExternalDeparture() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Owned native presentation"
+        let lifecycleA = CalendarEditorLifecycle(session: session)
+        let lifecycleB = CalendarEditorLifecycle(session: session)
+        let unrelated = lifecycleWindow()
+        defer { lifecycleA.stop(); lifecycleB.stop(); unrelated.close() }
+        lifecycleA.setEditorFocus(true)
+        lifecycleB.setOwnedMenuCount(1)
+        XCTAssertEqual(lifecycleA.windowContext(for: unrelated), .ownedPresentation)
+        lifecycleA.handleKeyLoss(to: unrelated)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.ownedMenuCount, 1)
+        lifecycleB.setOwnedMenuCount(0)
+        lifecycleB.setDatePopoverPresented(true)
+        lifecycleA.handleKeyLoss(to: unrelated)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertTrue(session.datePopoverPresented)
+        lifecycleB.setDatePopoverPresented(false)
+        XCTAssertEqual(lifecycleA.windowContext(for: unrelated), .external)
+        lifecycleA.handleLocalClick(in: unrelated)
+        XCTAssertEqual(session.route, .list)
+        XCTAssertFalse(session.shouldProtectAutoClose)
+        XCTAssertEqual(session.draft?.title, "Owned native presentation")
+        session.resumeDraft()
+        lifecycleB.setDatePopoverPresented(true)
+        lifecycleA.suspendForExternalDeparture()
+        XCTAssertEqual(session.route, .list, "真正外部应用不受所属弹层聚合状态阻挡")
+        XCTAssertFalse(session.datePopoverPresented)
+    }
+
+    func testShortcutDeadlineIsCancelledWhenEnteringEditorEvenAfterReturningToList() async {
+        let session = panelSession(service: panelBackend())
+        let closed = expectation(description: "old editor deadline must not close")
+        closed.isInverted = true
+        var pending: DispatchWorkItem?
+        var cancellationCalls = 0
+        let protection = CalendarShortcutCloseProtection(session: session) {
+            cancellationCalls += 1
+            pending?.cancel()
+            pending = nil
+        }
+        let item = DispatchWorkItem { closed.fulfill() }
+        pending = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.suspend()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertEqual(cancellationCalls, 1)
+        XCTAssertTrue(item.isCancelled)
+        XCTAssertNil(pending)
+        await fulfillment(of: [closed], timeout: 0.12)
+        withExtendedLifetime(protection) {}
+    }
+
+    func testShortcutDeadlineIsCancelledWhenSubmissionStartsEvenAfterItFinishes() async throws {
+        let backend = panelBackend()
+        let session = panelSession(service: backend)
+        let closed = expectation(description: "old submission deadline must not close")
+        closed.isInverted = true
+        var pending: DispatchWorkItem?
+        var cancellationCalls = 0
+        let protection = CalendarShortcutCloseProtection(session: session) {
+            cancellationCalls += 1
+            pending?.cancel()
+            pending = nil
+        }
+        let item = DispatchWorkItem { closed.fulfill() }
+        pending = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
+        let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
+        let completed = await session.complete(reminder, completed: true)
+        XCTAssertTrue(completed)
+        XCTAssertFalse(session.isSubmitting)
+        XCTAssertEqual(session.route, .list)
+        XCTAssertEqual(cancellationCalls, 1)
+        XCTAssertTrue(item.isCancelled)
+        XCTAssertNil(pending)
+        await fulfillment(of: [closed], timeout: 0.12)
+        withExtendedLifetime(protection) {}
+    }
+
     func testLifecycleViewingAndDirtyDraftAloneDoNotProtectAutoClose() {
         let session = panelSession(service: panelBackend())
         var protected = false

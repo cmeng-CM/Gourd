@@ -115,6 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowsHiddenForLock = false
     private var optionalShortcutHandlersRegistered = false
     private let calendarTermination = CalendarTerminationController()
+    private var calendarShortcutProtection: CalendarShortcutCloseProtection?
     private var calendarTerminationTask: Task<Void, Never>?
     private weak var focusWithoutDevToolsMenuItem: NSMenuItem?
     private weak var focusUseDevToolsMenuItem: NSMenuItem?
@@ -403,6 +404,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         tearDownAudioTapMusicObservers()
         cancelPendingNotchAutoClose()
         cancellables.removeAll()
+        calendarShortcutProtection = nil
         extensionXPCServiceHost.stop()
         extensionRPCServer.stop()
         
@@ -786,6 +788,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        observeCalendarShortcutProtection(session: .shared)
         let userInfo: [String: Any] = [
             AtollDistributedNotifications.UserInfoKey.sourcePID: NSNumber(value: ProcessInfo.processInfo.processIdentifier)
         ]
@@ -1550,6 +1553,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func cancelPendingNotchAutoClose() {
         closeNotchWorkItem?.cancel()
         closeNotchWorkItem = nil
+    }
+
+    /// NSApplicationDelegateAdaptor may wrap NSApp.delegate; use this real delegate instance.
+    func observeCalendarShortcutProtection(session: CalendarPanelSession) {
+        calendarShortcutProtection = CalendarShortcutCloseProtection(session: session) { [weak self] in
+            self?.cancelPendingNotchAutoClose()
+        }
     }
 
     private func registerOptionalShortcutHandlers() {
