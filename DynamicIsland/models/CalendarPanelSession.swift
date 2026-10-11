@@ -64,6 +64,8 @@ final class CalendarPanelSession: ObservableObject {
     @Published private(set) var baseline: CalendarDraft?
     @Published private(set) var isSubmitting = false
     @Published private(set) var error: String?
+    /// 首页只展示本次完成动作的错误，不能读到先前保存草稿的错误。
+    @Published private(set) var completionError: String?
     @Published private(set) var pendingConfirmation: Confirmation?
     @Published private(set) var editorHasFocus = false
     @Published private(set) var ownedMenuCount = 0
@@ -402,7 +404,12 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     func complete(_ event: EventModel, completed: Bool) async -> Bool {
-        guard !isSubmitting, event.canCompleteReminderInIsland else { return false }
+        guard !isSubmitting else { return false }
+        completionError = nil
+        guard event.canCompleteReminderInIsland else {
+            completionError = (event.calendar.allowsContentModifications ? CalendarMutationError.wrongRecordType : .readOnlyCalendar).localizedDescription
+            return false
+        }
         let generation = navigationGeneration
         return await submit {
             do {
@@ -412,6 +419,7 @@ final class CalendarPanelSession: ObservableObject {
                 }
                 return true
             } catch {
+                self.completionError = error.localizedDescription
                 if self.navigationGeneration == generation { self.error = error.localizedDescription }
                 return false
             }

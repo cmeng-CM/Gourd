@@ -29,6 +29,7 @@
 //  倒计时这三段的字面量断言（它们不分语言，见 docs/38 口径 ①）。
 //
 
+import EventKit
 import XCTest
 
 @testable import Gourd
@@ -65,10 +66,12 @@ final class HomeTodayBandTests: XCTestCase {
         _ title: String,
         start: Date,
         end: Date,
-        isAllDay: Bool = false
+        isAllDay: Bool = false,
+        id: String? = nil,
+        type: EventType = .event(.accepted)
     ) -> EventModel {
         EventModel(
-            id: title,
+            id: id ?? title,
             start: start,
             end: end,
             title: title,
@@ -76,7 +79,7 @@ final class HomeTodayBandTests: XCTestCase {
             notes: nil,
             url: nil,
             isAllDay: isAllDay,
-            type: .event(.accepted),
+            type: type,
             calendar: CalendarModel(
                 accountName: "Fixture",
                 id: "fixture.calendar",
@@ -348,4 +351,220 @@ final class HomeTodayBandTests: XCTestCase {
             "整行 = 三段用 ` · ` 连接"
         )
     }
+
+    // MARK: - 首页全量清单与独立今天快照
+
+    func testHomeTodayEventsUseHalfOpenOverlapAndRecordIDs() {
+        let calendar = fixtureCalendar()
+        let day = time(calendar, month: 10, day: 14)
+        let tomorrow = time(calendar, month: 10, day: 15)
+        let now = time(calendar, month: 10, day: 14, hour: 10)
+        let ongoing = event("同名", start: time(calendar, month: 10, day: 13, hour: 23), end: time(calendar, month: 10, day: 14, hour: 11), id: "overnight")
+        let sameTitle = event("同名", start: now, end: time(calendar, month: 10, day: 14, hour: 12), id: "other")
+        let midnightEnded = event("零点结束", start: time(calendar, month: 10, day: 13, hour: 20), end: day)
+        let future = event("明日", start: tomorrow, end: time(calendar, month: 10, day: 15, hour: 1))
+        let allDay = event("全天", start: day, end: tomorrow, isAllDay: true)
+        let reminder = event("提醒", start: now, end: tomorrow, type: .reminder(completed: false))
+        let input = [ongoing, sameTitle, ongoing, midnightEnded, future, allDay, reminder]
+        XCTAssertEqual(HomeTodayEvents.filtered(input, now: now, calendar: calendar).map(\.id), ["overnight", "other", "全天"])
+        XCTAssertEqual(HomeTodayEvents.filtered(input, now: now, hideAllDayEvents: true, calendar: calendar).map(\.id), ["overnight", "other"])
+        XCTAssertEqual(TodayNextEvent.pick(events: input, now: now, calendar: calendar), .ongoing(ongoing, minutesUntilEnd: 60))
+        XCTAssertEqual(TodayNextEvent.pick(events: [midnightEnded, future, allDay, reminder], now: now, calendar: calendar), .none)
+    }
+
+    func testHomeNextEventKeepsIndependentTodaySnapshotWhileBrowsingDate() async {
+        let calendar = fixtureCalendar()
+        let now = time(calendar, month: 10, day: 14, hour: 10)
+        let today = event("今天", start: now, end: time(calendar, month: 10, day: 14, hour: 11))
+        let tomorrow = event("明日", start: time(calendar, month: 10, day: 15, hour: 10), end: time(calendar, month: 10, day: 15, hour: 11))
+        let service = CalendarInteractionMemoryService(records: [today, tomorrow], calendars: [today.calendar], calendar: calendar)
+        let manager = CalendarManager(service: service, now: { now }, calendar: calendar, startMonitoring: false)
+        await manager.updateTodayEvents(force: true)
+        let before = TodayNextEvent.pick(events: manager.todayEvents, now: now, calendar: calendar)
+        await manager.updateCurrentDate(tomorrow.start)
+        XCTAssertEqual(manager.events.map(\.id), [tomorrow.id])
+        XCTAssertEqual(manager.todayEvents, [today])
+        XCTAssertEqual(TodayNextEvent.pick(events: manager.todayEvents, now: now, calendar: calendar), before)
+        XCTAssertEqual(HomeTodayEvents.filtered(manager.todayEvents, now: now, calendar: calendar), [today])
+    }
+
+    func testHomeEntriesContainAllNineOrThirtyRecordsAndDeduplicateByID() async {
+        for count in [9, 30] {
+            let backend = CalendarInteractionFixtures.makeBackend(count: count, on: Date())
+            let store = fixtureTodoStore(backend)
+            await store.refresh()
+            let records = backend.allRecords()
+            let events = records.filter { !$0.type.isReminder }
+            let todos = store.items
+            let all = TodosHomeBlockLayout.listedEntries(events: events + records, todos: todos + todos, hasFullAccess: true)
+            XCTAssertEqual(all.count, count)
+            XCTAssertEqual(Set(all.map(\.recordID)).count, count)
+            XCTAssertTrue(all.contains { $0.recordID == String(format: "fixture-reminder-%02d", count) })
+            let hidden = TodosHomeBlockLayout.listedEntries(events: events, todos: todos, hasFullAccess: true, hideCompletedReminders: true)
+            XCTAssertEqual(hidden.count, count - 1)
+            XCTAssertEqual(TodosHomeBlockLayout.listedEntries(events: events, todos: todos, hasFullAccess: false).count, count / 3)
+        }
+        let sameTitle = [TodoBucketing.Item(id: "one", title: "同名"), TodoBucketing.Item(id: "two", title: "同名")]
+        XCTAssertEqual(TodosHomeBlockLayout.uniqueTodos(sameTitle + sameTitle).map(\.id), ["one", "two"])
+    }
+
+    func testHomeAnchorKeepsViewportAndFindsAdjacentSurvivor() {
+        let ids = ["event", "one", "two", "three"]
+        XCTAssertEqual(TodosHomeBlockLayout.anchor(afterRemoving: "two", from: ids, anchor: "one"), "one")
+        XCTAssertEqual(TodosHomeBlockLayout.anchor(afterRemoving: "two", from: ids, anchor: "two"), "three")
+        XCTAssertEqual(TodosHomeBlockLayout.anchor(afterRemoving: "three", from: ids, anchor: "three"), "two")
+        XCTAssertNil(TodosHomeBlockLayout.anchor(afterRemoving: "one", from: ["one"], anchor: "one"))
+        XCTAssertNil(TodosHomeBlockLayout.anchor(afterRemoving: "one", from: ids, anchor: nil))
+    }
+
+    private func fixtureTodoStore(_ backend: CalendarInteractionMemoryService) -> TodoStore {
+        TodoStore(logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"), fixtureBackend: backend)
+    }
+
+    func testTodoFixtureInitializationAuthorizationAndRefreshAvoidEventKit() async {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 9, on: Date())
+        let store = fixtureTodoStore(backend)
+        XCTAssertEqual(store.authorization, .fullAccess)
+        XCTAssertFalse(store.hasInitializedEventStore)
+        store.start()
+        await store.refresh()
+        XCTAssertEqual(store.items.count, 6)
+        XCTAssertFalse(store.isObservingEventStore)
+        backend.setAuthorization(.denied, for: .reminder)
+        await store.requestAccess()
+        XCTAssertEqual(store.authorization, .denied)
+        XCTAssertTrue(store.items.isEmpty)
+        backend.setAuthorization(.fullAccess, for: .reminder)
+        await store.requestAccess()
+        XCTAssertEqual(store.items.count, 6)
+        store.stop()
+        XCTAssertFalse(store.hasInitializedEventStore)
+        XCTAssertFalse(store.isObservingEventStore)
+        let defaultStore = TodoStore(logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"))
+        await defaultStore.refresh()
+        XCTAssertFalse(defaultStore.hasInitializedEventStore)
+        XCTAssertFalse(defaultStore.items.isEmpty)
+    }
+
+    func testTodoFixtureAllWritesShareBackendIncludingNoDateAndFailureRollback() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 9, on: Date())
+        let store = fixtureTodoStore(backend)
+        await store.refresh()
+        let item = try XCTUnwrap(store.items.first { !$0.isCompleted })
+        await store.setCompleted(item, completed: true)
+        XCTAssertTrue(try XCTUnwrap(store.items.first { $0.id == item.id }).isCompleted)
+        XCTAssertEqual(backend.event(withID: item.id)?.type, .reminder(completed: true))
+        XCTAssertNotNil(backend.completionDate(forReminderID: item.id))
+        let priorityOK = await store.setPriority(item, to: .high)
+        XCTAssertTrue(priorityOK)
+        await store.refresh()
+        XCTAssertEqual(store.priority(for: item.id), .high)
+        XCTAssertEqual(backend.event(withID: item.id)?.priority, .high)
+        for due in [TodoComposer.DueOption.today, .tomorrow, .none] {
+            let ok = await store.createTodo(title: "  created-\(due.rawValue)  ", due: due)
+            XCTAssertTrue(ok)
+            let created = try XCTUnwrap(store.items.first { $0.title == "created-\(due.rawValue)" })
+            XCTAssertEqual(created.dueDate == nil, due == .none)
+            XCTAssertEqual(backend.event(withID: created.id)?.start == .distantFuture, due == .none)
+            if due == .tomorrow {
+                XCTAssertTrue(Calendar.current.isDateInTomorrow(try XCTUnwrap(created.dueDate)))
+            }
+            let removed = await store.removeTodo(created)
+            XCTAssertTrue(removed)
+            XCTAssertNil(backend.event(withID: created.id))
+            XCTAssertFalse(store.items.contains { $0.id == created.id })
+        }
+        backend.writeFailure = .readOnlyCalendar
+        let originalRecords = backend.allRecords()
+        let originalItems = store.items
+        await store.setCompleted(item, completed: false)
+        XCTAssertNotNil(store.writeFailure)
+        let failedPriority = await store.setPriority(item, to: .low)
+        let failedCreate = await store.createTodo(title: "failed", due: .none)
+        let failedDelete = await store.removeTodo(item)
+        XCTAssertFalse(failedPriority)
+        XCTAssertFalse(failedCreate)
+        XCTAssertFalse(failedDelete)
+        XCTAssertEqual(store.priority(for: item.id), .high)
+        XCTAssertEqual(backend.allRecords(), originalRecords)
+        XCTAssertEqual(store.items, originalItems)
+        XCTAssertFalse(store.hasInitializedEventStore)
+        XCTAssertFalse(store.isObservingEventStore)
+    }
+
+    func testHomeCompletionSharesSubmissionStateAndUpdatesCountsWithoutNavigation() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 9, on: Date())
+        let store = fixtureTodoStore(backend)
+        await store.refresh()
+        let item = try XCTUnwrap(store.items.first { !$0.isCompleted })
+        let record = try XCTUnwrap(backend.event(withID: item.id))
+        let manager = CalendarManager(service: backend, startMonitoring: false)
+        let session = CalendarPanelSession(manager: manager)
+        session.homeScrollAnchor = item.id
+        let before = TodoBucketing.classify(store.items).today
+        backend.writeDelayNanoseconds = 5_000_000
+        let first = Task { await session.complete(record, completed: true) }
+        while !session.isSubmitting { await Task.yield() }
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        let duplicate = await session.complete(record, completed: true)
+        XCTAssertFalse(duplicate)
+        let completed = await first.value
+        XCTAssertTrue(completed)
+        await store.refresh()
+        let after = TodoBucketing.classify(store.items).today
+        XCTAssertEqual(after.total, before.total)
+        XCTAssertEqual(after.completed, before.completed + 1)
+        XCTAssertEqual(session.route, .list)
+        XCTAssertNil(session.detailEvent)
+        XCTAssertEqual(session.homeScrollAnchor, item.id)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertFalse(session.isSubmitting)
+        session.showDetail(record, source: .home(anchor: item.id))
+        XCTAssertEqual(session.back(), .home(anchor: item.id))
+        XCTAssertEqual(session.homeScrollAnchor, item.id)
+        backend.writeFailure = .readOnlyCalendar
+        let original = store.items
+        let failed = await session.complete(record, completed: false)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(session.completionError, CalendarMutationError.readOnlyCalendar.localizedDescription)
+        await store.refresh()
+        XCTAssertEqual(store.items, original)
+    }
+
+    func testHomeCompletionErrorDoesNotReusePreviousSaveError() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 9, on: Date())
+        let session = CalendarPanelSession(manager: CalendarManager(service: backend, startMonitoring: false))
+        session.beginCreate(kind: .event, on: Date(), calendarID: "fixture-events")
+        let saved = await session.save()
+        XCTAssertFalse(saved)
+        XCTAssertEqual(session.error, CalendarMutationError.invalidTitle.localizedDescription)
+        let event = try XCTUnwrap(backend.allRecords().first { !$0.type.isReminder })
+        let completed = await session.complete(event, completed: true)
+        XCTAssertFalse(completed)
+        XCTAssertEqual(session.completionError, CalendarMutationError.wrongRecordType.localizedDescription)
+        XCTAssertNotEqual(session.completionError, session.error)
+        XCTAssertEqual(backend.writeAttempts, 0)
+    }
+
+    func testTodoRefreshDiscardsOlderAsynchronousReadAfterNewCompletionSnapshot() async {
+        var callbacks: [CheckedContinuation<[TodoBucketing.Item], Never>] = []
+        let store = TodoStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"),
+            authorizationStatus: { .fullAccess },
+            readItems: { await withCheckedContinuation { callbacks.append($0) } }
+        )
+        let oldRead = Task { await store.refresh() }
+        while callbacks.count < 1 { await Task.yield() }
+        let newRead = Task { await store.refresh() }
+        while callbacks.count < 2 { await Task.yield() }
+        let latest = TodoBucketing.Item(id: "same", title: "latest", dueDate: Date(), isCompleted: true, completionDate: Date())
+        callbacks[1].resume(returning: [latest])
+        await newRead.value
+        callbacks[0].resume(returning: [TodoBucketing.Item(id: "same", title: "old", dueDate: Date())])
+        await oldRead.value
+        XCTAssertEqual(store.items, [latest])
+        XCTAssertEqual(TodoBucketing.classify(store.items).today.completed, 1)
+        XCTAssertFalse(store.hasInitializedEventStore)
+    }
+
 }

@@ -153,6 +153,22 @@ enum TodayHeadline {
     }
 }
 
+/// 首页只读独立今天快照，按半开窗口重叠筛选；跨日未结束事件也属于今天。
+enum HomeTodayEvents {
+    static func filtered(
+        _ events: [EventModel], now: Date,
+        hideAllDayEvents: Bool = false, calendar: Calendar = .autoupdatingCurrent
+    ) -> [EventModel] {
+        let start = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        var seen = Set<String>()
+        return events.filter {
+            !$0.type.isReminder && (!hideAllDayEvents || !$0.isAllDay)
+                && $0.start < end && $0.end > start && seen.insert($0.id).inserted
+        }
+    }
+}
+
 // MARK: - 下一个日程
 
 /// 「今天还没结束的下一条定时日程」的取舍与文案（纯函数）。
@@ -183,15 +199,11 @@ enum TodayNextEvent {
         now: Date,
         calendar: Calendar = .autoupdatingCurrent
     ) -> Pick {
-        let startOfToday = calendar.startOfDay(for: now)
-        guard let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else {
-            return .none
-        }
-        let timed = events
-            .filter { !$0.isAllDay && $0.start >= startOfToday && $0.start < startOfTomorrow }
+        let timed = HomeTodayEvents.filtered(events, now: now, hideAllDayEvents: true, calendar: calendar)
             .sorted { lhs, rhs in
                 if lhs.start != rhs.start { return lhs.start < rhs.start }
-                return lhs.title < rhs.title
+                if lhs.title != rhs.title { return lhs.title < rhs.title }
+                return lhs.id < rhs.id
             }
 
         if let ongoing = timed.first(where: { $0.start <= now && $0.end > now }) {
@@ -322,12 +334,9 @@ enum WorkdayRemainderLine {
 /// **分钟粒度刷新**：`TimelineView(.everyMinute)` 只包住本带（不包整页）——倒计时文案
 /// （「还有 1 小时 20 分」）不刷新就是错的，而环境带与流没有任何按分钟变的东西。
 ///
-/// **取数**：日程来自 `CalendarManager.events`（当天窗口）。**本带不自己改窗口**——
-/// 面板打开时由首页接缝（`HomeBandedHomeView`）把它对齐到今天；本带只按「起点落在今天」过滤
-/// 一道（与待办块同一道防御：用户去日历页翻过别的日期之后，窗口可能不是今天）。
+/// 日程来自 `CalendarManager.todayEvents` 独立快照；浏览日历日期不改变这条带。
 struct HomeTodayBand: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
-    @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
 
     var body: some View {
@@ -340,7 +349,8 @@ struct HomeTodayBand: View {
     }
 
     private func rows(now: Date) -> some View {
-        let pick = TodayNextEvent.pick(events: todayEvents, now: now)
+        let events = HomeTodayEvents.filtered(calendarManager.todayEvents, now: now, hideAllDayEvents: hideAllDayEvents)
+        let pick = TodayNextEvent.pick(events: events, now: now)
         return VStack(alignment: .leading, spacing: HomeTodayBandLayout.lineSpacing) {
             HStack(spacing: 12) {
                 Text(TodayHeadline.text(for: now))
@@ -385,19 +395,4 @@ struct HomeTodayBand: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    /// 当天窗口里真正落在今天的定时 / 全天条目（经与日历页同一套偏好过滤）。
-    private var todayEvents: [EventModel] {
-        let filtered = CalendarEventFilters.filtered(
-            events: calendarManager.events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-        let today = Date()
-        let calendar = Calendar.autoupdatingCurrent
-        let startOfToday = calendar.startOfDay(for: today)
-        guard let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else {
-            return filtered
-        }
-        return filtered.filter { $0.start >= startOfToday && $0.start < startOfTomorrow }
-    }
 }

@@ -1,4 +1,4 @@
-// Modified for Gourd (2026-09-30)
+// Modified for Gourd (2026-10-11)
 // Copyright (C) 2026 Gourd Contributors
 //
 // This program is free software: you can redistribute it and/or modify
@@ -29,15 +29,8 @@
 //    **三环代码保留但不挂 surface**（可逆）：`TodoScopeRing` / `TodoRingPicker` / `TodoRingLayout`
 //    一律留着，不再被任何 surface 渲染（P5 / T1 起首页块也不再画环，见下一条）。
 //  - 折叠态 = 图标 + **今日**的 `已办/总量`（自带 60s `TimelineView`，宿主不起定时器，与 progress 同口径）；
-//  - **首页块**（P5 / T1 改判，2026-09-30，[29](../../docs/29-home-blocks-and-panel.md) D-01 / D-02）
-//    = **表头一行 + 今日清单**：表头 = `今天` + `已办/总量` + 一条细进度条（吃掉剩余宽度），
-//    它在**任何状态下都在**；清单**行数由块高算**（`rowCount(fittingHeight:)`，钳 0…8）、
-//    **行形态按块宽选**（`listTier(forWidth:)`：`>= 160` 完整行 / 更窄紧凑行，宽度不再决定行数）；
-//    表头之下画什么由 `todayContent(todayItems:hasFullAccess:rowCount:)` 定：有授权且放得下时画今日
-//    清单，**今日 0 条**画一行空态（`module.todos.home.empty`），**未授权（读不到 ≠ 没有）或块矮到
-//    连一行都放不下时只留表头**；旧形态（三环横排 + 按块宽三档的行数）见
-//    [17](../../docs/17-nookx-adoption.md) §已知限制 16 的历史记录；
-//    块宽由宿主 `HomeStripLayoutMath` 分配（本批 180 ～ 240pt）；
+//  - 首页块（docs/39）：固定统计头 + 一个滚动区，日程/待办分组完整展示；
+//    完成圈独立提交，标题进日历详情；窄行也保留圈。旧容量 helper 仅作历史 API 兼容。
 //  - 分类与计数口径全在 `TodoBucketing`（纯函数，单测覆盖）——**各 surface 共用同一份聚合**。
 
 //
@@ -317,7 +310,7 @@ final class TodoStore: ObservableObject {
     /// 优先级的**乐观层**（读回的真值 + 用户刚点出的未确认值）。视图读 `priority(for:)`。
     @Published private(set) var priorityOverlay = TodoPriorityOverlay()
     /// 提醒的当前授权状态。**只读**：请求权限只有 `requestAccess()` 一个入口，由用户点击触发。
-    @Published private(set) var authorization: EKAuthorizationStatus = TodoStore.currentAuthorization()
+    @Published private(set) var authorization: EKAuthorizationStatus
 
     /// 最近一次写回 / 取数的错误描述（只进日志与调试，不上面板）。
     private(set) var lastErrorDescription: String?
@@ -329,30 +322,78 @@ final class TodoStore: ObservableObject {
     /// 「失败时给一行错误提示（不崩、不静默）」，因此失败必须**可观察**，不能只写进日志。
     @Published private(set) var writeFailure: TodoWriteFailure?
 
-    private let store = EKEventStore()
+    // 测试分支在访问这个属性之前早退；初始化模块不会构造 EventKit store。
+    private var eventStore: EKEventStore?
+    private var store: EKEventStore {
+        if let eventStore { return eventStore }
+        let created = EKEventStore()
+        eventStore = created
+        return created
+    }
+    var hasInitializedEventStore: Bool { eventStore != nil }
+    var isObservingEventStore: Bool { changedObserver != nil }
+    #if DEBUG
+    private let fixtureBackend: CalendarInteractionMemoryService?
+    #endif
+    private let readItems: (() async -> [TodoBucketing.Item])?
+    private var refreshGeneration = 0
     private let log: ModuleLogger
     private let writePriority: TodoPriorityWriter
     /// 授权读数接缝（**不引入协议**）：默认读 EventKit 的实时状态；单测注入固定值，
     /// 让写回链的用例不依赖本机 TCC（也不会因为机器上没授权就整条用例空转）。
     private let authorizationStatus: () -> EKAuthorizationStatus
     private var changedObserver: NSObjectProtocol?
+    private var isStarted = false
 
     /// - Parameters:
     ///   - logger: 模块日志器（写回失败必须留下痕迹，不静默）。
     ///   - writePriority: 优先级写回的执行体；**nil = 走管理器侧入口**
     ///     （`CalendarManager.setReminderPriority`）。单测注入计数型假体。
-    ///   - authorizationStatus: 授权读数；**nil = 读 EventKit 实时状态**。单测注入 `.fullAccess`。
+    ///   - authorizationStatus: 授权读数；生产默认读 EventKit，夹具默认读内存。显式注入优先。
+    ///   - readItems: 异步归一化读取接缝，供旧刷新回调的竞争回归；nil 保持正常读取。
     init(
         logger: ModuleLogger,
         writePriority: TodoPriorityWriter? = nil,
-        authorizationStatus: (() -> EKAuthorizationStatus)? = nil
+        authorizationStatus: (() -> EKAuthorizationStatus)? = nil,
+        readItems: (() async -> [TodoBucketing.Item])? = nil
     ) {
         self.log = logger
+        self.readItems = readItems
+        #if DEBUG
+        let backend = CalendarInteractionFixtures.isEnabled ? CalendarInteractionFixtures.backend : nil
+        fixtureBackend = backend
+        if let backend {
+            self.writePriority = writePriority ?? { await backend.setReminderPriority(reminderID: $0, priority: $1) }
+            let reader = authorizationStatus ?? { backend.authorizationStatus(for: .reminder) }
+            self.authorizationStatus = reader
+            authorization = reader()
+            return
+        }
+        #endif
         self.writePriority = writePriority ?? { reminderID, eventKitPriority in
             await CalendarManager.shared.setReminderPriority(reminderID, priority: eventKitPriority)
         }
-        self.authorizationStatus = authorizationStatus ?? { Self.currentAuthorization() }
+        let reader = authorizationStatus ?? { Self.currentAuthorization() }
+        self.authorizationStatus = reader
+        authorization = reader()
     }
+
+    #if DEBUG
+    /// 每个测试可注入独立字典；显式写入器和授权读数仍优先于默认夹具实现。
+    init(
+        logger: ModuleLogger, fixtureBackend: CalendarInteractionMemoryService,
+        writePriority: TodoPriorityWriter? = nil,
+        authorizationStatus: (() -> EKAuthorizationStatus)? = nil
+    ) {
+        log = logger
+        self.fixtureBackend = fixtureBackend
+        readItems = nil
+        self.writePriority = writePriority ?? { await fixtureBackend.setReminderPriority(reminderID: $0, priority: $1) }
+        let reader = authorizationStatus ?? { fixtureBackend.authorizationStatus(for: .reminder) }
+        self.authorizationStatus = reader
+        authorization = reader()
+    }
+    #endif
 
     /// 是否已拿到提醒的完整访问权限（= 可以取数 / 可以写回）。
     ///
@@ -370,7 +411,14 @@ final class TodoStore: ObservableObject {
     /// 订阅 `EKEventStoreChanged` 并做一次首取。**幂等**；**不请求权限**（未授权时只记状态、不取数）。
     func start() {
         authorization = authorizationStatus()
-        guard changedObserver == nil else { return }
+        guard !isStarted else { return }
+        isStarted = true
+        #if DEBUG
+        if fixtureBackend != nil {
+            Task { if isStarted { await refresh() } }
+            return
+        }
+        #endif
 
         // `object: nil`：提醒库的变更对**所有** `EKEventStore` 实例广播，我们不分辨是谁改的
         //（上游 `CalendarService` 有自己的 store，用 `object: store` 会漏掉它触发的变更）。
@@ -380,15 +428,18 @@ final class TodoStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.refresh()
+                guard let self, self.isStarted else { return }
+                await self.refresh()
             }
         }
 
-        Task { await refresh() }
+        Task { if isStarted { await refresh() } }
     }
 
     /// 取消订阅。`stop()` 后不再有任何回调，重新 `start()` 即可恢复。
     func stop() {
+        isStarted = false
+        refreshGeneration += 1
         if let changedObserver {
             NotificationCenter.default.removeObserver(changedObserver)
         }
@@ -403,6 +454,8 @@ final class TodoStore: ObservableObject {
     /// 顺带把**优先级的真值**重建进 `priorityOverlay.baseline`（乐观值 `pending` 原样保留，
     /// 写回还在飞时不会被一次重取抹掉——见 `TodoPriorityOverlay`）。
     func refresh() async {
+        refreshGeneration += 1
+        let generation = refreshGeneration
         authorization = authorizationStatus()
         guard hasFullAccess else {
             if !items.isEmpty { items = [] }
@@ -418,7 +471,33 @@ final class TodoStore: ObservableObject {
             to: calendar.startOfDay(for: now)
         ) ?? calendar.startOfDay(for: now)
 
+        if let readItems {
+            let fetched = await readItems()
+            guard refreshGeneration == generation else { return }
+            items = TodosHomeBlockLayout.uniqueTodos(fetched)
+            return
+        }
+        #if DEBUG
+        if let fixtureBackend {
+            let reminders = fixtureBackend.allRecords().filter { $0.type.isReminder }
+            items = reminders.compactMap { event in
+                guard case .reminder(let completed) = event.type else { return nil }
+                let completion = fixtureBackend.completionDate(forReminderID: event.id)
+                guard !completed || (completion.map { $0 >= windowStart } ?? false) else { return nil }
+                return TodoBucketing.Item(
+                    id: event.id, title: event.title,
+                    dueDate: event.start == .distantFuture ? nil : event.start,
+                    isCompleted: completed, completionDate: completion, listName: event.calendar.title
+                )
+            }
+            priorityOverlay.rebuild(from: Dictionary(uniqueKeysWithValues: reminders.map {
+                ($0.id, Self.fixturePriority($0.priority))
+            }))
+            return
+        }
+        #endif
         let allReminders = await fetchReminders(matching: store.predicateForReminders(in: nil))
+        guard refreshGeneration == generation else { return }
         let recentCompleted = await fetchReminders(
             matching: store.predicateForCompletedReminders(
                 withCompletionDateStarting: windowStart,
@@ -426,6 +505,8 @@ final class TodoStore: ObservableObject {
                 calendars: nil
             )
         )
+
+        guard refreshGeneration == generation else { return }
 
         // 两个谓词的结果可能重叠（`predicateForReminders(in:)` 也含已完成条目），按 id 去重：
         // 已完成者优先（它在第二个谓词里出现过），未完成者才会被 `!isCompleted` 收进来。
@@ -455,6 +536,16 @@ final class TodoStore: ObservableObject {
     /// 提醒已被删除（`calendarItem` 取不到）时也重取，让那一行自然消失。
     func setCompleted(_ item: TodoBucketing.Item, completed: Bool) async {
         guard hasFullAccess else { return }
+        #if DEBUG
+        if let fixtureBackend {
+            do {
+                _ = try await fixtureBackend.completeReminder(id: item.id, completed: completed)
+                writeFailure = nil
+            } catch { recordFixtureFailure(error) }
+            await refresh()
+            return
+        }
+        #endif
         guard let reminder = store.calendarItem(withIdentifier: item.id) as? EKReminder else {
             log.warn("写回跳过：提醒不存在或已不是提醒（\(item.id)）")
             await refresh()
@@ -558,6 +649,17 @@ final class TodoStore: ObservableObject {
             return false
         }
 
+        #if DEBUG
+        if let fixtureBackend {
+            do {
+                let date = dueDateComponents.flatMap { Calendar.autoupdatingCurrent.date(from: $0) }
+                _ = try await fixtureBackend.createTodoReminder(title: finalTitle, due: date)
+                writeFailure = nil
+                await refresh()
+                return true
+            } catch { recordFixtureFailure(error); return false }
+        }
+        #endif
         guard let list = TodoComposer.targetList(
             defaultList: store.defaultCalendarForNewReminders(),
             availableLists: store.calendars(for: .reminder)
@@ -600,6 +702,16 @@ final class TodoStore: ObservableObject {
             return false
         }
 
+        #if DEBUG
+        if let fixtureBackend {
+            do {
+                try await fixtureBackend.deleteReminder(id: item.id)
+                writeFailure = nil
+                await refresh()
+                return true
+            } catch { recordFixtureFailure(error); return false }
+        }
+        #endif
         guard let reminder = store.calendarItem(withIdentifier: item.id) as? EKReminder else {
             log.warn("删除跳过：提醒不存在或已不是提醒（\(item.id)）")
             await refresh()
@@ -625,6 +737,14 @@ final class TodoStore: ObservableObject {
 
     /// 用户点击「请求访问提醒」后的**唯一**权限请求入口（系统只会在 `.notDetermined` 时弹窗）。
     func requestAccess() async {
+        #if DEBUG
+        if let fixtureBackend {
+            _ = await fixtureBackend.requestAccess(to: .reminder)
+            authorization = authorizationStatus()
+            await refresh()
+            return
+        }
+        #endif
         do {
             _ = try await store.requestFullAccessToReminders()
         } catch {
@@ -645,6 +765,24 @@ final class TodoStore: ObservableObject {
             }
         }
     }
+
+    #if DEBUG
+    private static func fixturePriority(_ priority: Priority?) -> TodoPriority {
+        switch priority {
+        case .high: return .high
+        case .medium: return .medium
+        case .low: return .low
+        case nil: return .none
+        }
+    }
+
+    private func recordFixtureFailure(_ error: Error) {
+        let detail = error.localizedDescription
+        lastErrorDescription = detail
+        writeFailure = .storage(detail)
+        log.error("待办夹具写回失败：\(detail)")
+    }
+    #endif
 
     private static func currentAuthorization() -> EKAuthorizationStatus {
         EKEventStore.authorizationStatus(for: .reminder)
@@ -740,8 +878,7 @@ final class TodosModule: GourdModule {
 
     /// 三个 surface 各给一份内容；未声明的 `lockscreen` 返回 `.none`（不占位、也不算失败）。
     ///
-    /// 首页块与展开 tab **同源**：同一份 `TodoBucketing` 聚合，差别只在呈现（首页块 = 表头一行 +
-    /// 今日清单，行数随块高，见 `TodosHomeBlockLayout`）与「只读」。
+    /// 首页与展开 tab 共用 TodoBucketing 聚合；首页固定统计头、完整滚动并提供独立完成动作。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .compact:
@@ -1090,31 +1227,20 @@ private struct TodoScopeRing: View {
 
 // MARK: - 首页块（表头一行 + 今日清单）
 
-/// 首页块的**尺寸与取舍**（纯函数，无 SwiftUI 依赖，单测覆盖行数边界）。
-///
-/// 规格（[29](../../docs/29-home-blocks-and-panel.md) §做法 机制一 / D-01、D-02，2026-09-30 改判）：
-/// 块内容 = **表头一行**（`今天` + `已办/总量` + 一条细进度条）+ **今日清单**；三环不再进首页块
-/// （`TodoScopeRing` 一族代码保留、不挂任何 surface，可逆）。**行数由块的可用高度算**
-/// （`rowCount(fittingHeight:)`），块宽只决定清单的**行形态**（`listTier(forWidth:)`）——
-/// 块高本批起会变（音乐降档 + 面板自适应高度），按高度算才不会在小块里溢出。
-///
-/// 高度用 `GeometryReader` 读**放置后**的尺寸（与 `ProgressHomeBlockLayout` 同一手法）；块宽由宿主
-/// `HomeStripLayoutMath` 分配（本批模块块统一声明 180 / 240），模块自己**不声明宽度、不读 `.layoutValue`**。
+/// 首页块尺寸与全量取舍。旧带 rowCount 的 helper 保留供历史调用，真实首页不消费容量裁剪。
+/// 块高决定滚动视口，块宽决定宽窄行；统计头固定在滚动区上方。
 enum TodosHomeBlockLayout {
     /// 清单的**行形态**（只有两档）。**纯值**：视图只按它选行视图，切换就是布局切换（无动画）。
     ///
-    /// 语义与旧的同名档位不同：它**不再决定行数**（行数归 `rowCount(fittingHeight:)`），
-    /// 也不再是「宽度的三档」之一——没有 `.ringsOnly`（首页块任何宽度下都画清单）。
+    /// 任何宽度都保留完成圈；窄行省略过期标签。
     enum Tier: Equatable {
         /// 块宽 `>= compactListWidth`：完整行（状态圈 + 标题 + 已过期红字）。
         case full
-        /// 更窄（或宽度取不到）：紧凑行（只标题单行尾部截断）。
+        /// 更窄（或宽度取不到）：完成圈与标题，省去过期标签。
         case compact
     }
 
-    /// 行形态的分界线（160，**沿用 P2 / T3 的既有值**）。窄于此的块放不下完整行里的两段**固定宽度**
-    /// 元素（10pt 状态圈 + 6pt 间距、`fixedSize` 的「已过期」红字），先牺牲它们把宽度让给标题。
-    /// 判据取**放置后**的宽度（`GeometryReader`），不用测量。
+    /// 行形态分界线沿用 160pt；更窄时保留完成圈与标题，只省去过期标签。
     static let compactListWidth: CGFloat = 160
 
     /// 首页块的**宽度申报**（p13 / docs/38 D-04）：最小 420（再窄就装不下「色条 + 标题 + 时间列」的
@@ -1128,7 +1254,7 @@ enum TodosHomeBlockLayout {
     /// 表头与清单之间的间距。清单**行与行之间不留间距**（行高 16 已含行距）——`rowCount` 的算术
     /// 因此是「表头 + 一段间距 + N 行」。
     static let listSpacing: CGFloat = 4
-    /// 清单的行数上限：块再高也不超过它（D-02 的钳位）。
+    /// 历史容量 helper 的上限，真实首页不使用。
     static let maximumRows = 8
 
     // MARK: - 首页块尺寸（2026-10-10 / docs/37 D-05：今日日程与待办同一清单）
@@ -1139,11 +1265,7 @@ enum TodosHomeBlockLayout {
     /// **今日待办行**的高度（在混合清单里与日程行**等高**：行高不齐会让清单读起来散。
     /// 状态圈 + 标题在 34 里居中——比旧 `rowHeight`(16) 松，因此不再复用 `rowCount` 的算术）。
     static let todoRowHeightInSchedule: CGFloat = 34
-    /// 清单里**混合**（日程在前、待办在后）时的行数上限——块高按它申报。
-    ///
-    /// 6 = 「今天要看的日程 + 待办」在 228pt 的块里能放下的条数（`blockHeight` 的算式）；
-    /// 再多就与首页「一眼看完」的定位冲突，
-    /// 完整清单看展开 tab 与日历页。
+    /// 视口高度沿用六行预算；数据量没有六行上限，全部条目在单一滚动区内。
     static let maximumScheduleRows = 6
 
     /// 首页块申报的**固定高**（`TodosModule.homeBlockHeight` 引用它）。
@@ -1189,8 +1311,7 @@ enum TodosHomeBlockLayout {
 
     /// 块宽 → 行形态。边界口径：`>= compactListWidth` → `.full`；更窄或非有限数（首帧 0 / NaN）→ `.compact`。
     ///
-    /// 宽度取不到时退到最保守的形态（紧凑行）：完整行里的固定宽度元素会溢出窄块，紧凑行只有标题，
-    /// 任何宽度下都放得下——宁可少画元素，也不让文字溢出块宽。
+    /// 宽度取不到时使用紧凑行，保留独立完成圈。
     static func listTier(forWidth width: CGFloat) -> Tier {
         guard width.isFinite else { return .compact }
         return width >= compactListWidth ? .full : .compact
@@ -1247,6 +1368,40 @@ enum TodosHomeBlockLayout {
             case .todo(let item): return "todo:" + item.id
             }
         }
+        var recordID: String {
+            switch self {
+            case .event(let event): return event.id
+            case .todo(let item): return item.id
+            }
+        }
+    }
+
+    /// 全量首页入口：按记录 ID 去重，容量只决定滚动区高度，不裁剪数据。
+    static func uniqueTodos(_ items: [TodoBucketing.Item]) -> [TodoBucketing.Item] {
+        var seen = Set<String>()
+        return items.filter { seen.insert($0.id).inserted }
+    }
+
+    static func listedEntries(
+        events: [EventModel], todos: [TodoBucketing.Item], hasFullAccess: Bool,
+        hideCompletedReminders: Bool = false
+    ) -> [ScheduleEntry] {
+        var seen = Set<String>()
+        let eventEntries = events.filter { !$0.type.isReminder && seen.insert($0.id).inserted }
+            .sorted {
+                if $0.isAllDay != $1.isAllDay { return $0.isAllDay }
+                if $0.start != $1.start { return $0.start < $1.start }
+                return $0.id < $1.id
+            }.map(ScheduleEntry.event)
+        let todoEntries = hasFullAccess ? uniqueTodos(todos)
+            .filter { !hideCompletedReminders || !$0.isCompleted }.map(ScheduleEntry.todo) : []
+        return eventEntries + todoEntries
+    }
+
+    /// 当前锚点被隐藏时选下一条，其次上一条；操作非锚点条目不改变视口。
+    static func anchor(afterRemoving id: String, from ids: [String], anchor: String?) -> String? {
+        guard anchor == id, let index = ids.firstIndex(of: id) else { return anchor }
+        return ids.dropFirst(index + 1).first ?? ids.prefix(index).last
     }
 
     /// 混合清单要画的条目（纯函数）：**日程按时间排在前面**（全天在最前，与日历卡片的 `ordered`
@@ -1287,103 +1442,101 @@ enum TodosHomeBlockLayout {
     }
 }
 
-/// 首页块：**一行表头 + 今日清单**（[29](../../docs/29-home-blocks-and-panel.md) D-01 / D-02）。
-///
-/// **2026-10-10 / docs/37 D-05 改判：今日清单里先是「今日日程」（日历事件），再是「今日待办」**
-/// ——用户原话「应该显示今日日程，而不是光待办……显示的方式不一样就可以，参考日历」。
-/// 两段**同一个清单**（不是两个折叠区），行形态各按自己的词汇：日程行 = 日历那条**色条 + 标题 +
-/// 时间**（沿用 `CalendarEventCard` 的视觉词汇），待办行 = 状态圈 + 标题 + 已过期（原样）。
-/// 块的**高度也随之上调**（`homeBlockHeight` 申报 `blockHeight` = 表头 + 6 行日程档高）。
-///
-/// 与展开 tab **同源**：待办聚合是同一个 `TodoBucketing.classify`（**不另写一套统计**）、
-/// 日程取 `CalendarManager.events`（当天窗口，与首页日历行右栏同一份数据、同一套过滤）。
-///
-/// **只读**（控制器裁决 2）：勾选 / 新增 / 删除都留在展开 tab，这里不挂任何手势——首页块是
-/// 「一眼看今天」，不是第二个操作台。
-///
-/// 尺寸用 `GeometryReader` 读**放置后**的尺寸（不是测量）：**高度**决定画几行
-/// （`rowCount(fittingHeight:)`），**宽度**只决定行形态（`listTier(forWidth:)`）。
-///
-/// **表头之下画什么由 `TodosHomeBlockLayout` 的两条判据合起来定**：待办侧沿用 `todayContent`
-/// （未授权 / 一行都放不下 / 今日确实 0 条三档）；**日程侧独立**——日历没授权时它本来就取不到
-/// 条目（`CalendarManager.events` 为空），不需要第二条判据。
-///
-/// 重绘走本模块既有做法——观察 `store` 的 `@Published`（折叠态那 60s 的 `TimelineView` 是给**常驻**视图
-/// 跨零点用的；首页块只在展开面板里存在，每次出现 `.task` 重取一次数即可，不去新建定时器）；
-/// 日程那一份观察 `CalendarManager`（面板打开时它本来就在被日历行驱动刷新）。
+/// 固定统计头，下方单一滚动区展示日程与待办；轻量完成和详情导航彼此独立。
 private struct TodosHomeBlockView: View {
+    @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var store: TodoStore
-    /// **观测源**：日程数据（`events` 是当天窗口，由日历行的选中日驱动；首页块只读不写）。
     @ObservedObject private var calendarManager = CalendarManager.shared
-
-    /// 分类在每次重算时按**当下**做（与展开 tab 同口径）。
-    private var summary: TodoBucketing.Summary { TodoBucketing.classify(store.items) }
-
-    /// 今日日程：`CalendarManager.events`（**当天窗口**，与首页日历行右栏同一份数据）经
-    /// **与日历页同一套过滤**（隐藏全天 / 已完成提醒）后**只留真正落在今天的那些**。
-    ///
-    /// 为什么要再过一道「落在今天」：`events` 的窗口跟**月历的选中日**走（用户在首页日历行点了
-    /// 别的日期，它就不是今天了），而本块的口径是「今天」——不跟随选中日（用户 2026-10-10 的
-    /// 原话是「应该显示今日日程」，日程的含义就是今天）。
-    private var todayEvents: [EventModel] {
-        let filtered = CalendarEventFilters.filtered(
-            events: calendarManager.events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-        let today = Date()
-        let startOfToday = Calendar.autoupdatingCurrent.startOfDay(for: today)
-        guard let startOfTomorrow = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: startOfToday) else {
-            return []
-        }
-        // 判定与日历页同一条口径：**日程看起点落在今天**（跨天日程由它自己的起点那天承接）。
-        return filtered.filter { $0.start >= startOfToday && $0.start < startOfTomorrow }
-    }
-
-    /// 今日待办（`TodoBucketing` 的「今天」类别，与展开 tab 同一份聚合）。
-    private var todayTodos: [TodoBucketing.Item] { summary.today.items }
-
+    @ObservedObject private var session = CalendarPanelSession.shared
+    @ObservedObject private var registry = ModuleRegistry.shared
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
+    @State private var actionError: String?
+    @State private var completingItemID: String?
+    @State private var scrollToken = UUID()
+
+    private var summary: TodoBucketing.Summary {
+        TodoBucketing.classify(TodosHomeBlockLayout.uniqueTodos(store.items))
+    }
+    private var todayEvents: [EventModel] {
+        HomeTodayEvents.filtered(calendarManager.todayEvents, now: Date(), hideAllDayEvents: hideAllDayEvents)
+    }
+    private var canOpenDetail: Bool { registry.tabEntries.contains { $0.id == CalendarModule.moduleID } }
+    private var entries: [TodosHomeBlockLayout.ScheduleEntry] {
+        TodosHomeBlockLayout.listedEntries(
+            events: todayEvents, todos: summary.today.items, hasFullAccess: store.hasFullAccess,
+            hideCompletedReminders: hideCompletedReminders
+        )
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            // 行数与行形态都在**同一层**算：高度决定画几行，宽度只决定待办行的形态。
-            let tier = TodosHomeBlockLayout.listTier(forWidth: proxy.size.width)
-            let rowCount = TodosHomeBlockLayout.scheduleRowCount(
-                fittingHeight: proxy.size.height - HomeBlockChrome.contentInsetTopListHeader
-            )
-            let entries = TodosHomeBlockLayout.listedEntries(
-                events: todayEvents,
-                todos: todayTodos,
-                hasFullAccess: store.hasFullAccess,
-                rowCount: rowCount
-            )
-
             VStack(alignment: .leading, spacing: TodosHomeBlockLayout.listSpacing) {
                 TodoHomeHeader(result: summary.today, eventCount: todayEvents.count)
-
-                if entries.isEmpty {
-                    // 今日确实什么都没有（且块高放得下这一行）→ 空态文案；未授权时 `entries`
-                    // 恒空但**不该说话**（读不到 ≠ 没有），判据在 `emptyStateShows`。
-                    if TodosHomeBlockLayout.emptyStateShows(
-                        hasFullAccess: store.hasFullAccess,
-                        rowCount: rowCount,
-                        eventCount: todayEvents.count,
-                        todoCount: todayTodos.count
-                    ) {
-                        TodoHomeEmptyRow()
-                    }
-                } else {
-                    TodoHomeTodayList(entries: entries, tier: tier)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("home-counts")
+                if let actionError {
+                    Text(actionError).font(.caption).foregroundStyle(.red)
+                        .accessibilityIdentifier("home-error")
                 }
+                ScrollView(.vertical) {
+                    TodoHomeTodayList(
+                        entries: entries, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
+                        canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
+                        isSubmitting: session.isSubmitting || completingItemID != nil,
+                        openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo
+                    )
+                    .scrollTargetLayout()
+                    if entries.isEmpty, store.hasFullAccess { TodoHomeEmptyRow() }
+                }
+                .scrollPosition(id: $session.homeScrollAnchor, anchor: .top)
+                .accessibilityIdentifier("home-today-scroll")
+                .onHover { vm.setScrollGestureSuppression($0, token: scrollToken) }
             }
-            // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：改前表头贴着板顶（上屏读数 3.5pt 的行首留白
-            // 之外再无余量）——4pt 是「表头墨迹落在板顶下 7.5pt」的反推值，见 `HomeBlockChrome`。
             .padding(.top, HomeBlockChrome.contentInsetTopListHeader)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .task { await store.refresh() }
+        .onDisappear { vm.setScrollGestureSuppression(false, token: scrollToken) }
+    }
+
+    private func openDetail(_ event: EventModel) {
+        guard canOpenDetail, !session.isSubmitting else { return }
+        session.showDetail(event, source: .home(anchor: session.homeScrollAnchor ?? event.id))
+        vm.coordinator.selectModule(CalendarModule.moduleID)
+    }
+
+    private func openTodo(_ item: TodoBucketing.Item) {
+        guard let event = calendarManager.event(withID: item.id) else {
+            actionError = CalendarMutationError.recordNotFound.localizedDescription
+            return
+        }
+        openDetail(event)
+    }
+
+    private func completeTodo(_ item: TodoBucketing.Item) {
+        guard !session.isSubmitting, completingItemID == nil else { return }
+        actionError = nil
+        guard let event = calendarManager.event(withID: item.id) else {
+            actionError = CalendarMutationError.recordNotFound.localizedDescription
+            return
+        }
+        let ids = entries.map(\.recordID)
+        completingItemID = item.id
+        Task {
+            defer { completingItemID = nil }
+            let succeeded = await session.complete(event, completed: !item.isCompleted)
+            if succeeded {
+                if hideCompletedReminders && !item.isCompleted && vm.coordinator.currentView == .home {
+                    session.homeScrollAnchor = TodosHomeBlockLayout.anchor(
+                        afterRemoving: item.id, from: ids, anchor: session.homeScrollAnchor
+                    )
+                }
+                await store.refresh()
+            } else {
+                actionError = session.completionError ?? TodoText.localized("module.todos.writeFailed")
+            }
+        }
     }
 }
 
@@ -1450,132 +1603,103 @@ private struct TodoHomeEmptyRow: View {
     }
 }
 
-/// 首页块的今日清单：**只读**的简化行（勾选圈只是状态字形，不是按钮）。
-///
-/// **两种行形态同列**（docs/37 D-05）：日程行 = 色条 + 标题 + 时间（视觉词汇与 `CalendarEventCard`
-/// 同族）；待办行 = 状态圈 + 标题 + 已过期红字（原样）。顺序由 `listedEntries` 定（日程在前），
-/// 本视图只按条目类型选行视图。
-///
-/// 画几条由调用方按块高算好，空清单这里什么都不画（空态是 `TodoHomeEmptyRow` 的事）。
-///
-/// 行形态按档（`TodosHomeBlockLayout.Tier`，只作用于**待办行**；日程行任何宽度下都是完整形态
-/// ——它的固定元素（色条 3 + 时间列）比待办的状态圈更窄，窄块里也放得下）。
+/// 两个组共用一个滚动区；行 ID 同时供来源锚点与 UI 验收使用。
 private struct TodoHomeTodayList: View {
     let entries: [TodosHomeBlockLayout.ScheduleEntry]
-    /// 当前行形态（待办行用）。
     let tier: TodosHomeBlockLayout.Tier
+    let canOpenDetail: Bool
+    let isSubmitting: Bool
+    let openEvent: (EventModel) -> Void
+    let openTodo: (TodoBucketing.Item) -> Void
+    let completeTodo: (TodoBucketing.Item) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(entries) { entry in
-                switch entry {
-                case .event(let event):
-                    TodoHomeEventRow(event: event)
-                case .todo(let item):
-                    switch tier {
-                    case .full:
-                        TodoHomeRow(item: item)
-                    case .compact:
-                        TodoHomeCompactRow(item: item)
+        LazyVStack(alignment: .leading, spacing: 0) {
+            if entries.contains(where: { if case .event = $0 { return true }; return false }) {
+                groupHeader("calendar.quickAdd.kindEvent")
+                ForEach(entries) { entry in
+                    if case .event(let event) = entry {
+                        TodoHomeEventRow(event: event, open: { openEvent(event) })
+                            .disabled(!canOpenDetail)
+                            .id(event.id)
                     }
                 }
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+            if entries.contains(where: { if case .todo = $0 { return true }; return false }) {
+                groupHeader("calendar.quickAdd.kindReminder")
+                ForEach(entries) { entry in
+                    if case .todo(let item) = entry {
+                        TodoHomeRow(
+                            item: item, tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
+                            open: { openTodo(item) }, complete: { completeTodo(item) }
+                        ).id(item.id)
+                    }
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func groupHeader(_ key: String) -> some View {
+        Text(LocalizedStringKey(key)).font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)
     }
 }
 
-/// 首页块的**日程行**（docs/37 D-05）：左侧日历色条（4×22）+ 标题 + 右侧时间列。
-///
-/// 视觉词汇与两处日历的 `CalendarEventCard` 同族（色条取 `event.calendar.color`、时间列在右、
-/// 标题 `.semibold`），但按首页块的密度收小：卡片是 50pt 起的两行大卡，行是 30pt 的一行。
-/// 全天条目的时间列显示 `All-day`（`module.todos.homeAllDay`，与日历卡片同一口语文案）。
-///
-/// 行高钉在 `TodosHomeBlockLayout.eventRowHeight`（行数是按预算算的，行高必须是真的）。
 private struct TodoHomeEventRow: View {
     let event: EventModel
+    let open: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            // 日历色条（与卡片同形的 4pt 宽圆角条，高度按行内容收短）。
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color(event.calendar.color))
-                .frame(width: 4, height: 24)
-
-            Text(event.title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.95))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 6)
-
-            Text(TodoText.eventTimeLabel(for: event))
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.6))
-                .lineLimit(1)
-                .fixedSize()
-        }
-        .frame(height: TodosHomeBlockLayout.eventRowHeight)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        Button(action: open) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color(event.calendar.color)).frame(width: 4, height: 24)
+                Text(event.title).font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 6)
+                Text(TodoText.eventTimeLabel(for: event))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .monospacedDigit().foregroundStyle(.white.opacity(0.6)).lineLimit(1).fixedSize()
+            }.frame(height: TodosHomeBlockLayout.eventRowHeight)
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier("home-item-" + event.id)
     }
 }
 
-/// 首页块的一行：状态圈 + 标题（单行尾部截断）+ 过期红字。
-///
-/// 是展开 tab `TodoRow` 的简化形态：去掉勾选按钮（只读）、去掉所属列表名与到期时刻
-/// （今日条目都到期在今天，逐行重复同一个日期只是噪音），保留「已完成置灰 + 删除线」与「已过期」。
-/// 行高钉死在 `TodosHomeBlockLayout.todoRowHeightInSchedule`（混合清单里行高必须是真的，
-/// 见那边的算式）。
+/// 宽窄两档都有独立完成圈；窄行只省去过期标签。
 private struct TodoHomeRow: View {
     let item: TodoBucketing.Item
+    let tier: TodosHomeBlockLayout.Tier
+    let canOpenDetail: Bool
+    let isSubmitting: Bool
+    let open: () -> Void
+    let complete: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(item.isCompleted ? 0.35 : 0.8))
-
-            Text(item.title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
-                .strikethrough(item.isCompleted, color: .white.opacity(0.4))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 4)
-
-            if TodoText.isOverdue(item) {
-                Text(LocalizedStringKey("module.todos.overdue"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.red)
-                    .fixedSize()
-            }
-        }
-        .frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
-    }
-}
-
-/// 首页块**窄块**（块宽 < `TodosHomeBlockLayout.compactListWidth`）的一行：**只标题**，单行尾部截断。
-///
-/// 比完整行再省两种元素——状态圈（10pt 图标 + 6pt 间距）与「已过期」红字（`fixedSize` 不缩）：
-/// 它们各占一段**不会被压缩**的宽度，窄块里先牺牲它们，把宽度全留给标题。
-/// 「已完成」的线索只靠标题本身的样式（置灰 + 删除线），不另加元素。
-/// 条目的成员与顺序与完整档**同一份**（`TodoBucketing` 的今日类别，不在这里筛）。
-/// 行高同样钉在 `TodosHomeBlockLayout.todoRowHeightInSchedule`。
-private struct TodoHomeCompactRow: View {
-    let item: TodoBucketing.Item
-
-    var body: some View {
-        Text(item.title)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
-            .strikethrough(item.isCompleted, color: .white.opacity(0.4))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
+            Button(action: complete) {
+                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(item.isCompleted ? 0.35 : 0.8))
+                    .frame(width: 20, height: 24).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(isSubmitting)
+                .accessibilityLabel(Text(LocalizedStringKey(item.isCompleted ? "calendar.panel.markIncomplete" : "calendar.panel.markComplete")))
+                .accessibilityIdentifier("home-complete-" + item.id)
+            Button(action: open) {
+                HStack(spacing: 4) {
+                    Text(item.title).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
+                        .strikethrough(item.isCompleted, color: .white.opacity(0.4))
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if tier == .full, TodoText.isOverdue(item) {
+                        Text(LocalizedStringKey("module.todos.overdue"))
+                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.red).fixedSize()
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(!canOpenDetail)
+                .accessibilityIdentifier("home-item-" + item.id)
+        }.frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
     }
 }
 

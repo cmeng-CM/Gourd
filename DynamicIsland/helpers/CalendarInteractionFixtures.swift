@@ -76,6 +76,7 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
     private var records: [String: EventModel]
     private let sources: [CalendarModel]
     private let calendar: Calendar
+    private var completionDates: [String: Date]
     private var serial = 0
     private var failure: CalendarMutationError?
     private var delay: UInt64 = 0
@@ -90,6 +91,10 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
         reminderAuthorization: EKAuthorizationStatus = .fullAccess
     ) {
         self.records = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        completionDates = Dictionary(records.compactMap { event in
+            guard case .reminder(completed: true) = event.type else { return nil }
+            return (event.id, event.start == .distantFuture ? Date() : event.start)
+        }, uniquingKeysWith: { _, last in last })
         sources = calendars
         self.calendar = calendar
         self.eventAuthorization = eventAuthorization
@@ -114,6 +119,7 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
     var systemOpenedIDs: [String] { locked { openedIDs } }
     func recordSystemOpen(_ id: String) { locked { openedIDs.append(id) } }
     func allRecords() -> [EventModel] { locked { records.values.sorted { $0.id < $1.id } } }
+    func completionDate(forReminderID id: String) -> Date? { locked { completionDates[id] } }
     func setAuthorization(_ status: EKAuthorizationStatus, for type: EKEntityType) {
         locked { if type == .event { eventAuthorization = status } else { reminderAuthorization = status } }
     }
@@ -196,14 +202,18 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
         }
     }
     func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel {
+        try await createTodoReminder(title: title, due: due, listID: listID)
+    }
+
+    func createTodoReminder(title: String, due: Date?, listID: String? = nil) async throws -> EventModel {
         try await waitForWrite()
         return try performWrite(type: .reminder, creating: true) {
             let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
             let source = try target(listID, reminder: true)
-            let start = calendar.startOfDay(for: due)
+            let start = due.map { calendar.startOfDay(for: $0) } ?? .distantFuture
             let saved = EventModel(
-                id: nextID(), start: start, end: calendar.date(byAdding: .day, value: 1, to: start) ?? start,
+                id: nextID(), start: start, end: due == nil ? .distantFuture : (calendar.date(byAdding: .day, value: 1, to: start) ?? start),
                 title: title, location: nil, notes: nil, url: nil, isAllDay: true, type: .reminder(completed: false),
                 calendar: source, participants: [], timeZone: calendar.timeZone, hasRecurrenceRules: false, priority: nil, conferenceURL: nil
             )
@@ -217,6 +227,17 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
             try CalendarMutationPolicy.performEventWrite(event: event) { records.removeValue(forKey: id); return () }
         }
     }
+    func deleteReminder(id: String) async throws {
+        try await waitForWrite()
+        try performWrite(type: .reminder) {
+            guard let event = records[id] else { throw CalendarMutationError.recordNotFound }
+            try CalendarMutationPolicy.performReminderWrite(event: event) {
+                records.removeValue(forKey: id)
+                completionDates.removeValue(forKey: id)
+            }
+        }
+    }
+
     func completeReminder(id: String, completed: Bool) async throws -> EventModel {
         try await waitForWrite()
         return try performWrite(type: .reminder) {
@@ -224,6 +245,7 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
             return try CalendarMutationPolicy.performReminderWrite(event: event) {
                 let saved = copyReminder(event, completed: completed, priority: event.priority)
                 records[id] = saved
+                completionDates[id] = completed ? (completionDates[id] ?? Date()) : nil
                 return saved
             }
         }
