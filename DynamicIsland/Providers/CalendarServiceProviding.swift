@@ -42,6 +42,24 @@ protocol CalendarServiceProviding {
     func setReminderPriority(reminderID: String, priority: Int) async -> Bool
 }
 
+/// 仅写授权支持新建日程及目标日历查询；既有记录的详情、改删仍需完整读取权限。
+enum CalendarAccessPolicy {
+    static func canRead(status: EKAuthorizationStatus) -> Bool { status == .fullAccess }
+
+    static func canCreate(status: EKAuthorizationStatus, for type: EKEntityType) -> Bool {
+        canRead(status: status) || (type == .event && status == .writeOnly)
+    }
+
+    static func performWrite<T>(
+        status: EKAuthorizationStatus, type: EKEntityType, creating: Bool, write: () throws -> T
+    ) throws -> T {
+        guard creating ? canCreate(status: status, for: type) : canRead(status: status) else {
+            throw CalendarMutationError.accessDenied
+        }
+        return try write()
+    }
+}
+
 class CalendarService: CalendarServiceProviding {
     private let store = EKEventStore()
     /// 一个 store 的全部写入（含兼容入口）顺序执行；队列内重读和复核后才 commit。
@@ -51,17 +69,20 @@ class CalendarService: CalendarServiceProviding {
         EKEventStore.authorizationStatus(for: type)
     }
 
-    private func performWrite<T>(_ operation: @escaping () throws -> T) async throws -> T {
+    private func performWrite<T>(
+        to type: EKEntityType, creating: Bool = false, _ operation: @escaping () throws -> T
+    ) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             writeQueue.async {
-                do { continuation.resume(returning: try operation()) }
+                do {
+                    let result = try CalendarAccessPolicy.performWrite(
+                        status: self.authorizationStatus(for: type), type: type, creating: creating, write: operation
+                    )
+                    continuation.resume(returning: result)
+                }
                 catch { continuation.resume(throwing: error) }
             }
         }
-    }
-
-    private func requireAccess(to type: EKEntityType) throws {
-        guard hasAccess(to: type) else { throw CalendarMutationError.accessDenied }
     }
 
     private func targetCalendar(requestedID: String?, originalID: String? = nil, type: EKEntityType) throws -> EKCalendar {
@@ -122,8 +143,7 @@ class CalendarService: CalendarServiceProviding {
     }
     
     private func hasAccess(to entityType: EKEntityType) -> Bool {
-        let status = authorizationStatus(for: entityType)
-        return status == .fullAccess
+        CalendarAccessPolicy.canRead(status: authorizationStatus(for: entityType))
     }
     
     func calendars() async -> [CalendarModel] {
@@ -191,6 +211,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func event(withID id: String) -> EventModel? {
+        guard hasAccess(to: .event) || hasAccess(to: .reminder) else { return nil }
         guard let item = store.calendarItem(withIdentifier: id) else { return nil }
         if let event = item as? EKEvent, hasAccess(to: .event) { return EventModel(from: event) }
         if let reminder = item as? EKReminder, hasAccess(to: .reminder) { return EventModel(from: reminder) }
@@ -198,8 +219,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func saveEvent(input: CalendarEventInput, eventID: String? = nil) async throws -> EventModel {
-        try await performWrite {
-            try self.requireAccess(to: .event)
+        try await performWrite(to: .event, creating: eventID == nil) {
             let input = try input.validated()
             let event: EKEvent
             if let eventID {
@@ -241,8 +261,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func deleteEvent(id: String) async throws {
-        try await performWrite {
-            try self.requireAccess(to: .event)
+        try await performWrite(to: .event) {
             guard let item = self.store.calendarItem(withIdentifier: id) else {
                 throw CalendarMutationError.recordNotFound
             }
@@ -254,8 +273,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func completeReminder(id: String, completed: Bool) async throws -> EventModel {
-        try await performWrite {
-            try self.requireAccess(to: .reminder)
+        try await performWrite(to: .reminder) {
             guard let item = self.store.calendarItem(withIdentifier: id) else {
                 throw CalendarMutationError.recordNotFound
             }
@@ -278,8 +296,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     private func createReminderRecord(title: String, dueDateComponents: DateComponents?, listID: String?) async throws -> EventModel {
-        try await performWrite {
-            try self.requireAccess(to: .reminder)
+        try await performWrite(to: .reminder, creating: true) {
             let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
             let calendar = try self.targetCalendar(requestedID: listID, type: .reminder)
@@ -304,8 +321,7 @@ class CalendarService: CalendarServiceProviding {
 
     func setReminderPriority(reminderID: String, priority: Int) async -> Bool {
         do {
-            try await performWrite {
-                try self.requireAccess(to: .reminder)
+            try await performWrite(to: .reminder) {
                 guard let item = self.store.calendarItem(withIdentifier: reminderID) else {
                     throw CalendarMutationError.recordNotFound
                 }
@@ -347,7 +363,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func writableEventCalendars() -> [CalendarModel] {
-        guard hasAccess(to: .event) else { return [] }
+        guard CalendarAccessPolicy.canCreate(status: authorizationStatus(for: .event), for: .event) else { return [] }
         return store.calendars(for: .event).filter(\.allowsContentModifications).map { CalendarModel(from: $0) }
     }
 
@@ -357,7 +373,7 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func defaultEventCalendarID() -> String? {
-        guard hasAccess(to: .event) else { return nil }
+        guard CalendarAccessPolicy.canCreate(status: authorizationStatus(for: .event), for: .event) else { return nil }
         return store.defaultCalendarForNewEvents?.calendarIdentifier
     }
 

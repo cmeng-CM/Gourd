@@ -122,7 +122,6 @@ enum CalendarMutationPolicy {
             throw CalendarMutationError.wrongRecordType
         }
         guard event.calendar.allowsContentModifications else { throw CalendarMutationError.readOnlyCalendar }
-        guard !event.hasRecurrenceRules else { throw CalendarMutationError.recurringEvent }
         return try write()
     }
 
@@ -215,7 +214,7 @@ extension EventModel {
     var canModifyInIsland: Bool { modificationRestriction == nil }
 
     var canCompleteReminderInIsland: Bool {
-        type.isReminder && calendar.isReminder && calendar.allowsContentModifications && !hasRecurrenceRules
+        type.isReminder && calendar.isReminder && calendar.allowsContentModifications
     }
 
     func calendarAppURL() -> URL? {

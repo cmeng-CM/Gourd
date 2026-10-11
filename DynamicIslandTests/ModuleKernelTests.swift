@@ -8655,9 +8655,8 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(writes, 1)
     }
 
-    func testReminderWritesRequireWritableReminderTypeAndRejectRecurrence() {
-        for event in [record(), record(type: .reminder(completed: false), writable: false),
-                      record(type: .reminder(completed: false), recurring: true)] {
+    func testReminderWritesRequireWritableReminderType() {
+        for event in [record(), record(type: .reminder(completed: false), writable: false)] {
             var writes = 0
             XCTAssertFalse(event.canCompleteReminderInIsland)
             XCTAssertThrowsError(try CalendarMutationPolicy.performReminderWrite(event: event) { writes += 1 })
@@ -8666,6 +8665,58 @@ final class CalendarInteractionTests: XCTestCase {
         let reminder = record(type: .reminder(completed: false))
         XCTAssertTrue(reminder.canCompleteReminderInIsland)
         XCTAssertEqual(try CalendarMutationPolicy.performReminderWrite(event: reminder) { "reminder-id" }, "reminder-id")
+    }
+
+    func testRecurringReminderCompletionAndPriorityReachTheCommonWriteClosure() throws {
+        let reminder = record(type: .reminder(completed: false), recurring: true)
+        XCTAssertTrue(reminder.canCompleteReminderInIsland)
+        var completions = 0
+        var priorities = 0
+        let completedID = try CalendarAccessPolicy.performWrite(status: .fullAccess, type: .reminder, creating: false) {
+            try CalendarMutationPolicy.performReminderWrite(event: reminder) {
+                completions += 1
+                return reminder.id
+            }
+        }
+        let priorityWritten = try CalendarAccessPolicy.performWrite(status: .fullAccess, type: .reminder, creating: false) {
+            try CalendarMutationPolicy.performReminderWrite(event: reminder) {
+                priorities += 1
+                return true
+            }
+        }
+        XCTAssertEqual(completedID, reminder.id)
+        XCTAssertTrue(priorityWritten)
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(priorities, 1)
+    }
+
+    func testWriteOnlyAllowsNewEventsAndTargetsWhileExistingRecordWritesRequireFullAccess() throws {
+        let statuses: [EKAuthorizationStatus] = [.notDetermined, .denied, .restricted, .writeOnly, .fullAccess]
+        let operations: [(name: String, type: EKEntityType, creating: Bool)] = [
+            ("new event", .event, true), ("edit event", .event, false), ("delete event", .event, false),
+            ("new reminder", .reminder, true), ("complete reminder", .reminder, false), ("priority", .reminder, false)
+        ]
+        for status in statuses {
+            XCTAssertEqual(CalendarAccessPolicy.canRead(status: status), status == .fullAccess)
+            XCTAssertEqual(CalendarAccessPolicy.canCreate(status: status, for: .event), status == .fullAccess || status == .writeOnly)
+            XCTAssertEqual(CalendarAccessPolicy.canCreate(status: status, for: .reminder), status == .fullAccess)
+            for operation in operations {
+                var writes = 0
+                let allowed = status == .fullAccess || (status == .writeOnly && operation.type == .event && operation.creating)
+                do {
+                    let id = try CalendarAccessPolicy.performWrite(status: status, type: operation.type, creating: operation.creating) {
+                        writes += 1
+                        return "current-created-instance-id"
+                    }
+                    XCTAssertTrue(allowed, operation.name)
+                    XCTAssertEqual(id, "current-created-instance-id")
+                } catch {
+                    XCTAssertFalse(allowed, operation.name)
+                    XCTAssertEqual(error as? CalendarMutationError, .accessDenied)
+                }
+                XCTAssertEqual(writes, allowed ? 1 : 0, operation.name)
+            }
+        }
     }
 
     func testExplicitTargetsRejectInvalidReadOnlyAndWrongTypesWithoutFallback() throws {
