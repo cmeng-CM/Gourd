@@ -136,13 +136,15 @@ func clearOwnership(_ ownerID: UUID)
 
 首页 [TodosModule.swift](../DynamicIsland/Modules/TodosModule.swift) 使用无容量参数的 `TodosHomeBlockLayout.listedEntries(events:todos:hasFullAccess:hideCompletedReminders:) -> [ScheduleEntry]` 与 `uniqueTodos(_:)` 按记录 ID 去重；旧 `rowCount` 重载仅兼容历史调用。表头统计用未隐藏的今日待办，清单与 [HomeTodayBand.swift](../DynamicIsland/Host/HomeTodayBand.swift) 的下一个日程均读独立今天快照；首页详情只在日历 tab 已启用时可打开。`anchor(afterRemoving:from:anchor:) -> String?` 对被隐藏的锚点取下一条、再兜上一条，其它完成动作不重置锚点。
 
+真实首页使用单一 `ScrollView`，实时 ID 绑定保留在该滚动视图上；`ScrollViewReader` 在 `onAppear` 明确恢复会话保存的原锚点。内部完整 `VStack` 注册滚动目标，两组 `ForEach` 仅遍历各自条目并使用原始 `recordID`，不改 DTO 的带前缀 `ScheduleEntry.id` 或历史纯函数接口。30 项限定日志曾记录保存目标24、懒布局却恢复到18；提前测量全部今日行后原9/30项返回断言通过。恢复不改成点击行，不使用固定延迟，不增加像素状态或内容容量上限。
+
 ### 焦点、收回与退出
 
 源码：[CalendarEditorLifecycle.swift](../DynamicIsland/components/Calendar/CalendarEditorLifecycle.swift)、[DynamicIslandApp.swift](../DynamicIsland/DynamicIslandApp.swift)、[ContentView.swift](../DynamicIsland/ContentView.swift)。生命周期复用 VM 的 `setAutoCloseSuppression(_:token:)` 和独立滚动抑制令牌，窗口销毁先释放本页 UUID；无任何聚合输入时才暂停编辑路由。窗口之间及其子窗口互认，真正外部离开才全局暂停；MainActor 同步完成检查和暂停，提交任务仍继续，宿主在页面销毁/切 tab 后保留提交保护。
 
 `CalendarEditorLifecycle.closeForLock(session:closePanels:)` 先 `suspend()`，再关闭全部屏幕面板；`CalendarShortcutCloseProtection` 由实际 AppDelegate 实例注入取消闭包，在编辑/提交入场时取消旧快捷键收回定时器。`CalendarTerminationController.resolve(session:choose:restart:) async -> Bool` 合并重复退出裁决，`requestRestart()` 标记重启；AppDelegate 的 `applicationShouldTerminate(_:) -> NSApplication.TerminateReply` 先返回 `.terminateLater`，决策完成再回复。只有允许退出后才启动重启实例。
 
-新增界面文案在 `Localizable.xcstrings` 提供 `en`、`zh-Hans`；四个退出提示键通过 `String(localized:)` 在真实 AppDelegate 取值。
+新增界面文案在 `Localizable.xcstrings` 提供 `en`、`zh-Hans`；四个退出提示键通过 `String(localized:)` 在真实 AppDelegate 取值。`ContentView` 在 `GourdNotch` 标识前使用 `.accessibilityElement(children: .contain)`，让根容器与页面子标识独立；保留真实布局，不能据 AX 根修复推断菜单、日期或退出已经通过。
 
 ### DEBUG 夹具与验收入口
 
@@ -150,7 +152,9 @@ func clearOwnership(_ ownerID: UUID)
 
 `CalendarInteractionFixtures.backend: CalendarInteractionMemoryService` 实现 `CalendarServiceProviding`，所有写入与刷新共用锁保护的同一字典，完成日期元数据也在同一锁下。后端 `allRecords() -> [EventModel]` 供 TodoStore 读取，`recordSystemOpen(_ id: String)` 只记录跳转，不启动真实系统或第三方应用；补 `createTodoReminder(title: String, due: Date?, listID: String? = nil) async throws -> EventModel`、`deleteReminder(id: String) async throws` 供既有待办模块测试调用，无日期用 `.distantFuture` 并在读回待办时映射为 nil。Manager 初始化直接选内存服务，跳过 EventKit 观察与真实授权读取；TodoStore 所有夹具读取/写入先短路真实调用，生产 `EKEventStore` 延迟初始化。
 
-测试 app/unit/UI 包按 `com.cmeng.gourd.calendar-tests.$(PRODUCT_NAME:rfc1034identifier)` 分开标识，保留项目 `Gourd Local` 签名，不覆写 `CODE_SIGN_IDENTITY`。AppDelegate 在 VM/coordinator 属性构造前配置测试标准偏好，只启用 config 为 nil 的日历与待办，不写不清固定生产模块 suite；窗口与 bootstrap 双就绪后由 `CalendarFixtureReadiness` 打开真实首页并发布 `calendar-fixture-ready`，UI helper 再等待真实待办行，未另建演示宿主。测试模式跳过系统 HUD/Lunar 启动与退出恢复，提前关闭 DDC 与 `mirrorSystemTimer`，避免外部应用 suite 写入及真实 Clock 域读取。
+测试 app/unit/UI 包按 `com.cmeng.gourd.calendar-tests.$(PRODUCT_NAME:rfc1034identifier)` 分开标识，保留项目 `Gourd Local` 签名，不覆写 `CODE_SIGN_IDENTITY`。UI 分支在 VM/coordinator 属性构造前清自身隔离持久域并配置测试标准偏好，只启用 config 为 nil 的日历与待办；DEBUG 非 UI 单元宿主只在当前 bundle 具有 `com.cmeng.gourd.calendar-tests.` 前缀时清自身持久域一次，再保留 Clock/DDC/Lunar 四键 volatile 门控。不会用空 `moduleEnableOverrides` 覆盖 argumentDomain，也不清生产、普通 Debug 域或固定模块 suite；窗口与 bootstrap 双就绪后由 `CalendarFixtureReadiness` 打开真实首页并发布 `calendar-fixture-ready`，UI helper 再等待真实待办行，未另建演示宿主。测试模式跳过系统 HUD/Lunar 启动与退出恢复，提前关闭 DDC 与 `mirrorSystemTimer`，避免外部应用 suite 写入及真实 Clock 域读取。
+
+UI 使用显式 `XCUIApplication(bundleIdentifier: "com.cmeng.gourd.calendar-tests.Gourd")`，输入前以公开 `NSWorkspace.runningApplications` 要求唯一隔离进程，并将公开 AX 根 PID 与该进程 PID 核对；身份失败停止输入。hover、click、scroll、type、quit/Esc 与 teardown 的 terminate 均消费此守卫，不用私有 KVC，也不关闭生产实例绕过同名。标题替换缓存真实字段，用 `field.typeKey` 发送 Cmd+A，保留真实 `typeText` 与精确 value 断言。长备注在 macOS AX 中读取 `StaticText.value`，用原末句的 `value CONTAINS` 查询，尾标可见、固定按钮及返回来源断言保留。
 
 测试 host/fixture 在蓝牙管理器 init 最前端返回，`batteryReader` 改为 lazy，不构造 CBCentralManager 或启动初始扫描、观察、轮询。剪贴板 init/startMonitoring 的 guard 位于 pasteboard、历史载入、清理与监控之前；测试缓存目录先创建 `temporaryDirectory/GourdClipboardTests-<PID>-<UUID>` 再返回，随后才是生产 Documents 分支。PID 与 UUID 隔离进程并防历史临时内容复用，代价是留下无真实用户数据的测试临时文件夹，交给系统清理。下载管理器 init 与两处监控入口最先返回，不请求权限或打开 Downloads。此隔离针对线程采样发现的蓝牙/文件访问启动旁路，生产路径不变。
 
@@ -162,39 +166,52 @@ func clearOwnership(_ ownerID: UUID)
 
 ## 实际交付
 
-T1–T5 的功能及 T6 测试代码已本地提交；本节与两份指南按 `69bb3a44` 的源码回写，旧方案顶部已声明覆盖。没有安装替换用户当前应用、推送或发布。界面验收阻塞仍在，不能据以下实现清单判定全部交互已经实测通过。
+T1–T5 功能及 T6 测试代码已本地提交；本节按 `3ac03dba` 回写，生产功能源码最近变化为 `2b22b670`，之后仅调整详情测试的 AX value 查询。没有安装替换当前应用、推送或发布。现已取得真实 UI、AX、截图和录屏；完整16项与全局验收仍未通过，不能由定向通过拼成全套成功。
 
 | 交付 | 实现与提交 |
 |---|---|
 | T1 安全记录写入与今天快照 | `188c08aa`、`170fa526`：服务协议、真实 ID、同 store 写前权限/记录限制复核、仅写授权新建兼容、重复提醒完成兼容及独立 `todayEvents` |
 | T2 单草稿会话与内存夹具 | `28af8f15`、`c2b338c2`：路由/来源/锚点、单稿基线与确认、代数与在途任务、退出裁决、同一内存后端与失败/延迟注入 |
 | T3 右栏页面 | `65f22333`、`dc9b2867`：列表/全文详情/编辑替换，日期与目标控件，普通日程保存/确认删除、受限记录系统入口，新增与既有记录权限分开 |
-| T4 首页完整清单 | `9366a099`：固定计数、全量分组滚动、ID 去重、独立完成与详情、隐藏完成行仍保留总量、来源与邻近锚点恢复 |
-| T5 焦点、锁屏与普通退出 | `7a4c0d30`、`fca477dd`：页面所有权与多窗口互认、局部离开暂存、提交保护、锁屏先暂存再收回、退出/重启、真实夹具双就绪入口及本地化 |
-| T6 验收代码与启动隔离 | `d02ca836`、`69bb3a44`：保留旧 2 例并追加 14 例 UI，真实 tab AX 标识、一次失败注入、蓝牙/Clipboard/Downloads 隔离，首页计数断言数字边界；完整 wrapper 拒绝缺失、跳过与非 Passed 用例 |
-| T7 当前说明 | 本文件回写精确接口、交付和限制；[36](36-calendar-cards-and-add.md) 保留历史并提示覆盖；[组件指南](guide/modules.md) 与 [手册](guide/README.md) 写现行操作、系统维护边界及草稿生命周期 |
+| T4 首页完整清单与恢复修复 | `9366a099`、`6854a086`：固定计数、全量分组滚动、独立完成与详情；完整今日布局测量，Reader/onAppear 恢复保存的原 ID 锚点 |
+| T5 焦点、锁屏、普通退出与测试入口 | `7a4c0d30`、`fca477dd`；`739cd4cc` 保留独立根/子 AX 标识，`2b22b670` 仅隔离单元宿主启动清自身 UI seed，保留真实测试写入 |
+| T6 验收代码与启动隔离 | `d02ca836`、`69bb3a44`：16项 UI、启动隔离与严格结果校验；`cd93f1f8` 显式 AUT/PID 守卫及字段 Cmd+A；`3ac03dba` 按真实 AX value 核对长备注原末句 |
+| T7 当前说明 | 本文件回写接口、交付、版本化证据及限制；[36](36-calendar-cards-and-add.md) 保留历史；[组件指南](guide/modules.md) 与 [手册](guide/README.md) 说明现行操作及验收状态 |
 
-**当前实测（2026-10-11）**：原始记录在 `.workflow/calendar-interaction/reports/T6.md` 及对应日志、退出码、xcresult 中；未用文档回写替代验收。
+**实测记录（2026-10-11）**：原始命令、退出码、xcresult、AX 与附件留在 `.workflow/calendar-interaction/reports/`。各轮结果独立列示；文档回写不替代验收。
 
-| 检查 | 实际结果与证据 |
+| 版本／运行 | 实际结果与证据 |
 |---|---|
-| 已完成的两轮全量 XCTest | `T6-unit-isolated`、`T6-unit-final` 均 exit 0，**各 651/651 通过，failed 0、skipped 0**；两轮均验证 D17 启动隔离，第一轮缓存目录只有 PID，第二轮覆盖最终 PID+UUID 隔离及生产源码。覆盖写入守卫、日期端点、单稿/异步/退出状态、所有权及首页数据与锚点等；这是单元证据 |
-| `69bb3a44` 后全量复验 | 此提交仅改 UI 计数断言。`T6-unit-69bb3a44` 中最终 UI 源码 SwiftCompile 成功，unit host 在 `_prepareTestConfigurationAndIDESession` 等待超过 3 分钟仍无 case 启动；仅中止自有测试进程，exit **143 / BUILD INTERRUPTED**，该轮未通过。xcresult 未完成，缺 Info.plist，summary 提取 exit 64，不能生成该轮计数 |
-| Python 回归 | `python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle` exit 0，**7 例通过** |
-| Release | 最终 `sh tools/build.sh`（`T6-release-isolated`）exit 0，BUILD SUCCEEDED，产物 `~/Library/Developer/Xcode/Gourd/Build/Products/Release/Gourd.app`；未安装或运行 |
-| 16 例 UI | 源码编译成功，**实际 UI 用例执行 0，未通过**。最新隔离 probe exit 65：runner 在启用 automation mode 时等待 60 秒后超时；summary 的总 1/错误 1 是初始化错误条目，不是执行了一个用例 |
-| AX 与截图 | 最新 probe 未进入夹具宿主；附件导出 exit 0 但 `no matching attachments`，只有空 manifest，**没有真实 AX 探测结果或 UI 截图** |
-| 完整 wrapper | **尚未通过**。preflight、结果校验和拒绝假 green 的自检分别通过，但全量 UI 与完整单入口仍待系统自动化恢复后执行；本地 synthetic 样本仅证明拒绝行为 |
+| 历史两轮全量单元 | `T6-unit-isolated`、`T6-unit-final` 各 exit0、651/651 Passed、failed/skipped/expectedFailures 0。第一轮 Clipboard 临时目录仅 PID，第二轮覆盖最终 PID+UUID；两轮都早于后续首页/测试域修复 |
+| `69bb3a44` 后中断复验 | `T6-unit-69bb3a44` 编译最终测试源码后，host 等待 XCTest 配置会话，无实际case；中止自有进程，exit143、BUILD INTERRUPTED。未完成 xcresult 缺 Info.plist，summary 提取 exit64；该轮不通过 |
+| `739cd4cc` 完整 UI／单元 | `T6-ui-final-739cd4cc` 全16实际执行：4 Passed、12 Failed、0 skipped/expectedFailures，exit65；同版本 unit 650 Passed、1 Failed，唯一失败为 kernel bootstrap（7个断言，仍是1个case）。截图与 AX 已存在 |
+| `6854a086` 首页定向回归 | `T4-anchor-measured-ui` 原9/30两例整例 Passed，exit0、0 skipped/expectedFailures；两份返回后 AX 的末项均在真实视口内。不是完整16项结果 |
+| `2b22b670` 同域单元复验 | `T5-fixture-domain-unit` 紧接上述 UI 同域 seed，651/651 Passed、0 failed/skipped/expectedFailures，exit0；原 Takeover64项及 kernel bootstrap Passed。不是最新完整16UI后再次运行单元 |
+| `2b22b670` 最新完整16UI | `T6-ui-current-2b22b670` **16实际执行、6 Passed／10 Failed、0 skipped/expectedFailures，exit65**；summary/tree 名称集合与源码16声明完全相同。9/30、首页失败保持、五类受限日程入口和旧2例整例通过；失败进度见下表 |
+| `3ac03dba` 详情定向复验 | `T6-notes-value-3ac03dba` 原详情完整case **1 Passed／0 Failed、0 skipped/expectedFailures，exit0**，实际23.816秒；原备注末句 value 查询、尾标可见、固定按钮及 Back 返回首页均通过。不能与上一轮拼成新的7/16通过套件 |
+| Python／Release | `T6-python-current-2b22b670` 两模块7项 Passed、exit0；`T6-release-current-2b22b670` BUILD SUCCEEDED、exit0，产物 `~/Library/Developer/Xcode/Gourd/Build/Products/Release/Gourd.app`，未安装或运行。之后只有测试查询变更 |
+| AX／截图／录屏 | 最新完整16UI导出214附件、12张 keepAlways PNG，目录 `reports/screenshots/T6-ui-current-2b22b670/`；详情定向复验也有真实附件。旧认证失败时0case/空附件是历史状态 |
+| 完整 wrapper／全局 | **未通过**。preflight、各gate、结果拒绝校验有独立证据，但未获得全部16项成功及完整单入口exit0，尚未最终终审/指纹验收 |
 
-先前两次 probe 的 `LocalAuthentication Code=-4 / System authentication is running.` 与最新 automation mode 超时是分开的失败，不能混作同一次原因。下一步需取得真实 AX/focus、执行全部 16 例并核对截图、通过完整 wrapper，再同步本节；T6 与全局验收保持待完成。
+最新完整16UI中的失败范围与详情单例复验分开记录：
+
+| 范围 | 已观察／仍未验 |
+|---|---|
+| 8个输入case：新增延迟保存、编辑保存删除、脏稿确认、返回恢复与冲突、永久失败重试、同稿第二次保存、Finder离开、普通退出取消 | 已进入编辑并完成标题点击、Cmd+A及身份守卫；在 `field.typeText` 前重查时标题消失，最终 AX 为列表与继续编辑草稿。各case后续保存、删除、确认、重试、离开与退出步骤未执行，不能判它们已通过或已证产品写入失败 |
+| `testAccessibilityProbe` | 目标菜单 Esc 后编辑页仍存在的断言通过；日期按钮 isHittable 失败，日期点击及后续 Esc 未验 |
+| `testDetailFullNotesAndHomeAnchor` | 完整16UI旧 label 查询失败；改 value 查询后的原单例整例通过。其余上述9个UI用例尚未通过，仍需完整套件复验 |
+
+系统认证先前阻挡runner，但用户认证后已恢复实际用例执行。用户明确将系统设置来源调查留待后续；当前输入页暂存及日期不可点击的根因未确认，不继续改设置或把它写成已证根因。下一步仍须解决剩余验收阻塞、执行全部16项并核对附件、通过完整 wrapper 和独立终审，再更新本节；停止来源调查不豁免本轮验收。
 
 ## 已知限制
 
 - 草稿只在本次进程存活期间保留，切页、收回与锁屏不落盘；崩溃或强制结束不能恢复。普通退出保护只针对有修改的草稿，正在提交则先等待同一操作。
 - 系统应用打开后由用户完整维护，回到岛内通过已有刷新链路读取；本轮未用真实账户验证同步，也未读写真实用户日历/提醒做测试。
-- 原生日期弹层、目标菜单的 Esc 次序、非激活窗口焦点、实际收回/恢复及普通退出提示尚未取得 UI 证据，651 单元通过不能证明这些系统交互通过。AX 类型和全部 UI 断言仍需真实 probe 核实。
+- 已有首页9/30全量滚动、完成、详情返回与失败保持，以及五类受限入口的真实UI通过；长备注原单例也通过。普通改删、新增/保存失败重试、草稿冲突、Finder收回恢复和退出仍被输入前失败阻断，日期弹层未通过，不能由651单元通过推断这些系统交互成功。
+- 首页完整 `VStack` 的初始测量/渲染成本随今日条目数增长；9/30项真实通过不等于超大清单性能已验证。内容没有容量上限。
+- 最新完整16UI summary保留27条 runtimeWarnings：16条主线程方法调用、11条view更新内发布；首页定向两例有同类4条，详情定向有2条。旧739日志也已有两类警告，具体来源未确定，不归因本次锚点修复，不以Passed忽略。
 - 物理锁屏与多屏设备未纳入本轮自动验证；已有生命周期单元检查只证明状态与调用顺序，不能代替设备实测。
-- 定时与全天转换保留日期范围，全天切回定时使用首日 09:00 / 最后日 10:00，原时刻需手工恢复；岛内不维护提醒完整字段、重复规则、会议邀请或日历管理。
+- 定时与全天转换保留日期范围，全天切回定时使用首日09:00／最后日10:00，原时刻需手工恢复；岛内不维护提醒完整字段、重复规则、会议邀请或日历管理。
 - 旧浮层与局部 quick-add 组件仍保留给未启用的历史宿主，当前首页与日历页走本文件的共享会话入口；阅读旧 [36](36-calendar-cards-and-add.md) 时以顶部覆盖说明为准。
 
 ## 验收标准
@@ -227,4 +244,9 @@ T1–T5 的功能及 T6 测试代码已本地提交；本节与两份指南按 `
 | D-15 | 用户委托控制器审核：T5接受额外本地化目录文件，仅四个退出文案键 | 退出提示与行为一并交付；超五文件的计划警告由独立语义及代码审查覆盖 |
 | D-16 | agent：局部离开仅在无聚合输入时暂停；日历窗口互认；实际AppDelegate取消旧快捷计时器 | 满足单窗口恢复条与多窗口焦点保护，防旧定时器在保护结束后再次收回；代价是窗口注册与订阅需要确定清理 |
 | D-17 | 用户委托控制器审核：T6接受额外ClipboardManager/DownloadManager两文件的测试启动隔离，测试缓存目录用PID+UUID | 采样证明真实Documents/Downloads访问会阻塞并有缓存清理副作用；init/monitor最先短路且临时分支早于Documents，PID+UUID避免进程与历史内容复用。代价是增加隔离代码并留下无真实数据的临时文件夹由系统清理；源码隔离经全量单元与Release验证，完整UI仍待验，生产路径不变 |
-| D-18 | 用户委托控制器审核：系统认证阻塞界面验收时，先回写已有代码与实测证据 | 文档无需自动化权限；必须明确UI未验，T6和全局验收保留待完成，不能据编译成功或单测推断界面通过 |
+| D-18 | 用户委托控制器审核：验收受阻时先回写已实现代码与实际证据 | 初期阻塞为系统认证，目前已有实际UI但未全通过；文档应同步当前版本/失败进度，T6和全局验收仍待完成，不能据编译、单测或定向通过推断全套通过 |
+| D-19 | agent／独立审核：根AX使用contain保留子标识 | 根标识曾覆盖子标识；保持真实布局与查询，代价是新增根无障碍容器 |
+| D-20 | agent／独立审核：显式隔离AUT，公开bundle/PID/AX交叉核验，字段级Cmd+A | 旧同名快照曾落生产PID；未知身份停止输入，原字段精确断言保留，代价是每动作身份查询；此修复没有证明输入页后续失败根因 |
+| D-21 | agent／独立审核：完整今日VStack测量，Reader/onAppear恢复原ID锚点 | 原30项保存24却由懒布局恢复到18；原9/30真实通过。代价是初次测量全部今日行，不限制容量、不改成点击行或加固定延迟 |
+| D-22 | agent／独立审核：非UI隔离单元宿主仅启动时清自身持久域 | 前轮UI seed压过默认模块启用；同域后651通过。代价是专用测试域每次启动重置，不清生产或固定suites，不用volatile空override遮蔽后续写入 |
+| D-23 | agent：详情末句断言按真实macOS AX value查询 | StaticText原长备注位于value；保留原END源句、可见尾标、固定按钮和返回断言，原单例已通过。仅换正确读取字段，不作为其余UI通过或全套通过依据 |
