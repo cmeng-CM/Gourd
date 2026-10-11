@@ -8608,6 +8608,72 @@ final class CalendarInteractionTests: XCTestCase {
         testCalendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))!
     }
 
+    private func pageDraft(start: Date, end: Date, allDay: Bool = false) -> CalendarDraft {
+        CalendarDraft(kind: .event, eventID: nil, originalDate: start, title: "Draft",
+                      start: start, end: end, isAllDay: allDay, calendarID: "events")
+    }
+
+    func testCalendarPageTimedCrossDayRangeRemainsValid() throws {
+        let draft = pageDraft(start: date(day: 11, hour: 23), end: date(day: 12, hour: 2))
+        let input = try draft.eventInput(calendar: testCalendar)
+        XCTAssertEqual(input.start, date(day: 11, hour: 23))
+        XCTAssertEqual(input.end, date(day: 12, hour: 2))
+    }
+
+    func testCalendarPageSingleDayAllDayConvertsToExclusiveEndAndBack() throws {
+        let draft = pageDraft(start: date(day: 11, hour: 9), end: date(day: 11, hour: 10))
+        let allDay = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+        XCTAssertEqual(allDay.start, date(day: 11))
+        XCTAssertEqual(allDay.end, date(day: 12))
+        XCTAssertEqual(CalendarPanelDates.includedEnd(of: allDay, calendar: testCalendar), date(day: 11))
+        XCTAssertNoThrow(try allDay.eventInput(calendar: testCalendar))
+        XCTAssertEqual(CalendarPanelDates.settingAllDay(false, in: allDay, calendar: testCalendar), draft)
+        XCTAssertEqual(CalendarPanelDates.settingAllDay(true, in: allDay, calendar: testCalendar), allDay)
+    }
+
+    func testCalendarPageMultiDayAllDayKeepsLastIncludedDayOnToggle() throws {
+        let draft = pageDraft(start: date(day: 11, hour: 23), end: date(day: 13, hour: 2))
+        let allDay = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+        XCTAssertEqual(allDay.start, date(day: 11))
+        XCTAssertEqual(allDay.end, date(day: 14))
+        XCTAssertEqual(CalendarPanelDates.includedEnd(of: allDay, calendar: testCalendar), date(day: 13))
+        let extended = CalendarPanelDates.settingEnd(date(day: 15), in: allDay, calendar: testCalendar)
+        XCTAssertEqual(extended.end, date(day: 16))
+        let timed = CalendarPanelDates.settingAllDay(false, in: extended, calendar: testCalendar)
+        XCTAssertEqual(timed.start, date(day: 11, hour: 9))
+        XCTAssertEqual(timed.end, date(day: 15, hour: 10))
+        XCTAssertNoThrow(try timed.eventInput(calendar: testCalendar))
+    }
+
+    func testCalendarPageTimedMidnightEndDoesNotAddAnExtraAllDayDate() {
+        let draft = pageDraft(start: date(day: 11, hour: 23), end: date(day: 12))
+        let allDay = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+        XCTAssertEqual(allDay.end, date(day: 12))
+        XCTAssertEqual(CalendarPanelDates.includedEnd(of: allDay, calendar: testCalendar), date(day: 11))
+    }
+
+    func testCalendarPageAllDayNaturalDayConversionAcrossDaylightSaving() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let first = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8))!
+        let next = calendar.date(from: DateComponents(year: 2026, month: 3, day: 9))!
+        let draft = pageDraft(start: first, end: next, allDay: true)
+        XCTAssertEqual(next.timeIntervalSince(first), 23 * 3600)
+        XCTAssertEqual(CalendarPanelDates.includedEnd(of: draft, calendar: calendar), first)
+        XCTAssertEqual(CalendarPanelDates.settingEnd(first, in: draft, calendar: calendar).end, next)
+        let timed = CalendarPanelDates.settingAllDay(false, in: draft, calendar: calendar)
+        XCTAssertEqual(calendar.component(.hour, from: timed.start), 9)
+        XCTAssertEqual(calendar.component(.hour, from: timed.end), 10)
+        XCTAssertNoThrow(try timed.eventInput(calendar: calendar))
+    }
+
+    func testCalendarPageChangingDatePreservesTimeAndNoDueSentinelIsNotADate() {
+        let changed = CalendarPanelDates.changingDay(date(day: 13), preservingTimeOf: date(day: 11, hour: 23), calendar: testCalendar)
+        XCTAssertEqual(changed, date(day: 13, hour: 23))
+        XCTAssertFalse(CalendarPanelDates.hasDueDate(record("no-due", start: .distantFuture, type: .reminder(completed: false))))
+        XCTAssertTrue(CalendarPanelDates.hasDueDate(record("due", type: .reminder(completed: false))))
+    }
+
     private func source(_ id: String = "events", reminder: Bool = false, writable: Bool = true) -> CalendarModel {
         CalendarModel(
             accountName: "Fixture", id: id, title: id, color: .systemBlue,

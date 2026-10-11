@@ -1025,21 +1025,15 @@ struct MonthGridView: View {
 struct StandaloneCalendarView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var calendarManager = CalendarManager.shared
-    @State private var selectedDate = Date()
+    @ObservedObject private var session = CalendarPanelSession.shared
     @State private var datePickerScrollTarget: Date?
-    /// 内联新增表单是否展开（P11 / T6 · D-07）：展开时右栏的**列表区**被 `CalendarQuickAddBar`
-    /// **替换**（顶部那行「+」保留）；再点一次「+」收起（入口常显，不看授权——D-12）。
-    @State private var isComposing = false
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
-    /// 详情浮层状态（P11 / T4，面板页一份；首页行各自持一份）：卡片把悬停 / 点击写给它，
-    /// 浮层由右栏整列 `rightColumn` 上挂的 `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`；
-    /// P11 / T6 起挂点从 pane 上移到整列，表单期列表不在树上 → 无锚点 → 浮层不渲染）。
-    ///
-    /// 用 `@StateObject` 而**不是** `@State`：`@State` 存引用类型时不订阅 `objectWillChange`，
-    /// 本视图不会因 `isPinRenderable` 变化重算 body，下面那条 `.onChange(of: details.isPinRenderable)`
-    /// （收起抑制标志的唯一通路）永远不会触发（教训同 T3 的 `HomeCalendarRow`）。
-    @StateObject private var details = CalendarEventDetailsModel()
+
+    /// 浏览日期只改共享路由；暂存稿的日期、目标和字段由会话保留。
+    private var selectedDate: Binding<Date> {
+        Binding(get: { session.selectedDate }, set: { session.showList(on: $0) })
+    }
 
     /// 左栏**显示月份**（`MonthGridView` 自持，经 `onDisplayedMonthChange` 回声到这里）：只用于左栏高度
     /// ——网格高度算式与首页日历行**同源**（`MonthGridLayout.monthGridHeight`，`36N + 52`）。
@@ -1049,23 +1043,9 @@ struct StandaloneCalendarView: View {
     /// 两栏之间的间距（旧 `body` 里的局部常量逐字搬上来：几何读数去掉后它得有个具名住处）。
     private static let paneSpacing: CGFloat = 12
 
-    /// 右栏顶部「+」入口行的高度（P11 / T6 · D-04）：22pt，右端一颗常显的「+」。
-    ///
-    /// 这一行从**右栏既有高度里**出（右栏仍钉 `monthGridHeight`，见 `body`），面板自然高因此
-    /// 不因它变：它是列表区的顶缘，不是列高的增量。
-    private static let quickAddHeaderHeight: CGFloat = 22
-
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
     /// 左栏高度（`monthGridHeight`）由它算；网格本体在 `MonthGridView` 里从同一枚取数。
     private let calendar = Calendar.gourdDisplay
-
-    private var filteredEvents: [EventModel] {
-        CalendarEventFilters.filtered(
-            events: calendarManager.events,
-            hideCompletedReminders: hideCompletedReminders,
-            hideAllDayEvents: hideAllDayEvents
-        )
-    }
 
     /// 月历网格的**按月**数据源：`calendarManager.monthEvents`（该显示月份整张网格的窗口）经同一套
     /// 偏好过滤——与右栏清单的**按日** `filteredEvents` 是两条不同窗口的数据，别混用。
@@ -1104,7 +1084,7 @@ struct StandaloneCalendarView: View {
             // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
             // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
             MonthGridView(
-                selectedDate: $selectedDate,
+                selectedDate: selectedDate,
                 scrollTarget: $datePickerScrollTarget,
                 monthNavigationMovesSelection: true,
                 monthEvents: monthEventSnapshot,
@@ -1125,7 +1105,9 @@ struct StandaloneCalendarView: View {
                 .frame(height: monthGridHeight, alignment: .topLeading)
                 .layoutPriority(1)
 
-            rightColumn
+            CalendarPanelPages(session: session, manager: calendarManager) { source in
+                if case .home = source { vm.coordinator.currentView = .home }
+            }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 // 右栏拿**同一个高度**：事件列表在它里面滚动 / 裁剪（它不参与「这一页要多高」，
                 // 因此把它的大内容量进自然高是不可能的——旧结构正是靠 `paneHeight` 把它钉住的）。
@@ -1135,128 +1117,13 @@ struct StandaloneCalendarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
         .onAppear {
-            // 显示月份由 `MonthGridView` 自持（随选中日同步），这里只在 `onDisplayedMonthChange` 的回声里
-            // 读一份用于左栏高度；出现时钉选中日与滚动落点。
-            selectedDate = Date.now
-            requestDatePickerCenterOnCurrentDate()
-            Task {
-                await calendarManager.updateCurrentDate(selectedDate)
-            }
+            // 重建或展开不能重置已由首页/另一屏设置的会话日期与来源。
+            datePickerScrollTarget = calendar.startOfDay(for: session.selectedDate)
+            Task { await calendarManager.updateCurrentDate(session.selectedDate) }
         }
-        .onChange(of: selectedDate) { _, newDate in
-            Task {
-                await calendarManager.updateCurrentDate(newDate)
-            }
+        .onChange(of: session.selectedDate) { _, newDate in
+            Task { await calendarManager.updateCurrentDate(newDate) }
         }
-        .onChange(of: vm.notchState) { _, newState in
-            guard newState == .open else {
-                // 收面板 / 切页（任何 `notchState != .open`）时浮层归位（P11 / T4）：`onDisappear`
-                // 对无边框面板不可靠（见 `DynamicIslandViewModel.onViewTeardown` 的注释），这条是
-                // 「面板收起后不残留浮层与标志」的主通路——否则钉住标志悬空为 true，面板再也收不起来。
-                details.clear()
-                vm.isCalendarDetailsPinned = false
-                return
-            }
-            selectedDate = Date.now
-            requestDatePickerCenterOnCurrentDate()
-            Task {
-                await calendarManager.updateCurrentDate(selectedDate)
-            }
-        }
-        // 钉住详情浮层期间抑制面板自动收起（P11 / T4；判据 T8b 起改 `isPinRenderable`）：标志并入
-        // `ContentView.hasAnyActivePopovers()`。`isPinRenderable` = 钉住了**且**锚点还在（条目离开
-        // 当日窗口 / 被偏好过滤 / 表单替换列表时自动落回 false——否则标志悬空为 true，面板再也收不
-        // 起来、浮层里的 × 出口也不可达）。判据放在本视图（浮层状态的所有者），`clear()` 归位同经这里。
-        .onChange(of: details.isPinRenderable) { _, renderable in
-            vm.isCalendarDetailsPinned = renderable
-        }
-        // 本页被销毁（退出日历 tab / 面板收起）时的兜底归位（P11 / T4）：与 `HomeCalendarRow`
-        // 的 `onDisappear` 同一条教训——悬停与钉住双清、标志复位，不留悬空状态。
-        .onDisappear {
-            details.clear()
-            vm.isCalendarDetailsPinned = false
-        }
-    }
-
-    /// 右栏整列（P11 / T6 起）：顶部「+」入口行 + （列表区 / 新增表单），外加整列级的详情浮层。
-    ///
-    /// **高度口径不变**（P11 / T6 验收项「表单展开 / 收起不改变面板自然高」）：整列仍由 `body` 钉
-    /// `monthGridHeight`；顶部行占的 22pt 从列表区里出，不是列高的增量。
-    ///
-    /// **详情浮层**挂在**整列**（不再是只挂列表区）：表单期列表不在树上 → 锚点表为空 → 浮层无内容
-    /// 可画（P11 / T6 裁决 5，不需要额外清理逻辑）；列表期与 T4 的行为逐字相同
-    /// （条目坐标与浮层共用同一个坐标系）。
-    private var rightColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            quickAddHeaderRow
-
-            Group {
-                if isComposing {
-                    // **新增表单**（P11 / T6 · D-07）：展开时**替换**列表区（含空态分支）。表单自身不设
-                    // 高度（自然高约 126pt），这里给它右栏剩余高度并裁在列内——右栏高度与面板自然高都不变。
-                    CalendarQuickAddBar(selectedDate: selectedDate) {
-                        isComposing = false
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                } else {
-                    rightEventsPane
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .calendarEventDetails(model: details)
-    }
-
-    /// 右栏最顶部一行（22pt）：`Spacer` + 右端「+」——与首页行日期头那颗同款（`CalendarQuickAddButton`）、
-    /// 常显（不看授权——D-12），再点一次收起（`isComposing.toggle()`）。
-    private var quickAddHeaderRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            CalendarQuickAddButton {
-                isComposing.toggle()
-            }
-        }
-        .frame(height: Self.quickAddHeaderHeight)
-    }
-
-    /// 右栏 pane：空态走 `EmptyEventsView`，否则渲染可滚动卡片 List
-    /// （`StandaloneEventCardList`；**全天与定时条目都是卡片**——2026-10-10 改判，黑底芯片条已退休）。
-    ///
-    /// **详情浮层（P11 / T4；挂点 P11 / T6 上移到整列）**：浮层画在**列表之外**（不在 `List` 行内、
-    /// 不被行 / 滚动视口裁剪），由宿主 `rightColumn` 的 `.calendarEventDetails(model:)` 挂**一次**
-    /// （本 pane 只上报锚点、不再自己挂——两处都挂会叠出两张）；条目锚点由卡片的
-    /// `anchorPreference` 上报（`CalendarEventDetail.swift` 的 `overlayPreferenceValue` + 现场解析）。
-    private var rightEventsPane: some View {
-        Group {
-            if filteredEvents.isEmpty {
-                EmptyEventsView(selectedDate: selectedDate)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                StandaloneEventCardList(
-                    events: filteredEvents,
-                    selectedDate: selectedDate,
-                    showFullEventTitles: Defaults[.showFullEventTitles],
-                    details: details,
-                    onToggleReminder: { reminderID, completed in
-                        Task {
-                            await calendarManager.setReminderCompleted(reminderID: reminderID, completed: completed)
-                        }
-                    }
-                )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        // 浮层不在这里挂（P11 / T6 起由宿主 `rightColumn` 整列挂一次）——本 pane 只上报锚点，
-        // 两处都挂会叠出两张浮层。
-    }
-
-    private func requestDatePickerCenterOnCurrentDate() {
-        datePickerScrollTarget = calendar.startOfDay(for: selectedDate)
     }
 }
 
@@ -1284,146 +1151,6 @@ private extension Date {
     }
 }
 
-private struct StandaloneEventCardList: View {
-    @Default(.autoScrollToNextEvent) private var autoScrollToNextEvent
-    let events: [EventModel]
-    let selectedDate: Date
-    let showFullEventTitles: Bool
-    /// 详情浮层状态（P11 / T4，宿主一份）：卡片把悬停 / 点击写给它；浮层本体由
-    /// `StandaloneCalendarView` 右栏**整列**（`rightColumn`，P11 / T6 起）的
-    /// `.calendarEventDetails(model:)` 画（`CalendarEventDetail.swift`，本视图不画浮层、只上报锚点）。
-    let details: CalendarEventDetailsModel
-    let onToggleReminder: (String, Bool) -> Void
-    @State private var initialAutoScrollDone = false
-
-    /// 列表顺序：**全天在前、各自按开始时间升序**——与首页卡片列（`CalendarEventCardList.ordered`）同序。
-    ///
-    /// 改判（2026-10-10，用户拍板）：原先全天条目走顶部**黑底芯片条**（`AllDayEventsStrip`，已退休），
-    /// 与首页「全天 = 一张卡片、收尾位显示 全天」的形态不一致；现在两处都走同一条卡片列表。
-    private var orderedEvents: [EventModel] {
-        let partitioned = partitionEvents(events)
-        return partitioned.allDay.sorted { $0.start < $1.start }
-            + partitioned.timed.sorted { $0.start < $1.start }
-    }
-
-    private var timedEvents: [EventModel] {
-        // Sorted by start time so `scrollTargetForTimedEvents` (which uses
-        // `first(where:)` to pick in-progress / next-upcoming) returns the true
-        // nearest-to-now event. (#566)
-        partitionEvents(events).timed.sorted { $0.start < $1.start }
-    }
-
-    private func scrollToRelevantEvent(proxy: ScrollViewProxy) {
-        guard autoScrollToNextEvent else { return }
-        let refTime = scrollReferenceTime(for: selectedDate)
-        guard let target = scrollTargetForTimedEvents(timed: timedEvents, referenceTime: refTime) else { return }
-
-        // Use .center anchor for more reliable positioning with List's internal padding.
-        // DispatchQueue.main.async ensures the scroll fires after List completes its initial layout,
-        // avoiding the race condition where proxy.scrollTo fires before items are measured.
-        let anchor: UnitPoint = .center
-        DispatchQueue.main.async {
-            withTransaction(Transaction(animation: nil)) {
-                proxy.scrollTo(target.id, anchor: anchor)
-            }
-        }
-    }
-
-    var body: some View {
-        // 一条可滚动列表，**全天与定时条目都是卡片**（与首页右栏 `CalendarEventCardList` 同款；
-        // 全天卡片在收尾位显示「全天」）。改判（2026-10-10，用户拍板）：原先全天走顶部黑底芯片条
-        // （`AllDayEventsStrip`，含 `.background(Color.black.opacity(0.95))`，本次随本视图一并退休）——
-        // 面板页与首页因此在这块观感不一致（黑条 vs 卡片）。
-        // 使用 `List`（而不是 `LazyVStack`-in-`ScrollView`）保留既有滚动行为与内置分隔，
-        // 与首页卡片列的口径一致（#566 review）。自动滚动（`autoScrollToNextEvent`）只以
-        // **定时条目**为目标（`timedEvents` / `scrollTargetForTimedEvents`），全天卡片不参与。
-        ScrollViewReader { proxy in
-            List {
-                ForEach(orderedEvents) { event in
-                    eventCard(event)
-                        .id(event.id)
-                        .padding(.bottom, 8)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                }
-            }
-            .listStyle(.plain)
-            .scrollIndicators(.never)
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
-            .onAppear {
-                scrollToRelevantEvent(proxy: proxy)
-                if !timedEvents.isEmpty {
-                    initialAutoScrollDone = true
-                }
-            }
-            .onChange(of: selectedDate) { _, _ in
-                scrollToRelevantEvent(proxy: proxy)
-            }
-            .onChange(of: timedEvents.isEmpty) { wasEmpty, isEmpty in
-                // Retrigger the initial auto-scroll once, when timed events become
-                // available after the view appeared (e.g. async calendar load).
-                // Guarded so later data refreshes don't re-scroll. (#566 follow-up)
-                guard wasEmpty, !isEmpty, !initialAutoScrollDone else { return }
-                scrollToRelevantEvent(proxy: proxy)
-                initialAutoScrollDone = true
-            }
-            .onChange(of: events) { _, _ in
-                // Fallback: re-trigger auto-scroll when events are refreshed (e.g., calendar
-                // permission granted, calendars re-selected, or external calendar change).
-                // The initialAutoScrollDone guard prevents unwanted re-scrolling on minor updates.
-                if !initialAutoScrollDone {
-                    scrollToRelevantEvent(proxy: proxy)
-                }
-            }
-        }
-        .clipped()
-    }
-
-    /// 单张卡片的**宿主交互包装**（P11 / T4）——卡片本体分派到下面两个 builder（纯展示）：
-    /// `CalendarEventHoverTarget`（悬停约 0.3s → `details.hover`）
-    /// + `anchorPreference`（本卡 bounds 按 id 上报给面板右栏 pane 级的详情浮层）
-    /// + `contentShape(Rectangle())`（整卡可悬停 / 可点，含色条与空隙）
-    /// + `onTapGesture`（**点击 = 钉住详情**；打开系统 App 走浮层的「Open in Calendar」——
-    /// P11 / T4 口径变更，D-09）
-    /// + `.accessibilityAddTraits(.isButton)`（T8b：可点语义给辅助功能，不加视觉 / 文案）。
-    ///
-    /// 提醒分支原外层 `Button { openURL(calendarAppURL()) }` 随本次接线去掉：勾选圈
-    /// （`ReminderCard` 里的 `ReminderToggle`）是 `Button`、自身吞点击（写回仍走 `onToggleReminder`
-    /// 链路，一行未动）；卡片其余区域点击落到本层 `onTapGesture` → 钉住，不误触勾选。
-    private func eventCard(_ event: EventModel) -> some View {
-        CalendarEventHoverTarget(id: event.id, model: details) {
-            if event.type.isReminder {
-                reminderCard(event)
-            } else {
-                calendarEventCard(event)
-            }
-        }
-        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            details.togglePin(event.id)
-        }
-        .accessibilityAddTraits(.isButton)
-        .padding(.horizontal, 2)
-    }
-
-    /// 卡片本体已抽为共享组件 `ReminderCard`（`CalendarEventCards.swift`，P11/T1）：
-    /// 这里只做宿主侧的接缝——把 `event.id` 与宿主的 `onToggleReminder` 闭包绑给组件的 `onToggle`。
-    private func reminderCard(_ event: EventModel) -> some View {
-        ReminderCard(
-            event: event,
-            showFullEventTitles: showFullEventTitles,
-            onToggle: { completed in onToggleReminder(event.id, completed) }
-        )
-    }
-
-    /// 卡片本体已抽为共享组件 `CalendarEventCard`（`CalendarEventCards.swift`，P11/T1）。
-    private func calendarEventCard(_ event: EventModel) -> some View {
-        CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles)
-    }
-}
 
 struct ReminderToggle: View {
     @Binding var isOn: Bool
