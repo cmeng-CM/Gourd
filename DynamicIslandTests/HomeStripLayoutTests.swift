@@ -56,7 +56,7 @@
 //  - 顺序的正面判据：可用高度从高到低逐 pt 扫，**让位顺序恒为 日历行 → 主块带 → 小组件带**；
 //  - **空带不进取舍**（T7）：没有紧凑块时四档**退化成旧三档**（`.both` ≡ 旧 both、`.noCalendar` ≡
 //    旧 stripOnly、`.none` ≡ 旧 calendarOnly——旧 calendarOnly 那一档本就不画日历行，见
-//    `MonthGridLayout.monthGridHeight`（T8 起按当月周数，2026-10 = 278.4）> `HomeStripView.minimumUsableHeight`（140））；
+//    `MonthGridLayout.monthGridHeight`（T8 起按当月周数，2026-10 = 278）> `HomeStripView.minimumUsableHeight`（140））；
 //  - 日历行关掉时（行高按 0 传）不存在取舍：剩下的几样拿全部可用高度；
 //  - 退化输入：`available == 0` 与负值都判成什么都不画（负值按 0 处理）。
 //
@@ -752,8 +752,8 @@ final class HomeStripLayoutTests: XCTestCase {
     /// 的镜像**：它原样对应改前的 `HomeCalendarRow.rowHeight(forMonth:)`，那条行随「月历退出首页」
     /// 整条退休（docs/38 D-07）；`HomeBandedHomeView` 现在走 `HomeFlowLayout`，`HomeVerticalFit`
     /// 只剩本文件这一批回归用例在用，样本值取整便于阈值链（484 / 244 / 步长 1pt 的扫描）保持整数口径。
-    /// **2026-10-12 日历页等比放大 ×1.2 后 `MonthGridLayout.monthGridHeight` 已是 278.4**（非整数）——
-    /// 本夹具**故意不跟**：跟了会让 `allThreeMinimumHeight` 变成 530.4，`testGiveWayOrderIs…` 那条
+    /// **2026-10-12 日历页等比放大 ×1.2（逐档取整）后 `MonthGridLayout.monthGridHeight` 是 278**——
+    /// 本夹具**故意不跟**：跟了会让 `allThreeMinimumHeight` 从 484 变成 530，`testGiveWayOrderIs…` 那条
     /// 逐 pt 扫描（`stride(by: -1)`）与若干 `==` 无容差断言都要跟着改算式（属另一件事）；
     /// 真实行高由下面 `testMonthGridHeightFollowsTheMonthWeeks` / `testHomeCalendarGridViewportFits…`
     /// 按 `MonthGridLayout` 的常量直接钉住。
@@ -812,7 +812,7 @@ final class HomeStripLayoutTests: XCTestCase {
             Self.calendarRowHeight, 232,
             "`HomeVerticalFit` 样本里的日历行高：**冻结的分带时代取值**（改前 2026-10 五周 → 36 × 5 + 52，"
                 + "样本取整以便阈值链 / 逐 pt 扫描保持整数口径；真实的 monthGridHeight 见 "
-                + "`testMonthGridHeightFollowsTheMonthWeeks`，2026-10 现为 278.4）"
+                + "`testMonthGridHeightFollowsTheMonthWeeks`，2026-10 现为 278）"
         )
         XCTAssertEqual(Self.rowSpacing, 8)
         XCTAssertEqual(Self.stripMinimumHeight, 140, "主块带最小可用高 = 大块档（T3 起 140，见 HomeStripView 的属性注释）")
@@ -840,14 +840,14 @@ final class HomeStripLayoutTests: XCTestCase {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
-    /// **行高 = `43.2 × N + 62.4`**（N = 当月实际周数；p6-ui-polish / T8 起按当月周数，
-    /// 2026-10-12 起随日历页等比放大 ×1.2——日格 30 → 36、行距 6 → 7.2，算式逐项见
+    /// **行高 = `43 × N + 63`**（N = 当月实际周数；p6-ui-polish / T8 起按当月周数，
+    /// 2026-10-12 起随日历页等比放大 ×1.2 并**逐档取整**——日格 30 → 36、行距 6 → 7，算式逐项见
     /// `MonthGridLayout.monthGridHeight`）。
     ///
     /// 三条判据：
     /// 1. **与网格渲染同源**：N 就是 `MonthGridLayout.days(forMonth:)`（屏幕上的那张网格）的格数 / 7
     ///    ——两处算法不可能漂；
-    /// 2. **边界**：2026-08 = 6 周（7/26–9/5，跨到 9 月的 6 周月 → 321.6）、2026-10 = 5 周（278.4）、
+    /// 2. **边界**：2026-08 = 6 周（7/26–9/5，跨到 9 月的 6 周月 → 321）、2026-10 = 5 周（278）、
     ///    跨年 1 月（首格落在上一年 12 月）、首日恰是周起点的
     ///    11 月（leading days = 0）；
     /// 3. **周起点跟随 `firstWeekday`**：同一月份在周日-first 与周一-first 下的周数按各自网格算
@@ -856,7 +856,7 @@ final class HomeStripLayoutTests: XCTestCase {
         let sunday = Self.calendarRowCalendar(firstWeekday: 1)
         let monday = Self.calendarRowCalendar(firstWeekday: 2)
 
-        /// 同源判据：周数 = 网格格数 / 7；行高 = `43.2N + 62.4`（2026-10-12 起日历页等比放大 ×1.2，
+        /// 同源判据：周数 = 网格格数 / 7；行高 = `43N + 63`（2026-10-12 起日历页等比放大 ×1.2 后逐档取整，
         /// 逐项见 `MonthGridLayout.monthGridHeight`）。
         func assertMonth(
             _ calendar: Calendar, _ year: Int, _ month: Int, weeks: Int,
@@ -874,33 +874,34 @@ final class HomeStripLayoutTests: XCTestCase {
                 "同源判据：周数 = 网格格数 / 7（`weekCount` 就是网格那份数据摊出来的行数）",
                 file: file, line: line
             )
-            // `43.2N + 62.4` 的两个系数都不是二进制可精确表示的数（1.2 不能），算式逐项相加后
-            // 末位可能有 1 ulp 的零头——所以这里按浮点口径比（`accuracy:`），不给 `==` 拿字面量钉死。
+            // `43N + 63` 逐档取整后每一档都是整点（`scale` 派生值 `.rounded()` 后再相加），算式
+            // 里没有 1.2 这种二进制不精确的系数了——仍按浮点口径比（`accuracy:`）只是给个紧公差，
+            // 值本身是精确的整数。
             XCTAssertEqual(
                 MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: calendar),
-                43.2 * CGFloat(weeks) + 62.4,
+                43 * CGFloat(weeks) + 63,
                 accuracy: 1e-9,
-                "行高 = 43.2N + 62.4（\(weeks) 周；日格 36 + 行距 7.2 的等价放大档）",
+                "行高 = 43N + 63（\(weeks) 周；日格 36 + 行距 7 取整后的放大档）",
                 file: file, line: line
             )
         }
 
-        // 2026-08 = 6 周（7/26–9/5）→ 321.6；2026-10 = 5 周 → 278.4（放大前的 268 / 232 各 ×1.2）。
+        // 2026-08 = 6 周（7/26–9/5）→ 321；2026-10 = 5 周 → 278（放大取整前是 268 / 232）。
         assertMonth(sunday, 2026, 8, weeks: 6)
         assertMonth(sunday, 2026, 10, weeks: 5)
         XCTAssertEqual(
             MonthGridLayout.monthGridHeight(
                 forMonth: Self.calendarRowMonth(sunday, year: 2026, month: 10), calendar: sunday
             ),
-            278.4, accuracy: 1e-9,
-            "10 月 5 周 → 278.4 = 43.2 × 5 + 62.4（日历页等比放大 ×1.2 后的设计值；放大前 232）"
+            278, accuracy: 1e-9,
+            "10 月 5 周 → 278 = 43 × 5 + 63（日历页等比放大 ×1.2 后逐档取整的设计值；放大前 232）"
         )
         XCTAssertEqual(
             MonthGridLayout.monthGridHeight(
                 forMonth: Self.calendarRowMonth(sunday, year: 2026, month: 8), calendar: sunday
             ),
-            321.6, accuracy: 1e-9,
-            "8 月 6 周 → 321.6 = 43.2 × 6 + 62.4（放大前 268）"
+            321, accuracy: 1e-9,
+            "8 月 6 周 → 321 = 43 × 6 + 63（放大前 268）"
         )
 
         // 跨年 1 月：首格跨到上一年 12 月（2027-01 的首格 = 2026-12-27，Sunday-first）。
@@ -933,8 +934,8 @@ final class HomeStripLayoutTests: XCTestCase {
 
         // 生产入口（无月参的那一个）与纯函数逐字同值：宿主 plan 的预算与行的 frame 读的是同一份。
         XCTAssertEqual(
-            MonthGridLayout.monthGridHeight(forMonth: Date()), 278.4, accuracy: 1e-9,
-            "2026-10（当前月）仍是 5 周那一档：43.2 × 5 + 62.4 = 278.4"
+            MonthGridLayout.monthGridHeight(forMonth: Date()), 278, accuracy: 1e-9,
+            "2026-10（当前月）仍是 5 周那一档：43 × 5 + 63 = 278"
         )
 
         // 两处宿主同源（首页行 / 独立日历页左栏）：`MonthGridLayout.monthGridHeight` 就是行高算式
@@ -950,8 +951,8 @@ final class HomeStripLayoutTests: XCTestCase {
     }
 
     /// **静态入口的默认值与显示日历同源**（p9 / T2，docs/34 §做法 机制一）：`rowHeight(forMonth:)`
-    /// 的 `calendar:` 默认参数就是 `Calendar.gourdDisplay`（周一档）——2026-11 在周一起始下是 6 周 → 321.6
-    /// （周日起始是 5 周 → 278.4）。默认值若仍走 `.current`（本机周日起始），这条等式与 321.6 都会红。
+    /// 的 `calendar:` 默认参数就是 `Calendar.gourdDisplay`（周一档）——2026-11 在周一起始下是 6 周 → 321
+    /// （周日起始是 5 周 → 278）。默认值若仍走 `.current`（本机周日起始），这条等式与 321 都会红。
     ///
     /// 期望值按**宿主机时区**造月首（默认参数 = 宿主机时区那一档）；GMT 夹具（`calendarRowCalendar`）
     /// 继续只服务显式注入日历的判据。
@@ -963,15 +964,15 @@ final class HomeStripLayoutTests: XCTestCase {
             "默认参数 = 显式 `.gourdDisplay`（静态入口与显示日历同源）"
         )
         XCTAssertEqual(
-            MonthGridLayout.monthGridHeight(forMonth: november), 321.6, accuracy: 1e-9,
-            "2026-11 周一档 = 6 周 → 43.2 × 6 + 62.4（周日起始档是 5 周 → 278.4）"
+            MonthGridLayout.monthGridHeight(forMonth: november), 321, accuracy: 1e-9,
+            "2026-11 周一档 = 6 周 → 43 × 6 + 63（周日起始档是 5 周 → 278）"
         )
     }
 
     /// **行高下网格恰好装下整月**（p6-ui-polish / T8 tune 的结构护栏；2026-10-12 起行高与日格随
-    /// `MonthGridLayout.scale` 等比放大，算式 `43.2N + 62.4`）：在 `MonthGridLayout.monthGridHeight`
+    /// `MonthGridLayout.scale` 等比放大并**逐档取整**，算式 `43N + 63`）：在 `MonthGridLayout.monthGridHeight`
     /// 给定的行高里挂**真的** `MonthGridView`，量日格那个 `NSScrollView` 的视口——它必须恰好等于
-    /// 「整月网格内容」= `dayCellPitch × N − gridSpacing`（`43.2N − 7.2`；`LazyVGrid` 的 N 行 +
+    /// 「整月网格内容」= `dayCellPitch × N − gridSpacing`（`43N − 7`；`LazyVGrid` 的 N 行 +
     /// (N−1) 道行距；T8 tune 去掉了额外的 `.padding(.bottom, 2)`），且网格底**贴住行底**
     /// （上方两段 chrome 的余量都落在网格上方）。**护栏的算式本身不写死数字**：日格高 / 行距 /
     /// 两段 chrome 都从 `MonthGridLayout` 的那一份常量读，与视图、与 `monthGridHeight` 同源——
@@ -993,7 +994,7 @@ final class HomeStripLayoutTests: XCTestCase {
             let monthDate = Self.calendarRowMonth(calendar, year: year, month: month)
             let rowHeight = MonthGridLayout.monthGridHeight(forMonth: monthDate, calendar: calendar)
             XCTAssertEqual(
-                rowHeight, 43.2 * CGFloat(weeks) + 62.4, accuracy: 1e-9,
+                rowHeight, 43 * CGFloat(weeks) + 63, accuracy: 1e-9,
                 "前提：\(year)-\(month) = \(weeks) 周"
             )
 
@@ -1031,6 +1032,9 @@ final class HomeStripLayoutTests: XCTestCase {
                 "\(year)-\(month)：视口必须恰好是整月内容高（小于 = 末行被裁，大于 = 底部又留空档）"
             )
             let gridFrameInRow = host.convert(dayGrid.bounds, from: dayGrid)
+            // 容差保留 1pt（T8 tune 以来的原值，本轮不收紧到 `==`）：全部刻度取整后网格底与行底逐点
+            // 相等，这条护栏已足够；1pt 的公差既容得下 AppKit 子点级落地量化，又仍能钉死本轮回归
+            // 的那类**分数帧**空档（放大未取整时实测差 1.4 / 1.6pt，> 1 即红）。
             XCTAssertEqual(
                 gridFrameInRow.maxY, rowHeight, accuracy: 1,
                 "\(year)-\(month)：网格底贴住行底（行高 = 网格顶部内缩 + 标题 chrome + 周标题 chrome + 内容，逐项见 monthGridHeight）"

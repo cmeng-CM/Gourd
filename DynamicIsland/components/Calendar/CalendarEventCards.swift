@@ -41,9 +41,11 @@
 //  勾选圈左置（待办）、`ConferenceJoinButton` 在正文列内（日程）——位置都不许动。
 //
 //  **2026-10-12：右栏行高随面板「日历」页等比放大**（docs/41-home-and-calendar-scale.md D-03 / D-04）：
-//  本文件里由 `MonthGridLayout.scale` 派生的只有两处**行高**——列容器的 `headerHeight`（26 → 31.2）
-//  与两张卡片的 `minHeight`（50 → 60，让出的高度正好补上左栏 `monthGridHeight` 长高的那一截，
-//  两栏拿同一个高度）。卡片的文字用的是**语义字号**（`.callout` / `.caption` / `.caption2`）而不是
+//  本文件里由 `MonthGridLayout.scale` 派生的只有两处**行高**——列容器的 `headerHeight`（26 → 31.2，
+//  **取整 31**）与两张卡片的 `minHeight`（50 → 60，让出的高度正好补上左栏 `monthGridHeight` 长高的
+//  那一截，两栏拿同一个高度）。两档都**取整到整点**（`(原值 × scale).rounded()`，2026-10-12 T2fix2）：
+//  整条链（左栏日格 / 行距 / chrome / 行高 + 右栏表头 / 卡片）都是整点，AppKit 逐层落地不再逐档
+//  向下取整累加误差（左栏网格底贴行底的结构护栏依赖这一点）。卡片的文字用的是**语义字号**（`.callout` / `.caption` / `.caption2`）而不是
 //  数值字号，随动态字体走，因此**不随 `scale` 变**（要变只能写死数值字号，那会丢掉动态字体）；
 //  `padding` / 圆角 / 色条 4×36 同样不在本次放大范围（卡片结构一个字没动）。
 //
@@ -120,9 +122,9 @@ struct CalendarEventCard: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
-        // 卡片最小行高（原 50）：右栏行高随 `MonthGridLayout.scale` 放大（docs/41 D-03），
-        // 卡片跟着长高，一屏的行数与左栏日格的对位才不会走样。
-        .frame(maxWidth: .infinity, minHeight: 50 * MonthGridLayout.scale, alignment: .leading)
+        // 卡片最小行高（原 50 → 60）：右栏行高随 `MonthGridLayout.scale` 放大（docs/41 D-03），
+        // 取整到整点（T2fix2），卡片跟着长高，一屏的行数与左栏日格的对位才不会走样。
+        .frame(maxWidth: .infinity, minHeight: (50 * MonthGridLayout.scale).rounded(), alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.05))
@@ -185,8 +187,8 @@ struct ReminderCard: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
-        // 卡片最小行高（原 50）：与 `CalendarEventCard` 同一条口径，随 `MonthGridLayout.scale` 放大。
-        .frame(maxWidth: .infinity, minHeight: 50 * MonthGridLayout.scale, alignment: .leading)
+        // 卡片最小行高（原 50 → 60）：与 `CalendarEventCard` 同一条口径，随 `MonthGridLayout.scale` 放大并取整。
+        .frame(maxWidth: .infinity, minHeight: (50 * MonthGridLayout.scale).rounded(), alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.05))
@@ -261,8 +263,9 @@ struct CalendarEventCardList: View {
     /// 右栏与本页左栏（`MonthGridLayout.monthGridHeight`）拿的是同一个高度，行高不跟着走就会
     /// 「卡片列溢出到行外」或「行内留白」——所以它引左栏那一个 `scale` 常量，不再自己写数
     /// （唯一取值处仍是这里）。两处宿主共用这一个数——`CalendarView`（**仅供 `#Preview`**）的
-    /// 视口换算也引它。
-    static let headerHeight: CGFloat = 26 * MonthGridLayout.scale
+    /// 视口换算也引它。**取整到整点**（26 × 1.2 = 31.2 → **31**，T2fix2）：与左栏同一批量化口径，
+    /// 右栏视口 = `monthGridHeight − headerHeight` 也是整点（278 − 31 = 247）。
+    static let headerHeight: CGFloat = (26 * MonthGridLayout.scale).rounded()
 
     @ObservedObject private var calendarManager = CalendarManager.shared
     /// **未过滤**的原始条目（首页宿主传 `calendarManager.events`）；偏好过滤在组件内做。
