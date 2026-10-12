@@ -90,6 +90,8 @@ VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
 
 不做关闭 / 清除 / 回复 / 新通知高亮；不引入新定时器（重绘仍靠 `store` 的 `@Published`）；不改展开 tab 的列表与状态行；不改通知读取上限、`dismissed` 过滤与权限引导；不做跨面板的滚动位置记忆；不做通知块与今日块之间的滚动联动。
 
+> **补记（2026-10-12）**：本块表头此后多了一个「清除」动作——见 [42-notification-clear-and-reset-heal.md](42-notification-clear-and-reset-heal.md)，语义与面板一致（只从岛上移除、系统通知中心不动）。因此本节的「不做清除」在**块表头**范围内已不成立；整行点击打开 App、只读（除这颗清除外）等其余结论不变。
+
 ## 实际交付
 
 **代码**（文件 `DynamicIsland/Modules/NotificationsModule.swift`）：
