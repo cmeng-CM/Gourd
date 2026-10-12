@@ -4,6 +4,7 @@ import XCTest
 final class DynamicIslandUITests: XCTestCase {
 
     private let isolatedBundleIdentifier = "com.cmeng.gourd.calendar-tests.Gourd"
+    private var launchedApplication: NSRunningApplication?
     private var launchedProcessIdentifier: pid_t?
     var app: XCUIApplication!
 
@@ -17,6 +18,7 @@ final class DynamicIslandUITests: XCTestCase {
         if name.contains("Delayed") { app.launchArguments.append("--calendar-write-delay-ms=2000") }
         app.launch()
         guard let process = isolatedApplicationProcess() else { return }
+        launchedApplication = process
         launchedProcessIdentifier = process.processIdentifier
         guard requireIsolatedApplication() else { return }
         app.activate()
@@ -36,6 +38,7 @@ final class DynamicIslandUITests: XCTestCase {
             app.terminate()
         }
         app = nil
+        launchedApplication = nil
         launchedProcessIdentifier = nil
     }
 
@@ -58,13 +61,13 @@ final class DynamicIslandUITests: XCTestCase {
     /// Reject replacement processes; background hover and scroll remain valid.
     @discardableResult
     private func requireIsolatedApplication(file: StaticString = #filePath, line: UInt = #line) -> Bool {
-        guard let launchedProcessIdentifier else {
-            XCTFail("No isolated AUT PID recorded for this launch", file: file, line: line)
+        guard let launchedApplication, let launchedProcessIdentifier else {
+            XCTFail("No isolated AUT process recorded for this launch", file: file, line: line)
             return false
         }
         guard let process = isolatedApplicationProcess(file: file, line: line) else { return false }
-        guard process.processIdentifier == launchedProcessIdentifier else {
-            XCTFail("Isolated AUT PID changed from this launch's \(launchedProcessIdentifier) to \(process.processIdentifier)", file: file, line: line)
+        guard process.isEqual(launchedApplication), process.processIdentifier == launchedProcessIdentifier else {
+            XCTFail("Isolated AUT process identity changed from this launch's PID \(launchedProcessIdentifier) to PID \(process.processIdentifier)", file: file, line: line)
             return false
         }
         return true
@@ -137,6 +140,7 @@ final class DynamicIslandUITests: XCTestCase {
         guard requireIsolatedApplication() else { return }
         XCTAssertTrue(element(id).waitForExistence(timeout: 8), id)
         XCTAssertTrue(element(id).isHittable, "\(id) must be hittable")
+        guard requireIsolatedApplication() else { return }
         element(id).click()
     }
 
