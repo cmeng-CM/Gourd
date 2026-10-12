@@ -1601,6 +1601,12 @@ private struct NotificationsHomeBlockView: View {
 
             // 一键清除：只在有内容时出现（空列表上放一颗无效按钮只会让人以为坏了）。
             // **只把当前列表标记为已关闭**，系统通知中心里的条目一条都不动。
+            //
+            // **块内这颗是纯文字，刻意不带面板那颗的 capsule 底**（2026-10-12）：块表头是固定
+            // `headerHeight`（16pt）的紧档，而面板那颗（11pt 文字 + 上下 padding 2 + capsule 底）
+            // 外框约 17pt，照搬会溢表头 ~1pt 把块顶起来。这里去掉背景与纵向 padding、再夹一道
+            // `.frame(height: headerHeight)` 兜底，让它永远进得了 16pt——**别再来「统一风格」把
+            // capsule 加回来**，那样溢出会原样回来。字号档 / 文案键 / 动作 / 提示都与面板逐字相同。
             if NotificationsHomeBlockLayout.showsClearAction(itemCount: store.items.count) {
                 Button {
                     store.dismissAll()
@@ -1608,10 +1614,9 @@ private struct NotificationsHomeBlockView: View {
                     Text(LocalizedStringKey("module.notifications.clearAll"))
                         .font(.system(size: NotificationRowMetrics.clearAll, weight: .medium))
                         .foregroundStyle(.white.opacity(0.75))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(.white.opacity(0.12)))
-                        .contentShape(Capsule())
+                        .lineLimit(1)
+                        .contentShape(Rectangle())
+                        .frame(height: NotificationsHomeBlockLayout.headerHeight)
                 }
                 .buttonStyle(.plain)
                 .help(NotificationText.localized("module.notifications.clearAll"))
