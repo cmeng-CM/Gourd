@@ -177,7 +177,8 @@ enum PanelAutoHeight {
     ///
     /// **`hostBandsHeight`（p13 / docs/38 D-01）** = 环境带高 + 一道缝 + 今天带高 + 一道缝——
     /// 即「流以上那两条固定带连同它们与流之间的间距」。改前这里算的是流下方那条全宽日历行
-    /// （`calendarHeight` / `calendarSpacing`，按当月的 `36N + 52`）；月历退出首页之后由本参数
+    /// （`calendarHeight` / `calendarSpacing`，按当月的 `43N + 63`——2026-10-12 起日历页等比放大
+    /// ×1.2，改前 `36N + 52`）；月历退出首页之后由本参数
     /// 承接同一件事（口径不变：**两者都只是「流之外那一段固定的高度」**）。
     /// 三带都不画时（块全关）传 0。
     public static func contentHeight(
