@@ -145,10 +145,13 @@ if [ "$do_install" = true ]; then
   # 没有 UI 会话的实例（菜单栏无图标、退不掉、主线程空转），只能手工 lsregister -f 补救。
   # 失败不致命，只提示。
   if "$lsregister" -f "$installed_app" >/dev/null 2>&1; then
-    echo "已重新登记 $installed_app（避免半登记起成无 UI 会话的实例）"
+    echo "已重新登记 ${installed_app}（避免半登记起成无 UI 会话的实例）"
   else
-    echo "提示：重新登记 $installed_app 失败（若启动异常请手工 lsregister -f）"
+    echo "提示：重新登记 ${installed_app} 失败（若启动异常请手工 lsregister -f）"
   fi
+  # 注意：变量后面紧跟中文全角括号时必须写 ${var}——`$var（` 会把全角括号的首字节
+  # 当成变量名的一部分，`set -u` 下报 unbound variable（2026-10-12 实跑安装才暴露，
+  # `bash -n` 查不出来）。
 fi
 
 if [ "$do_dmg" = true ]; then
