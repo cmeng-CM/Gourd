@@ -1541,6 +1541,7 @@ private struct NotificationsHomeBlockView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("home-notifications-scroll")
             // 滚动 / 悬停块内时压住面板的 hover-exit 收回（沿用今日块 idiom）。
             .onHover { vm.setScrollGestureSuppression($0, token: scrollToken) }
         }

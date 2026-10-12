@@ -215,7 +215,7 @@ enum TodayHeadline / WorkdayRemainderLine / TodayNextEvent / TodayCountdown / Lu
 | 关掉通知 → 今日清单铺满整行 | 单测：`470 + 8 + 377 = 855` 恰好吃满；更宽时按 ideal 分富余；800 时压缩不丢块 | **通过**（`testFlowDistributionAtUserPanelSize`） |
 | 面板贴内容 | 上屏：auto 档面板高 **490**（含表头与内边距；= 两带 168 + 流 228 + 表头 ≈34 + 内边距 40） | **通过** |
 | 死开关清零 | 组件页无「首页的日历行」卡、无镜子卡、无工作日统计卡；设置页「日历」页无「Show calendar」；`showCalendar` 键定义删除 | **通过**（`grep showCalendar` 只剩文档与历史注释） |
-| 通知标题不说假话 | 上屏：`通知 · 最近 6 条（共 40 条）`，与块里画出的 6 行一致 | **通过**（`testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader`） |
+| 通知标题不说假话 | 上屏：`通知 · 最近 6 条（共 40 条）`，与块里画出的 6 行一致 | **通过**（`testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader`）；后由 p14 / [40](40-home-notifications-scroll.md) 取代——通知块不再裁剪列表，改为把全部已保留条目放进 6 行视口的块内滚动区（块高 225 不变），标题相应变为「通知 · 最近 N 条」且不再出现「（共 M 条）」。此行为 v5 当次上屏结论，原样保留。 |
 | 浮动镜子 | AXPress 顶栏镜子按钮 → 面板右上浮出 212 × 212 的镜子（占位态）；再按一次收起（暗像素计数 12 → 3794 → 12） | **通过**（证据 `.workflow/p13-home-v5/evidence/`） |
 | 摄像头出画面 | 需要摄像头授权（本机授权状态未决，见「已知限制 7」） | **待用户**（真人项） |
 | 单测 | `xcodebuild test -only-testing:DynamicIslandTests` | **572 条 0 失败** |

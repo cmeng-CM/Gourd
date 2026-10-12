@@ -30,7 +30,7 @@
 机制三条：
 
 1. **列表不再裁剪**：`NotificationsHomeBlockLayout.listedItems(_:)` 去掉 `prefix(maxListRows)`，返回传入的全部条目（顺序原样＝`rec_id DESC`，新的在前）。`maxListRows` 的语义从「列表上限」**收窄为「视口行数」**——块高算式与视口行数不变，只是不再拿它裁数据。这与今日块「容量只决定滚动区高度，不裁剪数据」是同一条口径。
-2. **条目区进滚动容器**：`NotificationsHomeBlockView` 里把条目 `ForEach` 包进 `ScrollView(.vertical)`，并沿用今日块的 idiom——`@State scrollToken`、`.onHover { vm.setScrollGestureSuppression($0, token:) }`、`.onDisappear` 复位 token。滚动时鼠标停在块内即压住面板的 hover-exit 收回（与剪贴板/笔记/终端视图同款接缝）。需要取 `vm`（`@EnvironmentObject`）。
+2. **条目区进滚动容器**：`NotificationsHomeBlockView` 里把条目 `ForEach` 包进 `ScrollView(.vertical)`，并沿用今日块的 idiom——`@State scrollToken`、`.onHover { vm.setScrollGestureSuppression($0, token:) }`、`.onDisappear` 复位 token。滚动时鼠标停在块内即压住面板的 hover-exit 收回（与剪贴板/笔记/终端视图同款接缝）。需要取 `vm`（`@EnvironmentObject`）。实际交付的结构不只是「把 `ForEach` 包进 `ScrollView`」，而是 `ScrollView` 内另有一层 `VStack(alignment: .leading, spacing: entrySpacing)`——条目之间的 4pt 行距由这层内层 `VStack` 提供（`ForEach` 进滚动容器后不再是外层 `VStack` 的直接子视图，外层那 4pt 不落到条目之间），6 行因此仍量出 200pt 视口（见 §已知限制 1 与 §实际交付 的偏离说明）。
 3. **表头不变**：`NotificationText.homeHeader(shown:total:)` **一个字不改**；`shown` 现在是全部可达条数，标题因此自然变成「通知 · 最近 N 条」，`total > shown` 时才带的「（共 M 条）」在不再裁剪后自然消失——D-11「标题不说假话」的原始口径继续保持。
 
 ## 备选与取舍
@@ -110,7 +110,7 @@ VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
 空→空」，`maxListRows == 6` 与 `blockHeight` 断言与 `homeHeader` 三档保留）；新增
 `testNotificationsHomeBlockLayoutListsEveryItemUncropped`（40 条与 10 条全量、顺序不变）。
 
-**提交**：`3b802228`（T1）、`fac3b52b`（T1fix）。
+**提交**：`3b802228`（T1）、`fac3b52b`（T1fix）、`25ff96ea`（T2：本设计回写 + 38 指针）。
 
 **与计划的偏离**：计划（§做法 2）只说「把条目 `ForEach` 包进 `ScrollView`」；实际必须再加一层
 `VStack(alignment: .leading, spacing: entrySpacing)`——`ForEach` 进滚动容器后不再是外层 `VStack` 的直接子视图，
