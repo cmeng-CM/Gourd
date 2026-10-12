@@ -6813,17 +6813,22 @@ final class CalendarWeekStartTests: XCTestCase {
         )
     }
 
-    /// ⑥ 默认参数下 2026-11 是 6 周（周一起始；周日起始是 5 周）→ 网格高度 `36 × 6 + 52 = 268`。
+    /// ⑥ 默认参数下 2026-11 是 6 周（周一起始；周日起始是 5 周）→ 网格高度 `43.2 × 6 + 62.4 = 321.6`
+    /// （`MonthGridLayout.scale = 1.2` 等比放大后；放大前 `36 × 6 + 52 = 268`）。
     func testDefaultNovember2026NeedsSixWeeks() {
         let november = hostMonth(year: 2026, month: 11)
         XCTAssertEqual(MonthGridLayout.weekCount(for: november), 6, "2026-11 周一起始 = 6 周")
-        XCTAssertEqual(MonthGridLayout.monthGridHeight(forMonth: november), 268, "36 × 6 + 52 = 268")
+        // `43.2N + 62.4` 在二进制里不是精确值（实测 321.60000000000002），给紧公差而非取整生产值。
+        XCTAssertEqual(
+            MonthGridLayout.monthGridHeight(forMonth: november), 321.6, accuracy: 1e-9,
+            "43.2 × 6 + 62.4 = 321.6"
+        )
     }
 }
 
 // MARK: - 月网格行高 · 卡片列视口（P2 批次 / T2；p13 改指面板「日历」页）
 
-/// 月网格的**行高**（`MonthGridLayout.monthGridHeight` = `36N + 52`，N = 当月周数）与卡片列
+/// 月网格的**行高**（`MonthGridLayout.monthGridHeight` = `43.2N + 62.4`，N = 当月周数）与卡片列
 /// 视口（行高 − 表头高 `CalendarEventCardList.headerHeight`）是同一组数字，算错就会出现
 /// 「卡片列溢出到行外」或「行内留白」——这里把这条算术钉住。
 ///
@@ -6834,9 +6839,11 @@ final class CalendarWeekStartTests: XCTestCase {
 @MainActor
 final class MonthGridRowHeightTests: XCTestCase {
 
-    /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`36 × 5 + 52 = 232`；
-    /// T8 前是「最坏 6 周」的固定 294、T8 首版 258）− 26（收起态日期头 `CalendarEventCardList.headerHeight`，
-    /// 含与列表之间的 4pt 间距）= 206 → 卡片列视口高度（条目多于它时栏内滚动——P11 / T7 起
+    /// 2026-10 = 5 周（p6-ui-polish / T8 起行高按当月实际周数：`43.2 × 5 + 62.4 = 278.4`，
+    /// `MonthGridLayout.scale = 1.2` 放大前是 `36 × 5 + 52 = 232`；
+    /// T8 前是「最坏 6 周」的固定 294、T8 首版 258）− 31.2（收起态日期头 `CalendarEventCardList.headerHeight`
+    /// = `26 × scale`，原 26，
+    /// 含与列表之间的 4pt 间距）= 247.2 → 卡片列视口高度（条目多于它时栏内滚动——P11 / T7 起
     /// 不再有 `+N` 与容量算式，D-13）。
     ///
     /// 固定到 2026-10 再取行高：算式随运行日所在月的周数走，直接拿当前月参与字面量断言
@@ -6851,9 +6858,10 @@ final class MonthGridRowHeightTests: XCTestCase {
 
         // 5 周月的行高（2026-10 在两种周起点下都是 5 周，见 HomeStripLayoutTests 的同源用例）。
         let rowHeight = MonthGridLayout.monthGridHeight(forMonth: october2026, calendar: calendar)
-        XCTAssertEqual(rowHeight, 232, "36 × 5 + 52")
+        // `43.2N + 62.4` 不是二进制的精确值（实测 278.40000000000003），给紧公差而非取整生产值。
+        XCTAssertEqual(rowHeight, 278.4, accuracy: 1e-9, "43.2 × 5 + 62.4")
         let listHeight = rowHeight - CalendarEventCardList.headerHeight
-        XCTAssertEqual(listHeight, 206, "232 − 26")
+        XCTAssertEqual(listHeight, 247.2, accuracy: 1e-9, "278.4 − 31.2（表头高 = 26 × scale）")
         XCTAssertGreaterThan(listHeight, 0, "卡片列视口必须为正——列按它钉高（D-13 滚动列）")
     }
 }
