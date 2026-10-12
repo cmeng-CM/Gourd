@@ -140,6 +140,15 @@ if [ "$do_install" = true ]; then
   else
     echo "提示：未注销 DerivedData 副本（通常表示它本就没有登记，无需处理）"
   fi
+  # 注销掉 DerivedData 那份之后，/Applications 这份必须再登记一次收尾：
+  # 2026-10-12 实测，只注销不回头登记会留下半条登记——之后启动可能起成一个
+  # 没有 UI 会话的实例（菜单栏无图标、退不掉、主线程空转），只能手工 lsregister -f 补救。
+  # 失败不致命，只提示。
+  if "$lsregister" -f "$installed_app" >/dev/null 2>&1; then
+    echo "已重新登记 $installed_app（避免半登记起成无 UI 会话的实例）"
+  else
+    echo "提示：重新登记 $installed_app 失败（若启动异常请手工 lsregister -f）"
+  fi
 fi
 
 if [ "$do_dmg" = true ]; then

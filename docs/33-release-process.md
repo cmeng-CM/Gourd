@@ -82,6 +82,9 @@ sh tools/build.sh --dmg
 1. **身份门禁**：`--dmg` 的产物用于对外分发，签名身份必须是 `Gourd Local`；
    本机没有该身份时会退回 ad-hoc ——这时脚本拒绝出包（ad-hoc 在别人机器上更容易被判「已损坏」，
    且会重置老用户授权）。只装本机请用 `--install`。
+   `--install` 装完（并注销 DerivedData 副本的登记）之后，会对 `/Applications/壶中天.app`
+   补一次 `lsregister -f` 重新登记——少了这一步，应用可能起成**没有 UI 会话**的实例
+   （菜单栏无图标、退不掉），只能手工 `lsregister -f` 补救。
 2. **签名自校验**：对 staging 里的 app 跑 `codesign --verify --deep --strict`，
    查的是**嵌套代码**（Sparkle 的 `Updater.app` + 两个 XPC 服务、Lottie、helpers）。
    本机因为没有隔离标记，嵌套签名坏了照样能跑，**光在本机试是发现不了的**。
