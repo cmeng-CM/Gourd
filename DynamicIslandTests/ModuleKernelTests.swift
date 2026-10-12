@@ -7281,6 +7281,89 @@ final class MonthGridRowHeightTests: XCTestCase {
     }
 }
 
+// MARK: - 日历页次要文字的不透明度（p18 / T1）
+
+/// 面板「日历」页的次要文字（星期行 / 年份 / 农历副标 / 跨月补格 / 空态 / 右栏卡片）原先用**不透明中灰**
+/// （`Color(white: 0.35 / 0.5 / 0.55 / 0.65 / 0.75)`）表达层级——那套取值只在**深色底**上成立：面板底色
+/// 有两档不是纯黑（`.liquidGlass` / `.frostedGlass`），浅色系统外观下这两档渲染成浅色 / 中间调玻璃
+/// （≈0.55–0.7 亮度），中灰与底色**几乎同亮度、对比度归零**，星期行（0.55 + `caption2` 小字）最惨。
+///
+/// 修法是把这些次要文字提进**白系 + 不透明度**（常量集中在 `MonthGridLayout`），本组用例钉住**下界**与
+/// **层级顺序**：日后有人再把这些不透明度调低、或又把某处写回固定中灰，这里先红。
+///
+/// 常量是纯数据（不读 `Defaults`、不碰视图），直接读 `MonthGridLayout` 的静态常量即可，无需夹具。
+@MainActor
+final class CalendarSecondaryTextOpacityTests: XCTestCase {
+
+    /// 全部次要文字档的（名字，取值）——「硬底线 > 0.4」与层级顺序共用这一份清单。
+    private var allSecondaryOpacityTiers: [(name: String, value: Double)] {
+        [
+            ("weekdayOpacity", MonthGridLayout.weekdayOpacity),
+            ("yearOpacity", MonthGridLayout.yearOpacity),
+            ("subtitleOpacity", MonthGridLayout.subtitleOpacity),
+            ("emptyStateOpacity", MonthGridLayout.emptyStateOpacity),
+            ("cardSecondaryOpacity", MonthGridLayout.cardSecondaryOpacity),
+            ("cardSecondaryStrongOpacity", MonthGridLayout.cardSecondaryStrongOpacity),
+            ("outOfMonthOpacity", MonthGridLayout.outOfMonthOpacity),
+        ]
+    }
+
+    /// 星期行（「一 二 三 …」）是浅色玻璃下最先消失的一行（`caption2` 小字 + 极短笔画），下界 0.8。
+    func testWeekdayOpacityFloor() {
+        XCTAssertGreaterThanOrEqual(
+            MonthGridLayout.weekdayOpacity, 0.8,
+            "星期行是白系最高档：0.8 以下在中间调玻璃上对比度不足（p18 根因）"
+        )
+    }
+
+    /// 农历 / 节假日副标（本月日格）下界 0.7。
+    func testSubtitleOpacityFloor() {
+        XCTAssertGreaterThanOrEqual(
+            MonthGridLayout.subtitleOpacity, 0.7,
+            "农历 / 节假日副标不得低于 0.7——它比星期行弱、但必须在浅底上读得出来"
+        )
+    }
+
+    /// 跨月补格（日号与副标）下界 0.4：全表最低档，但绝不能退回固定中灰那一档。
+    func testOutOfMonthOpacityFloor() {
+        XCTAssertGreaterThanOrEqual(
+            MonthGridLayout.outOfMonthOpacity, 0.4,
+            "跨月补格是最低档，但 0.4 以下在中间调玻璃上对比度归零（p18 根因）"
+        )
+    }
+
+    /// 硬底线：**每一档都 > 0.4**。0.4 及以下 = 又回到「不透明中灰」那套只在深色底成立的取值。
+    func testEverySecondaryOpacityStaysAboveOpaqueMidGreyTier() {
+        for (name, value) in allSecondaryOpacityTiers {
+            XCTAssertGreaterThan(
+                value, 0.4,
+                "\(name) 必须 > 0.4：不透明中灰（0.35–0.75）在浅色 / 中间调玻璃上对比度归零，正是 p18 的 bug"
+            )
+        }
+    }
+
+    /// 层级顺序：星期行 / 年份 / 副标 **亮于** 跨月补格（次要的再弱也弱不过补格），
+    /// 卡片两档之间也是「更靠近主文字的更强」。
+    func testSecondaryTextHierarchyIsStrictlyOrdered() {
+        XCTAssertGreaterThan(
+            MonthGridLayout.weekdayOpacity, MonthGridLayout.outOfMonthOpacity,
+            "星期行应亮于跨月补格"
+        )
+        XCTAssertGreaterThan(
+            MonthGridLayout.subtitleOpacity, MonthGridLayout.outOfMonthOpacity,
+            "本月副标应亮于跨月补格"
+        )
+        XCTAssertGreaterThan(
+            MonthGridLayout.yearOpacity, MonthGridLayout.outOfMonthOpacity,
+            "年份应亮于跨月补格"
+        )
+        XCTAssertGreaterThan(
+            MonthGridLayout.cardSecondaryStrongOpacity, MonthGridLayout.cardSecondaryOpacity,
+            "卡片里靠近主文字的那一档（待办开始时间）应亮于普通次要文字"
+        )
+    }
+}
+
 // MARK: - 首页行滚动卡片列的展示顺序（P11 / T2，docs/36 §接口与数据形状）
 
 /// `CalendarEventCardList.ordered(_:)` 的展示顺序（纯函数）——口径**逐字沿用**旧紧凑行的

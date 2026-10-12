@@ -37,7 +37,11 @@
 //  `.semibold`（日程）；`padding(.horizontal, 11)` / `padding(.vertical, 8)`；`minHeight 50`；
 //  圆角 14（`.continuous`）+ `Color.white.opacity(0.05)` 底；弱化档 0.55（勾选完成的待办）/ 0.6
 //  （今天已结束的日程）；标题 `lineLimit(showFullEventTitles ? nil : 2)`；地点 `lineLimit(1)`；
-//  日程收尾时间右列（起 `.caption` 白 / 止 `.caption2` 0.65 灰；全天显示 `All-day`）；色条 4×36。
+//  日程收尾时间右列（起 `.caption` 白 / 止 `.caption2` 白色 0.8 不透明；全天显示 `All-day`）；色条 4×36。
+//  **2026-10-12 p18**：卡片的次要文字（地点 / 止时间 / 全天行）从固定中灰（0.65 / 0.75）改为
+//  白系不透明度常量（`MonthGridLayout.cardSecondaryOpacity` / `cardSecondaryStrongOpacity`）——
+//  固定中灰在浅色 / 中间调玻璃（`.liquidGlass` / `.frostedGlass` + 浅色系统外观）上对比度归零，
+//  与日历页星期行同一根因（见 `MonthGridLayout` 的「次要文字的不透明度」一节）。
 //  勾选圈左置（待办）、`ConferenceJoinButton` 在正文列内（日程）——位置都不许动。
 //
 //  **2026-10-12：右栏行高随面板「日历」页等比放大**（docs/41-home-and-calendar-scale.md D-03 / D-04）：
@@ -93,7 +97,8 @@ struct CalendarEventCard: View {
                 if let location = event.location, !location.isEmpty {
                     Text(location)
                         .font(.caption)
-                        .foregroundColor(Color(white: 0.65))
+                        // p18：改前固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上卡片会整片看不清。
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                         .lineLimit(1)
                 }
 
@@ -116,7 +121,7 @@ struct CalendarEventCard: View {
                         .foregroundColor(.white)
                     Text(event.end, style: .time)
                         .font(.caption2)
-                        .foregroundColor(Color(white: 0.65))
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 }
             }
         }
@@ -173,7 +178,7 @@ struct ReminderCard: View {
                 if event.isAllDay {
                     Text("All-day")
                         .font(.caption)
-                        .foregroundColor(Color(white: 0.65))
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 }
             }
 
@@ -182,7 +187,7 @@ struct ReminderCard: View {
             if !event.isAllDay {
                 Text(event.start, style: .time)
                     .font(.caption)
-                    .foregroundColor(Color(white: 0.75))
+                    .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryStrongOpacity))
             }
         }
         .padding(.horizontal, 11)

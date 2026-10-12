@@ -342,7 +342,8 @@ struct CalendarView: View {
                         Text(selectedDate.formatted(.dateTime.year()))
                             .font(.caption)
                             .fontWeight(.regular)
-                            .foregroundColor(Color(white: 0.65))
+                            // p18：与 `MonthGridView.header` 的年份标签同一档（改前固定中灰 0.65）。
+                            .foregroundColor(.white.opacity(MonthGridLayout.yearOpacity))
                     } else {
                         Text(selectedDate.formatted(.dateTime.weekday(.abbreviated))
                              + ", " + selectedDate.formatted(.dateTime.month(.abbreviated))
@@ -581,6 +582,38 @@ enum MonthGridLayout {
     static let weekdaySpacing: CGFloat = (6 * scale).rounded()
     /// 网格**上方**要预留的第二段固定 chrome（原 20 = 14 + 6 → **24** = 17 + 7）。
     static let weekdayChromeHeight: CGFloat = weekdayRowHeight + weekdaySpacing
+
+    // MARK: 次要文字的不透明度（白系常量，2026-10-12 p18）
+
+    /// 日历页的「次要文字」一律走**白系 + 不透明度**，不再用**不透明中灰**
+    /// （改前是 `Color(white: 0.35 / 0.5 / 0.55 / 0.65 / 0.75)`）。
+    ///
+    /// **为什么不能再落回固定中灰**（p18 的根因）：面板底色有两档不是纯黑（`.liquidGlass` /
+    /// `.frostedGlass`），浅色系统外观下这两档渲染成浅色或中间调玻璃（≈0.55–0.7 亮度）——此时中灰
+    /// 与底色**几乎同亮度、对比度归零**，越「次要」的越先消失（星期行 0.55 + `caption2` 小字最惨）。
+    /// 同页主文字是 `.white`（1.0）所以还看得见；其他页面（笔记 / 剪贴板 / 计时）的次要文字用 `.secondary`
+    /// （随**系统外观**自适应的语义色，浅底上自动变深）或显式 `.white`，因此没事。默认档 `solidBlack`
+    /// 是纯黑底，不能改用 `.secondary`（浅色系统下会压成深灰看不见），所以这里的口径是**显式白系**。
+    ///
+    /// **硬底线 = 全部 > 0.4**：0.4 及以下在中间调玻璃上又回到「固定中灰」那一档的老问题。
+    /// 每条下界（含这条硬底线与层级顺序）由 `ModuleKernelTests` 的
+    /// `CalendarSecondaryTextOpacityTests` 钉住——日后有人嫌「太亮」再往下调，测试先红。
+
+    /// 星期行（「一 二 三 …」）：**最不该消失的一行**——`caption2` 小字 + 极短笔画，取全页最高档。
+    static let weekdayOpacity: Double = 0.9
+    /// 年份「2026年」（月份标题旁那一枚降一档说明文字）：与星期行同属「次要里最亮」的一档。
+    static let yearOpacity: Double = 0.85
+    /// 农历 / 节假日副标（**本月**日格）：比公历日号（`.white`）低一档的次要色。
+    static let subtitleOpacity: Double = 0.8
+    /// 空态文案（`EmptyEventsView` 的图标与「Enjoy your free time!」第二行）。
+    static let emptyStateOpacity: Double = 0.8
+    /// 右栏事件 / 待办卡片的次要文字（地点、止时间、「All-day」行）：与副标同档。
+    static let cardSecondaryOpacity: Double = 0.8
+    /// 卡片里**更靠近主文字**的那一档次要文字（待办卡的开始时间，改前 0.75 灰）：略高于 `cardSecondaryOpacity`。
+    static let cardSecondaryStrongOpacity: Double = 0.85
+    /// 跨月补格的**日号与副标**（改前 0.35 灰）：全表最低档——补格本就是被弱化的项，
+    /// 但**不得低于 0.4**（再低在中间调玻璃上对比度归零）。
+    static let outOfMonthOpacity: Double = 0.45
 
     /// 整月网格在**固定格高**下要的高度（纯函数）：**`43 × N + 63`**，N = `weekCount(for:calendar:)`。
     ///
@@ -857,7 +890,8 @@ struct MonthGridView: View {
                 Text(yearTitle)
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .foregroundStyle(Color(white: 0.65))
+                    // p18：改前是固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上对比度归零。
+                    .foregroundStyle(.white.opacity(MonthGridLayout.yearOpacity))
             }
             Spacer()
             HStack(spacing: 6) {
@@ -894,7 +928,9 @@ struct MonthGridView: View {
                         Text(symbol.prefix(1))
                             .font(.caption2)
                             .fontWeight(.semibold)
-                            .foregroundStyle(Color(white: 0.55))
+                            // p18（本 bug 最惨的一处）：改前 `Color(white: 0.55)` 不透明中灰，与浅色 /
+                            // 中间调玻璃同亮度，整行「一 二 三 …」几乎看不见。
+                            .foregroundStyle(.white.opacity(MonthGridLayout.weekdayOpacity))
                             .frame(maxWidth: .infinity)
                             // 周标题**行高**的来源（`weekdayChromeHeight` 的那 14 → 取整后 17），与翻月键的
                             // 框撑起 `headerRowHeight` 同一条口径：`.caption2` 是语义字号、**不随 `scale` 变**
@@ -985,8 +1021,12 @@ struct MonthGridView: View {
     }
 
     /// 日格第二行的颜色：跟随公历数字的层级（跨月补格更暗），比数字低一档（次要色）。
+    ///
+    /// p18：两档都从固定中灰（0.65 / 0.35）改为白系不透明度——补格仍是最低档，但不下探到 0.4 以下。
     private func subtitleColor(isCurrentMonth: Bool) -> Color {
-        isCurrentMonth ? Color(white: 0.65) : Color(white: 0.35)
+        isCurrentMonth
+            ? .white.opacity(MonthGridLayout.subtitleOpacity)
+            : .white.opacity(MonthGridLayout.outOfMonthOpacity)
     }
 
     private func dayCell(for day: Date, cellWidth: CGFloat) -> some View {
@@ -1053,8 +1093,8 @@ struct MonthGridView: View {
     ///   没有随点一起放大——那两个数在 `LunarDayLabel.swift` / 本函数里，不在本轮 `scale` 的派生集合里，
     ///   偏差 0.8pt 落在 `fits` 的 `slack`(2) 之内。）
     /// - **颜色取面板强调色**（`Color.effectiveAccent`，与今天的日号、选中的圆同一支），跨月补格降到
-    ///   45% 不透明：补格的日号本来就是灰的（`Color(white: 0.35)`），标记跟着一起弱化，免得把视线
-    ///   引到不属于当前显示月份的日子上。
+    ///   45% 不透明：补格的日号本来就是最低档（`outOfMonthOpacity`，p18 前是固定中灰 0.35），标记
+    ///   跟着一起弱化，免得把视线引到不属于当前显示月份的日子上。
     private func eventMarker(isCurrentMonth: Bool) -> some View {
         Circle()
             .fill(Color.effectiveAccent.opacity(isCurrentMonth ? 1 : 0.45))
@@ -1065,7 +1105,8 @@ struct MonthGridView: View {
 
     private func dayTextColor(isCurrentMonth: Bool, isSelected: Bool, isToday: Bool) -> Color {
         if isSelected { return .white }
-        if !isCurrentMonth { return Color(white: 0.35) }
+        // p18：跨月补格的日号从固定中灰 `Color(white: 0.35)` 改为白系最低档（≥ 0.4）。
+        if !isCurrentMonth { return .white.opacity(MonthGridLayout.outOfMonthOpacity) }
         if isToday { return Color.effectiveAccent }
         return .white
     }
@@ -1216,13 +1257,14 @@ struct EmptyEventsView: View {
         VStack {
             Image(systemName: "calendar.badge.checkmark")
                 .font(.title)
-                .foregroundColor(Color(white: 0.65))
+                // p18：改前固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上对比度归零。
+                .foregroundColor(.white.opacity(MonthGridLayout.emptyStateOpacity))
             Text(Calendar.current.isDateInToday(selectedDate) ? "No events today" : "No events")
                 .font(.subheadline)
                 .foregroundColor(.white)
             Text("Enjoy your free time!")
                 .font(.caption)
-                .foregroundColor(Color(white: 0.65))
+                .foregroundColor(.white.opacity(MonthGridLayout.emptyStateOpacity))
         }
     }
 }
