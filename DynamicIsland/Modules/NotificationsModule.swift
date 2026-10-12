@@ -144,6 +144,33 @@ import AppKit
 import Defaults
 import SwiftUI
 
+// MARK: - 已关闭集合的水位线自愈
+
+/// 「已关闭集合」是否该被清空的判定（**纯函数**：单测直接钉四个边界，不碰通知库、不碰存储）。
+///
+/// 要防的是通知库被**重建**：`record` 表的 `rec_id` 从低位重新爬升，已关闭集合里那些**旧高位 id**
+/// 会陆续与新通知撞号、把它们静默隐藏（2026-10-12 实际踩到）。唯一可靠的信号是**库最大号回退**：
+/// 见 `docs/42-notification-clear-and-reset-heal.md` §做法 ② 与 D-03。
+///
+/// 口径（宁可漏一次也不误清）：
+/// - `databaseMax <= 0`（库为空 / 这次读不到）→ `.keep(watermark)`，**绝不重置**：读失败不是回退证据；
+/// - `databaseMax < watermark`（且 > 0）→ 编号回退 = 库被重建 → `.resetDatabaseRolledOver`；
+/// - 其余（相等 / 前进）→ `.keep(max(watermark, databaseMax))`。
+enum NotificationDismissalPolicy {
+    enum Outcome: Equatable {
+        /// 不重置：把水位线推进到 `newWatermark`（未前进时等于原值）。
+        case keep(newWatermark: Int)
+        /// 编号回退（库被重建）：清空已关闭集合，水位线落到本次读到的库最大号。
+        case resetDatabaseRolledOver
+    }
+
+    static func reconcile(watermark: Int, databaseMax: Int) -> Outcome {
+        guard databaseMax > 0 else { return .keep(newWatermark: watermark) }
+        if databaseMax < watermark { return .resetDatabaseRolledOver }
+        return .keep(newWatermark: max(watermark, databaseMax))
+    }
+}
+
 // MARK: - Store
 
 /// 通知列表 / 增量计数 / 可读性状态的持有者（模块自己持有，不进 `ModuleRegistry`）。
@@ -320,6 +347,7 @@ final class NotificationStore: ObservableObject {
 
         apply(fetched, from: reader)
         log.info("全量刷新：\(fetched.count) 条，判定 \(String(describing: reader.lastState))")
+        reconcileDismissalWatermark(reader: reader)
         await drainPendingIncrementalRefresh()
     }
 
@@ -508,6 +536,31 @@ final class NotificationStore: ObservableObject {
         items = []
         persistDismissed()
         log.info("清除全部 \(count) 条，仅从岛上移除（系统通知中心不动）")
+    }
+
+    /// 全量刷新成功后的**水位线自愈**：拿读取层本次已经算过的 `MAX(rec_id)`
+    /// （`NotificationCenterReader.lastMaxRecordID`，**不新增查询、不碰通知库**）与持久水位线比一次。
+    ///
+    /// - 判定为**回退**（库被重建）→ 清空内存两处已关闭状态 + `persistDismissed()` 落盘（写入空集合），
+    ///   再把水位线落到本次读到的库最大号。**清空之后的下一次取数**就会把列表恢复出来
+    ///   （本次 `fetched` 已被旧集合过滤过，所以这一屏仍是空的——下一次事件 / 兜底轮询即恢复）。
+    /// - 否则只推进水位线（未前进时不写，避免每次事件都摸一次 UserDefaults）。
+    ///
+    /// 库为空 / 读不到（`lastMaxRecordID` 为 nil 或 <= 0）时纯函数给 `.keep`，**不重置**。
+    private func reconcileDismissalWatermark(reader: NotificationCenterReader) {
+        let databaseMax = Int(reader.lastMaxRecordID ?? 0)
+        let watermark = Defaults[.notificationsRecordIDWatermark]
+        switch NotificationDismissalPolicy.reconcile(watermark: watermark, databaseMax: databaseMax) {
+        case .keep(let newWatermark):
+            if newWatermark != watermark { Defaults[.notificationsRecordIDWatermark] = newWatermark }
+        case .resetDatabaseRolledOver:
+            let cleared = dismissedOrder.count
+            dismissedOrder = []
+            dismissedRecordIDs = []
+            persistDismissed()
+            Defaults[.notificationsRecordIDWatermark] = databaseMax
+            log.warn("通知库编号回退（库最大号 \(databaseMax) < 水位线 \(watermark)）：清空已关闭集合 \(cleared) 条并把水位线落到 \(databaseMax)")
+        }
     }
 
     /// 落盘（**写入时裁剪**到最近 `dismissedLimit` 个）+ 同步内存集合。

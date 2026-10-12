@@ -4408,6 +4408,146 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertTrue(store.items.isEmpty, "已关闭 id 生效：取数后列表仍是空的（不是把库清掉了才空）")
     }
 
+    // MARK: - 已关闭集合的水位线自愈（P16 T2 / docs/42 §做法 ②、D-03）
+
+    /// 水位线判定**纯函数**的四个边界（docs/42 §验收标准）：`databaseMax <= 0` → 保持原水位线
+    /// （**库为空 / 读不到绝不重置**）、相等 → 保持、前进 → 推进、回退（且 > 0）→ 重置。
+    ///
+    /// 纯函数因此**不碰通知库、不碰存储**：单测只喂两个整数，不新增查询也不读库。
+    func testNotificationDismissalPolicyReconcileBoundaries() {
+        // ① 库为空 / 读不到（databaseMax 0 或负数）：保持、**不重置**——读失败不是回退证据
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 0, databaseMax: 0),
+            .keep(newWatermark: 0),
+            "水位线 0 + 库为空 0：什么都不做（首次启动前那一档）"
+        )
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 294, databaseMax: 0),
+            .keep(newWatermark: 294),
+            "库为空 / 读不到时**绝不重置**（宁可漏一次也不误清）"
+        )
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 294, databaseMax: -1),
+            .keep(newWatermark: 294),
+            "负数（防御式输入）与 0 同档：当空库处理"
+        )
+
+        // ② 前进：水位线推进到库最大号（水位线 0 + 有记录 = 首次建水位线）
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 0, databaseMax: 13),
+            .keep(newWatermark: 13),
+            "水位线 0 + 库最大号 13：只推进，不重置（首启这一档）"
+        )
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 13, databaseMax: 27),
+            .keep(newWatermark: 27),
+            "库最大号前进 → 水位线跟着推进"
+        )
+
+        // ③ 相等：保持原值（不动集合，也不多写一次盘）
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 13, databaseMax: 13),
+            .keep(newWatermark: 13),
+            "相等（库里没有新记录）：水位线原地不动"
+        )
+
+        // ④ 回退（且 > 0）：编号倒退 = 库被重建 → 重置
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 13, databaseMax: 12),
+            .resetDatabaseRolledOver,
+            "库最大号 12 < 水位线 13（只差一号）：回退必须被认出来，不能按「前进」处理"
+        )
+        XCTAssertEqual(
+            NotificationDismissalPolicy.reconcile(watermark: 294, databaseMax: 3),
+            .resetDatabaseRolledOver,
+            "2026-10-12 本机实况那一档：水位线 294、重建后库最大号 3"
+        )
+    }
+
+    /// **回退才清空集合**——在真存储侧跑（夹具是临时目录里现造的库，**不碰系统通知库**）：
+    ///
+    /// 1. 全量刷新把水位线从 0 推到库最大号（13），`dismissAll()` 把三条记进已关闭集合并落盘；
+    /// 2. 把库里那一号记录删掉（库最大号 13 → 12，**模拟库被重建、编号回退**）：下一次
+    ///    `refreshAll()` 判定回退 → 内存两处已关闭状态清空 + 空集合落盘 + 水位线落到 12；
+    /// 3. **再刷新一次列表就自己回来了**（集合清了，过滤条件不再命中）——这才是"自愈"的观测量；
+    /// 4. 反过来，库不动的刷新（相等档）**集合一条不少**：不误清。
+    ///
+    /// 偏好卫生：备份 `dismissedNotificationIDs` 与新增的 `notificationsRecordIDWatermark` 两个键，
+    /// 结束时按"原来有没有"原样恢复（与 `testNotificationDismissAll…` 同款）。
+    @MainActor
+    func testNotificationDismissedSetHealsOnRecordIDRolloverButNotOnStableDatabase() async throws {
+        let dismissedKey = Defaults.Keys.dismissedNotificationIDs.name
+        let watermarkKey = Defaults.Keys.notificationsRecordIDWatermark.name
+        let savedDismissed = UserDefaults.standard.object(forKey: dismissedKey)
+        let savedWatermark = UserDefaults.standard.object(forKey: watermarkKey)
+        defer {
+            for (key, saved) in [(dismissedKey, savedDismissed), (watermarkKey, savedWatermark)] {
+                if let saved {
+                    UserDefaults.standard.set(saved, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: dismissedKey)
+        UserDefaults.standard.removeObject(forKey: watermarkKey)
+
+        let database = try Self.makeNotificationDatabase(records: [
+            (id: 11, title: "构建完成", body: "产物已上传"),
+            (id: 12, title: "新邮件", body: "来自张三"),
+            (id: 13, title: "日历", body: "10:00 站会"),
+        ])
+        defer { try? FileManager.default.removeItem(at: database.deletingLastPathComponent()) }
+
+        let store = NotificationStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.notifications", shortID: "notifications"),
+            reader: NotificationCenterReader(databasePath: database.path)
+        )
+
+        // 1. 起跑：全量刷新把水位线推到库最大号（**无记录 → 只推进，绝不清空**）
+        await store.refreshAll()
+        XCTAssertEqual(store.items.map(\.id), [13, 12, 11], "三条进列表")
+        XCTAssertEqual(
+            Defaults[.notificationsRecordIDWatermark], 13,
+            "水位线从 0 推进到库最大号 13（本键只在刷新后写）"
+        )
+        store.dismissAll()
+        XCTAssertEqual(store.dismissedRecordIDs, Set([11, 12, 13]), "清除把三条记进已关闭集合")
+        XCTAssertEqual(Defaults[.dismissedNotificationIDs].sorted(), [11, 12, 13], "并落盘")
+
+        // 2. 库被重建：最大号回退（13 → 12），下一次全量刷新必须判定回退并自愈
+        try Self.execNotificationDatabase(at: database, sql: "DELETE FROM record WHERE rec_id >= 13")
+        await store.refreshAll()
+        XCTAssertTrue(
+            store.dismissedRecordIDs.isEmpty,
+            "编号回退 → 清空内存已关闭集合（旧高位 id 从此不再撞新通知）"
+        )
+        XCTAssertTrue(Defaults[.dismissedNotificationIDs].isEmpty, "空集合落盘（`persistDismissed` 写回）")
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 12, "水位线落到重建后的库最大号 12")
+
+        // 3. 自愈的观测量：再刷新一次，被挡掉的记录自己回到列表（集合清空后过滤不再命中）
+        await store.refreshAll()
+        XCTAssertEqual(store.items.map(\.id), [12, 11], "自愈后列表恢复（不是把库清掉了才变空/变满）")
+
+        // 4. 反向：库不动的刷新（相等档）——集合一条不少，水位线原地不动（不误清）
+        store.dismissAll()
+        XCTAssertEqual(store.dismissedRecordIDs, Set([12, 11]), "先重新关闭这两条")
+        await store.refreshAll()
+        XCTAssertEqual(
+            store.dismissedRecordIDs, Set([12, 11]),
+            "库最大号（12）与水位线（12）相等 → 保持：已关闭集合一条不少"
+        )
+        XCTAssertEqual(Defaults[.dismissedNotificationIDs].sorted(), [11, 12], "落盘值也不受刷新影响")
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 12, "水位线原地不动")
+
+        // 5. 库里的记录仍原样在（自愈**只动本应用的设置键**，通知库只读）
+        XCTAssertEqual(
+            NotificationCenterReader(databasePath: database.path).fetchRecent(limit: 40).map(\.id).sorted(),
+            [11, 12],
+            "自愈不写通知库：剩下的记录一条不少"
+        )
+    }
+
     // MARK: - 通知浮层（P2d：基线 + 正文口径）
 
     /// 浮层候选是**纯函数**：只有 `rec_id > 基线` 的条目才可能触发，且多条时只取**最新一条**。
@@ -5493,6 +5633,14 @@ final class ModuleKernelTests: XCTestCase {
         XCTAssertEqual(Defaults.Keys.dismissedNotificationIDs.defaultValue, [], "默认没有已关闭条目")
     }
 
+    /// `notificationsRecordIDWatermark` 键本身的口径（P16 T2）：键名固定、类型 `Int`、**默认 0**
+    /// ——默认 0 是自愈判据的前提（首启水位线为 0 时任何正数都算「前进」，绝不误判回退）。
+    /// 断言读 `defaultValue` 而不是当前生效值——不受开发机上真实 UserDefaults 影响。
+    func testNotificationsRecordIDWatermarkKeyShape() {
+        XCTAssertEqual(Defaults.Keys.notificationsRecordIDWatermark.name, "notificationsRecordIDWatermark")
+        XCTAssertEqual(Defaults.Keys.notificationsRecordIDWatermark.defaultValue, 0, "默认 0：没记过水位线")
+    }
+
     // MARK: - AX 横幅通道（P2e：实时 + 真关闭）
 
     /// **本机实测（macOS 27）**的横幅树形状 → 解析结果。
@@ -5868,6 +6016,17 @@ final class ModuleKernelTests: XCTestCase {
             }
         }
         return url
+    }
+
+    /// 对**已存在**的临时通知库执行一句 SQL：只给用例改夹具用（例如删掉高号记录，模拟
+    /// 「库被重建、编号回退」）。路径由调用方给出，**绝不指向系统通知库**。
+    private static func execNotificationDatabase(at url: URL, sql: String) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let db else {
+            throw NotificationDatabaseFixtureError.sqlite("sqlite3_open_v2 失败（\(url.path)）")
+        }
+        defer { sqlite3_close(db) }
+        try sqliteExec(db, sql)
     }
 
     /// 一句 `sqlite3_exec`（夹具建表用；失败抛错而不是默默吞掉）。

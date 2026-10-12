@@ -1689,6 +1689,19 @@ extension Defaults.Keys {
     /// UserDefaults 不该被一个只增不减的 id 列表撑大。
     static let dismissedNotificationIDs = Key<[Int]>("dismissedNotificationIDs", default: [])
 
+    /// 见过的最大通知记录号（`rec_id`）**水位线**：与 `dismissedNotificationIDs` 一起构成自愈判据。
+    ///
+    /// 要防的是「通知库被重建」：`record` 表的 `rec_id` 从低位重新爬升，于是已关闭集合里那些
+    /// **旧高位 id** 会陆续与**新通知**撞号，把新通知静默隐藏（2026-10-12 实际踩到：集合涨到 294
+    /// 条，整屏通知都被挡掉）。判据是唯一的确定性事件——**库最大号回退**：
+    /// 每次全量刷新后拿读取层已经算过的 `MAX(rec_id)`（`NotificationCenterReader.lastMaxRecordID`，
+    /// 不新增查询）与本键比较，读取到的最大号 **> 0 且 < 水位线** 即判定编号回退，此时清空
+    /// `dismissedNotificationIDs` 并把水位线落到新值；否则水位线取两者较大值。
+    ///
+    /// 库为空 / 读不到（最大号取不到或 <= 0）时**不重置**：读失败与真回退不能混为一谈，宁可
+    /// 漏一次也不误清。判定本身是纯函数 `NotificationDismissalPolicy.reconcile(watermark:databaseMax:)`。
+    static let notificationsRecordIDWatermark = Key<Int>("notificationsRecordIDWatermark", default: 0)
+
     // MARK: Permission prompts
 
     /// 辅助功能授权的"只申请一次"闸门（2026-09-28）：媒体键拦截在启动时最多弹一次系统提示，
