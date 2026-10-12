@@ -164,9 +164,12 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     private func publishOwnership() {
-        editorHasFocus = ownership.values.contains(where: \.focused)
-        ownedMenuCount = ownership.values.reduce(0) { $0 + $1.menuCount }
-        datePopoverPresented = ownership.values.contains(where: \.popover)
+        let focused = ownership.values.contains(where: \.focused)
+        let menuCount = ownership.values.reduce(0) { $0 + $1.menuCount }
+        let popoverPresented = ownership.values.contains(where: \.popover)
+        if editorHasFocus != focused { editorHasFocus = focused }
+        if ownedMenuCount != menuCount { ownedMenuCount = menuCount }
+        if datePopoverPresented != popoverPresented { datePopoverPresented = popoverPresented }
     }
 
     private func changeNavigation() {

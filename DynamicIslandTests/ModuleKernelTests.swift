@@ -92,6 +92,7 @@
 
 import AppKit
 import ApplicationServices
+import Combine
 import Defaults
 import EventKit
 import SwiftUI
@@ -9597,6 +9598,123 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(session.draft, session.baseline)
         XCTAssertNil(session.pendingConfirmation)
         XCTAssertEqual(backend.writeAttempts, 0)
+    }
+
+    func testPanelRepeatedOwnershipValuesAndMissingOwnerCleanupDoNotPublish() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        let owner = UUID()
+        var publications = 0
+        let subscription = session.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+
+        session.setEditorFocus(false, ownerID: owner)
+        session.setOwnedMenuCount(-1, ownerID: owner)
+        session.setDatePopoverPresented(false, ownerID: owner)
+        session.clearOwnership(UUID())
+        session.clearOwnership(owner)
+        session.clearOwnership(owner)
+        XCTAssertEqual(publications, 0)
+
+        session.setEditorFocus(true, ownerID: owner)
+        XCTAssertEqual(publications, 1)
+        XCTAssertTrue(session.editorHasFocus)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.setOwnedMenuCount(2, ownerID: owner)
+        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(session.ownedMenuCount, 2)
+        session.setDatePopoverPresented(true, ownerID: owner)
+        XCTAssertEqual(publications, 3)
+        XCTAssertTrue(session.datePopoverPresented)
+        session.setEditorFocus(true, ownerID: owner)
+        session.setOwnedMenuCount(2, ownerID: owner)
+        session.setDatePopoverPresented(true, ownerID: owner)
+        session.clearOwnership(UUID())
+        XCTAssertEqual(publications, 3, "同值 setter 与不存在 owner 的清理不应通知订阅者")
+    }
+
+    func testPanelReleasingOneOfTwoInputOwnersDoesNotPublishUntilAggregateChanges() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "Shared input survives one owner"
+        let draft = session.draft
+        let ownerA = UUID(), ownerB = UUID()
+        session.setEditorFocus(true, ownerID: ownerA)
+        session.setDatePopoverPresented(true, ownerID: ownerA)
+        var publications = 0
+        let subscription = session.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+
+        session.setEditorFocus(true, ownerID: ownerB)
+        session.setDatePopoverPresented(true, ownerID: ownerB)
+        session.clearOwnership(ownerA)
+        XCTAssertEqual(publications, 0)
+        XCTAssertTrue(session.editorHasFocus)
+        XCTAssertTrue(session.datePopoverPresented)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        XCTAssertEqual(session.draft, draft)
+
+        session.clearOwnership(ownerB)
+        XCTAssertEqual(publications, 2, "最后 owner 释放时立即发布两项真实变化")
+        XCTAssertFalse(session.editorHasFocus)
+        XCTAssertFalse(session.datePopoverPresented)
+        XCTAssertFalse(session.shouldProtectAutoClose)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft, draft)
+    }
+
+    func testPanelMenuCountChangesPublishSynchronouslyAcrossOwners() {
+        let session = panelSession(service: panelBackend())
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        let ownerA = UUID(), ownerB = UUID()
+        var publications = 0
+        let subscription = session.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+
+        session.setOwnedMenuCount(2, ownerID: ownerA)
+        XCTAssertEqual(publications, 1)
+        XCTAssertEqual(session.ownedMenuCount, 2)
+        session.setOwnedMenuCount(1, ownerID: ownerB)
+        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(session.ownedMenuCount, 3)
+        session.clearOwnership(ownerA)
+        XCTAssertEqual(publications, 3)
+        XCTAssertEqual(session.ownedMenuCount, 1)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.setOwnedMenuCount(-1, ownerID: ownerB)
+        XCTAssertEqual(publications, 4)
+        XCTAssertEqual(session.ownedMenuCount, 0)
+        XCTAssertFalse(session.shouldProtectAutoClose)
+        session.clearOwnership(ownerB)
+        XCTAssertEqual(publications, 4)
+    }
+
+    func testLifecycleCleanupAfterBackDoesNotRepublishClearedOwnership() throws {
+        let backend = panelBackend()
+        let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
+        let session = panelSession(service: backend)
+        session.showDetail(event, source: .home(anchor: "home-tail"))
+        let lifecycle = CalendarEditorLifecycle(session: session)
+        lifecycle.setEditorFocus(true)
+        lifecycle.setOwnedMenuCount(1)
+        lifecycle.setDatePopoverPresented(true)
+        XCTAssertEqual(session.back(), .home(anchor: "home-tail"))
+        XCTAssertFalse(session.editorHasFocus)
+        XCTAssertEqual(session.ownedMenuCount, 0)
+        XCTAssertFalse(session.datePopoverPresented)
+        var publications = 0
+        let subscription = session.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+
+        lifecycle.setOwnedMenuCount(0)
+        lifecycle.clearLocalInput()
+        lifecycle.stop()
+        lifecycle.stop()
+        session.clearOwnership(lifecycle.ownerID)
+        XCTAssertEqual(publications, 0, "返回已清 ownership 后，菜单拆卸与生命周期清理不能重复发布")
+        XCTAssertEqual(session.route, .list)
+        XCTAssertEqual(session.homeScrollAnchor, "home-tail")
+        XCTAssertFalse(session.shouldProtectAutoClose)
     }
 
     func testPanelOwnerAggregationKeepsOtherWindowProtectionUntilGlobalSuspend() {
