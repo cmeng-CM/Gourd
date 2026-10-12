@@ -106,7 +106,8 @@ struct CalendarEventDetailCard: View {
                 if let location = event.location, !location.isEmpty {
                     Text(location)
                         .font(.caption)
-                        .foregroundColor(Color(white: 0.65))
+                        // p18：改前固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上对比度归零。
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                         .lineLimit(1)
                 }
 
@@ -115,7 +116,8 @@ struct CalendarEventDetailCard: View {
                     // 详情卡不做滚动——控制器裁决 1）。
                     Text(notes)
                         .font(.caption)
-                        .foregroundColor(Color(white: 0.75))
+                        // p18：改前固定中灰 `Color(white: 0.75)`——备注是正文延伸，取卡片里更靠近主文字的一档。
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryStrongOpacity))
                         .lineLimit(6)
                 }
 
@@ -135,7 +137,8 @@ struct CalendarEventDetailCard: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13))
-                        .foregroundColor(Color(white: 0.6))
+                        // p18：改前固定中灰 `Color(white: 0.6)`——关闭图标同为次要一档。
+                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                         .contentShape(Rectangle())
                         .padding(2)
                 }
@@ -170,9 +173,10 @@ struct CalendarEventDetailCard: View {
                 Text(event.start, style: .time)
                     .foregroundColor(.white)
                 Text(verbatim: "–")
-                    .foregroundColor(Color(white: 0.65))
+                    // p18：改前固定中灰 `Color(white: 0.65)`——分隔符与止时间同为次要一档。
+                    .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 Text(event.end, style: .time)
-                    .foregroundColor(Color(white: 0.65))
+                    .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
             }
             .font(.caption)
         }
