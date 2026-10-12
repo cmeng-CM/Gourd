@@ -112,11 +112,12 @@
 //  - 折叠态中央槽位：`bell` 图标 + 自上次打开面板以来的新增条数（内存态，0 时无数字）。
 //    **注意**：中央槽位当前由 todos（order 20）占用，本模块（order 40）只是候选之一，
 //    在默认配置下这个视图不会被渲染（`ModuleRegistry.compactSlotContent()` 只转发第一个候选）；
-//  - **首页块**（T1，`surfaces` 的第三个取值）：标题行「通知 · 最近 N 条」+ 最近 3 条
-//    （每行「App 名 · 标题」，单行尾部截断；**N = 列表里的条数**，与展开 tab 同源，
-//    **不是**折叠态铃铛那个「自上次打开面板以来的新增数」）+ 不可读 / 无权限时的一行提示，
+//  - **首页块**（T1，`surfaces` 的第三个取值）：标题行「通知 · 最近 N 条」+ 全部已保留条目
+//    （块内竖向滚动，视口 6 行；每行「App 名 · 标题」，单行尾部截断；**N = 列表里的条数**，
+//    与展开 tab 同源，**不是**折叠态铃铛那个「自上次打开面板以来的新增数」）
+//    + 不可读 / 无权限时的一行提示，
 //    **只读**——点一行 = 打开对应 App + 收起刘海，不做关闭 / 清除 / 回复；
-//    行数上限固定 3、不按块宽分档（见 `NotificationsHomeBlockView`）。
+//    条目区可滚动、视口行数固定 6、不按块宽分档（见 `NotificationsHomeBlockView`）。
 //
 //  ## 颜色（本项目已踩过两次的坑）
 //  面板是黑底、系统外观可为浅色——本模块所有文字与图标**一律显式浅色**
@@ -768,7 +769,8 @@ final class NotificationsModule: GourdModule {
     /// 静态元数据（06 §2.2 的本批子集）。
     ///
     /// - `surfaces`：`expanded`（通知列表）+ `compact`（bell + 未读数）+ `home`（首页块：
-    ///   「通知 · 最近 N 条」+ 最近 3 条 + 不可读时一行提示，见 `NotificationsHomeBlockView`）；
+    ///   「通知 · 最近 N 条」+ 全部已保留条目（块内滚动，视口 6 行）+ 不可读时一行提示，
+    ///   见 `NotificationsHomeBlockView`）；
     /// - `defaultPlacement`：`slot: .center` / `order: 40`——排在 todos（20）与 progress（30）之后，
     ///   因此**默认配置下拿不到中央槽位**（`compactSlotContent()` 只转发第一个候选）；
     ///   首页 strip 里模块块按同一个 `order` 排（todos 块在前、通知块在后）；
@@ -1077,7 +1079,7 @@ final class NotificationsModule: GourdModule {
 /// 本批主行 +2pt、次要 +1pt；失败态 / 空态 / 权限引导（同属展开页，留旧值会与放大后的
 /// 列表行明显不一致）随后并表，按语义就近取档；以后调档只动这里。
 ///
-/// **只服务展开面板**：首页通知块（`NotificationsHomeBlockView`，定高 96 内画 3 行）
+/// **只服务展开面板**：首页通知块（`NotificationsHomeBlockView`，定高 225 内视口 6 行 + 块内滚动）
 /// 与 HUD 浮层卡片（`NotificationHUDCardLayout`，按用户倍率缩放）各自有自己的字号口径，
 /// **不读这里**——放大首页块必裁（docs/30 备选⑩），两者与展开页是不同代码路径。
 struct NotificationRowMetrics {
@@ -1395,12 +1397,19 @@ private struct NotificationRow: View {
 
 /// 首页块的**取舍与文案**（纯函数，无 SwiftUI 依赖，单测直接钉）。
 ///
-/// 规格（T1）：标题行「通知 · 最近 N 条」（N == 0 只显示「通知」）+ **最近 3 条**清单，
-/// 每行「App 名 · 标题」。**行数上限固定 3、不按块宽分档**（按宽度分档是本批之后的事）。
+/// 规格（T1）：标题行「通知 · 最近 N 条」（N == 0 只显示「通知」）+ 全部已保留条目的
+/// **块内竖向滚动区**，每行「App 名 · 标题」。**视口行数固定 6、不按块宽分档**
+/// （按宽度分档是本批之后的事）。
 /// 块宽由宿主 `HomeStripView` 统一声明（模块块 180 / 240），本模块**不声明、不读宽度**。
 enum NotificationsHomeBlockLayout {
-    /// 首页块最多画几条（2026-10-10 / docs/37 D-03：3 → 4；**p13 / docs/38 D-11：4 → 6**——
-    /// 用户 2026-10-11「通知改为最近 6 条」，与「今日清单」并排成第三排）。
+    /// 首页块的**视口行数**（块高只装得下这么多行；**不再裁数据**——列表把全部已保留条目
+    /// 交给滚动区，见 `listedItems` 与 docs/40 D-01）。
+    ///
+    /// 沿革：2026-10-10 / docs/37 D-03：3 → 4；**p13 / docs/38 D-11：4 → 6**——
+    /// 用户 2026-10-11「通知改为最近 6 条」，与「今日清单」并排成第三排；
+    /// **p14 / docs/40 D-01**：语义从「列表上限」收窄为「视口行数」——块高算式与视口行数不变，
+    /// 只是不再拿它裁数据（与今日块「容量只决定滚动区高度，不裁剪数据」同一条口径）。
+    /// 块高算式仍逐字引用它，因此这里始终是 6。
     static let maxListRows = 6
 
     /// 一条通知占的高度：第一行（App 名 + 相对时间，10pt）14pt + 第二行（标题 · 正文，11pt）16pt。
@@ -1419,7 +1428,8 @@ enum NotificationsHomeBlockLayout {
 
     /// 首页块申报的**固定高**（与视图的行高预算同源）。
     ///
-    /// = 顶部内缩 5 + 表头 16 + 间距 4 + 6 × 条目 30 + 5 × 条间距 4 = **225**。
+    /// = 顶部内缩 5 + 表头 16 + 间距 4 + **视口 6 行** × 条目 30 + 5 × 条间距 4 = **225**。
+    /// 视口行数只决定这个高度；列表条数由滚动区承接（docs/40 D-01）。
     static var blockHeight: CGFloat {
         HomeBlockChrome.contentInsetTopText
             + headerHeight + listSpacing
@@ -1427,12 +1437,16 @@ enum NotificationsHomeBlockLayout {
             + CGFloat(maxListRows - 1) * entrySpacing
     }
 
-    /// 清单要画的条目：**列表顺序的前 6 条**。
+    /// 清单要画的条目：**传入的全部条目，顺序原样**。
+    ///
+    /// docs/40 D-01：改前是 `Array(items.prefix(maxListRows))`（只画前 6 条，第 7 条起不可达）；
+    /// 现在**不裁剪**——条目全部进块内滚动区，能滚到的就是列表里已有的
+    /// （可达上限仍受读取层保留条数约束，见 §已知限制）。
     ///
     /// 不在这里排序：`store.items` 本身就是「新的在前」（`NotificationCenterReader.fetchRecent`
     /// 走 `ORDER BY rec_id DESC`），再排一遍只会让首页块与展开 tab 的顺序出现两套口径。
     static func listedItems(_ items: [NotificationItem]) -> [NotificationItem] {
-        Array(items.prefix(maxListRows))
+        items
     }
 
     /// **第一行**的文案：「App 名」。
@@ -1454,7 +1468,13 @@ enum NotificationsHomeBlockLayout {
     }
 }
 
-/// 首页块：**标题行「通知 · 最近 N 条（共 M 条）」+ 最近 6 条**（每条两行）。
+/// 首页块：**标题行「通知 · 最近 N 条（共 M 条）」+ 全部已保留条目**（每条两行，块内竖向滚动）。
+///
+/// ## 滚动（docs/40 D-01/D-02）
+/// 条目区是一个 `ScrollView(.vertical)`：**视口 6 行**（`maxListRows` 只决定块高），列表**不裁剪**
+/// ——全部已保留条目都可滚到，与今日清单块同一套交互。滚动/悬停块内时用 `setScrollGestureSuppression`
+/// 压住面板的 hover-exit 收回（沿用今日块 `TodosHomeBlockView` 的 idiom）。表头与提示行在滚动区**之外**。
+/// **不引入** `CalendarPanelSession.homeScrollAnchor`（本块无详情页，没有锚点消费者）。
 ///
 /// ## N 是什么（**口径说明，别读成「未读」**）
 /// N = `store.items.count` = **列表里的条数**（reader 按 `rec_id DESC` 取回的最近 ≤ 40 条，
@@ -1486,12 +1506,17 @@ enum NotificationsHomeBlockLayout {
 /// 宽度：**不声明、不读**（`HomeStripBlock` 由宿主统一声明模块块 180 / 240，模块不参与
 /// 「我在首页占多宽」的决策）。填充方式沿用待办块：占满分配到的框、内容左上对齐。
 private struct NotificationsHomeBlockView: View {
+    /// 上游 `ModuleHostView` 的宿主树根部已注入（`ContentView` 根部 `.environmentObject(vm)`），
+    /// 这里只为滚动区的 hover 抑制接缝取用——与今日块 `TodosHomeBlockView` 逐字相同。
+    @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var store: NotificationStore
     /// 行点击出口（模块注入：打开对应 App + 收起刘海）。
     let onOpen: (NotificationItem) -> Void
     /// 当前悬停的那一行（`nil` = 没有；按 **id**（`NotificationItem.id` = `Int64` 记录号）记——
     /// 与前台应用格子同款，`Bool` 会让三行一起亮）。
     @State private var hoveredID: Int64?
+    /// hover 抑制 token（docs/40 D-02）：一个视图一个，`onDisappear` 复位。
+    @State private var scrollToken = UUID()
 
     var body: some View {
         VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
@@ -1499,6 +1524,7 @@ private struct NotificationsHomeBlockView: View {
 
             // 不可读 / 无权限时加一行浅色提示（取数失败与「真的 0 条」必须能区分开）；
             // 可读但 0 条时这里什么都不画（控制器裁决 3：不做空态）。
+            // 表头与提示行都在滚动区**之外**（只滚条目）。
             if let hint = NotificationText.homeHint(store.state) {
                 Text(hint)
                     .font(.system(size: 10))
@@ -1507,9 +1533,14 @@ private struct NotificationsHomeBlockView: View {
                     .truncationMode(.tail)
             }
 
-            ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
-                row(item)
+            // 条目区：全部已保留条目进块内竖向滚动（docs/40 D-01）；视口高度由外层 frame 决定。
+            ScrollView(.vertical) {
+                ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
+                    row(item)
+                }
             }
+            // 滚动 / 悬停块内时压住面板的 hover-exit 收回（沿用今日块 idiom）。
+            .onHover { vm.setScrollGestureSuppression($0, token: scrollToken) }
         }
         // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：加在**内容上、frame 之前**（frame 之内才算块内布局——
         // 加在 frame 之后会让整框高出块 5pt 挂在块外）。改前表头贴着板顶（上屏读数 2.0pt）；
@@ -1524,6 +1555,8 @@ private struct NotificationsHomeBlockView: View {
         // 与展开 tab 同口径：每次出现取一次数（首页块只在展开面板里存在，面板一开就是它出现的时刻）。
         // 不新建定时器：增量仍由模块的 AX 通道 / 文件事件 / 60s 兜底轮询推进。
         .task { await store.refreshAll() }
+        // 视图消失时复位 hover 抑制 token（与今日块同款）：否则块被移出后抑制位会一直挂着。
+        .onDisappear { vm.setScrollGestureSuppression(false, token: scrollToken) }
     }
 
     /// 标题行：有内容时「通知 · 最近 N 条（共 M 条）」，0 条时只留模块名（**不画空态文案**）。

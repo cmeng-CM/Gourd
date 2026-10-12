@@ -4187,30 +4187,32 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
-    /// 首页块的取舍与文案（纯函数）：**最近 6 条**（新的在前，不在这里重排）、
+    /// 首页块的取舍与文案（纯函数）：**返回全部条目**（新的在前，不在这里重排；docs/40 D-01 起
+    /// 不再裁到 6 条——`maxListRows` 只当**视口行数**，块高不变）、
     /// 两行式文案（第一行 App 名、第二行「标题 · 正文预览」，空串不留悬空分隔符、换行压成空格）、
     /// 标题行「通知 · 最近 N 条」（N == 0 只留模块名，不画空态文案）、
     /// 不可读 / 无权限时的那一行提示（可读给 nil——两种情形必须能区分开）。
     func testNotificationsHomeBlockLayoutLimitsRowsAndLabelsHeader() {
         XCTAssertEqual(
             NotificationsHomeBlockLayout.maxListRows, 6,
-            "最近 6 条是规格值（p13 / docs/38 D-11：4 → 6，用户 2026-10-11「通知改为最近 6 条」）"
+            "视口行数仍是 6（p13 / docs/38 D-11：4 → 6；docs/40 D-01 起只作视口行数，不再裁数据）"
         )
         XCTAssertEqual(
             NotificationsHomeBlockLayout.blockHeight,
             HomeBlockChrome.contentInsetTopText + 16 + 4 + 6 * 30 + 5 * 4,
-            "申报的块高 = 内缩 5 + 表头 16 + 间距 4 + 6 条 × 30 + 5 个条间距 4 = 225"
+            "申报的块高 = 内缩 5 + 表头 16 + 间距 4 + 视口 6 行 × 30 + 5 个条间距 4 = 225（不变）"
         )
 
-        // 清单：按列表顺序取前 6（`store.items` 已是新的在前），第 7 条起不画
+        // 清单：**返回传入的全部条目，顺序原样**（docs/40 D-01：`store.items` 已是新的在前，
+        // 第 7 条起不再被丢弃——全部进块内滚动区）
         let items = (1...7).map { notificationItem(Int64($0), title: "标题\($0)") }
         XCTAssertEqual(
             NotificationsHomeBlockLayout.listedItems(items).map(\.id),
-            [1, 2, 3, 4, 5, 6],
-            "首页块只画最近 6 条，顺序与 store.items 一致（不在这里重排）"
+            [1, 2, 3, 4, 5, 6, 7],
+            "不再裁剪：7 条全返回，顺序与 store.items 一致（不在这里重排）"
         )
         XCTAssertTrue(NotificationsHomeBlockLayout.listedItems([]).isEmpty, "空列表给空（不画空态文案）")
-        XCTAssertEqual(NotificationsHomeBlockLayout.listedItems(Array(items.prefix(2))).map(\.id), [1, 2], "不足 6 条时原样")
+        XCTAssertEqual(NotificationsHomeBlockLayout.listedItems(Array(items.prefix(2))).map(\.id), [1, 2], "不足视口行数时原样")
 
         // 第一行：App 名（App 名为空时退到标题，不留悬空分隔符）
         XCTAssertEqual(NotificationsHomeBlockLayout.sourceLabel(appName: "邮件", title: "构建完成"), "邮件")
@@ -4286,6 +4288,34 @@ final class ModuleKernelTests: XCTestCase {
             unreadable,
             NotificationText.localized("module.notifications.name"),
             "不可读时不能退化成只显示模块名（那就与「0 条」同形了）"
+        )
+    }
+
+    /// docs/40 D-01：`listedItems` **不裁剪**——不论传入多少条（含远超视口行数的 40 条），
+    /// 全部按输入顺序返回；`maxListRows` 只作**视口行数**（块高算式沿用，不再拿它裁数据）。
+    func testNotificationsHomeBlockLayoutListsEveryItemUncropped() {
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.maxListRows, 6,
+            "视口行数仍是 6（块高算式 = 6 × 30 + 5 × 4 沿用；本断言钉住语义收窄后取值不变）"
+        )
+
+        // 40 条（远超视口 6 行）：全返回，顺序原样（id 递增＝新的在前）
+        let many = (1...40).map { notificationItem(Int64($0), title: "标题\($0)") }
+        let listed = NotificationsHomeBlockLayout.listedItems(many)
+        XCTAssertEqual(
+            listed.count, many.count,
+            "全部已保留条目都要进滚动区（不再 prefix(maxListRows) 砍到 6 条）"
+        )
+        XCTAssertEqual(
+            listed.map(\.id), many.map(\.id),
+            "顺序原样＝store.items 的顺序（新的在前，不在这里重排）"
+        )
+
+        // 10 条（> 视口 6 行）同样全量：一条不少、顺序不变
+        let ten = (1...10).map { notificationItem(Int64($0), title: "标题\($0)") }
+        XCTAssertEqual(
+            NotificationsHomeBlockLayout.listedItems(ten).map(\.id), Array(1...10),
+            "10 条全量返回（第 7 条起不再不可达）"
         )
     }
 
