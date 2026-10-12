@@ -117,16 +117,17 @@ VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
 外层那 4pt 条间距不落到条目之间，6 行只量出 180pt（视口 200pt，第 7 行会露头）。这是独立审查发现的
 唯一一处 Important 缺陷，`fac3b52b` 修复后复审 PASS（见 §已知限制 1）。
 
+**验证**：2026-10-12 用户授权后实际执行 `xcodebuild test … -only-testing:DynamicIslandTests` →
+**656 条 0 失败**、exit 0；`sh tools/build.sh` → `** BUILD SUCCEEDED **`、exit 0。引擎 verify 记录
+提交 `9cbd18ef`、指纹 `2b753f08eafd888c`、PASS。此前编译证据（`T1-build-for-testing.log` /
+`T1-release.log` / `T1fix-build-for-testing.log` / `T1fix-release.log`，均 exit 0）保留在
+`.workflow/p14-notif-scroll/reports/`。§元信息 的「已实现」现含单测实测通过。
+
 **遗留项**：
 
-- **单测只编译未执行**：`xcodebuild build-for-testing` 与 `sh tools/build.sh` 均 exit 0、打出
-  `** TEST BUILD SUCCEEDED **` / `** BUILD SUCCEEDED **`（日志 `.workflow/p14-notif-scroll/reports/`），
-  但 `xcodebuild test` 未运行——按用户「桌面保持不动」的既有约束，且今天重装应用后首跑单元测试有触发 TCC 弹窗的风险。
-  因此 §元信息 的「已实现」指代码已落地并通过编译，**不等于单测实测通过**。
-- **上屏复核未做**：滚动到底、滚动 / 悬停期间面板不收回、块高不变三项人眼验收需桌面，留待用户空闲时执行。
-
-**验证证据**：`.workflow/p14-notif-scroll/reports/`（`T1-build-for-testing.log` exit 0、
-`T1-release.log` exit 0、`T1fix-build-for-testing.log`、`T1fix-release.log` 均 exit 0）。
+- **上屏复核未做**：滚动到底、滚动 / 悬停期间面板不收回、块高不变三项人眼验收仍待执行。且**需通知多于 6 条**
+  才看得出滚动（不足 6 条时列表本就不滚动，改前改后同观感），留待用户在有 7 条以上通知时上屏复核。
+- 滚动可达范围受读取层 40 条上限约束（D-04），见 §已知限制 3。
 
 ## 已知限制
 
