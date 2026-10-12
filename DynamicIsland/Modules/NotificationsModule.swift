@@ -1535,8 +1535,10 @@ private struct NotificationsHomeBlockView: View {
 
             // 条目区：全部已保留条目进块内竖向滚动（docs/40 D-01）；视口高度由外层 frame 决定。
             ScrollView(.vertical) {
-                ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
-                    row(item)
+                VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.entrySpacing) {
+                    ForEach(NotificationsHomeBlockLayout.listedItems(store.items)) { item in
+                        row(item)
+                    }
                 }
             }
             // 滚动 / 悬停块内时压住面板的 hover-exit 收回（沿用今日块 idiom）。
@@ -2030,6 +2032,11 @@ enum NotificationText {
     /// `store.items.count`（reader 取回的**列表总数**，可达 40），而块里最多画 6 条——
     /// 标题因此与它下面的清单对不上（是一句假话）。现在的口径是「**标题说的是这一块显示了几条**」，
     /// 列表总数只在还有更多时作为括注出现；完整清单仍在展开 tab 里。
+    ///
+    /// **T1 起「（共 M 条）」这一支在首页块上不可达**（docs/40 D-01）：首页块**不再裁剪**条目
+    /// （`listedItems` 原样返回全部），标题与清单收的是同一份输入，因此块上恒有 `shown == total`，
+    /// `total > shown` 永不成立。这条分支**保留**只为纯函数契约与单测（函数本身不改），
+    /// 将来若再出现「列表画得比数据少」的块可复用。
     ///
     /// **刻意不叫「未读」**：那个数是折叠态铃铛的 `store.unseenCount`（自上次打开面板以来的新增数），
     /// 与这里的条数不是一回事（见块视图的「N 是什么」）。函数本身不碰 store，边界因此由单测直接钉。
