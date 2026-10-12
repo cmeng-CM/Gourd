@@ -7122,6 +7122,196 @@ final class MonthGridLayoutTests: XCTestCase {
             "该月没有条目 → 空集"
         )
     }
+
+    // MARK: - 日格事件标记：分色与数量角标（2026-10-12，docs/43 D-01 / D-02 / D-03）
+
+    /// 指定可写性 / 订阅性的 `CalendarModel`（分类用例要造订阅与只读日历）。
+    private func gridCalendarModel(
+        id: String,
+        isSubscribed: Bool = false,
+        allowsContentModifications: Bool = true
+    ) -> CalendarModel {
+        CalendarModel(
+            accountName: "Test",
+            id: id,
+            title: id,
+            color: .systemBlue,
+            isSubscribed: isSubscribed,
+            isReminder: false,
+            allowsContentModifications: allowsContentModifications
+        )
+    }
+
+    /// 与 `gridEvent` 同款，但**日历由调用方给定**（`calendarModel:` 标签与既有重载不冲突）。
+    private func gridEvent(
+        id: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool = false,
+        calendarModel: CalendarModel,
+        type: EventType = .event(.accepted)
+    ) -> EventModel {
+        EventModel(
+            id: id,
+            start: start,
+            end: end,
+            title: id,
+            location: nil,
+            notes: nil,
+            url: nil,
+            isAllDay: isAllDay,
+            type: type,
+            calendar: calendarModel,
+            participants: [],
+            timeZone: TimeZone(secondsFromGMT: 0),
+            hasRecurrenceRules: false,
+            priority: nil,
+            conferenceURL: nil
+        )
+    }
+
+    private func gridMarks(_ calendar: Calendar, day: Int, month: Int = 10, events: [EventModel]) -> MonthDayEventMarks {
+        MonthDayEventMarksBuilder.marks(
+            for: gridDay(calendar, year: 2026, month: month, day: day), events: events, calendar: calendar
+        )
+    }
+
+    /// **(a) 可写日历**的条目算「我的」、且**不是**信息类（判据的唯一一条分支）。
+    func testWritableCalendarEventsCountAsMine() {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let writable = gridCalendarModel(id: "writable")
+        XCTAssertFalse(MonthDayEventMarksBuilder.isInformational(writable), "可写日历 → 不是信息类")
+
+        let event = gridEvent(
+            id: "mine",
+            start: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 9),
+            end: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 10),
+            calendarModel: writable
+        )
+        XCTAssertEqual(
+            gridMarks(calendar, day: 12, events: [event]), MonthDayEventMarks(mine: 1, hasInfo: false),
+            "可写日历条目 → 我的 1 条、无信息类"
+        )
+    }
+
+    /// **(b) 订阅**日历与**只读**（`allowsContentModifications == false`）日历都算信息类：`mine == 0`。
+    /// 两条分别钉住判据的 `||` 两侧。
+    func testSubscribedAndReadOnlyCalendarsCountAsInformational() {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let subscribed = gridCalendarModel(id: "holiday", isSubscribed: true)
+        let readOnly = gridCalendarModel(id: "shared", allowsContentModifications: false)
+        XCTAssertTrue(MonthDayEventMarksBuilder.isInformational(subscribed), "订阅 → 信息类")
+        XCTAssertTrue(MonthDayEventMarksBuilder.isInformational(readOnly), "只读（不允许改）→ 信息类")
+
+        let events = [
+            gridEvent(
+                id: "holiday",
+                start: gridDay(calendar, year: 2026, month: 10, day: 12),
+                end: gridDay(calendar, year: 2026, month: 10, day: 13),
+                isAllDay: true,
+                calendarModel: subscribed
+            ),
+            gridEvent(
+                id: "shared",
+                start: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 14),
+                end: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 15),
+                calendarModel: readOnly
+            )
+        ]
+        XCTAssertEqual(
+            gridMarks(calendar, day: 12, events: events), MonthDayEventMarks(mine: 0, hasInfo: true),
+            "订阅 / 只读条目都只算信息类、不进「我的」计数"
+        )
+    }
+
+    /// **(c) 累加**：同一天多条可写日历条目全部进 `mine`。
+    func testSeveralEventsOnOneDayAccumulateIntoMine() {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let writable = gridCalendarModel(id: "writable")
+        let events = (9...11).map { hour in
+            gridEvent(
+                id: "mine-\(hour)",
+                start: gridTime(calendar, year: 2026, month: 10, day: 12, hour: hour),
+                end: gridTime(calendar, year: 2026, month: 10, day: 12, hour: hour + 1),
+                calendarModel: writable
+            )
+        }
+        XCTAssertEqual(
+            gridMarks(calendar, day: 12, events: events), MonthDayEventMarks(mine: 3, hasInfo: false),
+            "3 条可写条目 → mine = 3"
+        )
+    }
+
+    /// **(d) 两类并存**：同一天既有我的日程又有信息类条目 → 两样都给（橙点 + 蓝点，角标数 = 我的条数）。
+    func testDayWithBothKindsYieldsBoth() {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let events = [
+            gridEvent(
+                id: "mine",
+                start: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 9),
+                end: gridTime(calendar, year: 2026, month: 10, day: 12, hour: 10),
+                calendarModel: gridCalendarModel(id: "writable")
+            ),
+            gridEvent(
+                id: "holiday",
+                start: gridDay(calendar, year: 2026, month: 10, day: 12),
+                end: gridDay(calendar, year: 2026, month: 10, day: 13),
+                isAllDay: true,
+                calendarModel: gridCalendarModel(id: "holiday", isSubscribed: true)
+            )
+        ]
+        XCTAssertEqual(
+            gridMarks(calendar, day: 12, events: events), MonthDayEventMarks(mine: 1, hasInfo: true),
+            "两类并存 → mine = 1、hasInfo = true"
+        )
+    }
+
+    /// **(e) 全天与跨日**条目落在**正确的天**上——覆盖口径与既有日格查找逐字同源：
+    /// 9/29 全天（`end` = 9/30 零点排他）只落 9/29；跨零点定时条目 9/29 23:00 → 9/30 01:00 两天都落。
+    func testAllDayAndCrossDayEventsLandOnTheirDays() {
+        let calendar = gridCalendar(firstWeekday: 2)
+        let writable = gridCalendarModel(id: "writable")
+
+        let allDay = gridEvent(
+            id: "all-day",
+            start: gridDay(calendar, year: 2026, month: 9, day: 29),
+            end: gridDay(calendar, year: 2026, month: 9, day: 30),
+            isAllDay: true,
+            calendarModel: writable
+        )
+        XCTAssertEqual(
+            gridMarks(calendar, day: 29, month: 9, events: [allDay]), MonthDayEventMarks(mine: 1, hasInfo: false),
+            "全天条目落在起始日"
+        )
+        XCTAssertEqual(
+            gridMarks(calendar, day: 30, month: 9, events: [allDay]), MonthDayEventMarks(mine: 0, hasInfo: false),
+            "全天条目的次日零点（排他端）不落"
+        )
+
+        let overnight = gridEvent(
+            id: "overnight",
+            start: gridTime(calendar, year: 2026, month: 9, day: 29, hour: 23),
+            end: gridTime(calendar, year: 2026, month: 9, day: 30, hour: 1),
+            calendarModel: writable
+        )
+        XCTAssertEqual(
+            gridMarks(calendar, day: 29, month: 9, events: [overnight]), MonthDayEventMarks(mine: 1, hasInfo: false)
+        )
+        XCTAssertEqual(
+            gridMarks(calendar, day: 30, month: 9, events: [overnight]), MonthDayEventMarks(mine: 1, hasInfo: false),
+            "跨零点的定时条目两天都落"
+        )
+    }
+
+    /// **(f) `badgeLabel` 边界**：0 → 不画；1–9 直显；≥10 一律 `"9+"`（含 10 与 99）。
+    func testBadgeLabelBoundaries() {
+        XCTAssertNil(MonthDayEventMarksBuilder.badgeLabel(count: 0), "0 条 → 不画角标")
+        XCTAssertEqual(MonthDayEventMarksBuilder.badgeLabel(count: 1), "1")
+        XCTAssertEqual(MonthDayEventMarksBuilder.badgeLabel(count: 9), "9")
+        XCTAssertEqual(MonthDayEventMarksBuilder.badgeLabel(count: 10), "9+")
+        XCTAssertEqual(MonthDayEventMarksBuilder.badgeLabel(count: 99), "9+")
+        XCTAssertNil(MonthDayEventMarksBuilder.badgeLabel(count: -1), "异常负数同样按「不画」处理")
+    }
 }
 
 // MARK: - 周起点契约（p9 / T2，docs/34 §做法 机制一 / §接口与数据形状）

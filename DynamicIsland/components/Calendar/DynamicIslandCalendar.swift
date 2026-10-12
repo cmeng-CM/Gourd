@@ -548,6 +548,21 @@ enum MonthGridLayout {
     /// 「有事件」小圆点的直径（原 4 → **5**）。
     static let eventMarkerDiameter: CGFloat = (4 * scale).rounded()
 
+    // MARK: 日格事件标记的新刻度（2026-10-12，docs/43-calendar-event-colors.md §做法 ②）
+
+    /// 右上角数量角标的直径（原 12 → **14**，设计稿就是这个尺寸）。
+    static let badgeDiameter: CGFloat = (12 * scale).rounded()
+    /// 角标数字的字号（原 7.5 → **9**：14pt 圆里塞 9pt 正合适）。
+    static let badgeFontSize: CGFloat = (7.5 * scale).rounded()
+    /// 角标「`9+`」**两字符**档的小一号字号（原 6 → **7**）：两字符在 14pt 圆里塞不下 9pt。
+    static let badgeCompactFontSize: CGFloat = (6 * scale).rounded()
+    /// 右下角并排两枚事件点（橙在里侧 / 左、蓝在外侧 / 右）之间的间距（原 2 → **2**）。
+    static let dotSpacing: CGFloat = (2 * scale).rounded()
+
+    /// 「我的日程」事件标记色 = **橙**（docs/43 §做法 ②）：右下角那枚橙点与右上角数量角标**同一枚**。
+    /// 蓝色仍沿用 `Color.effectiveAccent`（节假日 / 农历节气那类**信息类**条目），本批不新增蓝色常量。
+    static let mineEventMarker: Color = Color(red: 1.0, green: 154.0 / 255.0, blue: 60.0 / 255.0)
+
     /// 网格的**行 / 列间距**（原 6 → **7**）：周标题行与日格之间、日格与日格之间共用同一个数。
     static let gridSpacing: CGFloat = (6 * scale).rounded()
     /// 日格网格的**横向总内缩**（原 36 = 6 道列距 × 6 → **42**）：`cellWidth = (width − gridInset) / 7`
@@ -739,6 +754,56 @@ enum MonthGridLayout {
         var ordered = Array(symbols[firstWeekdayIndex...])
         ordered.append(contentsOf: symbols[..<firstWeekdayIndex])
         return ordered
+    }
+}
+
+/// 一天的**事件标记归类结果**（2026-10-12，docs/43-calendar-event-colors.md §接口与数据形状）：
+/// 「我的（可写日历）」条数 + 「信息类（订阅 / 只读日历）」有没有。纯数据、无 SwiftUI 依赖，单测直接钉。
+struct MonthDayEventMarks: Equatable {
+    /// 我的（可写日历）事件数——右上角数量角标的数字来源。
+    let mine: Int
+    /// 是否有信息类（订阅 / 只读日历）事件——右下角那枚蓝点的判据。
+    let hasInfo: Bool
+}
+
+/// 日格事件标记的**纯函数**（不引 SwiftUI、不读环境 / `Defaults`，`calendar` 由调用方给）：
+/// 「某天有我的日程吗 / 有几条 / 有信息类条目吗」与角标文案的唯一来源，单测直接钉分类、累加与边界。
+///
+/// **归类判据只有一条**（docs/43 D-03）：事件所属日历**可写 → 我的**；**订阅或不允许改 → 信息类**。
+/// 不猜日历标题、不按日期、不引入内置节日表、不加设置项——与 docs/39「只读日历不在岛内改删、
+/// 转系统维护」是同一条边界，所以「能改的是我的、不能改的是信息」在语义上也自洽。
+enum MonthDayEventMarksBuilder {
+    /// 某一天的标记：覆盖区间与 `MonthGridLayout.daysWithEvents` **同一条规则**——一条事件覆盖
+    /// `[起始日, (结束时刻 − 1s) 所在日]` 里的每一天（那个 −1s 是全天事件在 EventKit 里 `end` 为
+    /// **次日零点排他值**的处置：9/29 全天 = 9/29 00:00 → 9/30 00:00 只落 9/29；跨零点的定时条目
+    /// 两天都落）。落在这一天的事件再按 `isInformational` 分成两堆。
+    static func marks(for day: Date, events: [EventModel], calendar: Calendar = .gourdDisplay) -> MonthDayEventMarks {
+        let normalized = calendar.startOfDay(for: day)
+        var mine = 0
+        var hasInfo = false
+        for event in events {
+            let first = calendar.startOfDay(for: event.start)
+            // 结束时刻不晚于起始时刻（零长 / 数据异常）时退化为「只覆盖起始日」，与 `daysWithEvents` 一致。
+            let last = calendar.startOfDay(for: event.end.addingTimeInterval(-1))
+            guard normalized >= first, normalized <= max(first, last) else { continue }
+            if isInformational(event.calendar) {
+                hasInfo = true
+            } else {
+                mine += 1
+            }
+        }
+        return MonthDayEventMarks(mine: mine, hasInfo: hasInfo)
+    }
+
+    /// 归类判据（**唯一一处**）：**订阅或不允许改 → 信息类**；其余（可写）→ 我的。
+    static func isInformational(_ calendar: CalendarModel) -> Bool {
+        calendar.isSubscribed || !calendar.allowsContentModifications
+    }
+
+    /// 角标文案：`0 → nil`（不画角标）、`1...9 → "\(count)"` 直显、`>= 10 → "9+"`（纯函数，单测钉边界）。
+    static func badgeLabel(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count <= 9 ? "\(count)" : "9+"
     }
 }
 
@@ -1033,7 +1098,7 @@ struct MonthGridView: View {
         let isCurrentMonth = calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month)
         let isSelected = calendar.isDate(day, inSameDayAs: selectedDate)
         let isToday = calendar.isDateInToday(day)
-        let hasEvents = eventDays.contains(calendar.startOfDay(for: day))
+        let marks = dayMarks(for: day)
         let subtitle = subtitleText(for: day, cellWidth: cellWidth)
         let selectionDiameter = subtitle == nil
             ? MonthGridLayout.singleLineSelectionDiameter
@@ -1067,15 +1132,20 @@ struct MonthGridView: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: MonthGridLayout.dayCellHeight)
-            // 事件标记：右侧小圆点（位置与颜色见 `eventMarker` 的注释）。放在日格**右下角**而不是
-            // 日号正下方，是为了和选中圆永不重叠；`overlay` 不进布局，日格仍恰好 `dayCellHeight` 高
-            // （`MonthGridLayout.monthGridHeight` 的行距算式 `43 × 周数 + 63` 依赖这个日格高，
-            // 别改成会撑高的写法）。
-            // T4 的第二行让日格下半部分多了文字：那颗点在**右下角内缩**（右 6pt / 下 2pt），
-            // 与居中的第二行之间仍有 `MonthCellSubtitle` 判据里预留的那段横向余量（见该类型注释）。
+            // 事件标记（2026-10-12 起分色 + 数量角标，docs/43 §做法 ②）：右下角**分色点**、右上角
+            // **数量角标**。两处都画在日格**叠加层**（`overlay`，不进布局），日格仍恰好
+            // `dayCellHeight` 高（`MonthGridLayout.monthGridHeight` 的行距算式 `43 × 周数 + 63`
+            // 依赖这个日格高，别改成会撑高的写法）。
+            // 右下角的点：位置取右下角、蓝点取面板强调色的两条理由见 `eventMarkers` 的注释；
+            // 右上角是格内唯一的空位（日号居中、副标在下一行），角标因此不与它们争地方。
             .overlay(alignment: .bottomTrailing) {
-                if hasEvents {
-                    eventMarker(isCurrentMonth: isCurrentMonth)
+                if marks.mine > 0 || marks.hasInfo {
+                    eventMarkers(marks: marks, isCurrentMonth: isCurrentMonth)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let label = MonthDayEventMarksBuilder.badgeLabel(count: marks.mine) {
+                    eventBadge(label: label, isCurrentMonth: isCurrentMonth)
                 }
             }
             .contentShape(Rectangle())
@@ -1083,24 +1153,65 @@ struct MonthGridView: View {
         .buttonStyle(.plain)
     }
 
-    /// 「有事件」的小圆点：**实心圆（`eventMarkerDiameter`，原 4），日格右下角内缩（右 6pt / 下 2pt）**。
+    /// 某一天的事件标记归类：**只在按月快照与显示月份对齐时**才出标记——`eventDays` 已经载着这条
+    /// 「快照月份 == 显示月份」判据（翻月后新数据还在路上时它是空集），标记因此与右下角的点同源，
+    /// 不会出现「有点却没角标」或反之。
+    private func dayMarks(for day: Date) -> MonthDayEventMarks {
+        guard eventDays.contains(calendar.startOfDay(for: day)) else {
+            return MonthDayEventMarks(mine: 0, hasInfo: false)
+        }
+        return MonthDayEventMarksBuilder.marks(for: day, events: monthEvents.events, calendar: calendar)
+    }
+
+    /// 日格右下角的**分色事件点**（docs/43 §做法 ②）：**橙 = 我的日程**（可写日历，有就画一枚，
+    /// 数量交给角标、不逐枚画）、**蓝 = 信息类**（订阅 / 只读日历，沿用 `Color.effectiveAccent`，
+    /// 颜色逐字不变）。两者都有时**并排**（橙在里侧 / 左、蓝在外侧 / 右，间距 `dotSpacing`）——
+    /// 蓝点永远贴住原来的内缩位置（右 6pt / 下 2pt），只有它一枚时位置与改前逐字一致。
     ///
-    /// 两条都是刻意的选择（候选决策，见批次报告 `final-fix.md`）：
+    /// 两条位置 / 颜色选择（沿用改前，见批次报告 `final-fix.md`）：
     /// - **位置取右下角**：日格只有 `dayCellHeight` 高，而选中高亮是**居中**的实心圆（纵向占满整格），
     ///   日号正下方正是那个圆的底边——把点画在那里会和选中高亮糊成一团。右下角离圆心约 20pt，
     ///   今天高亮（日号变强调色，无圆圈）与选中高亮因此都能与它共存；它也不改日格高度，不影响
     ///   整月网格的行距算式。（**内缩的那 6/2 与 `MonthCellSubtitle` 的 `trailingMarkerZone = 10`
     ///   没有随点一起放大——那两个数在 `LunarDayLabel.swift` / 本函数里，不在本轮 `scale` 的派生集合里，
     ///   偏差 0.8pt 落在 `fits` 的 `slack`(2) 之内。）
-    /// - **颜色取面板强调色**（`Color.effectiveAccent`，与今天的日号、选中的圆同一支），跨月补格降到
+    /// - **蓝点取面板强调色**（`Color.effectiveAccent`，与今天的日号、选中的圆同一支），跨月补格降到
     ///   45% 不透明：补格的日号本来就是最低档（`outOfMonthOpacity`，p18 前是固定中灰 0.35），标记
-    ///   跟着一起弱化，免得把视线引到不属于当前显示月份的日子上。
-    private func eventMarker(isCurrentMonth: Bool) -> some View {
-        Circle()
-            .fill(Color.effectiveAccent.opacity(isCurrentMonth ? 1 : 0.45))
-            .frame(width: MonthGridLayout.eventMarkerDiameter, height: MonthGridLayout.eventMarkerDiameter)
-            .padding(.trailing, 6)
-            .padding(.bottom, 2)
+    ///   跟着一起弱化，免得把视线引到不属于当前显示月份的日子上（橙点与角标同此口径）。
+    private func eventMarkers(marks: MonthDayEventMarks, isCurrentMonth: Bool) -> some View {
+        HStack(spacing: MonthGridLayout.dotSpacing) {
+            if marks.mine > 0 {
+                Circle()
+                    .fill(MonthGridLayout.mineEventMarker.opacity(isCurrentMonth ? 1 : 0.45))
+                    .frame(width: MonthGridLayout.eventMarkerDiameter, height: MonthGridLayout.eventMarkerDiameter)
+            }
+            if marks.hasInfo {
+                Circle()
+                    .fill(Color.effectiveAccent.opacity(isCurrentMonth ? 1 : 0.45))
+                    .frame(width: MonthGridLayout.eventMarkerDiameter, height: MonthGridLayout.eventMarkerDiameter)
+            }
+        }
+        .padding(.trailing, 6)
+        .padding(.bottom, 2)
+    }
+
+    /// 日格右上角的**数量角标**（docs/43 §做法 ②）：橙色实心圆（`badgeDiameter`，14pt）内写当天
+    /// **我的日程数**——`badgeFontSize`（9）；「`9+`」是**两字符**，降到 `badgeCompactFontSize`（7）。
+    /// 文字取**深色**（`.black`）：角标是橙底 chip，不依赖白字，浅色底（玻璃档）上也有对比度
+    /// （docs/43 §已知限制）。没有我的日程时调用方不画（`badgeLabel` 返回 `nil`）。与点同为格内
+    /// 叠加层、不参与布局；跨月补格跟着降档（45%）。
+    private func eventBadge(label: String, isCurrentMonth: Bool) -> some View {
+        Text(label)
+            .font(.system(
+                size: label.count > 1 ? MonthGridLayout.badgeCompactFontSize : MonthGridLayout.badgeFontSize,
+                weight: .bold
+            ))
+            .foregroundStyle(.black)
+            .frame(width: MonthGridLayout.badgeDiameter, height: MonthGridLayout.badgeDiameter)
+            .background(Circle().fill(MonthGridLayout.mineEventMarker))
+            .padding(.trailing, 1)
+            .padding(.top, 1)
+            .opacity(isCurrentMonth ? 1 : 0.45)
     }
 
     private func dayTextColor(isCurrentMonth: Bool, isSelected: Bool, isToday: Bool) -> Color {
