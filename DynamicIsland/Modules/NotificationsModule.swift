@@ -393,6 +393,12 @@ final class NotificationStore: ObservableObject {
         lastModificationDate = reader.modificationDate
         state = reader.lastState
         if let maxID = reader.lastMaxRecordID { baselineRecordID = max(baseline, maxID) }
+        // **水位线判定要在「没有新条目」的早退之前**（T2 补口）：库被重建后编号正从低位爬升，
+        // 那一刻 `rec_id > 基线` 必然为空（本函数走早退），而这正是**唯一**能观察到
+        // 「库最大号 < 水位线」的窗口——放到非空路径的 `apply` 之后（或只在 `refreshAll` 里）就永远看不到回退。
+        // 与 `refreshAll` **同一份纯函数、同一套语义**（`databaseMax <= 0` → `.keep`，读失败绝不重置；
+        // 不新增 SQL、不碰通知库）。
+        reconcileDismissalWatermark(reader: reader)
         guard !newItems.isEmpty else { return }
 
         unseenCount += newItems.count
@@ -538,7 +544,8 @@ final class NotificationStore: ObservableObject {
         log.info("清除全部 \(count) 条，仅从岛上移除（系统通知中心不动）")
     }
 
-    /// 全量刷新成功后的**水位线自愈**：拿读取层本次已经算过的 `MAX(rec_id)`
+    /// 一次读取后的**水位线自愈**（`refreshAll` 全量路径 **与** 增量 / 兜底轮询路径都调它）：
+    /// 拿读取层本次已经算过的 `MAX(rec_id)`
     /// （`NotificationCenterReader.lastMaxRecordID`，**不新增查询、不碰通知库**）与持久水位线比一次。
     ///
     /// - 判定为**回退**（库被重建）→ 清空内存两处已关闭状态 + `persistDismissed()` 落盘（写入空集合），

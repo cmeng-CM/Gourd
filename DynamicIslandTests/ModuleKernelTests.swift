@@ -4548,6 +4548,88 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// **增量 / 兜底轮询路径也要判水位线**（P16 T2 补口）：回退可能**只在两次全量刷新之间**被读到——
+    /// 库被重建后编号正从低位爬升，此刻 `rec_id > 基线` 必然为空（`refreshIncremental` 走早退），
+    /// 而这正是**唯一**能观察到「库最大号 < 水位线」的窗口。判定因此必须在早退前、在增量路径上跑一次。
+    ///
+    /// 夹具同 `testNotificationDismissedSetHealsOnRecordIDRollover…`：临时目录现造的库，**不碰系统通知库**。
+    /// 用 `pollOnce()`（60s 兜底轮询）驱动增量路径——它直接调 `refreshIncremental`，不需要文件事件。
+    ///
+    /// 偏好卫生：备份 / 恢复 `dismissedNotificationIDs` 与 `notificationsRecordIDWatermark` 两个键。
+    @MainActor
+    func testNotificationDismissedSetHealsOnRolloverViaIncrementalPath() async throws {
+        let dismissedKey = Defaults.Keys.dismissedNotificationIDs.name
+        let watermarkKey = Defaults.Keys.notificationsRecordIDWatermark.name
+        let savedDismissed = UserDefaults.standard.object(forKey: dismissedKey)
+        let savedWatermark = UserDefaults.standard.object(forKey: watermarkKey)
+        defer {
+            for (key, saved) in [(dismissedKey, savedDismissed), (watermarkKey, savedWatermark)] {
+                if let saved {
+                    UserDefaults.standard.set(saved, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: dismissedKey)
+        UserDefaults.standard.removeObject(forKey: watermarkKey)
+
+        let database = try Self.makeNotificationDatabase(records: [
+            (id: 11, title: "构建完成", body: "产物已上传"),
+            (id: 12, title: "新邮件", body: "来自张三"),
+            (id: 13, title: "日历", body: "10:00 站会"),
+        ])
+        defer { try? FileManager.default.removeItem(at: database.deletingLastPathComponent()) }
+
+        let store = NotificationStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.notifications", shortID: "notifications"),
+            reader: NotificationCenterReader(databasePath: database.path)
+        )
+
+        // 1. 起跑：全量刷新建基线 / 水位线，再「清除全部」
+        await store.refreshAll()
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 13, "水位线推到库最大号 13")
+        store.dismissAll()
+        XCTAssertEqual(store.dismissedRecordIDs, Set([11, 12, 13]), "三条都进已关闭集合")
+
+        // 2. 库被重建：最大号 13 → 12（集合里 11/12/13 都是旧高位 id）
+        try Self.execNotificationDatabase(at: database, sql: "DELETE FROM record WHERE rec_id >= 13")
+
+        // 3. 增量路径（兜底轮询）：`rec_id > 基线(13)` 为空 → 早退；判定必须在早退前跑，才看得到回退
+        await store.pollOnce()
+        XCTAssertTrue(
+            store.dismissedRecordIDs.isEmpty,
+            "增量读取也要判回退并自愈（不是只在 refreshAll 里）——否则回退在两次全量刷新之间被漏掉"
+        )
+        XCTAssertTrue(Defaults[.dismissedNotificationIDs].isEmpty, "空集合落盘（`persistDismissed` 写回）")
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 12, "水位线落到重建后的库最大号")
+
+        // 4. 自愈观测量：下一次全量刷新把记录恢复出来
+        await store.refreshAll()
+        XCTAssertEqual(store.items.map(\.id), [12, 11], "自愈后列表恢复")
+
+        // 5. 反向：库不动的增量读取（相等档）**不误清**
+        store.dismissAll()
+        XCTAssertEqual(store.dismissedRecordIDs, Set([12, 11]), "先重新关闭这两条")
+        await store.pollOnce()
+        XCTAssertEqual(
+            store.dismissedRecordIDs, Set([12, 11]),
+            "库最大号（12）== 水位线（12）→ 保持：增量路径也不误清"
+        )
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 12, "水位线原地不动")
+
+        // 6. 读失败也走同一条增量路径：`databaseMax <= 0` → 纯函数 `.keep`，**绝不重置**
+        //    （reader 指向不存在的路径；`handleDatabaseChange` 不过 mtime 闸门，能直接进增量）
+        let unreadable = Self.notificationStoreFixture()
+        XCTAssertEqual(unreadable.dismissedRecordIDs, Set([12, 11]), "从落盘的已关闭集合起跑")
+        await unreadable.handleDatabaseChange()
+        XCTAssertEqual(
+            unreadable.dismissedRecordIDs, Set([12, 11]),
+            "读失败 → 集合一条不少（guard：`databaseMax <= 0` 给 `.keep`）"
+        )
+        XCTAssertEqual(Defaults[.notificationsRecordIDWatermark], 12, "读失败也不动水位线")
+    }
+
     // MARK: - 通知浮层（P2d：基线 + 正文口径）
 
     /// 浮层候选是**纯函数**：只有 `rec_id > 基线` 的条目才可能触发，且多条时只取**最新一条**。
