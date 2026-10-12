@@ -1454,6 +1454,15 @@ enum NotificationsHomeBlockLayout {
         items
     }
 
+    /// 表头右侧的**「清除」入口显示不显示**（纯函数，可测——与 `listedItems` 同一条纪律：
+    /// 判据抽出来，视图只负责接上）。
+    ///
+    /// 判据与展开面板 header 的 `!store.items.isEmpty` **同口径**（docs/42 D-01/D-02）：**列表非空才显示**
+    /// ——空列表上放一颗无效按钮只会让人以为坏了。负数（防御式输入）也当空处理。
+    static func showsClearAction(itemCount: Int) -> Bool {
+        itemCount > 0
+    }
+
     /// **第一行**的文案：「App 名」。
     static func sourceLabel(appName: String, title: String) -> String {
         let name = NotificationText.singleLine(appName)
@@ -1498,7 +1507,10 @@ enum NotificationsHomeBlockLayout {
 /// 不做空态插图）。提示只是一行字，详细的权限引导与失败原因仍在展开 tab
 /// （`NotificationPermissionPrompt` / 失败原因截断显示）。
 ///
-/// **只读**（控制器裁决 2/3）：不做关闭 / 清除 / 回复。
+/// **只读**：**不做逐条关闭 / 回复**（逐条关闭在展开 tab 的列表行 × 与浮层的 × 上）。
+/// **2026-10-12 / docs/42 D-01/D-02 起表头右侧有「清除」入口**（一键清空**本岛列表**，
+/// 复用面板同一个 `store.dismissAll()`，系统通知中心一条不动；显示条件见
+/// `NotificationsHomeBlockLayout.showsClearAction(itemCount:)`）。
 /// **不做新通知高亮 / 闪烁**：瞬时提示是浮层（HUD）的职责，块只做常驻展示。
 /// **不引入定时器**：重绘靠 `store` 的 `@Published`。
 ///
@@ -1567,18 +1579,45 @@ private struct NotificationsHomeBlockView: View {
         .onDisappear { vm.setScrollGestureSuppression(false, token: scrollToken) }
     }
 
-    /// 标题行：有内容时「通知 · 最近 N 条（共 M 条）」，0 条时只留模块名（**不画空态文案**）。
+    /// 标题行：有内容时「通知 · 最近 N 条（共 M 条）」，0 条时只留模块名（**不画空态文案**）；
+    /// **列表非空时右侧给一颗「清除」**（2026-10-12 / docs/42 D-01/D-02）。
     ///
     /// **N 与清单同一份输入**（`listedItems`，只算一次）：标题说的条数与下面画出来的条数
     /// 因此不可能对不上（2026-10-11 修正的那一处假话就是这么来的——改前标题收的是列表总数）。
     private var header: some View {
         let shownCount = NotificationsHomeBlockLayout.listedItems(store.items).count
-        return Text(NotificationText.homeHeader(shown: shownCount, total: store.items.count))
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.95))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(height: NotificationsHomeBlockLayout.headerHeight, alignment: .leading)
+        // 文案照旧在左；右侧「清除」的动作与面板**同一个方法**（`store.dismissAll()`），因此
+        // 「只从岛上移除、系统通知中心不动」的语义自动一致；文案键与字号档也与面板逐字相同
+        // （`module.notifications.clearAll` / `NotificationRowMetrics.clearAll`）。显示条件收在
+        // 纯函数 `showsClearAction(itemCount:)` 里（与面板的 `!store.items.isEmpty` 同口径）。
+        return HStack(spacing: 6) {
+            Text(NotificationText.homeHeader(shown: shownCount, total: store.items.count))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            // 一键清除：只在有内容时出现（空列表上放一颗无效按钮只会让人以为坏了）。
+            // **只把当前列表标记为已关闭**，系统通知中心里的条目一条都不动。
+            if NotificationsHomeBlockLayout.showsClearAction(itemCount: store.items.count) {
+                Button {
+                    store.dismissAll()
+                } label: {
+                    Text(LocalizedStringKey("module.notifications.clearAll"))
+                        .font(.system(size: NotificationRowMetrics.clearAll, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(.white.opacity(0.12)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(NotificationText.localized("module.notifications.clearAll"))
+            }
+        }
+        .frame(height: NotificationsHomeBlockLayout.headerHeight, alignment: .leading)
     }
 
     /// 一条通知**两行**：第一行「App 名 · 相对时间」（10pt 弱色），第二行「标题 · 正文预览」

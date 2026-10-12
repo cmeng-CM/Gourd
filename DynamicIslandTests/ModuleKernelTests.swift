@@ -95,6 +95,7 @@ import ApplicationServices
 import Combine
 import Defaults
 import EventKit
+import SQLite3
 import SwiftUI
 import XCTest
 
@@ -4319,6 +4320,94 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// 首页块表头「清除」入口的**显示条件纯函数**（docs/42 D-02）：**列表非空才显示**
+    /// ——判据与展开面板 header 的 `!store.items.isEmpty` 同口径（两处语义逐字一致）。
+    func testNotificationsHomeBlockClearActionShowsOnlyWhenListNonEmpty() {
+        XCTAssertFalse(NotificationsHomeBlockLayout.showsClearAction(itemCount: 0), "0 条不显示（空列表上无效按钮只会让人以为坏了）")
+        XCTAssertFalse(NotificationsHomeBlockLayout.showsClearAction(itemCount: -1), "负数（防御式输入）也当空")
+        XCTAssertTrue(NotificationsHomeBlockLayout.showsClearAction(itemCount: 1), "1 条就显示")
+        XCTAssertTrue(NotificationsHomeBlockLayout.showsClearAction(itemCount: 40), "满列表（读取上限）显示")
+
+        // 逐档钉住「与面板同一判据」：`!store.items.isEmpty` ≡ `itemCount > 0`
+        for count in [0, 1, 2, 7, 40] {
+            XCTAssertEqual(
+                NotificationsHomeBlockLayout.showsClearAction(itemCount: count),
+                count > 0,
+                "必须与面板 header 的 `!store.items.isEmpty` 同口径：count=\(count)"
+            )
+        }
+    }
+
+    /// **首页「清除」复用的是面板同一个 `dismissAll()`**（docs/42 D-01/D-02）：**只从岛上移除**——
+    /// 列表清空、把这批 id 追加进已关闭集合并落盘，而**通知库里的记录一条不动**
+    /// （库里仍在 → 说明既没有删库记录、也没有走 AX 真关；`dismissAll` 压根不碰台账）。
+    ///
+    /// 夹具是临时目录里现造的一张通知库（`record(rec_id, data, delivered_date)`），
+    /// **不碰系统通知库**（与 `testNotificationReaderModificationDateTracksWALSibling` 同一纪律）；
+    /// 偏好卫生：先备份 `dismissedNotificationIDs`、结束时原样恢复（与
+    /// `testNotificationListRowClosePredicateFollowsCloseHandleWindow` 同款），不给开发机的真实域留键。
+    @MainActor
+    func testNotificationDismissAllClearsLocalListAndPersistsWithoutTouchingDatabase() async throws {
+        let dismissedKey = Defaults.Keys.dismissedNotificationIDs.name
+        let savedDismissed = UserDefaults.standard.object(forKey: dismissedKey)
+        defer {
+            if let savedDismissed {
+                UserDefaults.standard.set(savedDismissed, forKey: dismissedKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: dismissedKey)
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: dismissedKey)  // 从「没有已关闭条目」这一档起跑
+
+        let database = try Self.makeNotificationDatabase(records: [
+            (id: 11, title: "构建完成", body: "产物已上传"),
+            (id: 12, title: "新邮件", body: "来自张三"),
+            (id: 13, title: "日历", body: "10:00 站会"),
+        ])
+        defer { try? FileManager.default.removeItem(at: database.deletingLastPathComponent()) }
+
+        let store = NotificationStore(
+            logger: ModuleLogger(moduleID: "com.cmeng.gourd.notifications", shortID: "notifications"),
+            reader: NotificationCenterReader(databasePath: database.path)
+        )
+
+        // 起跑：全量取数把三条装进列表（新的在前）——夹具自身的前提
+        await store.refreshAll()
+        XCTAssertEqual(store.state, .ok, "临时库要能读到（否则下面几条都在空调上断言）")
+        XCTAssertEqual(store.items.map(\.id), [13, 12, 11], "三条全在列表里（新的在前）")
+        XCTAssertTrue(store.dismissedRecordIDs.isEmpty, "起跑没有已关闭条目")
+        XCTAssertTrue(
+            NotificationsHomeBlockLayout.showsClearAction(itemCount: store.items.count),
+            "列表非空 → 首页块的「清除」该出现"
+        )
+
+        // 点「清除」（首页块与面板调的是同一个方法）
+        store.dismissAll()
+
+        // ① 只从岛上移除：列表清空、这批 id 进已关闭集合并落盘
+        XCTAssertTrue(store.items.isEmpty, "列表清空")
+        XCTAssertEqual(store.dismissedRecordIDs, Set([11, 12, 13]), "三条都记进已关闭集合")
+        XCTAssertFalse(
+            NotificationsHomeBlockLayout.showsClearAction(itemCount: store.items.count),
+            "清空后按钮该收起"
+        )
+        XCTAssertEqual(
+            Defaults[.dismissedNotificationIDs].sorted(), [11, 12, 13],
+            "已关闭 id 落盘（`persistDismissed` 写回）"
+        )
+
+        // ② 系统通知中心一条不动：**库里的记录仍在**（没删记录、没真关）
+        let liveness = NotificationCenterReader(databasePath: database.path)
+        XCTAssertEqual(
+            liveness.fetchRecent(limit: 40).map(\.id).sorted(), [11, 12, 13],
+            "清除不动通知库：记录一条不少（`dismissAll` 不写库、不走 AX 真关）"
+        )
+
+        // ③ 已关闭集被读取层用来过滤：再取一次数 → 列表仍为空（id 真的被持久化并生效）
+        await store.refreshAll()
+        XCTAssertTrue(store.items.isEmpty, "已关闭 id 生效：取数后列表仍是空的（不是把库清掉了才空）")
+    }
+
     // MARK: - 通知浮层（P2d：基线 + 正文口径）
 
     /// 浮层候选是**纯函数**：只有 `rec_id > 基线` 的条目才可能触发，且多条时只取**最新一条**。
@@ -5731,6 +5820,66 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// 造一张**临时**通知库（`record(rec_id, data, delivered_date)`，`data` 列写真的二进制 plist），
+    /// 返回库文件 URL——`dismissAll` 语义用例用它把列表喂满，**不碰系统通知库**（临时目录里的新库）。
+    ///
+    /// 与真库同形的三两处：`rec_id` 单调 id、`data` 是 `["req": [...]]` 形态的二进制 plist、
+    /// 另有一张 `app` 表（本夹具不给显示名列，读侧按候选列自动跳过）。
+    private static func makeNotificationDatabase(
+        records: [(id: Int64, title: String, body: String)]
+    ) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-notification-db-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("db")
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+              let db
+        else { throw NotificationDatabaseFixtureError.sqlite("sqlite3_open_v2 失败") }
+        defer { sqlite3_close(db) }
+
+        try sqliteExec(db, "CREATE TABLE record (rec_id INTEGER PRIMARY KEY, data BLOB, delivered_date REAL)")
+        try sqliteExec(db, "CREATE TABLE app (app_id INTEGER PRIMARY KEY, identifier TEXT)")
+
+        for record in records {
+            let payload: [String: Any] = ["req": ["titl": record.title, "body": record.body]]
+            let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "INSERT INTO record (rec_id, data, delivered_date) VALUES (?, ?, ?)",
+                -1, &statement, nil
+            ) == SQLITE_OK, let statement
+            else { throw NotificationDatabaseFixtureError.sqlite(String(cString: sqlite3_errmsg(db))) }
+            defer { sqlite3_finalize(statement) }
+
+            sqlite3_bind_int64(statement, 1, record.id)
+            data.withUnsafeBytes { buffer in
+                _ = sqlite3_bind_blob(
+                    statement, 2, buffer.baseAddress, Int32(data.count),
+                    unsafeBitCast(-1, to: sqlite3_destructor_type.self)  // SQLITE_TRANSIENT
+                )
+            }
+            sqlite3_bind_double(statement, 3, 1_700_000_000 + Double(record.id))  // Unix 秒（读侧按启发式认）
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw NotificationDatabaseFixtureError.sqlite(String(cString: sqlite3_errmsg(db)))
+            }
+        }
+        return url
+    }
+
+    /// 一句 `sqlite3_exec`（夹具建表用；失败抛错而不是默默吞掉）。
+    private static func sqliteExec(_ db: OpaquePointer, _ sql: String) throws {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, sql, nil, nil, &errorPointer) == SQLITE_OK else {
+            let message = errorPointer.map { String(cString: $0) } ?? "未知错误"
+            sqlite3_free(errorPointer)
+            throw NotificationDatabaseFixtureError.sqlite("\(sql)：\(message)")
+        }
+    }
+
     /// 模块接缝：DB 侧指纹取自 `NotificationItem`（`displayName + title + body`），
     /// 与 AX 侧的 `BannerEvent.fingerprint` 同一口径 —— 这条钉住「两条通道能对上」。
     func testNotificationFingerprintFromItemMatchesBannerEvent() {
@@ -5883,6 +6032,11 @@ final class ModuleKernelTests: XCTestCase {
 }
 
 // MARK: - 假体
+
+/// 临时通知库夹具的失败（只在本文件的 `makeNotificationDatabase` 里用；不是产品错误类型）。
+private enum NotificationDatabaseFixtureError: Error {
+    case sqlite(String)
+}
 
 /// 最小假体：不读也不写，只满足 `ConfigHandle` 的签名（真实现属 T2 的 `ModuleContextFactory`）。
 private final class StubConfigHandle: ConfigHandle {
