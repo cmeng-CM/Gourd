@@ -32,12 +32,20 @@
 //  - 首页整宽日历行的右栏 —— `CalendarEventCardList`（`HomeCalendarRow.swift`，T2 接入）：
 //    竖向滚动卡片列（容器与卡片都在本文件，全天条目合并进同一列）。
 //
-//  **形态口径（逐字不变，T1 审查的 10 个视觉参数）**：字体 `.callout` / 权重 `.medium`（待办）与
+//  **形态口径（逐字不变，T1 审查的 10 个视觉参数；2026-10-12 只有「行高」两档随日历页放大，
+//  见下一条）**：字体 `.callout` / 权重 `.medium`（待办）与
 //  `.semibold`（日程）；`padding(.horizontal, 11)` / `padding(.vertical, 8)`；`minHeight 50`；
 //  圆角 14（`.continuous`）+ `Color.white.opacity(0.05)` 底；弱化档 0.55（勾选完成的待办）/ 0.6
 //  （今天已结束的日程）；标题 `lineLimit(showFullEventTitles ? nil : 2)`；地点 `lineLimit(1)`；
 //  日程收尾时间右列（起 `.caption` 白 / 止 `.caption2` 0.65 灰；全天显示 `All-day`）；色条 4×36。
 //  勾选圈左置（待办）、`ConferenceJoinButton` 在正文列内（日程）——位置都不许动。
+//
+//  **2026-10-12：右栏行高随面板「日历」页等比放大**（docs/41-home-and-calendar-scale.md D-03 / D-04）：
+//  本文件里由 `MonthGridLayout.scale` 派生的只有两处**行高**——列容器的 `headerHeight`（26 → 31.2）
+//  与两张卡片的 `minHeight`（50 → 60，让出的高度正好补上左栏 `monthGridHeight` 长高的那一截，
+//  两栏拿同一个高度）。卡片的文字用的是**语义字号**（`.callout` / `.caption` / `.caption2`）而不是
+//  数值字号，随动态字体走，因此**不随 `scale` 变**（要变只能写死数值字号，那会丢掉动态字体）；
+//  `padding` / 圆角 / 色条 4×36 同样不在本次放大范围（卡片结构一个字没动）。
 //
 //  口径：docs/36-calendar-cards-and-add.md §接口与数据形状（`CalendarEventCard(event:showFullEventTitles:)`、
 //  `ReminderCard(event:showFullEventTitles:onToggle:)`、
@@ -112,7 +120,9 @@ struct CalendarEventCard: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+        // 卡片最小行高（原 50）：右栏行高随 `MonthGridLayout.scale` 放大（docs/41 D-03），
+        // 卡片跟着长高，一屏的行数与左栏日格的对位才不会走样。
+        .frame(maxWidth: .infinity, minHeight: 50 * MonthGridLayout.scale, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.05))
@@ -175,7 +185,8 @@ struct ReminderCard: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+        // 卡片最小行高（原 50）：与 `CalendarEventCard` 同一条口径，随 `MonthGridLayout.scale` 放大。
+        .frame(maxWidth: .infinity, minHeight: 50 * MonthGridLayout.scale, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.05))
@@ -243,11 +254,15 @@ enum CalendarEventFilters {
 /// `.onHover { vm.isHoveringCalendar }` 已覆盖本行，`ContentView` 的面板收起滚动判据是
 /// `!vm.isHoveringCalendar`，本列滚动因此安全（docs/36 执行期裁决）。
 struct CalendarEventCardList: View {
-    /// 宿主表头（收起态日期头那一行）占用的高度 = 26pt（P11 / T7 从已退休的旧紧凑列表行容量档
-    /// 原值迁入）：一行 `subheadline` + 顶部 2pt padding + 与列表之间的 4pt 间距。
-    /// 两处宿主共用这一个数——`HomeCalendarRow` 的 `todayListHeight`（`rowHeight − headerHeight`）
-    /// 与 `CalendarView`（**仅供 `#Preview`**）的视口换算都引它。
-    static let headerHeight: CGFloat = 26
+    /// 宿主表头（收起态日期头那一行）占用的高度（P11 / T7 从已退休的旧紧凑列表行容量档原值 26
+    /// 迁入）：一行 `subheadline` + 顶部 2pt padding + 与列表之间的 4pt 间距。
+    ///
+    /// **2026-10-12 起随面板「日历」页整体等比放大**（docs/41-home-and-calendar-scale.md D-03 / D-04）：
+    /// 右栏与本页左栏（`MonthGridLayout.monthGridHeight`）拿的是同一个高度，行高不跟着走就会
+    /// 「卡片列溢出到行外」或「行内留白」——所以它引左栏那一个 `scale` 常量，不再自己写数
+    /// （唯一取值处仍是这里）。两处宿主共用这一个数——`CalendarView`（**仅供 `#Preview`**）的
+    /// 视口换算也引它。
+    static let headerHeight: CGFloat = 26 * MonthGridLayout.scale
 
     @ObservedObject private var calendarManager = CalendarManager.shared
     /// **未过滤**的原始条目（首页宿主传 `calendarManager.events`）；偏好过滤在组件内做。

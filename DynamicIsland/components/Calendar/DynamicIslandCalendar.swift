@@ -510,41 +510,90 @@ enum MonthGridLayout {
         days(forMonth: month, calendar: calendar).count / 7
     }
 
-    /// 网格**上方**、`MonthGridView` 内部要预留的两段固定 chrome（`NSHostingView` 实测值 + 每段 1pt
-    /// 余量，余量落在网格上方的空档里——不拉伸、也不挤压周标题行，见 `monthGridHeight` 的校准记录）。
+    /// 面板「日历」页的**等比放大比例**（2026-10-12，docs/41-home-and-calendar-scale.md D-03 / D-04）。
     ///
-    /// - `headerChromeHeight` = 月份标题行 + 与网格的间距：标题行由翻月键的
-    ///   `.frame(width: 24, height: 24)` 撑到 23–24（实测 HStack 高 23；取 24 是余量方向），间距 10；
-    /// - `weekdayChromeHeight` = 周标题行 + 与日格的间距：周标题行是 `caption2` 的一行（实测行高 13，
-    ///   取 14 留 1pt——这一档余量让周标题行**既不被拉伸也不被挤压**），间距 6。
-    static let headerChromeHeight: CGFloat = 24 + 10
-    static let weekdayChromeHeight: CGFloat = 14 + 6
+    /// 这一页所有影响**视觉尺寸**的常量都由它派生（日格 / 选中圆 / 字号 / 间距 / 表头与星期两段
+    /// chrome / 事件点，以及下面的 `monthGridHeight` 算式）——调幅度只动这一个数，别在别处再写
+    /// 新字面量（逐处写死以后没人知道基准）。右栏卡片列的行高同样引它（`CalendarEventCards.swift`
+    /// 的 `CalendarEventCardList.headerHeight` 与两张卡片的 `minHeight`）。
+    static let scale: CGFloat = 1.2
 
-    /// 整月网格在**固定格高**下要的高度（纯函数）：`36 × N + 52`，N = `weekCount(for:calendar:)`。
+    // MARK: 日格与网格（每个常量都由 `scale` 派生；括号里是放大前（`scale = 1`）的原值）
+
+    /// 日格高（原 30）：日格恒这么高，第二行（农历 / 节假日）不撑高——网格行距 `dayCellPitch`
+    /// 与日格的 `minHeight` 都读它。
+    static let dayCellHeight: CGFloat = 30 * scale
+    /// **单行档**（格子里放不下第二行）的选中圆直径（原 28）：完整落在日格内。
+    static let singleLineSelectionDiameter: CGFloat = 28 * scale
+    /// **两行档**（公历数字 + 农历 / 节假日）的选中圆直径（原 19）：与 `subtitleLineHeight` 咬合
+    /// ——`dayCellHeight − subtitleLineHeight`（原 `30 − 11 = 19`），两者随 scale 一起走。
+    static let twoLineSelectionDiameter: CGFloat = 19 * scale
+    /// 日格第二行（农历 / 节假日）的**行框**高度（原 11）：显式定高（PingFang 的自然行高会撑破日格），
+    /// 与两行档的选中圆一起恰好占满日格（`19 + 11 == 30` → `22.8 + 13.2 == 36`）。
+    static let subtitleLineHeight: CGFloat = 11 * scale
+    /// 公历日号的字号（原 12）。
+    static let dayNumberFontSize: CGFloat = 12 * scale
+    /// 日格第二行的字号（原 9）：`MonthGridView.subtitleText` 把它一并喂给
+    /// `MonthCellSubtitle.fits`（判据里的实测宽度必须与格子里 `Text` 的字号同源）。
+    static let subtitleFontSize: CGFloat = 9 * scale
+    /// 「有事件」小圆点的直径（原 4）。
+    static let eventMarkerDiameter: CGFloat = 4 * scale
+
+    /// 网格的**行 / 列间距**（原 6）：周标题行与日格之间、日格与日格之间共用同一个数。
+    static let gridSpacing: CGFloat = 6 * scale
+    /// 日格网格的**横向总内缩**（原 36 = 6 道列距 × 6）：`cellWidth = (width − gridInset) / 7` 用它
+    /// ——由 `gridSpacing` 派生，改间距时这个数自己跟着走（两处各写一份必然漂）。
+    static let gridInset: CGFloat = 6 * gridSpacing
+    /// 网格自身的顶部内缩（原 4，`MonthGridView` 的 `.padding(.top, 4)`）。
+    static let gridTopInset: CGFloat = 4 * scale
+    /// 一格占的**行距**（原 36 = 日格 30 + 行距 6）：`monthGridHeight` 的算式由它起算。
+    static let dayCellPitch: CGFloat = dayCellHeight + gridSpacing
+
+    // MARK: 网格上方两段 chrome（同样由 `scale` 派生；括号里是原值）
+
+    /// 月份标题行的行高（原 24：翻月键的 `.frame(width: 24, height: 24)` 撑起来的）。
+    /// `MonthGridView.header` 的翻月键按钮框**宽高都读它**——只放大 chrome 不放大按钮框，
+    /// `headerChromeHeight` 就会比真实表头多让出 4.8pt，网格底便不贴行底（结构护栏会红）。
+    static let headerRowHeight: CGFloat = 24 * scale
+    /// 月份标题行与网格之间的间距（原 10，`MonthGridView.body` 那个 `VStack` 的 `spacing`）。
+    static let headerSpacing: CGFloat = 10 * scale
+    /// 网格**上方**要预留的第一段固定 chrome（原 34 = 24 + 10，`NSHostingView` 实测值 + 余量，
+    /// 余量落在网格上方的空档里——不拉伸、也不挤压周标题行，见 `monthGridHeight` 的校准记录）。
+    static let headerChromeHeight: CGFloat = headerRowHeight + headerSpacing
+    /// 周标题行的行高（原 14：`caption2` 一行实测行高 13，取 14 留 1pt——这一档余量让周标题行
+    /// **既不被拉伸也不被挤压**）。
+    static let weekdayRowHeight: CGFloat = 14 * scale
+    /// 周标题行与日格之间的间距（原 6，`datePicker` 那个 `VStack` 的 `spacing`）。
+    static let weekdaySpacing: CGFloat = 6 * scale
+    /// 网格**上方**要预留的第二段固定 chrome（原 20 = 14 + 6）。
+    static let weekdayChromeHeight: CGFloat = weekdayRowHeight + weekdaySpacing
+
+    /// 整月网格在**固定格高**下要的高度（纯函数）：`43.2 × N + 62.4`，N = `weekCount(for:calendar:)`。
     ///
-    /// 算式逐项（`MonthGridView` 的真实刻度，`NSHostingView` 实测日格 `NSScrollView` 的 frame 校对过）：
-    /// - 日格网格内容 = `N × 30`（日格 `minHeight`）+ `(N − 1) × 6`（`LazyVGrid` 行距；末行不带行距）
-    ///   = `36N − 6`；
-    /// - 网格**上方**的 chrome：`4`（网格自身 `.padding(.top, 4)`）+ `headerChromeHeight`（34）
-    ///   + `weekdayChromeHeight`（20）− `6`（`36N` 的算式里已含末行后那一份，这里不能重复计）；
-    /// - 合计 → **`36N + 52`**：3 周 160、5 周 232（2026-10）、6 周 268。
+    /// 算式逐项（`MonthGridView` 的真实刻度，`NSHostingView` 实测日格 `NSScrollView` 的 frame 校对过；
+    /// 每一档都由 `scale` 派生的常量给出，所以调幅度只动 `scale` 一处，网格与行高永远自洽）：
+    /// - 日格网格内容 = `N × dayCellHeight`（36）+ `(N − 1) × gridSpacing`（7.2）——`LazyVGrid` 的末行
+    ///   不带行距，即 `dayCellPitch × N − gridSpacing` = `43.2N − 7.2`（原 `36N − 6`）；
+    /// - 网格**上方**的 chrome：`gridTopInset`（4.8，原 4）+ `headerChromeHeight`（40.8，原 34）
+    ///   + `weekdayChromeHeight`（24，原 20）− `gridSpacing`（7.2，上面那一项多算的末行行距，不能重复计）；
+    /// - 合计 → **`43.2N + 62.4`**：3 周 192、5 周 278.4（2026-10）、6 周 321.6。
     ///
-    /// **上屏校准（T8 tune，控制器实测 + NSHostingView 实测）**：旧算式 `36N + 52` 在网格**下方**
-    /// 多留了 27pt，逐项：
+    /// **上屏校准（T8 tune，控制器实测 + NSHostingView 实测；下表记的是 `scale = 1` 那一档的原值，
+    /// 本轮的放大是各档常量 ×1.2，余量随之等比放大）**：旧算式在网格**下方**多留了 27pt，逐项：
     /// | 项 | 值 | 处置 |
     /// |---|---|---|
     /// | `pickerViewportHeight` 的 `56` 对真实 chrome（标题行 24 + 间距 10 = 34）的余量 | 22 | 收回（改用具名 `headerChromeHeight`，余量落在网格上方、不挤网格） |
     /// | `datePicker` 视口对「周标题行 13 + 间距 6」多留的 allowance（`22 − 19`） | 3 | 收回（`weekdayChromeHeight` = 14 + 6，留 1pt 防拉伸/挤压） |
     /// | 网格内容底部的 `.padding(.bottom, 2)` | 2 | 去掉（它正落在末行文字下方 = 可见留白的一部分） |
     ///
-    /// 旧值下实测：网格区 = `H − 82`、网格上方 chrome = 59（2026-10、H = 258 时日格 `NSScrollView`
-    /// 的 frame = `(6, 59, 308, 176)`）；校准后网格区 = `H − 58`、chrome = 58，末行墨迹底到行底
-    /// 只剩「格内文字下方空档」（进程内位图墨迹扫描：5 周 232 高下 = 3.5pt），首页底部可见留白按
-    /// 控制器同一口径应从 53 落到 ≈28。
+    /// 旧值下实测（`scale = 1`）：网格区 = `H − 82`、网格上方 chrome = 59（2026-10、H = 258 时日格
+    /// `NSScrollView` 的 frame = `(6, 59, 308, 176)`）；校准后网格区 = `H − 58`、chrome = 58，末行墨迹底
+    /// 到行底只剩「格内文字下方空档」（进程内位图墨迹扫描：5 周 232 高下 = 3.5pt）——「网格底贴住行底」
+    /// 这条结构不变量在放大后仍由 `testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight` 逐项钉住。
     static func monthGridHeight(forMonth month: Date, calendar: Calendar = .gourdDisplay) -> CGFloat {
         let rows = CGFloat(weekCount(for: month, calendar: calendar))
-        let gridContent = 36 * rows - 6
-        return gridContent + 4 + headerChromeHeight + weekdayChromeHeight
+        let gridContent = dayCellPitch * rows - gridSpacing
+        return gridContent + gridTopInset + headerChromeHeight + weekdayChromeHeight
     }
 
     /// 某个日期所在月份的**首日零点**——按月数据的键（`MonthEventSnapshot.month` 与
@@ -749,11 +798,13 @@ struct MonthGridView: View {
             // 比真实 chrome 多 22——那 22 落在网格下方，就是首页底部可见留白里多出来的那一段，
             // 见 `MonthGridLayout.monthGridHeight` 的校准记录）。
             let pickerViewportHeight = max(96, geometry.size.height - MonthGridLayout.headerChromeHeight)
-            // 7 列日格的**单格宽**（与 `datePicker` 里的网格同一算式：两侧各 6pt 内边距 + 6 列 × 6pt
-            // 列距，其余 7 等分）——第二行（农历 / 节假日）放不放得下按它判（`MonthCellSubtitle`）。
-            let cellWidth = max(0, (geometry.size.width - 36) / 7)
+            // 7 列日格的**单格宽**（与 `datePicker` 里的网格同一算式：网格宽扣掉 6 道列距
+            // （`MonthGridLayout.gridInset`）后 7 等分）——第二行（农历 / 节假日）放不放得下按它判
+            // （`MonthCellSubtitle`）。网格左右那 6pt 内边距在 `padding(.horizontal, 6)` 里，已在
+            // `geometry.size.width` 之外，不重复扣。
+            let cellWidth = max(0, (geometry.size.width - MonthGridLayout.gridInset) / 7)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: MonthGridLayout.headerSpacing) {
                 header
                 datePicker(viewportHeight: pickerViewportHeight, cellWidth: cellWidth)
                     .frame(height: pickerViewportHeight)
@@ -762,7 +813,8 @@ struct MonthGridView: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .padding(.horizontal, 6)
-        .padding(.top, 4)
+        // 网格自身顶部内缩（原写死 4）：`monthGridHeight` 的算式逐项含它，必须同源放大。
+        .padding(.top, MonthGridLayout.gridTopInset)
         .clipped()
         // 显示月份一变（翻月 / 选中日换到别的月）就通知宿主去抓那个月的标记数据。
         // `.onChange` 不为首帧补发，所以出现时另发一次（首月同样要抓）。
@@ -797,15 +849,17 @@ struct MonthGridView: View {
             HStack(spacing: 6) {
                 Button(action: showPreviousMonth) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 24, height: 24)
+                        .font(.system(size: 11 * MonthGridLayout.scale, weight: .bold))
+                        // 翻月键的框就是**表头行高**的来源（`headerChromeHeight` 的那 24）：框高必须
+                        // 跟着 `scale` 走，否则 chrome 会比真实表头多让出 4.8pt、网格底不贴行底。
+                        .frame(width: MonthGridLayout.headerRowHeight, height: MonthGridLayout.headerRowHeight)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: showNextMonth) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 24, height: 24)
+                        .font(.system(size: 11 * MonthGridLayout.scale, weight: .bold))
+                        .frame(width: MonthGridLayout.headerRowHeight, height: MonthGridLayout.headerRowHeight)
                 }
                 .buttonStyle(.plain)
             }
@@ -819,8 +873,8 @@ struct MonthGridView: View {
     /// 「网格宽 → 7 等分」算好后传进来，视图内不另算一份（两处各算一次必然漂）。
     private func datePicker(viewportHeight: CGFloat, cellWidth: CGFloat) -> some View {
         ScrollViewReader { proxy in
-            VStack(spacing: 6) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+            VStack(spacing: MonthGridLayout.weekdaySpacing) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: MonthGridLayout.gridSpacing), count: 7), spacing: MonthGridLayout.gridSpacing) {
                     // 表头顺序由纯函数给出（D-08）：本视图不再自带那段旋转，视图与用例同一条算式。
                     ForEach(Array(MonthGridLayout.weekdaySymbols(for: calendar).enumerated()), id: \.offset) { _, symbol in
                         Text(symbol.prefix(1))
@@ -833,7 +887,7 @@ struct MonthGridView: View {
 
                 ZStack {
                     ScrollView(.vertical, showsIndicators: false) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: MonthGridLayout.gridSpacing), count: 7), spacing: MonthGridLayout.gridSpacing) {
                             ForEach(MonthGridLayout.days(forMonth: displayedMonth, calendar: calendar), id: \.self) { day in
                                 dayCell(for: day, cellWidth: cellWidth)
                                     .id(calendar.startOfDay(for: day))
@@ -874,24 +928,22 @@ struct MonthGridView: View {
         .clipped()
     }
 
-    /// 日格的**三个高度刻度**（T4 新增第二行后仍是这一份，别改成会撑高的写法）：
-    /// 日格恒 30pt（`MonthGridLayout.monthGridHeight` 的行高算式 `36 × 周数 + 52` 依赖这个 30）、第一行（数字 +
-    /// 选中圆）与第二行（农历 / 节假日）各自的高度——三者互相咬合：`19 + 11 == 30`。
-    ///
-    /// **为什么有两档选中圆**：30pt 的日格里塞下「圆 + 一行 9pt 文字」时，圆的最大直径是
-    /// `30 − 11 = 19`——28pt 的圆（单行档的现状）与第二行在几何上必然重叠（圆的下弧会切进文字）。
-    /// 单行档（格子放不下第二行时）继续用 28pt，两个档位各自的圆都**完整落在日格内**
-    ///（不溢出、不被 ScrollView 裁掉顶边——这也是不采用「28pt 圆 + 溢出顶边」那条路的原因：
-    /// 网格滚到顶时第一行的圆会被裁平）。
-    private static let dayCellHeight: CGFloat = 30
-    private static let singleLineSelectionDiameter: CGFloat = 28
-    private static let twoLineSelectionDiameter: CGFloat = 19
-    /// 第二行的行框高度：9pt 字（CJK 的 ink 约 8.8pt）放得下，且与选中圆加起来恰好 30。
-    /// **显式定高**：PingFang（CJK fallback）的行高比 SF Pro 宽，交给它自然排版会撑破 30pt。
-    private static let subtitleLineHeight: CGFloat = 11
+    // MARK: - 日格刻度（2026-10-12 起迁到 `MonthGridLayout`，逐档由它的 `scale` 派生）
+    //
+    // 常量只有一处（`MonthGridLayout.dayCellHeight` / `singleLineSelectionDiameter` /
+    // `twoLineSelectionDiameter` / `subtitleLineHeight` / `dayNumberFontSize` / `subtitleFontSize` /
+    // `eventMarkerDiameter`）：日格高是 `monthGridHeight` 行距算式的输入，行高算式与本视图必须读
+    // 同一个数（T4 起这三个刻度就是一份，别改成会撑高的写法）。
+    //
+    // 三者互相咬合：`twoLineSelectionDiameter + subtitleLineHeight == dayCellHeight`（22.8 + 13.2 == 36）。
+    // **为什么有两档选中圆**：日格里塞下「圆 + 一行副标文字」时，圆的最大直径是
+    // `dayCellHeight − subtitleLineHeight`——单行档的圆（28 → 33.6）与第二行在几何上必然重叠
+    // （圆的下弧会切进文字）。单行档（格子放不下第二行时）继续用 `singleLineSelectionDiameter`，
+    // 两个档位各自的圆都**完整落在日格内**（不溢出、不被 ScrollView 裁掉顶边——这也是不采用
+    // 「大圆 + 溢出顶边」那条路的原因：网格滚到顶时第一行的圆会被裁平）。
 
     /// 这一天的**第二行**：有节假日名就显示它，否则农历日名（机制四）；放不下（或取不到）给 `nil`
-    /// ——`nil` 时整行不画，公历数字的位置与高度因此与改前逐字一致（那段是 30pt 日格的全部）。
+    /// ——`nil` 时整行不画，公历数字的位置与高度因此与改前逐字一致（那段是 `dayCellHeight` 的全部）。
     ///
     /// 数据源 = 本视图的**按月快照**（`monthEvents`，与事件小圆点同一份，已按偏好过滤）：
     /// 节假日名走 `HolidayLookup`（名字含「节假日」的日历的全天条目），农历走 `LunarDayLabel`
@@ -903,7 +955,11 @@ struct MonthGridView: View {
         guard let label = HolidayLookup.name(for: day, events: monthEvents.events, calendar: calendar)
             ?? LunarDayLabel.label(for: day)
         else { return nil }
-        return MonthCellSubtitle.fits(label, cellWidth: cellWidth) ? label : nil
+        // 判据里的实测宽度必须与格子里那行 `Text` **同一个字号**（`MonthCellSubtitle.fits` 的
+        // `fontSize:` 口径）——副标字号随 `scale` 放大后仍传缺省的 9 会让判据偏乐观、文案被切边。
+        return MonthCellSubtitle.fits(
+            label, cellWidth: cellWidth, fontSize: MonthGridLayout.subtitleFontSize
+        ) ? label : nil
     }
 
     /// 日格第二行的颜色：跟随公历数字的层级（跨月补格更暗），比数字低一档（次要色）。
@@ -918,8 +974,8 @@ struct MonthGridView: View {
         let hasEvents = eventDays.contains(calendar.startOfDay(for: day))
         let subtitle = subtitleText(for: day, cellWidth: cellWidth)
         let selectionDiameter = subtitle == nil
-            ? Self.singleLineSelectionDiameter
-            : Self.twoLineSelectionDiameter
+            ? MonthGridLayout.singleLineSelectionDiameter
+            : MonthGridLayout.twoLineSelectionDiameter
 
         return Button {
             withAnimation(.smooth(duration: 0.18)) {
@@ -935,23 +991,24 @@ struct MonthGridView: View {
                     }
 
                     Text(day.formatted(.dateTime.day()))
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                        .font(.system(size: MonthGridLayout.dayNumberFontSize, weight: isSelected ? .semibold : .medium))
                         .foregroundStyle(dayTextColor(isCurrentMonth: isCurrentMonth, isSelected: isSelected, isToday: isToday))
                 }
 
                 // 第二行：公历数字**下方**（不挤数字、不换行）；放不下时 `subtitle` 为 nil、这里不生成。
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.system(size: MonthGridLayout.subtitleFontSize, weight: .medium))
                         .foregroundStyle(subtitleColor(isCurrentMonth: isCurrentMonth))
                         .lineLimit(1)
-                        .frame(height: Self.subtitleLineHeight)
+                        .frame(height: MonthGridLayout.subtitleLineHeight)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: Self.dayCellHeight)
+            .frame(maxWidth: .infinity, minHeight: MonthGridLayout.dayCellHeight)
             // 事件标记：右侧小圆点（位置与颜色见 `eventMarker` 的注释）。放在日格**右下角**而不是
-            // 日号正下方，是为了和选中圆永不重叠；`overlay` 不进布局，日格仍恰好 30pt 高
-            // （`MonthGridLayout.monthGridHeight` 的算式 `36 × 周数 + 52` 依赖这个 30，别改成会撑高的写法）。
+            // 日号正下方，是为了和选中圆永不重叠；`overlay` 不进布局，日格仍恰好 `dayCellHeight` 高
+            // （`MonthGridLayout.monthGridHeight` 的行距算式 `43.2 × 周数 + 62.4` 依赖这个日格高，
+            // 别改成会撑高的写法）。
             // T4 的第二行让日格下半部分多了文字：那颗点在**右下角内缩**（右 6pt / 下 2pt），
             // 与居中的第二行之间仍有 `MonthCellSubtitle` 判据里预留的那段横向余量（见该类型注释）。
             .overlay(alignment: .bottomTrailing) {
@@ -964,20 +1021,22 @@ struct MonthGridView: View {
         .buttonStyle(.plain)
     }
 
-    /// 「有事件」的小圆点：**4pt 实心圆，日格右下角内缩（右 6pt / 下 2pt）**。
+    /// 「有事件」的小圆点：**实心圆（`eventMarkerDiameter`，原 4），日格右下角内缩（右 6pt / 下 2pt）**。
     ///
     /// 两条都是刻意的选择（候选决策，见批次报告 `final-fix.md`）：
-    /// - **位置取右下角**：日格只有 30pt 高，而选中高亮是**居中**的 28pt 实心圆（纵向占满 1…29pt），
+    /// - **位置取右下角**：日格只有 `dayCellHeight` 高，而选中高亮是**居中**的实心圆（纵向占满整格），
     ///   日号正下方正是那个圆的底边——把点画在那里会和选中高亮糊成一团。右下角离圆心约 20pt，
     ///   今天高亮（日号变强调色，无圆圈）与选中高亮因此都能与它共存；它也不改日格高度，不影响
-    ///   整月网格的行距算式。
+    ///   整月网格的行距算式。（**内缩的那 6/2 与 `MonthCellSubtitle` 的 `trailingMarkerZone = 10`
+    ///   没有随点一起放大——那两个数在 `LunarDayLabel.swift` / 本函数里，不在本轮 `scale` 的派生集合里，
+    ///   偏差 0.8pt 落在 `fits` 的 `slack`(2) 之内。）
     /// - **颜色取面板强调色**（`Color.effectiveAccent`，与今天的日号、选中的圆同一支），跨月补格降到
     ///   45% 不透明：补格的日号本来就是灰的（`Color(white: 0.35)`），标记跟着一起弱化，免得把视线
     ///   引到不属于当前显示月份的日子上。
     private func eventMarker(isCurrentMonth: Bool) -> some View {
         Circle()
             .fill(Color.effectiveAccent.opacity(isCurrentMonth ? 1 : 0.45))
-            .frame(width: 4, height: 4)
+            .frame(width: MonthGridLayout.eventMarkerDiameter, height: MonthGridLayout.eventMarkerDiameter)
             .padding(.trailing, 6)
             .padding(.bottom, 2)
     }
@@ -1036,7 +1095,8 @@ struct StandaloneCalendarView: View {
     }
 
     /// 左栏**显示月份**（`MonthGridView` 自持，经 `onDisplayedMonthChange` 回声到这里）：只用于左栏高度
-    /// ——网格高度算式与首页日历行**同源**（`MonthGridLayout.monthGridHeight`，`36N + 52`）。
+    /// ——网格高度算式与首页日历行**同源**（`MonthGridLayout.monthGridHeight`，`43.2N + 62.4`，
+    /// 逐项由 `MonthGridLayout.scale` 派生）。
     /// 初值与 `MonthGridView` 的初值同式（选中日所在月，见那边的 init）；出现时回调会再对齐一次。
     @State private var displayedMonth: Date = Date().startOfMonth
 
@@ -1060,7 +1120,7 @@ struct StandaloneCalendarView: View {
         )
     }
 
-    /// 左栏（整月网格）的高度 = `36 × 显示月份周数 + 52`（与首页日历行同源，算式见
+    /// 左栏（整月网格）的高度 = `43.2 × 显示月份周数 + 62.4`（与首页日历行同源，算式见
     /// `MonthGridLayout.monthGridHeight`）：这个高度下网格视口恰好一屏放下整月，网格内不滚动。
     /// 翻月改的是**显示月份**（`monthNavigationMovesSelection: true` 会连带挪选中日，两条都会经
     /// `onDisplayedMonthChange` 回声）→ 这一页的自然高随之变 → 探针重报，面板高跟着走
@@ -1074,7 +1134,7 @@ struct StandaloneCalendarView: View {
         // `GeometryReader` + `paneHeight = geometry.size.height` 的两栏定高 frame——探针按
         // 「宽给定、高 unspecified」量这一页时，`GeometryReader` 的理想高只有 10pt 级，整页自然高
         // 因此被答成 10、面板落到下限。现在两栏的高度都来自**内容**：左栏 = 月网格按固定格高自然堆叠的
-        // 高（`36N + 52`，与首页日历行同源），右栏 = 同一个高度（事件列在它里面滚动 / 裁剪），
+        // 高（`43.2N + 62.4`，与首页日历行同源），右栏 = 同一个高度（事件列在它里面滚动 / 裁剪），
         // 这一页**不再读任何几何高度**（宽度也不读：两栏 `.frame(maxWidth: .infinity)` 等分，
         // 结果与旧的 `paneWidth = (width − 间距) / 2` 逐字相同）。
         HStack(alignment: .top, spacing: Self.paneSpacing) {
