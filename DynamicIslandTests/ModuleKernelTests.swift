@@ -7714,6 +7714,10 @@ final class CalendarEventCardListOrderTests: XCTestCase {
 /// `HomeBlockOrdering` 的纯函数口径（docs/18-p1-todos-and-order.md §接口与数据形状 1、§验收标准）：
 /// 覆盖值优先 → 缺键回落默认序号 → 同值按 id 字典序 → **未知 id 不参与排序**；空表不变序。
 /// 另钉住「上移 / 下移」的边界与整表序号的写入口径（`table(for:)`）。
+///
+/// p20 批次 / T1 加一档：`movedInGroup` 的**组内**相邻交换与三类越界返回 `nil`（组首上移 /
+/// 组尾下移、单元素组的两个方向、id 不在任何组），以及 `ModuleSettingsSection.homeOrderGroups`
+/// 的「环境带 ++ 可变流」规范顺序（docs/44-home-order-groups.md D-01~D-04）。
 @MainActor
 final class HomeBlockOrderingTests: XCTestCase {
 
@@ -7891,6 +7895,77 @@ final class HomeBlockOrderingTests: XCTestCase {
         XCTAssertEqual(suite.dictionary(forKey: key.name) as? [String: Int], table, "盘上存的是字典（不是字符串）")
         Defaults[key] = [:]
         XCTAssertEqual(Defaults[key], [:], "清空同样往返（回到「用户未表达」）")
+    }
+
+    // MARK: 组内移动（p20 / T1）
+
+    /// **组内相邻交换**（docs/44 D-01~D-04）：`movedInGroup` 只在 `id` 所在的那一组里换位；
+    /// 组间顺序与**其它组**的成员在结果里逐字不变，且纯函数不改入参。
+    func testMovedInGroupSwapsInsideOwningGroup() {
+        let groups = [["e1", "e2", "e3"], ["f1", "f2", "f3"]]
+
+        XCTAssertEqual(
+            HomeBlockOrdering.movedInGroup(groups, moving: "f2", direction: .up),
+            [["e1", "e2", "e3"], ["f2", "f1", "f3"]],
+            "可变流里上移一格"
+        )
+        XCTAssertEqual(
+            HomeBlockOrdering.movedInGroup(groups, moving: "f2", direction: .down),
+            [["e1", "e2", "e3"], ["f1", "f3", "f2"]]
+        )
+
+        let movedEnv = HomeBlockOrdering.movedInGroup(groups, moving: "e2", direction: .up)
+        XCTAssertEqual(movedEnv, [["e2", "e1", "e3"], ["f1", "f2", "f3"]], "环境带里上移一格")
+        XCTAssertEqual(movedEnv?[1], groups[1], "另一组逐字不变")
+        XCTAssertEqual(groups, [["e1", "e2", "e3"], ["f1", "f2", "f3"]], "纯函数不改入参")
+    }
+
+    /// **组内移动的三类越界一律返回 `nil`**（不是原样返回）：组首上移 / 组尾下移、单元素组的两个
+    /// 方向、`id` 不在任何一组里——调用方据此不写盘（docs/44 D-03）。
+    func testMovedInGroupBoundariesReturnNil() {
+        let groups = [["e1", "e2"], ["f1", "f2"]]
+
+        XCTAssertNil(HomeBlockOrdering.movedInGroup(groups, moving: "e1", direction: .up), "组首上移")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup(groups, moving: "f2", direction: .down), "组尾下移")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup(groups, moving: "missing", direction: .up), "不在任何组里")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup(groups, moving: "missing", direction: .down))
+        XCTAssertNil(HomeBlockOrdering.movedInGroup([["only"], ["f1"]], moving: "only", direction: .up), "单元素组上移")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup([["only"], ["f1"]], moving: "only", direction: .down), "单元素组下移")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup([], moving: "a", direction: .up), "空输入")
+        XCTAssertNil(HomeBlockOrdering.movedInGroup([[]], moving: "a", direction: .up), "只有一个空组")
+    }
+
+    /// **两节的分组算式 + 回落整表的规范顺序**（docs/44 §做法②③ / D-03）：`homeOrderGroups` 把
+    /// 排序后的首页名单拆成 `[环境带, 可变流]`（返回顺序恒为「环境带 ++ 可变流」，每组保持入参顺序）；
+    /// 组内交换后 `.flatMap { $0 }` 就是这个规范顺序，交给 `table(for:)` 得到整表 rank——另一组逐字不变。
+    func testHomeOrderGroupsSplitAndCanonicalFlattenOrder() {
+        let ids = ["com.cmeng.gourd.todos", "com.cmeng.gourd.music",
+                   "com.cmeng.gourd.notifications", "com.cmeng.gourd.stats"]
+        let environmentIDs: Set<String> = ["com.cmeng.gourd.music", "com.cmeng.gourd.stats"]
+
+        let groups = ModuleSettingsSection.homeOrderGroups(ids, environmentIDs: environmentIDs)
+        XCTAssertEqual(
+            groups,
+            [["com.cmeng.gourd.music", "com.cmeng.gourd.stats"],
+             ["com.cmeng.gourd.todos", "com.cmeng.gourd.notifications"]],
+            "环境带在前、可变流在后；每组保持入参顺序"
+        )
+
+        // 环境带内上移一格：拼回整表的规范顺序 = 环境带 ++ 可变流（另一组逐字不变）。
+        let moved = HomeBlockOrdering.movedInGroup(groups, moving: "com.cmeng.gourd.stats", direction: .up)
+        XCTAssertEqual(
+            moved?.flatMap { $0 },
+            ["com.cmeng.gourd.stats", "com.cmeng.gourd.music",
+             "com.cmeng.gourd.todos", "com.cmeng.gourd.notifications"]
+        )
+        XCTAssertEqual(moved?[1], groups[1], "另一组逐字不变")
+
+        XCTAssertEqual(
+            HomeBlockOrdering.table(for: moved?.flatMap { $0 } ?? []),
+            ["com.cmeng.gourd.stats": 0, "com.cmeng.gourd.music": 1,
+             "com.cmeng.gourd.todos": 2, "com.cmeng.gourd.notifications": 3],
+            "落盘仍是整表 rank（环境带 ++ 可变流）"
+        )
     }
 }
 

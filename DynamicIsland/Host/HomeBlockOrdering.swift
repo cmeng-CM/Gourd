@@ -163,6 +163,36 @@ enum HomeBlockOrdering {
         return result
     }
 
+    /// 把 `id` **在它所在的那一组里**上移 / 下移一位（与组内相邻项互换），返回新的分组。
+    ///
+    /// 设置页「首页组件」按区拆成两节后（p20 / docs/44 D-01~D-04），那一节的上移 / 下移**只在
+    /// 组内生效**：调用方把两节的 id 各自成组（`[[环境带…], [可变流…]]`，见
+    /// `ModuleSettingsSection.homeOrderGroups`）交给本函数，拿到的新分组再拼回**整表 rank**
+    /// （`table(for:)`）落盘——落盘仍是整表语义，否则渲染侧的整表排序会把两区重新交织（D-03）。
+    ///
+    /// **越界 → `nil`**（不是原样返回）：组首上移 / 组尾下移、单元素组的两方向，以及 `id`
+    /// 不在任何一组里，一律返回 `nil`——「用户没表达就不留痕迹」的判据（调用方据此不写盘，
+    /// 按钮本来也已按本节的边界置灰）。非 `nil` 时返回的新分组里**组之间的顺序与各组的成员集合
+    /// 都不变**，只有 `id` 所在的那一组内部换了一次相邻位。
+    ///
+    /// **与 `moved` 刻意不同**：`moved` 对整条名单做相邻交换、越界原样返回——面板那一节仍用它；
+    /// 本函数只服务首页被拆开的两节（越界 `nil` 让「组内约束」在类型上就写死）。
+    static func movedInGroup(
+        _ groups: [[String]],
+        moving id: String,
+        direction: MoveDirection
+    ) -> [[String]]? {
+        guard let groupIndex = groups.firstIndex(where: { $0.contains(id) }) else { return nil }
+        let group = groups[groupIndex]
+        // 单元素组两方向都无处可去（下面的 `indices` 判据也能拦住，这里写出来让 nil 档显式可见）。
+        guard group.count > 1, let index = group.firstIndex(of: id) else { return nil }
+        let destination = direction == .up ? index - 1 : index + 1
+        guard group.indices.contains(destination) else { return nil }
+        var result = groups
+        result[groupIndex].swapAt(index, destination)
+        return result
+    }
+
     /// 整表序号：名单顺序即序号（0 起）。
     ///
     /// **写入口径（本批选定「整表覆盖」）**：一次移动就把**当前可见名单整表**写成 `0…n-1`，

@@ -69473,6 +69473,74 @@
         }
       }
     },
+    "settings.modules.group.home.environment": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Environment band"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "环境带"
+          }
+        }
+      }
+    },
+    "settings.modules.group.home.environment.footer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The home screen's fixed first row (Music / Front App / System readings). These three blocks always stay in the first row — reorder them among themselves with the ↑↓ arrows; they can never move into the variable flow below."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首页固定第一排（音乐 / 前台应用 / 系统读数）。这三块永远在第一排——用 ↑↓ 在本节内调序；它们不会跳到下面的可变流。"
+          }
+        }
+      }
+    },
+    "settings.modules.group.home.flow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Variable flow"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可变流"
+          }
+        }
+      }
+    },
+    "settings.modules.group.home.flow.footer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Everything else that shows on the home screen. Reorder within this section with the ↑↓ arrows; these blocks can never move into the environment band above."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首页上其余的块。用 ↑↓ 在本节内调序；它们不会跳到上面的环境带。"
+          }
+        }
+      }
+    },
     "settings.modules.group.home.footer": {
       "extractionState": "manual",
       "localizations": {

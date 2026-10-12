@@ -106,7 +106,7 @@
 //  D-15、D-16；本段**改写**了下面 T5 那条口径里的「只有开关、没有 ↑↓」）：
 //  - `panelOrder` 的合法 id 扩到三条宿主 **tab**（`shelf` / `clipboard` / `terminal`，模块 tab 仍用
 //    模块 id）；面板组件节把「模块行 + 宿主三 tab 行」合并成一份按**当前有效序**渲染的名单
-//    （`panelSectionRows`），行上 ↑↓ 走既有 `writeOrderTable`（`move(_:in:direction:)`）；
+//    （`panelSectionRows`），行上 ↑↓ 走既有 `writeOrderTable`（`movePanel`）；
 //    三条键 ↔ id 的映射收在 `PanelHostTab`（`TabSelectionView.swift`），与面板条共用同一张表；
 //  - **取色器行不动**：它不是面板 tab（渲染在标题栏图标行），继续只有开关、列在可排名单之后；
 //  - **默认序（表为空）必须与改动前的实际渲染顺序一致**——那条口径在 `TabSelectionView` 的
@@ -177,6 +177,19 @@
 //    `row.icon`、首页内置日历行 `.symbol("calendar")`（日历不在唯一图标表里，见 docs/34
 //    §明确不做 3）、模块行 `manifest.icon.name` 空名折 `nil`（「空名不画」口径逐字保留）。
 //
+//  p20 批次 / T1 增量（**首页组件的排序按区分组、只能组内移动**，docs/44-home-order-groups.md
+//  §做法 / D-01~D-04）：
+//  - 首页那一节从**一个扁平 Section** 拆成**两节**：环境带（`registry.homeZone(for:) == .environment`）
+//    与可变流（其余），各带自己的表头 / 表尾文案（`settings.modules.group.home.environment[.footer]`
+//    与 `settings.modules.group.home.flow[.footer]`）；行视图本身（图标 / 名称 / 芯片 / 配置行 / 开关）不变；
+//  - 移动改用新增纯函数 `HomeBlockOrdering.movedInGroup`（只在 id 所在组内相邻交换，越界返回 `nil`），
+//    落盘仍按**规范顺序 环境带 ++ 可变流** 拼回整表（`homeOrderGroups` → `table(for:)` →
+//    `homeBlockOrder`）——键形状与渲染语义都不动（D-03），用户既有的混杂顺序在第一次调序后自动规范；
+//  - 每节的 `isFirst` / `isLast` 按**本节**的行数算：本节第一项的上键、最后一项的下键置灰，
+//    「跨组移动」在构造上不可能发生（分节渲染与落盘共用 `homeOrderGroups` 这一份拆分）；
+//  - **面板那一节不动**：`panelSection` / `movePanel` 的扁平行为与排序算式逐字同拆分前（`moved`
+//    仍服务面板）。
+//
 
 import Defaults
 import SwiftUI
@@ -215,11 +228,12 @@ struct ModuleSettingsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // 两节：首页组件（控制「在不在首页」）在前，面板组件（控制「单不单独出面板/tab」）在后
-            // ——首页是用户最常看的那一面（机制三）。
-            surfaceSection(.home)
+            // 首页组件那一节按区拆成**两节**（p20 / docs/44 D-01、D-04）：环境带在前、可变流在后，
+            // 两节互不跨越——见 `homeSurfaceSections`。
+            homeSurfaceSections
 
-            surfaceSection(.panel)
+            // 面板组件（控制「单不单独出面板/tab」）——本轮不动，仍是扁平一节（见 `panelSection`）。
+            panelSection
 
             // **「功能组件」节**（2026-10-08 用户要求）：只有开关、没有 ↑↓ 的宿主元素
             // （剪贴板 / 取色器）——见 `featuresSection` 的注释。
@@ -547,6 +561,30 @@ struct ModuleSettingsSection: View {
         )
     }
 
+    /// 一份首页名单里**属于环境带**的 id 集合（`homeZone == .environment`，每次现问一次——
+    /// 区的归属是模块自申报的，见 docs/38 D-03 / `ModuleRegistry.homeZone(for:)`）。
+    ///
+    /// **区由模块定、用户改不了**（docs/44 §已知限制）：这里只把「谁在第一排」算出来，
+    /// 供分节与组内移动两处共用同一份判据（两处各写一份 filter 就会漂）。
+    private func environmentIDs(in rows: [SurfaceRow]) -> Set<String> {
+        Set(rows.map(\.id).filter { registry.homeZone(for: $0) == .environment })
+    }
+
+    /// **首页两节的分组算式**（纯函数，p20 / docs/44 D-01~D-04）：把当前排序后的首页 id 名单
+    /// 按区拆成 `[环境带, 可变流]`（`environmentIDs` = 这份名单里属于环境带的 id）。
+    ///
+    /// **返回顺序恒为「环境带 ++ 可变流」**——这正是落盘拼回整表时的**规范顺序**（docs/44 §做法③）：
+    /// 组内移动后 `HomeBlockOrdering.movedInGroup(...)?.flatMap { $0 }` 就是这个顺序，再交给
+    /// `HomeBlockOrdering.table(for:)` 写 `homeBlockOrder`。`filter` 稳定，两组各自保持入参顺序，
+    /// 组内相对顺序不因拆分而变；两组**都出**（可能为空组）——分节渲染与移动落盘共用这一处，
+    /// 保证「屏幕上看到的两节」与「写回的规范顺序」是同一个拆分。
+    ///
+    /// **不是 `private`**：单测直接钉它（与本页其余生产表 / 纯函数同一条口径）——
+    /// 「合并顺序 = 环境带 ++ 可变流」与「另一组逐字不变」两条都由它一处体现。
+    static func homeOrderGroups(_ ids: [String], environmentIDs: Set<String>) -> [[String]] {
+        [ids.filter { environmentIDs.contains($0) }, ids.filter { !environmentIDs.contains($0) }]
+    }
+
     /// **面板组件**那节的模块行名单：全量 manifest 里声明 `.expanded` 的（那个投影还多一条
     /// `isTabVisible()` 与启用过滤，见 `SurfaceRow` 的注释）。
     ///
@@ -578,7 +616,7 @@ struct ModuleSettingsSection: View {
 
     /// 「面板组件」节**可排名单**里的一行（p6-ui-polish / T9）：**模块行 + 宿主三 tab 行**
     /// （见 `panelSectionRows`）。取色器行**不是可排行**（它不是面板 tab），因此不属于本枚举——
-    /// 它由 `surfaceSection` 单独渲染在名单之后（只有开关、没有 ↑↓）。
+    /// 它由 `panelSection` 单独渲染在名单之后（只有开关、没有 ↑↓）。
     private enum PanelSectionRow: Identifiable {
         /// 模块行（声明 `.expanded` 的全量 manifest）。
         case module(SurfaceRow)
@@ -613,9 +651,71 @@ struct ModuleSettingsSection: View {
             .compactMap { rowsByID[$0] }
     }
 
-    /// 一节的全部内容：卡（图标 + 名称 + 开关 + 上移 / 下移 + 卡片原有的每一行）+ 节头 / 节脚注。
-    private func surfaceSection(_ group: ModuleSurfaceGroup) -> some View {
-        let rows: [PanelSectionRow] = group == .home ? homeRows.map { .module($0) } : panelSectionRows
+    /// **「首页组件」节按区拆成的两节**（p20 / docs/44 D-01、D-04）：**环境带**（`homeZone == .environment`）
+    /// 与**可变流**（其余）——一眼看出两个区，且只能组内调序。
+    ///
+    /// 两节的名单是「当前排序后的首页列表按区拆开」（`homeOrderGroups`，与 `moveHome` 共用同一份拆分），
+    /// 顺序仍是首页那条唯一算式（`homeRows`）——本节显示的顺序就是首页渲染的顺序。
+    ///
+    /// **每行只在本节内移动**（`moveHome` 走 `HomeBlockOrdering.movedInGroup`），本节第一项的上键、
+    /// 最后一项的下键在本节内禁用（`isFirst` / `isLast` 按**本节**的行数算，不再按整条列表）；行视图
+    /// 本身（图标 / 名称 / surface 芯片 / 配置行 / 开关）不变。组**恒为两段**（可能为空组），与
+    /// `homeOrderGroups` 的返回一一对应。
+    private var homeSurfaceSections: some View {
+        let rows = homeRows
+        let groups = Self.homeOrderGroups(rows.map(\.id), environmentIDs: environmentIDs(in: rows))
+        let rowsByID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return Group {
+            homeSection(
+                rows: groups[0].compactMap { rowsByID[$0] },
+                titleKey: "settings.modules.group.home.environment",
+                footerKey: "settings.modules.group.home.environment.footer"
+            )
+            homeSection(
+                rows: groups[1].compactMap { rowsByID[$0] },
+                titleKey: "settings.modules.group.home.flow",
+                footerKey: "settings.modules.group.home.flow.footer"
+            )
+        }
+    }
+
+    /// 首页两节里的**一节**（环境带或可变流）：行视图与面板那一节同形（`ModuleSettingsCard` +
+    /// `OrderButtons`），差别只在本节的表头 / 表尾文案与**本节内**的移动 / 禁用边界。
+    ///
+    /// `isFirst` / `isLast` 按**本节**的 `rows` 算（不再按整条首页列表）：本节第一项的上键、
+    /// 最后一项的下键因此自动置灰，与 `movedInGroup` 的越界 `nil` 两处一致——按钮点不动的同时，
+    /// 万一被绕过也不会写盘。
+    private func homeSection(rows: [SurfaceRow], titleKey: String, footerKey: String) -> some View {
+        Section {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                ModuleSettingsCard(
+                    registry: registry,
+                    manifest: row.manifest,
+                    group: .home,
+                    order: OrderButtons(
+                        isFirst: index == 0,
+                        isLast: index == rows.count - 1,
+                        moveUp: { moveHome(row.id, direction: .up) },
+                        moveDown: { moveHome(row.id, direction: .down) }
+                    )
+                )
+            }
+        } header: {
+            Text(LocalizedStringKey(titleKey))
+        } footer: {
+            Text(LocalizedStringKey(footerKey))
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// **「面板组件」节**的渲染（首页那一节自 p20 起拆成两节，见 `homeSurfaceSections`）。
+    ///
+    /// 名单是 `panelSectionRows`（模块行 + 宿主三 tab，按当前有效序），每行的 `isFirst` / `isLast`
+    /// 按这一条名单算；上移 / 下移走 `movePanel`（`ModuleSurfaceGroup.panel.orderTable`）。
+    /// **行为与拆分前逐字相同**——本轮不动面板那一节的排序。
+    private var panelSection: some View {
+        let rows = panelSectionRows
         return Section {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 switch row {
@@ -623,12 +723,12 @@ struct ModuleSettingsSection: View {
                     ModuleSettingsCard(
                         registry: registry,
                         manifest: surfaceRow.manifest,
-                        group: group,
+                        group: .panel,
                         order: OrderButtons(
                             isFirst: index == 0,
                             isLast: index == rows.count - 1,
-                            moveUp: { move(surfaceRow.id, in: group, direction: .up) },
-                            moveDown: { move(surfaceRow.id, in: group, direction: .down) }
+                            moveUp: { movePanel(surfaceRow.id, direction: .up) },
+                            moveDown: { movePanel(surfaceRow.id, direction: .down) }
                         )
                     )
                 case .hostTab(let hostRow, let tab):
@@ -637,16 +737,16 @@ struct ModuleSettingsSection: View {
                         order: OrderButtons(
                             isFirst: index == 0,
                             isLast: index == rows.count - 1,
-                            moveUp: { move(tab.id, in: group, direction: .up) },
-                            moveDown: { move(tab.id, in: group, direction: .down) }
+                            moveUp: { movePanel(tab.id, direction: .up) },
+                            moveDown: { movePanel(tab.id, direction: .down) }
                         )
                     )
                 }
             }
         } header: {
-            Text(LocalizedStringKey(group.titleKey))
+            Text(LocalizedStringKey(ModuleSurfaceGroup.panel.titleKey))
         } footer: {
-            Text(LocalizedStringKey(group.footerKey))
+            Text(LocalizedStringKey(ModuleSurfaceGroup.panel.footerKey))
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -688,22 +788,41 @@ struct ModuleSettingsSection: View {
         }
     }
 
-    /// 上移 / 下移一行：**先落盘、再刷新**（docs/18 §处理链路）。
+    /// **首页组件**行的上移 / 下移：**只在它所在的那一组里**相邻交换，再按**整表 rank** 落盘。
     ///
-    /// 写的是本节的**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`，两节共用
+    /// 取当次排序后的首页名单（现取，不用渲染时捕获的那份）→ 按区拆成 `[环境带, 可变流]`
+    /// （`homeOrderGroups`）→ `HomeBlockOrdering.movedInGroup`（组内相邻交换；组首上移 / 组尾下移 /
+    /// `id` 不在任何组 → `nil`）→ 非 `nil` 时按**规范顺序**（环境带 ++ 可变流，即 `flatMap`）拼回
+    /// 整表 → `table(for:)` → 写 **`homeBlockOrder`（整表 rank）**。
+    ///
+    /// `nil` 时什么都不做：用户没表达就不写盘（按钮本来也已按本节边界置灰）。**落盘仍是整表语义**，
+    /// 否则渲染侧的整表排序会把两区重新交织（docs/44 D-03）；这也是「用户既有混杂顺序在第一次
+    /// 调序后自动被规范成 环境带 ++ 可变流」的那一步（§做法③）。
+    private func moveHome(_ id: String, direction: HomeBlockOrdering.MoveDirection) {
+        let rows = homeRows
+        let groups = Self.homeOrderGroups(rows.map(\.id), environmentIDs: environmentIDs(in: rows))
+        guard let moved = HomeBlockOrdering.movedInGroup(groups, moving: id, direction: direction) else {
+            return
+        }
+        ModuleSurfaceGroup.home.writeOrderTable(HomeBlockOrdering.table(for: moved.flatMap { $0 }))
+    }
+
+    /// **面板组件**行的上移 / 下移：**先落盘、再刷新**（docs/18 §处理链路）。
+    ///
+    /// 写的是本节的**整表序号**（口径与理由见 `HomeBlockOrdering.table(for:)`，走
     /// `ModuleSurfaceGroup.orderTable`）；名单在点击这一刻现取（而不是捕获渲染时的那一份），
     /// 因此「点之前名单刚好变了」（模块被开关 / 被摘掉）也按最新名单算。
     ///
     /// **宿主 tab 行与模块行走同一条路**（p6 / T9）：面板那一节的名单（`panelSectionRows`）
     /// 就是模块行 + 宿主三 tab，`panelOrder` 拿到的是同一批 id（`shelf` / `clipboard` / `terminal`
     /// 是新的合法键）；取色器不在名单里，动它没有接收者（也不会被这条路径写）。
-    private func move(_ id: String, in group: ModuleSurfaceGroup, direction: HomeBlockOrdering.MoveDirection) {
-        let ids = (group == .home ? homeRows.map(\.id) : panelSectionRows.map(\.id))
+    private func movePanel(_ id: String, direction: HomeBlockOrdering.MoveDirection) {
+        let ids = panelSectionRows.map(\.id)
         guard let table = ModuleSurfaceGroup.orderTable(ids: ids, moving: id, direction: direction) else {
             // 名单没变（已在顶 / 底，或该行已不在名单里）**不写盘**——用户没表达就不留痕迹。
             return
         }
-        group.writeOrderTable(table)
+        ModuleSurfaceGroup.panel.writeOrderTable(table)
     }
 }
 
@@ -1591,7 +1710,7 @@ private struct ModuleSettingsCard: View {
 
             Spacer(minLength: 12)
 
-            // 上移 / 下移：**在本节里**重排这一行（写本节的顺序键，见 `move(_:in:direction:)`）。
+            // 上移 / 下移：**在本节里**重排这一行（写本节的顺序键，见 `movePanel`）。
             // 按钮形态与文案沿用既有那条顺序行的口径（`Move Up` / `Move Down`，`borderless` +
             // 两端置灰），**不引入拖拽**（docs/26 §明确不做）；与可排宿主行共用 `OrderButtons`。
             //
