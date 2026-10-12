@@ -2561,6 +2561,26 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    // MARK: - 浮动镜子的避让几何（p17 / docs/38 D-08）
+
+    /// **浮动镜子的上内缩必须让开顶栏那排图标**（p17 回归）：浮层挂在面板内容之上且可命中测试，
+    /// 若它的上沿压在顶栏那排图标（`headerPadding + iconSide` = 8 + 30 = 38）上，鼠标点在镜子按钮的
+    /// 位置命中的就是浮层——「开着镜子再点同一枚按钮收起」永远点不动（本 bug；上一轮 AXPress 验收
+    /// 不经命中测试，因此漏掉）。第二条断言是钉住本 bug 的那条：上内缩 **≥ 顶栏下沿**；
+    /// 第一条钉住默认几何下它就是 46。
+    func testMirrorFloatingPreviewTopInsetClearsHeaderIconRow() {
+        XCTAssertEqual(
+            MirrorFloatingPreview.topInset(),
+            46,
+            "默认几何：8（顶栏内边距）+ 30（按钮边长）+ 8（缝）= 46"
+        )
+        XCTAssertGreaterThanOrEqual(
+            MirrorFloatingPreview.topInset(),
+            8 + 30,
+            "上内缩必须 ≥ 顶栏那排图标的下沿（headerPadding + iconSide），否则浮层盖住镜子按钮、点击被吞"
+        )
+    }
+
     // MARK: - 浮层的多屏显示（D-25：所有屏同时显示）
 
     /// **全屏模式**（用户当前设置 `showOnAllDisplays = 1`）：所有屏都该显示浮层——

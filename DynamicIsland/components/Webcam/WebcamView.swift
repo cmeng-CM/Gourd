@@ -159,6 +159,20 @@ struct MirrorFloatingPreview: View {
     /// 浮层总边长 = 预览 + 两侧内边距。
     static var totalSide: CGFloat { side + padding * 2 }
 
+    /// 浮层的**上内缩**：让开顶栏那排图标、再留一条可见的缝。
+    ///
+    /// 浮层挂在面板内容之上、落在 `clipShape` 之内且 `allowsHitTesting(true)`，SwiftUI 的命中测试
+    /// 从上层往下走——只要浮层的上沿压在顶栏那排图标（`headerPadding + iconSide` = 8 + 30 = **38**）上，
+    /// 鼠标点在镜子按钮的位置就会**先命中浮层**，按钮收不到这次点击，于是「开着镜子再点同一枚按钮
+    /// 收起」就点不动了（p17 的用户复现）。因此本值**必须 ≥ 顶栏那排图标的下沿**
+    /// （`headerPadding + iconSide`），再多留 `gap` 的缝才是 46——**小于下沿就等于把按钮吞掉**。
+    ///
+    /// 派生自顶栏自身的几何（而不是在 `ContentView` 里另写一个数）是为了让两者不再各写各的：
+    /// 顶栏内边距或按钮边长一改，本函数跟着走，且「不压按钮」这条能被单测直接钉住。
+    static func topInset(headerPadding: CGFloat = 8, iconSide: CGFloat = 30, gap: CGFloat = 8) -> CGFloat {
+        headerPadding + iconSide + gap
+    }
+
     var body: some View {
         CameraPreviewView(webcamManager: webcamManager)
             .frame(width: Self.side, height: Self.side)

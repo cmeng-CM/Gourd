@@ -891,7 +891,7 @@ struct ContentView: View {
             .overlay(alignment: .topTrailing) {
                 if vm.notchState == .open, !Defaults[.enableMinimalisticUI], vm.isCameraExpanded {
                     MirrorFloatingPreview()
-                        .padding(.top, 8)
+                        .padding(.top, MirrorFloatingPreview.topInset())
                         .padding(.trailing, 10)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
                         .animation(.smooth(duration: 0.18), value: vm.isCameraExpanded)
