@@ -570,6 +570,12 @@ enum MonthGridLayout {
     static let headerChromeHeight: CGFloat = headerRowHeight + headerSpacing
     /// 周标题行的行高（原 14 → **17**：`caption2` 一行实测行高 13，取 14 留 1pt——这一档余量让周标题行
     /// **既不被拉伸也不被挤压**）。
+    ///
+    /// **2026-10-12 T2fix3 起由 `MonthGridView.datePicker` 的周标题 `Text` 显式钉住**（`.frame(height:)`），
+    /// 与翻月键的框撑起 `headerRowHeight` 同一条口径（选 b：让这一行**真的**随 `scale` 长到 17）。
+    /// 为什么不改常量去迁就实际：`caption2` 是语义字号，不随 `scale` 变，放大后这一行**真实**只有 15pt
+    /// ——常量 14→17 而真实只有 14→15，网格上方 chrome 就比真实多让出 2pt、网格底差 2pt 够不到行底
+    /// （`NSHostingView` 实测 276 vs 行高 278）。钉住行框后 chrome 与常量重新一致、网格底贴住行底。
     static let weekdayRowHeight: CGFloat = (14 * scale).rounded()
     /// 周标题行与日格之间的间距（原 6 → **7**，`datePicker` 那个 `VStack` 的 `spacing`）。
     static let weekdaySpacing: CGFloat = (6 * scale).rounded()
@@ -890,6 +896,14 @@ struct MonthGridView: View {
                             .fontWeight(.semibold)
                             .foregroundStyle(Color(white: 0.55))
                             .frame(maxWidth: .infinity)
+                            // 周标题**行高**的来源（`weekdayChromeHeight` 的那 14 → 取整后 17），与翻月键的
+                            // 框撑起 `headerRowHeight` 同一条口径：`.caption2` 是语义字号、**不随 `scale` 变**
+                            // （要变只能写死数值字号，那会丢掉动态字体），所以放大后这一行真实高度仍是 15，
+                            // 常量 17 就比真实多让出 2pt、网格底不贴行底（结构护栏
+                            // `testHomeCalendarGridViewportFitsTheMonthAtItsRowHeight` 红：276 vs 278）。
+                            // 把行框显式钉到 `weekdayRowHeight`，这一行才真正随 `scale` 长到 17——chrome 与
+                            // 常量重新一致，网格底贴住行底（2026-10-12 T2fix3）。
+                            .frame(height: MonthGridLayout.weekdayRowHeight)
                     }
                 }
 
