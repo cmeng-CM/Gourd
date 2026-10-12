@@ -2143,44 +2143,47 @@ final class HomeStripLayoutTests: XCTestCase {
         XCTAssertEqual(oneFlexible.widths[1], 434 + (1000 - 16 - 839), "弹性块吃掉全部余量 145（两道缝 16）")
         XCTAssertEqual(oneFlexible.leftover, 0, "吃满之后没有余量")
 
-        // ③ 两块弹性：按 ideal 等比分配（floor 到 0.5）
+        // ③ 两块弹性、ideal 相同（今日清单 / 通知，docs/41 D-01/D-02）：按 ideal 等比 → 富余等分
         let twoFlexible = HomeStripLayoutMath.plan(
             items: [
-                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
-                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+                HomeStripLayoutMath.Item(min: 420, ideal: 420, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 420, flexible: true),
             ],
             available: 1000,
             spacing: 8
         )
-        let surplus: CGFloat = 1000 - 8 - 847
-        XCTAssertEqual(twoFlexible.widths[0], 470 + (surplus * 470 / 847 * 2).rounded(.down) / 2, accuracy: 0.5)
-        XCTAssertEqual(twoFlexible.widths[1], 377 + (surplus * 377 / 847 * 2).rounded(.down) / 2, accuracy: 0.5)
+        let surplus: CGFloat = 1000 - 8 - 840
+        XCTAssertEqual(twoFlexible.widths[0], twoFlexible.widths[1], accuracy: 1e-9, "ideal 相等 → 富余等分 → 两块等宽")
+        XCTAssertEqual(twoFlexible.widths[0], 420 + surplus / 2, accuracy: 0.5, "各拿 420 + 余量的一半（floor 到 0.5）")
         let used: CGFloat = twoFlexible.widths.reduce(0, +) + 8
         XCTAssertLessThanOrEqual(used, 1000, "不变量：总和 + 间隙 ≤ 可用宽")
 
-        // ④ 恰好吃满（余量为 0）：走规则 ①，弹性声明不影响结果
-        let exact = HomeStripLayoutMath.plan(
+        // ④ 默认面板那一档（行宽 855，docs/41 D-01/D-02）：`420 + 8 + 420 = 848 ≤ 855`，
+        //    富余 7 按 ideal 等比（1:1）→ 各 +3.5 = **423.5**——正是该行两块等宽。
+        let userPanel = HomeStripLayoutMath.plan(
             items: [
-                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
-                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+                HomeStripLayoutMath.Item(min: 420, ideal: 420, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 420, flexible: true),
             ],
             available: 855,
             spacing: 8
         )
-        XCTAssertEqual(exact.widths, [470, 377], "470 + 8 + 377 = 855，余量 0 → 各拿 ideal")
+        XCTAssertEqual(userPanel.widths, [423.5, 423.5], "两块 ideal 相同时该行等分（docs/41 D-01/D-02）")
 
-        // ⑤ 压缩档（规则 ②）不看弹性：按可压缩量等比压缩，逐字是改动前的行为
+        // ⑤ 压缩档（规则 ②）不看弹性：按可压缩量等比压缩。今日 min = ideal = 420 → 无压缩空间；
+        //    通知 min 340 < ideal 420 → 先被压窄。
         let compressed = HomeStripLayoutMath.plan(
             items: [
-                HomeStripLayoutMath.Item(min: 420, ideal: 470, flexible: true),
-                HomeStripLayoutMath.Item(min: 340, ideal: 377, flexible: true),
+                HomeStripLayoutMath.Item(min: 420, ideal: 420, flexible: true),
+                HomeStripLayoutMath.Item(min: 340, ideal: 420, flexible: true),
             ],
             available: 800,
             spacing: 8
         )
         XCTAssertEqual(compressed.visibleCount, 2, "800 ≥ 768（最小宽之和）→ 两块都在")
-        XCTAssertLessThan(compressed.widths[0], 470, "被压缩而不是被拉宽")
-        XCTAssertGreaterThanOrEqual(compressed.widths[0], 420, "不低于最小宽")
+        XCTAssertEqual(compressed.widths[0], 420, "今日清单 min = ideal = 420 → 无压缩空间，保持 420")
+        XCTAssertLessThan(compressed.widths[1], 420, "通知被压缩而不是被拉宽")
+        XCTAssertGreaterThanOrEqual(compressed.widths[1], 340, "不低于最小宽")
     }
 
     /// **名单按区劈开，不重不漏**：`environment` 与 `flow` 合起来必须逐字等于 `blocks`
@@ -2241,12 +2244,13 @@ final class HomeStripLayoutTests: XCTestCase {
         )
     }
 
-    /// **可变流那一档的分布**（p13 / docs/38 §做法 五）：流里今天是**今日清单 + 通知**两块，
-    /// 两块都弹性——可用宽大于「ideal 之和 + 缝」时富余按各自 ideal 等比分配（规则 ①′）。
+    /// **可变流那一档的分布**（p13 / docs/38 §做法 五；docs/41 D-01/D-02）：流里今天是**今日清单 + 通知**两块，
+    /// 两块都弹性且 **ideal 相同（420）**——可用宽大于「ideal 之和 + 缝」时富余按各自 ideal 等比分配
+    /// （规则 ①′），ideal 相等 → 该行**富余等分 → 两块等宽**。
     ///
-    /// 名单取**当前生产声明**（`TodosModule.homeBlockWidth` 420/470、`NotificationsModule.homeBlockWidth`
-    /// 340/377，两块申报高 228 / 225）。可用宽取默认面板那一档的 **855**（887 − 两侧内边距）：
-    /// `470 + 8 + 377 = 855` **恰好放满** → 这一档余量为 0，两块各拿自己的 ideal（正是 v5 设计稿的分布）。
+    /// 名单取**当前生产声明**（`TodosModule.homeBlockWidth` 420/420、`NotificationsModule.homeBlockWidth`
+    /// 340/420，两块申报高 228 / 225）。可用宽取默认面板那一档的 **855**（887 − 两侧内边距）：
+    /// `420 + 8 + 420 = 848 ≤ 855`，富余 7 等分 → 两块各 **423.5**（docs/41 D-01/D-02）。
     func testFlowDistributionAtUserPanelSize() {
         let todos = HomeFlowLayout.Item(
             min: TodosModule.homeBlockWidth?.min ?? 0,
@@ -2266,29 +2270,43 @@ final class HomeStripLayoutTests: XCTestCase {
             items: items, availableWidth: 855, availableHeight: 1000, metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(exact), [[0, 1]], "两块并排成第三排（v5 的「今日清单 + 通知」）")
-        XCTAssertEqual(exact.rows[0].widths, [470, 377], "855 = 470 + 8 + 377 → 恰好吃满，各拿 ideal")
+        XCTAssertEqual(exact.rows[0].widths, [423.5, 423.5], "420 + 8 + 420 = 848，富余 7 等分 → 各 423.5（docs/41 D-01/D-02）")
         XCTAssertEqual(exact.rows[0].height, TodosHomeBlockLayout.blockHeight, "行高 = 行内最高块（今日清单 228）")
 
-        // 更宽：富余只给弹性块，且按 ideal 等比分配（多出来的一份不会全落到一块头上）。
+        // 更宽：富余只给弹性块，ideal 相等 → 两块拿一样多（多出来的一份对半劈）。
         let wider = HomeFlowLayout.plan(
             items: items, availableWidth: 1000, availableHeight: 1000, metrics: flowMetrics
         )
-        let surplus: CGFloat = 1000 - 8 - (470 + 377)
+        let surplus: CGFloat = 1000 - 8 - (420 + 420)
         let widths = wider.rows[0].widths
         XCTAssertEqual(widths.count, 2)
-        let expectedTodosShare: CGFloat = (surplus * 470 / 847 * 2).rounded(.down) / 2
-        let expectedNotificationsShare: CGFloat = (surplus * 377 / 847 * 2).rounded(.down) / 2
-        XCTAssertEqual(widths[0] - 470, expectedTodosShare, accuracy: 0.5, "今日清单按 ideal 占比分富余")
-        XCTAssertEqual(widths[1] - 377, expectedNotificationsShare, accuracy: 0.5, "通知按 ideal 占比分富余")
+        let expectedShare: CGFloat = (surplus / 2 * 2).rounded(.down) / 2
+        XCTAssertEqual(widths[0], 420 + expectedShare, accuracy: 0.5, "今日清单按 ideal 占比分富余（与通知同 ideal → 各半）")
+        XCTAssertEqual(widths[1], 420 + expectedShare, accuracy: 0.5, "通知按 ideal 占比分富余")
+        XCTAssertEqual(widths[0], widths[1], accuracy: 1e-9, "ideal 相等 → 两块始终等宽")
         let usedTotal: CGFloat = widths[0] + 8 + widths[1]
         XCTAssertLessThanOrEqual(usedTotal, 1000, "分配不越界（规则 ①′ 的不变量）")
+
+        // 只开一块：弹性块独占整行（docs/38 D-04「用户少开一块时不留大片空白」）。
+        let todosOnly = HomeFlowLayout.plan(
+            items: [todos], availableWidth: 855, availableHeight: 1000, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(todosOnly), [[0]], "只开今日清单 → 一块独占整行")
+        XCTAssertEqual(todosOnly.rows[0].widths, [855], "单块弹性吃满整行（未用余量 0）")
+
+        let notificationsOnly = HomeFlowLayout.plan(
+            items: [notifications], availableWidth: 855, availableHeight: 1000, metrics: flowMetrics
+        )
+        XCTAssertEqual(flowRows(notificationsOnly), [[0]], "只开通知 → 一块独占整行")
+        XCTAssertEqual(notificationsOnly.rows[0].widths, [855], "单块弹性吃满整行（未用余量 0）")
 
         // 窄到最小宽之和（420 + 8 + 340 = 768）以下：按可压缩量等比压缩，两块都还在。
         let compressed = HomeFlowLayout.plan(
             items: items, availableWidth: 800, availableHeight: 1000, metrics: flowMetrics
         )
         XCTAssertEqual(flowRows(compressed), [[0, 1]], "800 ≥ 768 → 仍是并排两块（压缩而不是丢块）")
-        XCTAssertLessThan(compressed.rows[0].widths[0], 470, "富余没了 → 今日清单被压窄")
+        XCTAssertEqual(compressed.rows[0].widths[0], 420, "今日清单 min = ideal → 富余没了也不缩")
+        XCTAssertLessThan(compressed.rows[0].widths[1], 420, "通知被压窄（min 340 < ideal 420）")
     }
 
     /// 空名单：没有块时不产生任何行（今天带与环境带不在这里——它们是宿主直渲的，不经过本方案）。

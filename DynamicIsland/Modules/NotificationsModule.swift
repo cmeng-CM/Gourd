@@ -810,7 +810,10 @@ final class NotificationsModule: GourdModule {
         .points(NotificationsHomeBlockLayout.blockHeight)
     }
 
-    /// 首页块**宽度申报**（p13 / docs/38 D-04）：`340 / 377` + **弹性**。
+    /// 首页块**宽度申报**（p13 / docs/38 D-04；docs/41 D-01/D-02）：`340 / 420` + **弹性**。
+    ///
+    /// **与今日清单取同一个 ideal（420）**：规则 ①′ 按弹性块的 ideal 等比分富余，ideal 相等 → 该行富余等分
+    /// →「今日清单 + 通知」横向等宽（docs/41 D-01/D-02；行宽 855 → 各 423.5）。
     static var homeBlockWidth: ModuleHomeBlockWidth? {
         ModuleHomeBlockWidth(
             min: NotificationsHomeBlockLayout.minimumBlockWidth,
@@ -1421,10 +1424,12 @@ enum NotificationsHomeBlockLayout {
     /// 表头与第一条之间的间距。
     static let listSpacing: CGFloat = 4
 
-    /// 首页块的**宽度申报**（p13 / docs/38 D-04）：最小 340（两行式文案在更窄的列里只剩省略号），
-    /// 理想 377（v5 设计稿与今日清单并排那一档）；**吃余量**——今日清单关掉时它独占整行。
+    /// 首页块的**宽度申报**（p13 / docs/38 D-04；docs/41 D-01/D-02）：最小 340（两行式文案在更窄的列里
+    /// 只剩省略号），理想 **420**——**与今日清单取同一个 ideal**：规则 ①′ 按弹性块的 ideal 等比分富余，
+    /// ideal 相等 → 该行富余等分 →「今日清单 + 通知」横向等宽（docs/41 D-01/D-02；行宽 855 → 各 423.5。
+    /// 改前 377，377 是 v5 设计稿里与今日清单并排那一档，见 docs/38）；**吃余量**——今日清单关掉时它独占整行。
     static let minimumBlockWidth: CGFloat = 340
-    static let idealBlockWidth: CGFloat = 377
+    static let idealBlockWidth: CGFloat = 420
 
     /// 首页块申报的**固定高**（与视图的行高预算同源）。
     ///

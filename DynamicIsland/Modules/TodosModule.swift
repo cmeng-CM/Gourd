@@ -847,9 +847,10 @@ final class TodosModule: GourdModule {
         .points(TodosHomeBlockLayout.blockHeight)
     }
 
-    /// 首页块**宽度申报**（p13 / docs/38-home-v5-layout.md D-04 / D-12）：`420 / 470` + **弹性**。
+    /// 首页块**宽度申报**（p13 / docs/38-home-v5-layout.md D-04 / D-12；docs/41 D-01/D-02）：`420 / 420` + **弹性**。
     ///
-    /// 470 是 v5 设计稿里「今日清单 + 通知并排」那一档（470 + 377 + 8 = 855 = 887 面板的可用宽）；
+    /// **与通知取同一个 ideal（420）**：规则 ①′ 按弹性块的 ideal 等比分富余，ideal 相等 → 该行富余等分
+    /// →「今日清单 + 通知」横向等宽（docs/41 D-01/D-02；行宽 855 → 各 423.5）。
     /// 通知关掉时它独占整行（弹性块吃满富余），这正是「用户少开一块时不留大片空白」的做法。
     static var homeBlockWidth: ModuleHomeBlockWidth? {
         ModuleHomeBlockWidth(
@@ -1243,10 +1244,12 @@ enum TodosHomeBlockLayout {
     /// 行形态分界线沿用 160pt；更窄时保留完成圈与标题，只省去过期标签。
     static let compactListWidth: CGFloat = 160
 
-    /// 首页块的**宽度申报**（p13 / docs/38 D-04）：最小 420（再窄就装不下「色条 + 标题 + 时间列」的
-    /// 完整日程行与右侧时间列），理想 470（v5 设计稿与通知并排那一档）。
+    /// 首页块的**宽度申报**（p13 / docs/38 D-04；docs/41 D-01/D-02）：最小 420（再窄就装不下「色条 + 标题 +
+    /// 时间列」的完整日程行与右侧时间列），理想 **420**——**与通知取同一个 ideal**：规则 ①′ 按弹性块的
+    /// ideal 等比分富余，ideal 相等 → 该行富余等分 →「今日清单 + 通知」横向等宽（docs/41 D-01/D-02；
+    /// 行宽 855 → 各 423.5。改前 470，470 是 v5 设计稿里与通知并排那一档，见 docs/38）。
     static let minimumBlockWidth: CGFloat = 420
-    static let idealBlockWidth: CGFloat = 470
+    static let idealBlockWidth: CGFloat = 420
     /// 表头一行的高度（`今天` + `已办/总量` + 细进度条）。
     static let headerHeight: CGFloat = 16
     /// 清单一行的高度：完整行与紧凑行**都钉在这个高度上**（行数是按它算的，行高必须是真的）。
