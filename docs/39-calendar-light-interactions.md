@@ -169,7 +169,7 @@ UI 使用显式 `XCUIApplication(bundleIdentifier: "com.cmeng.gourd.calendar-tes
 
 ## 实际交付
 
-T1–T5 功能及 T6 测试代码已本地提交；本节按 `d217bd3c` 回写。`3bd10683` 修复会话 ownership 聚合的冗余同步发布，`b9c19cdb`、`d217bd3c` 改进 UI 输入护栏。用户先要求分析修复，随后允许测试；本轮完整单元655/655通过，四项新增 subscriber 回归实际通过，T2 已完成限定修复验收。两轮 UI 定向探针均在 Runner 启用 automation mode 时超时，目标用例零执行；只读 fixture 观察没有交互断言，均不算产品 UI 通过。本方案范围不含分发；用户在本轮修复之后单独授权本地安装，已执行 `sh tools/build.sh --install` 覆盖安装到 `/Applications/壶中天.app`（旧实例正常退出后核实退出，未强杀；安装副本 `codesign --verify --deep --strict` 通过），该安装不改变本节交互范围，也未推送或发布。已有完整 UI、AX、截图和录屏仍属此前版本；T6、完整16项与全局验收仍未完成，不能由单元或定向通过拼成全套成功。
+T1–T5 功能及 T6 测试代码已本地提交；本节按 `d217bd3c` 回写。`3bd10683` 修复会话 ownership 聚合的冗余同步发布，`b9c19cdb`、`d217bd3c` 改进 UI 输入护栏。用户先要求分析修复，随后允许测试；本轮完整单元655/655通过，四项新增 subscriber 回归实际通过，T2 已完成限定修复验收。两轮 UI 定向探针均在 Runner 启用 automation mode 时超时，目标用例零执行；只读 fixture 观察没有交互断言，均不算产品 UI 通过。本方案范围不含分发；用户在本轮修复之后单独授权本地安装，已沿用 `build.sh` 的安装路径把 Release 覆盖安装到 `/Applications/壶中天.app`（安装前单独退出旧实例、未强杀；安装副本的签名与 bundle 身份另经只读复核，证据见下表）。该安装不改变本节交互范围，也未推送或发布。已有完整 UI、AX、截图和录屏仍属此前版本；T6、完整16项与全局验收仍未完成，不能由单元或定向通过拼成全套成功。
 
 | 交付 | 实现与提交 |
 |---|---|
@@ -198,7 +198,7 @@ T1–T5 功能及 T6 测试代码已本地提交；本节按 `d217bd3c` 回写�
 | `d217bd3c` T6 护栏修复／仅编译 | 首次独立审查 I-1 指出 AND→OR 漏检，追加审查 I-2 指出 guard 包入 deadcode／前置成功返回仍被 regex 接受；当前 Swift 没有这两种绕过。ignored wrapper 改完整 body 模板，不再改 Swift；writer 31种内存变异拒绝，独立复审15种拒绝，I-1/I-2关闭。`T6-driver-body-review-20261012.md` 限定规格 PASS、质量 APPROVED，C/I/M = 0/0/0，不替代 UI/T6 验收。`T6-driver-guard-repair-20261012-build-only` build-for-testing exit0、TEST BUILD SUCCEEDED；该轮未启动宿主或运行 UI |
 | `3bd10683` 本轮 Python | `T6-python-analysis-20261012.md`：`python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle`，7项 OK、exit0；未启动应用或占用桌面 |
 | `d217bd3c` 本轮 Release | `T6-release-analysis-20261012.log/.exit`：`sh tools/build.sh`，BUILD SUCCEEDED、exit0；产物 `/Users/cm/Library/Developer/Xcode/Gourd/Build/Products/Release/Gourd.app`，bundle `com.cmeng.gourd`、version `0.1.0`，包含 `3bd10683` 会话修复；本次运行只构建、未安装或运行，同版本的独立安装见下一行 |
-| `d217bd3c` 本地安装 | `local-install-20261012.log/.exit`：`sh tools/build.sh --install`，BUILD SUCCEEDED、exit0；旧生产实例正常 quit 并核实退出、未强杀；安装到 `/Applications/壶中天.app`，bundle `com.cmeng.gourd`、version `0.1.0`、显示名壶中天；安装副本 `codesign --verify --deep --strict --verbose=2` 实际通过（valid on disk / satisfies its Designated Requirement）。用户明确授权本次本地安装；安装不等于 UI 验收，未推送或发布 |
+| `d217bd3c` 本地安装 | `local-install-20261012.log/.exit`：Release 构建 BUILD SUCCEEDED、exit0，日志末行 `===== 已安装到 /Applications/壶中天.app =====`；该日志不回显命令行（首行为脚本自身的“签名身份”提示），也不含 codesign 或退出旧实例记录。安装副本的签名与身份另由只读复核记录在 `local-install-verify-20261012.log`：`codesign --verify --deep --strict` exit0（valid on disk / satisfies its Designated Requirement），bundle `com.cmeng.gourd`、version `0.1.0`、显示名壶中天。安装前旧实例退出为脚本外单独步骤、未留日志证据，未强杀。用户明确授权本次本地安装；安装不等于 UI 验收，未推送或发布 |
 | `d217bd3c` 两轮前台 UI 探针 | `T6-foreground-probe-d217bd3c-20261012` 与 `T6-foreground-probe-retry-d217bd3c-20261012` 均 exit65，Runner启用automation mode超时；两轮各自的summary/tests已导出。summary的1 Failed是 System Failures／Runner error node；目标 `testEditSaveAndDeleteOrdinaryEvent` 与 `testAccessibilityProbe` 均零执行，不是产品断言失败，也不提供前台或输入成功证据 |
 | `d217bd3c` 只读 fixture 观察 | 控制器核对隔离bundle后启动独立 `--uitesting` fixture，CUA读取仅取得折叠 `GourdNotch`、count 1/20；无点击、键鼠或交互断言，不能当手工 UI 通过。读取异常阻塞后已停止桌面测试并清理自有fixture，未改权限或系统设置 |
 | AX／截图／录屏 | 最新完整16UI导出214附件、12张 keepAlways PNG，目录 `reports/screenshots/T6-ui-current-2b22b670/`；详情定向复验也有真实附件。旧认证失败时0case/空附件是历史状态 |
