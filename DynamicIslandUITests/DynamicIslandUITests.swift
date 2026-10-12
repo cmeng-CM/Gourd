@@ -4,6 +4,7 @@ import XCTest
 final class DynamicIslandUITests: XCTestCase {
 
     private let isolatedBundleIdentifier = "com.cmeng.gourd.calendar-tests.Gourd"
+    private var launchedProcessIdentifier: pid_t?
     var app: XCUIApplication!
 
     override func setUpWithError() throws {
@@ -15,7 +16,12 @@ final class DynamicIslandUITests: XCTestCase {
         if name.contains("Retry") { app.launchArguments.append("--calendar-write-failure-once") }
         if name.contains("Delayed") { app.launchArguments.append("--calendar-write-delay-ms=2000") }
         app.launch()
+        guard let process = isolatedApplicationProcess() else { return }
+        launchedProcessIdentifier = process.processIdentifier
         guard requireIsolatedApplication() else { return }
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Isolated AUT must be foreground before opening a draft")
+        guard requireKeyboardApplication() else { return }
         XCTAssertTrue(element("GourdNotch").waitForExistence(timeout: 20))
         hover(element("GourdNotch"))
         XCTAssertTrue(element("calendar-fixture-ready").waitForExistence(timeout: 25))
@@ -30,24 +36,47 @@ final class DynamicIslandUITests: XCTestCase {
             app.terminate()
         }
         app = nil
+        launchedProcessIdentifier = nil
     }
 
-    /// Public process metadata and the AX root must identify the same isolated AUT before input.
-    @discardableResult
-    private func requireIsolatedApplication(file: StaticString = #filePath, line: UInt = #line) -> Bool {
+    /// Public metadata identifies the unique live process for the explicit isolated bundle.
+    private func isolatedApplicationProcess(file: StaticString = #filePath, line: UInt = #line) -> NSRunningApplication? {
+        guard let app, app.state != .notRunning else {
+            XCTFail("Isolated AUT must be running", file: file, line: line)
+            return nil
+        }
         let processes = NSWorkspace.shared.runningApplications.filter {
             $0.bundleIdentifier == isolatedBundleIdentifier && !$0.isTerminated
         }
         guard processes.count == 1, let process = processes.first else {
             XCTFail("Expected one isolated AUT for \(isolatedBundleIdentifier), found \(processes.count)", file: file, line: line)
+            return nil
+        }
+        return process
+    }
+
+    /// Reject replacement processes; background hover and scroll remain valid.
+    @discardableResult
+    private func requireIsolatedApplication(file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        guard let launchedProcessIdentifier else {
+            XCTFail("No isolated AUT PID recorded for this launch", file: file, line: line)
             return false
         }
-        let hierarchy = app.debugDescription
-        let expression = try! NSRegularExpression(pattern: "pid: ([0-9]+)")
-        guard let match = expression.firstMatch(in: hierarchy, range: NSRange(hierarchy.startIndex..., in: hierarchy)),
-              let range = Range(match.range(at: 1), in: hierarchy),
-              let rootPID = Int32(hierarchy[range]), rootPID == process.processIdentifier else {
-            XCTFail("AX root must belong to isolated AUT PID \(process.processIdentifier)", file: file, line: line)
+        guard let process = isolatedApplicationProcess(file: file, line: line) else { return false }
+        guard process.processIdentifier == launchedProcessIdentifier else {
+            XCTFail("Isolated AUT PID changed from this launch's \(launchedProcessIdentifier) to \(process.processIdentifier)", file: file, line: line)
+            return false
+        }
+        return true
+    }
+
+    /// Keyboard events require both public foreground signals without reactivating mid-draft.
+    @discardableResult
+    private func requireKeyboardApplication(file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        guard requireIsolatedApplication(file: file, line: line) else { return false }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == launchedProcessIdentifier,
+              app.state == .runningForeground else {
+            XCTFail("Keyboard input requires this launch's isolated AUT in the foreground", file: file, line: line)
             return false
         }
         return true
@@ -59,7 +88,7 @@ final class DynamicIslandUITests: XCTestCase {
     }
 
     private func typeApplicationKey(_ key: String, modifiers: XCUIElement.KeyModifierFlags = []) {
-        guard requireIsolatedApplication() else { return }
+        guard requireKeyboardApplication() else { return }
         app.typeKey(key, modifierFlags: modifiers)
     }
 
@@ -114,9 +143,9 @@ final class DynamicIslandUITests: XCTestCase {
     private func replace(_ id: String, with value: String) {
         click(id)
         let field = element(id)
-        guard requireIsolatedApplication() else { return }
+        guard requireKeyboardApplication() else { return }
         field.typeKey("a", modifierFlags: .command)
-        guard requireIsolatedApplication() else { return }
+        guard requireKeyboardApplication() else { return }
         field.typeText(value)
         XCTAssertEqual(field.value as? String, value, "Keyboard focus must edit the actual field")
     }
