@@ -501,7 +501,7 @@
 
 OpenAI compatible 和 Ollama 可配置无认证端点；存在秘密引用但 Keychain 条目缺失时仍报错。加载配置失败会保留明确错误，修复落盘后须重启重新加载。连接失败、限额或能力错误显示可读提示；取消不能保证服务商已计费请求撤销。两套 AI 设置暂时并存，不迁移或删除旧屏幕助手的 Defaults 凭据。
 
-本轮真实模型兼容、Keychain/设置界面与导航的人工确认尚未执行；完整 XCTest/Release 证据也 pending，见 [设计及实际交付](../45-ai-calendar-and-meeting-actions.md)。
+本轮已实际通过 815 个 XCTest、11 个 Python 回归及完整自动门十阶段，Release 与 Gourd Local 签名检查通过。整体终审、安装、真实模型线上兼容及 Keychain/设置界面与导航的人工确认仍待完成；人工项在安装后逐项确认，自动通过不等于人工验收，见 [设计及实际交付](../45-ai-calendar-and-meeting-actions.md)。
 
 ---
 
