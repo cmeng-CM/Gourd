@@ -92,6 +92,16 @@ public protocol GourdModule: AnyObject {
 
 **配置驱动 UI**：`configSchema` 是 JSON Schema 的受限子集——**13 种 type**（`boolean` / `integer` / `number` / `string` / `enum` / `color` / `hotkey` / `appPicker` / `filePath` / `dateRange` / `duration` / `secret` / `list`，字段级定义见 [06](06-module-protocol.md) §5），设置页据此生成控件。Nook X 那种"左侧图标槽 / 右侧图标槽 + 每个小组件 Free/Pro 开关"的界面，在本项目里就是模块注册表的直接渲染——**没有 Free/Pro，只有开/关**。
 
+### 4.1 通用 AI 与日程生成（2026-10-13 增量）
+
+`GeneralAIRuntime` 是 Kernel/Factory 共用的 composition root，设置与内置模块使用同一活实例。`ModuleContext.ai: any AIHandle` 可在构造时注入，旧初始化调用保留默认值；`AIHandle.complete(_:) async throws -> AIResponse` 是 `@MainActor` 异步接口。`content(for:)` 仍同步返回内容，模型等待与每请求取消由调用者 Task 持有，没有全局活动请求。此接口不传递密钥、SDK 厂商类型或可执行动作。
+
+设置「AI 模型」写独立非秘密配置与 Keychain 引用；模型协议为 OpenAI compatible、Anthropic、Gemini、Ollama。屏幕助手原管理器、模型选择、设置和 Defaults 凭据保持原链。第三方插件通道不消费这个 Swift 句柄，也不新增 RPC。
+
+日历模块自有 `CalendarPanelSession` 经 surface 工厂同时传到首页与日历页面；`configuredAI` 只读暴露实际注入对象供会议动作使用。原文解析约 800ms debounce，携带修订/草稿/参考时区，候选只合并未手改字段；确认与保存守卫在 session，保存沿已有 EventKit 读回链。正文由 `CalendarSelectableText` 提供真实只读选区，详情按钮独立；拖选/菜单 owner 释放后重新检查 hover。会议由同一 resolver 验证来源，再由可注入 opener 分发与拒绝回退。
+
+机制、权威签名、时区及人工验证边界见 [45](45-ai-calendar-and-meeting-actions.md)；以下早期规划表中的「AI 对话不投入」仅指旧屏幕助手，不排除本次增量。
+
 ## 5. L2 内置模块
 
 > ⚠️ **以下表格是早期的模块规划草案，机制与动作已被 [09-features-and-mechanisms.md](09-features-and-mechanisms.md) 取代**（以 09 为准）：

@@ -1,0 +1,181 @@
+# Copyright (C) 2026 Gourd Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Offline source guards; no workflow directory, historical objects or app required."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+BASELINE = "cd825466"
+LEGACY_HASHES = {
+    "DynamicIsland/managers/ScreenAssistantManager.swift": "dee7398b38c91c5586fa0e2af8544bace061e2dedd5cdda2415237788242ec76",
+    "DynamicIsland/components/ScreenAssistant/ModelSelectionPanel.swift": "99ba81899ddf434ec0e969502d30bf413a1bafa96cdc199a9b9c32a7b60fec4e",
+    "DynamicIsland/models/Constants.swift": "dd7df6c8640d2c186eabaef9749684099a657113791e8a89ead4ee64248164eb",
+}
+LEGACY_SETTINGS_HASH = "9ab4b78e456086b3813897b71349da3a8a99c8aed87cabb8e9f286153210502f"
+# All added/changed main-app catalog entries in cd825466..9bed9efc, not prefix filtering.
+LOCALE_KEYS = (
+    'The time zone is invalid.',
+    'This due time cannot be preserved in its time zone. Choose another time or use all-day.',
+    'This reminder writer cannot save time or metadata.',
+    'ai.error.cancelled',
+    'ai.error.capabilityMismatch',
+    'ai.error.configurationReadFailed',
+    'ai.error.configurationWriteFailed',
+    'ai.error.httpStatus',
+    'ai.error.invalidConfiguration',
+    'ai.error.invalidEndpoint',
+    'ai.error.invalidRequest',
+    'ai.error.invalidResponse',
+    'ai.error.missingCredential',
+    'ai.error.missingDefault',
+    'ai.error.profileNotFound',
+    'ai.error.redirectRejected',
+    'ai.error.responseTooLarge',
+    'ai.error.rollbackFailed',
+    'ai.error.secretDeleteFailed',
+    'ai.error.secretReadFailed',
+    'ai.error.secretWriteFailed',
+    'ai.error.timedOut',
+    'ai.error.transportFailed',
+    'ai.settings.add',
+    'ai.settings.apiKey',
+    'ai.settings.baseURL',
+    'ai.settings.cancelTest',
+    'ai.settings.clearKey',
+    'ai.settings.defaultText',
+    'ai.settings.defaultVision',
+    'ai.settings.defaults',
+    'ai.settings.defaultsImmediate',
+    'ai.settings.defaultsSaved',
+    'ai.settings.delete',
+    'ai.settings.deleted',
+    'ai.settings.editor',
+    'ai.settings.keepKey',
+    'ai.settings.keyOptional',
+    'ai.settings.modelID',
+    'ai.settings.name',
+    'ai.settings.none',
+    'ai.settings.profiles',
+    'ai.settings.protocol',
+    'ai.settings.protocol.anthropic',
+    'ai.settings.protocol.gemini',
+    'ai.settings.protocol.ollama',
+    'ai.settings.protocol.openAICompatible',
+    'ai.settings.save',
+    'ai.settings.saved',
+    'ai.settings.screenSeparate',
+    'ai.settings.test',
+    'ai.settings.testExplanation',
+    'ai.settings.testSucceeded',
+    'ai.settings.textCapability',
+    'ai.settings.title',
+    'ai.settings.visionCapability',
+    'ai.settings.visionDeclaration',
+    'calendar.copy.fullInformation',
+    'calendar.copy.meetingInformation',
+    'calendar.copy.selection',
+    'calendar.copy.title',
+    'calendar.generation.blocked',
+    'calendar.generation.confirm.date',
+    'calendar.generation.confirm.time',
+    'calendar.generation.error.confirmationRequired',
+    'calendar.generation.error.emptySource',
+    'calendar.generation.error.failed',
+    'calendar.generation.error.invalidEvidence',
+    'calendar.generation.error.invalidResponse',
+    'calendar.generation.error.sourceTooLarge',
+    'calendar.generation.manual',
+    'calendar.generation.model',
+    'calendar.generation.retry',
+    'calendar.generation.sendingScope',
+    'calendar.generation.settings',
+    'calendar.generation.source',
+    'calendar.generation.state.cancelled',
+    'calendar.generation.state.debouncing',
+    'calendar.generation.state.failed',
+    'calendar.generation.state.idle',
+    'calendar.generation.state.parsing',
+    'calendar.generation.state.ready',
+    'calendar.generation.unconfigured',
+    'calendar.meeting.accepted',
+    'calendar.meeting.actions',
+    'calendar.meeting.cancelled',
+    'calendar.meeting.choose',
+    'calendar.meeting.configure',
+    'calendar.meeting.copyCodeFormat',
+    'calendar.meeting.copyLink',
+    'calendar.meeting.copySource',
+    'calendar.meeting.fallback',
+    'calendar.meeting.menuHelp',
+    'calendar.meeting.noEvidence',
+    'calendar.meeting.open',
+    'calendar.meeting.opening',
+    'calendar.meeting.recognitionFailed',
+    'calendar.meeting.recognize',
+    'calendar.meeting.recognizing',
+    'calendar.meeting.refused',
+    'calendar.meeting.sendingScope',
+    'calendar.meeting.sourceTooLarge',
+    'calendar.meeting.tooEarly',
+    'calendar.panel.sourceTimeZoneFormat',
+    'calendar.panel.url',
+)
+
+
+def legacy_settings(text):
+    return text.split("struct ScreenAssistantSettings: View {", 1)[1].split(
+        "\nstruct ColorPickerSettings: View {", 1)[0]
+
+
+class GeneralAIConfigurationTests(unittest.TestCase):
+    def test_old_screen_assistant_and_defaults_match_verified_baseline(self):
+        for name, expected in LEGACY_HASHES.items():
+            with self.subTest(path=name):
+                self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected)
+        section = legacy_settings((ROOT / "DynamicIsland/components/Settings/SettingsView.swift").read_text())
+        self.assertEqual(hashlib.sha256(section.encode()).hexdigest(), LEGACY_SETTINGS_HASH)
+
+    def test_all_changed_app_catalog_keys_are_bilingual_and_consumed(self):
+        catalog = json.loads((ROOT / "DynamicIsland/Localizable.xcstrings").read_text())["strings"]
+        sources = "\n".join(p.read_text() for p in (ROOT / "DynamicIsland").rglob("*.swift"))
+        for key in LOCALE_KEYS:
+            with self.subTest(key=key):
+                for language in ("en", "zh-Hans"):
+                    unit = catalog[key]["localizations"][language]["stringUnit"]
+                    self.assertEqual(unit["state"], "translated")
+                    self.assertTrue(unit["value"].strip())
+                # Static strings plus the finite enum projections used by production.
+                consumed = key in sources
+                if key.startswith("ai.settings.protocol."):
+                    consumed |= '"ai.settings.protocol.\\(protocolKind.rawValue)"' in sources
+                if key.startswith("calendar.generation.state."):
+                    consumed |= '"calendar.generation.state.\\(self)"' in sources
+                if key.startswith("calendar.generation.confirm."):
+                    consumed |= '"calendar.generation.confirm.\\(rawValue)"' in sources
+                self.assertTrue(consumed, "changed localization has no source consumer")
+
+    def test_manifest_covers_actual_diff_when_history_is_available(self):
+        result = subprocess.run(["git", "show", BASELINE + ":DynamicIsland/Localizable.xcstrings"],
+                                cwd=ROOT, capture_output=True, text=True)
+        if result.returncode:
+            # Fresh/shallow clones use the checked-in manifest and verified fingerprints.
+            return
+        before = json.loads(result.stdout)["strings"]
+        after = json.loads((ROOT / "DynamicIsland/Localizable.xcstrings").read_text())["strings"]
+        changed = {key for key, value in after.items() if before.get(key) != value}
+        self.assertEqual(changed, set(LOCALE_KEYS))
+
+    def test_general_ai_configuration_keeps_secrets_out_of_encoded_profiles(self):
+        text = (ROOT / "DynamicIsland/services/AI/AIConfigurationStore.swift").read_text()
+        text = text.split("struct AIModelProfile:", 1)[1].split("struct AIConfiguration:", 1)[0]
+        self.assertIn("secretReference", text)
+        self.assertNotRegex(text, r"(?:let|var)\s+(?:apiKey|secret|password)\s*:\s*String")
+        context = (ROOT / "DynamicIsland/Kernel/ModuleContext.swift").read_text()
+        self.assertIn("public let ai: any AIHandle", context)
+
+
+if __name__ == "__main__":
+    unittest.main()

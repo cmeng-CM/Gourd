@@ -286,10 +286,22 @@ public struct ModuleContext {
     public let notch: NotchHandle          // 只读几何 + requestExpand/Collapse，不碰窗口
     public let secrets: SecretHandle       // Keychain 读写（值永不落 config.json）
     public let clock: any Clock            // 可注入，单测用假时钟
+    public let ai: any AIHandle             // 内置模块通用模型句柄；无秘密、无插件 RPC
 }
 ```
 
 **为什么是 struct 而不是 protocol**：`ModuleContext` 是**数据载体**（一堆句柄），不是行为契约。struct 便于构造测试假体，也避免插件作者去实现它。行为契约分布在各个 Handle 上。
+
+**2026-10-13 已实现增量**：上表仍包含早期规划句柄；当前 `ModuleContext` 的实际字段为 moduleID/host/config/logger/ui/ai。新增的 `ai` 由共享 `GeneralAIRuntime` 注入，也可用测试假体替代；构造器 `ai: (any AIHandle)? = nil` 保持旧调用兼容。设置和模块不另建各自全局 AI 服务。
+
+```swift
+@MainActor
+public protocol AIHandle: AnyObject {
+    func complete(_ request: AIRequest) async throws -> AIResponse
+}
+```
+
+`AIRequest` 含 purpose、messages、可选 profileID、requiredCapability、maxOutputTokens；消息含 role/text 和可选图像数据；`AIResponse` 只含 text。配置和能力错误显式返回，取消只影响该调用者，没有自动重试或工具执行。密钥由服务内独立 Keychain 引用解析，不经 ModuleContext 暴露。此为**内置 Swift 注入面**，§7 的规划 `ai:complete` 不代表已新增第三方 RPC 或已授予权限。日程解析、保存确认及会议验证继续由模块确定性代码负责；完整接口和限制见 [45](45-ai-calendar-and-meeting-actions.md)。
 
 `NotchHandle` 只暴露：
 ```swift
