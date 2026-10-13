@@ -645,6 +645,12 @@ class CalendarManager: ObservableObject {
         return event
     }
 
+    func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel {
+        let reminder = try await calendarService.createReminderRecord(input: input)
+        await refreshAfterCalendarWrite()
+        return reminder
+    }
+
     func createReminderRecord(title: String, due: Date, listID: String? = nil) async throws -> EventModel {
         let reminder = try await calendarService.createReminderRecord(title: title, due: due, listID: listID)
         await refreshAfterCalendarWrite()

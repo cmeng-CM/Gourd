@@ -11079,6 +11079,247 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertNotNil(backend.event(withID: reminder.id))
     }
 
+    func testReminderComponentsKeepPreciseTimeSourceZoneAndExplicitAllDayAcrossDST() throws {
+        var source = Calendar(identifier: .gregorian)
+        source.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let due = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 17, minute: 45, second: 12)))
+        let input = CalendarReminderInput(title: "Timed", due: due, isAllDay: false, timeZoneIdentifier: source.timeZone.identifier)
+        let components = try XCTUnwrap(input.dueDateComponents(calendar: testCalendar))
+        XCTAssertEqual(components.hour, 17)
+        XCTAssertEqual(components.minute, 45)
+        XCTAssertEqual(components.second, 12)
+        XCTAssertEqual(components.timeZone, source.timeZone)
+        XCTAssertEqual(CalendarRecordDates.absoluteDate(from: components, fallback: testCalendar), due)
+        var dateOnly = input
+        dateOnly.isAllDay = true
+        let dayComponents = try XCTUnwrap(dateOnly.dueDateComponents(calendar: testCalendar))
+        XCTAssertNil(dayComponents.hour)
+        XCTAssertNil(dayComponents.minute)
+        XCTAssertEqual(dayComponents.timeZone, source.timeZone)
+        XCTAssertEqual(CalendarRecordDates.absoluteDate(from: dayComponents, fallback: testCalendar), source.startOfDay(for: due))
+        let start = try XCTUnwrap(CalendarRecordDates.absoluteDate(from: dayComponents, fallback: testCalendar))
+        XCTAssertEqual(source.date(byAdding: .day, value: 1, to: start)?.timeIntervalSince(start), 23 * 3600)
+    }
+
+    func testReminderReadUsesComponentsZoneWithoutDependingOnComponentsCalendar() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        var components = DateComponents(year: 2026, month: 10, day: 13, hour: 17, minute: 25)
+        components.timeZone = zone
+        var fallback = testCalendar
+        fallback.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        var source = Calendar(identifier: .gregorian)
+        source.timeZone = zone
+        XCTAssertEqual(CalendarRecordDates.absoluteDate(from: components, fallback: fallback), source.date(from: components))
+        components.calendar = fallback
+        XCTAssertEqual(CalendarRecordDates.absoluteDate(from: components, fallback: fallback), source.date(from: components), "显式组件时区优先于所携日历与当前时区")
+    }
+
+    func testEventMetadataResolutionPreservesLegacyValuesAndUnknownZone() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/original?token=literal"))
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        var input = CalendarEventInput(title: "Legacy", start: date(day: 14, hour: 9), end: date(day: 14, hour: 10), isAllDay: false)
+        let legacy = try input.resolvedMetadata(existingURL: url, existingTimeZone: zone)
+        XCTAssertEqual(legacy.url, url)
+        XCTAssertEqual(legacy.timeZone, zone)
+        XCTAssertNil(try input.resolvedMetadata(existingURL: url, existingTimeZone: nil).timeZone)
+        input.url = URL(string: "https://example.com/replacement")
+        input.timeZoneIdentifier = "Asia/Tokyo"
+        let replaced = try input.resolvedMetadata(existingURL: url, existingTimeZone: zone)
+        XCTAssertEqual(replaced.url, input.url)
+        XCTAssertEqual(replaced.timeZone?.identifier, "Asia/Tokyo")
+    }
+
+    func testEventAllDayValidationUsesExplicitSourceZoneInsteadOfCurrentZone() throws {
+        var source = testCalendar
+        source.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let start = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: 3, day: 8)))
+        let end = try XCTUnwrap(source.date(byAdding: .day, value: 1, to: start))
+        let input = CalendarEventInput(title: "DST all day", start: start, end: end, isAllDay: true, timeZoneIdentifier: source.timeZone.identifier)
+        XCTAssertNoThrow(try input.validated(calendar: testCalendar))
+        XCTAssertEqual(end.timeIntervalSince(start), 23 * 3600)
+    }
+
+    func testInvalidExplicitTimeZoneRejectsBothInputsWithDistinctErrors() throws {
+        let event = CalendarEventInput(title: "Event", start: date(day: 14, hour: 9), end: date(day: 14, hour: 10), isAllDay: false, timeZoneIdentifier: "Mars/Olympus")
+        XCTAssertThrowsError(try event.validated(calendar: testCalendar)) { XCTAssertEqual($0 as? CalendarMutationError, .invalidTimeZone) }
+        let reminder = CalendarReminderInput(title: "Task", due: date(day: 14), isAllDay: true, timeZoneIdentifier: "Mars/Olympus")
+        XCTAssertThrowsError(try reminder.dueDateComponents(calendar: testCalendar)) { XCTAssertEqual($0 as? CalendarMutationError, .invalidTimeZone) }
+        XCTAssertNotEqual(CalendarMutationError.invalidTimeZone.localizedDescription, CalendarMutationError.wrongRecordType.localizedDescription)
+        XCTAssertNotEqual(CalendarMutationError.unsupportedReminderInput.localizedDescription, CalendarMutationError.wrongRecordType.localizedDescription)
+    }
+
+    func testManagerAndProductionPanelRichReminderWriteRetainsEveryField() async throws {
+        let backend = panelBackend()
+        let manager = CalendarManager(service: backend, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let session = CalendarPanelSession(manager: manager)
+        session.beginCreate(kind: .reminder, on: date(day: 14), calendarID: "fixture-reminders")
+        session.draft?.title = "  Precise task  "
+        session.draft?.start = date(day: 14, hour: 17).addingTimeInterval(25 * 60)
+        session.draft?.isAllDay = false
+        session.draft?.notes = "Original invitation notes"
+        session.draft?.url = URL(string: "https://example.com/invitation?source=literal")
+        session.draft?.timeZoneIdentifier = "Asia/Shanghai"
+        let submitted = try XCTUnwrap(session.draft)
+        let success = await session.save()
+        XCTAssertTrue(success)
+        let saved = try XCTUnwrap(backend.allRecords().first { $0.id.hasPrefix("fixture-created-") })
+        XCTAssertEqual(saved.title, "Precise task")
+        XCTAssertEqual(saved.start, submitted.start)
+        XCTAssertFalse(saved.isAllDay)
+        XCTAssertEqual(saved.notes, submitted.notes)
+        XCTAssertEqual(saved.url, submitted.url)
+        XCTAssertEqual(saved.timeZone?.identifier, submitted.timeZoneIdentifier)
+        XCTAssertNil(session.draft)
+        XCTAssertEqual(backend.writeAttempts, 1)
+    }
+
+    func testRichAllDayReminderReadbackAndInvalidZoneFailurePreserveDraft() async throws {
+        var source = testCalendar
+        source.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let due = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 17)))
+        let backend = panelBackend()
+        let input = CalendarReminderInput(title: "Date only", due: due, isAllDay: true, notes: "Source notes", url: URL(string: "https://example.com/source"), listID: "fixture-reminders", timeZoneIdentifier: source.timeZone.identifier)
+        let saved = try await backend.createReminderRecord(input: input)
+        XCTAssertEqual(saved.start, source.startOfDay(for: due))
+        XCTAssertEqual(saved.end.timeIntervalSince(saved.start), 23 * 3600)
+        XCTAssertTrue(saved.isAllDay)
+        XCTAssertEqual(saved.notes, input.notes)
+        XCTAssertEqual(saved.url, input.url)
+        XCTAssertEqual(saved.timeZone, source.timeZone)
+        let manager = CalendarManager(service: backend, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let session = CalendarPanelSession(manager: manager)
+        session.beginCreate(kind: .reminder, on: date(day: 14), calendarID: "fixture-reminders")
+        session.draft?.title = "Reject invalid source zone"
+        session.draft?.notes = "Keep all fields"
+        session.draft?.url = input.url
+        session.draft?.isAllDay = false
+        session.draft?.timeZoneIdentifier = "Mars/Olympus"
+        let draft = session.draft
+        let before = backend.allRecords()
+        let success = await session.save()
+        XCTAssertFalse(success)
+        XCTAssertEqual(session.error, CalendarMutationError.invalidTimeZone.localizedDescription)
+        XCTAssertEqual(session.draft, draft)
+        XCTAssertEqual(backend.allRecords(), before)
+    }
+
+    func testManagerRichReminderPassesEntireInputToProviderAndDoesNotRefreshAfterFailure() async throws {
+        let service = CalendarInteractionServiceFake()
+        service.reminderRecord = record("timed", type: .reminder(completed: false))
+        let manager = CalendarManager(service: service, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let input = CalendarReminderInput(title: "Task", due: date(day: 14, hour: 17), isAllDay: false, notes: "Notes", url: URL(string: "https://example.com/task"), listID: "explicit-list", timeZoneIdentifier: "Asia/Tokyo")
+        _ = try await manager.createReminderRecord(input: input)
+        XCTAssertEqual(service.lastReminderInput, input)
+        let fetches = service.fetchCount
+        service.writeError = .readOnlyCalendar
+        do { _ = try await manager.createReminderRecord(input: input); XCTFail("Expected failure") }
+        catch { XCTAssertEqual(error as? CalendarMutationError, .readOnlyCalendar) }
+        XCTAssertEqual(service.fetchCount, fetches)
+    }
+
+    func testLegacyReminderWriterOnlyAcceptsLosslessDateOnlyInputAndLeavesRichDraftOnFailure() async throws {
+        let backend = panelBackend()
+        let legacy = try await backend.createReminderRecord(title: "Legacy", due: date(day: 14, hour: 17), listID: "fixture-reminders")
+        XCTAssertEqual(legacy.start, date(day: 14))
+        XCTAssertTrue(legacy.isAllDay)
+        XCTAssertNil(legacy.notes)
+        XCTAssertNil(legacy.url)
+        let input = CalendarReminderInput(title: "Legacy", due: date(day: 14, hour: 17), isAllDay: true)
+        let components = try XCTUnwrap(input.dueDateComponents(calendar: testCalendar))
+        XCTAssertNil(components.hour)
+        XCTAssertNil(components.timeZone)
+        let variants: [CalendarReminderInput] = [
+            CalendarReminderInput(title: "Rich", due: date(day: 14), isAllDay: false),
+            CalendarReminderInput(title: "Rich", due: date(day: 14), isAllDay: true, notes: "Notes"),
+            CalendarReminderInput(title: "Rich", due: date(day: 14), isAllDay: true, url: URL(string: "https://example.com")),
+            CalendarReminderInput(title: "Rich", due: date(day: 14), isAllDay: true, timeZoneIdentifier: "Asia/Tokyo")
+        ]
+        for variant in variants {
+            XCTAssertThrowsError(try variant.legacyArguments()) { XCTAssertEqual($0 as? CalendarMutationError, .unsupportedReminderInput) }
+        }
+        var calls = 0
+        let session = panelSession(service: backend, create: { title, due, id in
+            calls += 1
+            return try await backend.createReminderRecord(title: title, due: due, listID: id)
+        })
+        session.beginCreate(kind: .reminder, on: date(day: 14), calendarID: "fixture-reminders")
+        session.draft?.title = "Rich"
+        session.draft?.notes = "Do not drop"
+        let draft = session.draft
+        let success = await session.save()
+        XCTAssertFalse(success)
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(session.draft, draft)
+        XCTAssertTrue(session.hasDirtyDraft)
+        XCTAssertEqual(session.error, CalendarMutationError.unsupportedReminderInput.localizedDescription)
+    }
+
+    func testEventPanelLoadsOriginalMetadataAndSavesReplacementWithoutClearingLegacyValues() async throws {
+        let backend = panelBackend()
+        var input = CalendarEventInput(title: "Original", start: date(day: 14, hour: 9), end: date(day: 14, hour: 10), isAllDay: false, notes: "Notes", calendarID: "fixture-events", url: URL(string: "https://example.com/original"), timeZoneIdentifier: "America/Los_Angeles")
+        let original = try await backend.saveEvent(input: input, eventID: nil)
+        let session = panelSession(service: backend)
+        session.beginEdit(original)
+        XCTAssertEqual(session.draft?.url, original.url)
+        XCTAssertEqual(session.draft?.timeZoneIdentifier, original.timeZone?.identifier)
+        session.draft?.title = "Edited"
+        XCTAssertTrue(session.hasDirtyDraft)
+        let success = await session.save()
+        XCTAssertTrue(success)
+        let edited = try XCTUnwrap(backend.event(withID: original.id))
+        XCTAssertEqual(edited.url, original.url)
+        XCTAssertEqual(edited.timeZone, original.timeZone)
+        input.url = nil
+        input.timeZoneIdentifier = nil
+        let legacy = try await backend.saveEvent(input: input, eventID: original.id)
+        XCTAssertEqual(legacy.url, original.url)
+        XCTAssertEqual(legacy.timeZone, original.timeZone)
+        input.url = URL(string: "https://example.com/replaced")
+        input.timeZoneIdentifier = "Asia/Tokyo"
+        let replaced = try await backend.saveEvent(input: input, eventID: original.id)
+        XCTAssertEqual(replaced.url, input.url)
+        XCTAssertEqual(replaced.timeZone?.identifier, "Asia/Tokyo")
+    }
+
+    func testLegacyEventEditKeepsUnknownOriginalTimeZoneAndMetadataFailureIsAtomic() async throws {
+        let source = CalendarModel(accountName: "Fixture", id: "fixture-events", title: "Events", color: .systemBlue, isSubscribed: false, isReminder: false)
+        let original = EventModel(id: "unknown-zone", start: date(day: 14, hour: 9), end: date(day: 14, hour: 10), title: "Original", location: nil, notes: "Original notes", url: URL(string: "https://example.com/original"), isAllDay: false, type: .event(.unknown), calendar: source, participants: [], timeZone: nil, hasRecurrenceRules: false, priority: nil, conferenceURL: nil)
+        let backend = CalendarInteractionMemoryService(records: [original], calendars: [source], calendar: testCalendar)
+        let input = CalendarEventInput(title: "Legacy edit", start: original.start, end: original.end, isAllDay: false, notes: original.notes)
+        let saved = try await backend.saveEvent(input: input, eventID: original.id)
+        XCTAssertNil(saved.timeZone)
+        XCTAssertEqual(saved.url, original.url)
+        var rich = input
+        rich.url = URL(string: "https://example.com/replaced")
+        rich.timeZoneIdentifier = "Asia/Tokyo"
+        backend.writeFailure = .readOnlyCalendar
+        do { _ = try await backend.saveEvent(input: rich, eventID: original.id); XCTFail("Expected failure") }
+        catch { XCTAssertEqual(error as? CalendarMutationError, .readOnlyCalendar) }
+        XCTAssertEqual(backend.event(withID: original.id), saved)
+    }
+
+    func testRichMetadataDoesNotBypassRestrictedEventOrReminderWritesAndFailuresKeepRecords() async throws {
+        let backend = panelBackend(count: 18)
+        let input = CalendarEventInput(title: "Bypass", start: date(day: 14, hour: 9), end: date(day: 14, hour: 10), isAllDay: false, calendarID: "fixture-events", url: URL(string: "https://example.com"), timeZoneIdentifier: "Asia/Tokyo")
+        for id in ["fixture-event-04", "fixture-event-07", "fixture-event-10", "fixture-event-13", "fixture-event-16"] {
+            let original = try XCTUnwrap(backend.event(withID: id))
+            do { _ = try await backend.saveEvent(input: input, eventID: id); XCTFail("Restricted record must reject") }
+            catch { XCTAssertEqual(error as? CalendarMutationError, original.modificationRestriction) }
+            XCTAssertEqual(backend.event(withID: id), original)
+        }
+        backend.setAuthorization(.denied, for: .reminder)
+        let reminder = CalendarReminderInput(title: "Rich", due: date(day: 14), isAllDay: false, notes: "Notes", url: input.url, listID: "fixture-reminders", timeZoneIdentifier: "Asia/Tokyo")
+        let before = backend.allRecords()
+        do { _ = try await backend.createReminderRecord(input: reminder); XCTFail("Denied access must reject") }
+        catch { XCTAssertEqual(error as? CalendarMutationError, .accessDenied) }
+        XCTAssertEqual(backend.allRecords(), before)
+        backend.setAuthorization(.fullAccess, for: .reminder)
+        backend.writeFailure = .readOnlyCalendar
+        do { _ = try await backend.createReminderRecord(input: reminder); XCTFail("Injected failure must propagate") }
+        catch { XCTAssertEqual(error as? CalendarMutationError, .readOnlyCalendar) }
+        XCTAssertEqual(backend.allRecords(), before)
+    }
+
     func testFixtureAuthorizationIsInMemoryAndSharedManagerChoosesFixtureBeforeStore() async throws {
         XCTAssertTrue(CalendarInteractionFixtures.isEnabled)
         XCTAssertEqual(CalendarManager.shared.liveCalendarAuthorization, .fullAccess)
@@ -11121,6 +11362,7 @@ private final class CalendarInteractionServiceFake: CalendarServiceProviding {
     var writeError: CalendarMutationError?
     var lastEventID: String?
     var lastListID: String?
+    var lastReminderInput: CalendarReminderInput?
     var deletedID: String?
 
     func requestAccess() async -> Bool { accessRequests += 1; return true }
@@ -11135,6 +11377,12 @@ private final class CalendarInteractionServiceFake: CalendarServiceProviding {
         if let writeError { throw writeError }
         lastEventID = eventID
         return try XCTUnwrap(savedRecord)
+    }
+    func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel {
+        if let writeError { throw writeError }
+        lastReminderInput = input
+        lastListID = input.listID
+        return try XCTUnwrap(reminderRecord)
     }
     func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel {
         if let writeError { throw writeError }

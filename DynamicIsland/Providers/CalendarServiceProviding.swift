@@ -30,6 +30,7 @@ protocol CalendarServiceProviding {
     func events(from start: Date, to end: Date, calendars: [String]) async -> [EventModel]
     func setReminderCompleted(reminderID: String, completed: Bool) async
     func saveEvent(input: CalendarEventInput, eventID: String?) async throws -> EventModel
+    func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel
     func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel
     func deleteEvent(id: String) async throws
     func completeReminder(id: String, completed: Bool) async throws -> EventModel
@@ -40,6 +41,12 @@ protocol CalendarServiceProviding {
     var preferredReminderCalendarID: String? { get }
     func authorizationStatus(for type: EKEntityType) -> EKAuthorizationStatus
     func setReminderPriority(reminderID: String, priority: Int) async -> Bool
+}
+
+extension CalendarServiceProviding {
+    func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel {
+        try await createReminderRecord(input: CalendarReminderInput(title: title, due: due, isAllDay: true, listID: listID))
+    }
 }
 
 /// 仅写授权支持新建日程及目标日历查询；既有记录的详情、改删仍需完整读取权限。
@@ -197,7 +204,8 @@ class CalendarService: CalendarServiceProviding {
                 }
 
                 let filtered = reminders.compactMap { reminder -> EventModel? in
-                    guard let dueDate = reminder.dueDateComponents?.date,
+                    guard let components = reminder.dueDateComponents,
+                          let dueDate = CalendarRecordDates.absoluteDate(from: components),
                           dueDate >= start,
                           dueDate < end else {
                         return nil
@@ -246,6 +254,9 @@ class CalendarService: CalendarServiceProviding {
                 event.isAllDay = input.isAllDay
                 event.location = input.location
                 event.notes = input.notes
+                let metadata = try input.resolvedMetadata(existingURL: event.url, existingTimeZone: event.timeZone)
+                event.url = metadata.url
+                event.timeZone = metadata.timeZone
                 return try CalendarMutationPolicy.performEventWrite(event: try self.savedModelForWrite(from: event)) {
                     try self.store.save(event, span: .thisEvent, commit: true)
                     return try self.savedModel(from: event)
@@ -289,20 +300,28 @@ class CalendarService: CalendarServiceProviding {
     }
 
     func createReminderRecord(title: String, due: Date, listID: String? = nil) async throws -> EventModel {
+        try await createReminderRecord(input: CalendarReminderInput(title: title, due: due, isAllDay: true, listID: listID))
+    }
+
+    func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel {
         try await createReminderRecord(
-            title: title, dueDateComponents: CalendarQuickAdd.reminderDueComponents(on: due, calendar: .current),
-            listID: listID
+            title: input.title, dueDateComponents: { try input.dueDateComponents() }, listID: input.listID,
+            notes: input.notes, url: input.url
         )
     }
 
-    private func createReminderRecord(title: String, dueDateComponents: DateComponents?, listID: String?) async throws -> EventModel {
+    private func createReminderRecord(
+        title: String, dueDateComponents: @escaping () throws -> DateComponents?, listID: String?, notes: String? = nil, url: URL? = nil
+    ) async throws -> EventModel {
         try await performWrite(to: .reminder, creating: true) {
             let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
             let calendar = try self.targetCalendar(requestedID: listID, type: .reminder)
             let reminder = EKReminder(eventStore: self.store)
             reminder.title = title
-            reminder.dueDateComponents = dueDateComponents
+            reminder.dueDateComponents = try dueDateComponents()
+            reminder.notes = notes
+            reminder.url = url
             reminder.calendar = calendar
             guard let model = EventModel(from: reminder) else { throw CalendarMutationError.wrongRecordType }
             return try CalendarMutationPolicy.performReminderWrite(event: model) {
@@ -342,7 +361,7 @@ class CalendarService: CalendarServiceProviding {
 
     func createReminder(title: String, dueDateComponents: DateComponents?) async -> Bool {
         do {
-            _ = try await createReminderRecord(title: title, dueDateComponents: dueDateComponents, listID: nil)
+            _ = try await createReminderRecord(title: title, dueDateComponents: { dueDateComponents }, listID: nil)
             return true
         } catch {
             print("Failed to create reminder: \(error)")
@@ -430,12 +449,13 @@ extension EventModel {
         guard let calendar = reminder.calendar else { return nil }
         let dueDateComponents = reminder.dueDateComponents
         // 兼容无日期提醒的完成/详情入口；查询仍只收有到期日的提醒。
-        let date = dueDateComponents.flatMap { Calendar.current.date(from: $0) } ?? .distantFuture
+        let date = dueDateComponents.flatMap { CalendarRecordDates.absoluteDate(from: $0) } ?? .distantFuture
+        let dateCalendar = dueDateComponents.map { CalendarRecordDates.calendar(for: $0) } ?? .current
         
         self.init(
             id: reminder.calendarItemIdentifier,
             start: date,
-            end: Calendar.current.endOfDay(for: date),
+            end: CalendarRecordDates.endOfDay(for: date, calendar: dateCalendar),
             title: reminder.title ?? "",
             location: reminder.location,
             notes: reminder.notes,
@@ -444,7 +464,7 @@ extension EventModel {
             type: .reminder(completed: reminder.isCompleted),
             calendar: .init(from: calendar),
             participants: [],
-            timeZone: calendar.isSubscribed || calendar.isDelegate ? nil : reminder.timeZone,
+            timeZone: calendar.isSubscribed || calendar.isDelegate ? nil : (dueDateComponents?.timeZone ?? dueDateComponents?.calendar?.timeZone ?? reminder.timeZone),
             hasRecurrenceRules: reminder.hasRecurrenceRules,
             priority: .init(from: reminder.priority),
             conferenceURL: nil
@@ -550,11 +570,5 @@ extension EKEvent {
     func extractConferenceURL() -> URL? {
         let source = [url?.absoluteString, location, notes].compactMap { $0 }.joined(separator: "\n")
         return MeetingLinkResolver().uniqueOpenTarget(text: source)?.sourceURL
-    }
-}
-
-private extension Calendar {
-    func endOfDay(for date: Date) -> Date {
-        dateInterval(of: .day, for: date)?.end ?? date
     }
 }

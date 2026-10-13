@@ -28,6 +28,8 @@ struct CalendarDraft: Equatable {
     var location: String = ""
     var notes: String = ""
     var calendarID: String?
+    var url: URL? = nil
+    var timeZoneIdentifier: String? = nil
 
     func eventInput(calendar: Calendar = .current) throws -> CalendarEventInput {
         guard kind == .event else { throw CalendarMutationError.wrongRecordType }
@@ -35,8 +37,17 @@ struct CalendarDraft: Equatable {
         return try CalendarEventInput(
             title: title, start: start, end: end, isAllDay: isAllDay,
             location: location.isEmpty ? nil : location, notes: notes.isEmpty ? nil : notes,
-            calendarID: calendarID
+            calendarID: calendarID, url: url, timeZoneIdentifier: timeZoneIdentifier
         ).validated(calendar: calendar)
+    }
+
+    func reminderInput() throws -> CalendarReminderInput {
+        guard kind == .reminder else { throw CalendarMutationError.wrongRecordType }
+        try validateTarget()
+        return CalendarReminderInput(
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines), due: start, isAllDay: isAllDay,
+            notes: notes.isEmpty ? nil : notes, url: url, listID: calendarID, timeZoneIdentifier: timeZoneIdentifier
+        )
     }
 
     func validateTarget() throws {
@@ -94,7 +105,7 @@ final class CalendarPanelSession: ObservableObject {
     private let calendar: Calendar
     private let now: () -> Date
     private let saveEventRecord: (CalendarEventInput, String?) async throws -> EventModel
-    private let createReminderRecord: (String, Date, String?) async throws -> EventModel
+    private let createReminderRecord: (CalendarReminderInput) async throws -> EventModel
     private let deleteEventRecord: (String) async throws -> Void
     private let completeReminderRecord: (String, Bool) async throws -> EventModel
     private let readEvent: (String) -> EventModel?
@@ -113,7 +124,7 @@ final class CalendarPanelSession: ObservableObject {
         selectedDate: Date = Date(), calendar: Calendar = .autoupdatingCurrent,
         now: @escaping () -> Date = Date.init,
         saveEvent: @escaping (CalendarEventInput, String?) async throws -> EventModel,
-        createReminder: @escaping (String, Date, String?) async throws -> EventModel,
+        createReminder: @escaping (CalendarReminderInput) async throws -> EventModel,
         deleteEvent: @escaping (String) async throws -> Void,
         completeReminder: @escaping (String, Bool) async throws -> EventModel,
         event: @escaping (String) -> EventModel?,
@@ -131,11 +142,32 @@ final class CalendarPanelSession: ObservableObject {
         self.openSystemEvent = openSystemEvent
     }
 
+    /// Compatibility for existing manual callers; rich drafts must use the input closure.
+    convenience init(
+        selectedDate: Date = Date(), calendar: Calendar = .autoupdatingCurrent,
+        now: @escaping () -> Date = Date.init,
+        saveEvent: @escaping (CalendarEventInput, String?) async throws -> EventModel,
+        createReminder: @escaping (String, Date, String?) async throws -> EventModel,
+        deleteEvent: @escaping (String) async throws -> Void,
+        completeReminder: @escaping (String, Bool) async throws -> EventModel,
+        event: @escaping (String) -> EventModel?,
+        openSystemEvent: @escaping (EventModel) -> Void = { _ in }
+    ) {
+        self.init(
+            selectedDate: selectedDate, calendar: calendar, now: now, saveEvent: saveEvent,
+            createReminder: { input in
+                let arguments = try input.legacyArguments()
+                return try await createReminder(arguments.title, arguments.due, arguments.listID)
+            },
+            deleteEvent: deleteEvent, completeReminder: completeReminder, event: event, openSystemEvent: openSystemEvent
+        )
+    }
+
     convenience init(manager: CalendarManager) {
         self.init(
             selectedDate: manager.currentWeekStartDate,
             saveEvent: { try await manager.saveEvent(input: $0, eventID: $1) },
-            createReminder: { try await manager.createReminderRecord(title: $0, due: $1, listID: $2) },
+            createReminder: { try await manager.createReminderRecord(input: $0) },
             deleteEvent: { try await manager.deleteEvent(id: $0) },
             completeReminder: { try await manager.completeReminder(id: $0, completed: $1) },
             event: { manager.event(withID: $0) },
@@ -225,7 +257,8 @@ final class CalendarPanelSession: ObservableObject {
         let newDraft = CalendarDraft(
             kind: .event, eventID: event.id, originalDate: event.start, title: event.title,
             start: event.start, end: event.end, isAllDay: event.isAllDay,
-            location: event.location ?? "", notes: event.notes ?? "", calendarID: event.calendar.id
+            location: event.location ?? "", notes: event.notes ?? "", calendarID: event.calendar.id,
+            url: event.url, timeZoneIdentifier: event.timeZone?.identifier
         )
         requestDraft(newDraft, context: currentContext())
     }
@@ -357,7 +390,7 @@ final class CalendarPanelSession: ObservableObject {
                 if submitted.kind == .event {
                     saved = try await self.saveEventRecord(try submitted.eventInput(calendar: self.calendar), submitted.eventID)
                 } else {
-                    saved = try await self.createReminderRecord(submitted.title.trimmingCharacters(in: .whitespacesAndNewlines), submitted.start, submitted.calendarID)
+                    saved = try await self.createReminderRecord(try submitted.reminderInput())
                 }
                 let unchangedDraft = self.draftID == id && self.draft == submitted
                 if unchangedDraft { self.clearDraft() }

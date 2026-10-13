@@ -1121,6 +1121,38 @@
         }
       }
     },
+    "The time zone is invalid.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The time zone is invalid."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时区无效，请检查时区名称。"
+          }
+        }
+      }
+    },
+    "This reminder writer cannot save time or metadata.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This reminder writer cannot save time or metadata."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前待办写入接口无法保存具体时刻或附加信息。"
+          }
+        }
+      }
+    },
     "The saved item could not be read.": {
       "localizations": {
         "en": {

@@ -52,8 +52,11 @@ struct CalendarEventInput: Equatable {
     var location: String? = nil
     var notes: String? = nil
     var calendarID: String? = nil
+    var url: URL? = nil
+    var timeZoneIdentifier: String? = nil
 
     func validated(calendar: Calendar = .current) throws -> Self {
+        let calendar = try CalendarRecordDates.calendar(timeZoneIdentifier: timeZoneIdentifier, fallback: calendar)
         var input = self
         input.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.title.isEmpty else { throw CalendarMutationError.invalidTitle }
@@ -67,6 +70,13 @@ struct CalendarEventInput: Equatable {
         return input
     }
 
+    func resolvedMetadata(existingURL: URL?, existingTimeZone: TimeZone?) throws -> (url: URL?, timeZone: TimeZone?) {
+        let zone = try timeZoneIdentifier.map {
+            try CalendarRecordDates.calendar(timeZoneIdentifier: $0, fallback: .current).timeZone
+        }
+        return (url ?? existingURL, zone ?? existingTimeZone)
+    }
+
     static func exclusiveAllDayEnd(including lastDay: Date, calendar: Calendar = .current) -> Date? {
         calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: lastDay))
     }
@@ -76,11 +86,70 @@ struct CalendarEventInput: Equatable {
     }
 }
 
+/// Date-only and timed reminders share one write input; due is optional for existing undated callers.
+struct CalendarReminderInput: Equatable {
+    var title: String
+    var due: Date?
+    var isAllDay: Bool
+    var notes: String? = nil
+    var url: URL? = nil
+    var listID: String? = nil
+    var timeZoneIdentifier: String? = nil
+
+    func dueDateComponents(calendar: Calendar = .current) throws -> DateComponents? {
+        let calendar = try CalendarRecordDates.calendar(timeZoneIdentifier: timeZoneIdentifier, fallback: calendar)
+        guard let due else { return nil }
+        let fields: Set<Calendar.Component> = isAllDay ? [.year, .month, .day] : [.year, .month, .day, .hour, .minute, .second]
+        var components = calendar.dateComponents(fields, from: due)
+        // Legacy date-only reminders remain floating. Timed reminders carry the source zone.
+        if !isAllDay || timeZoneIdentifier != nil {
+            components.calendar = calendar
+            components.timeZone = calendar.timeZone
+        }
+        return components
+    }
+
+    /// A legacy three-argument writer cannot represent richer input; fail before calling it.
+    func legacyArguments() throws -> (title: String, due: Date, listID: String?) {
+        guard isAllDay, notes == nil, url == nil, timeZoneIdentifier == nil, let due else {
+            throw CalendarMutationError.unsupportedReminderInput
+        }
+        return (title, due, listID)
+    }
+}
+
+/// Shared by EventKit and the in-memory backend, including reads of components carrying a zone.
+enum CalendarRecordDates {
+    static func calendar(timeZoneIdentifier: String?, fallback: Calendar) throws -> Calendar {
+        guard let timeZoneIdentifier else { return fallback }
+        guard let zone = TimeZone(identifier: timeZoneIdentifier) else {
+            throw CalendarMutationError.invalidTimeZone
+        }
+        var calendar = fallback
+        calendar.timeZone = zone
+        return calendar
+    }
+
+    static func calendar(for components: DateComponents, fallback: Calendar = .current) -> Calendar {
+        var calendar = components.calendar ?? fallback
+        if let zone = components.timeZone { calendar.timeZone = zone }
+        return calendar
+    }
+
+    static func endOfDay(for date: Date, calendar: Calendar) -> Date {
+        calendar.dateInterval(of: .day, for: date)?.end ?? date
+    }
+
+    static func absoluteDate(from components: DateComponents, fallback: Calendar = .current) -> Date? {
+        calendar(for: components, fallback: fallback).date(from: components)
+    }
+}
+
 enum CalendarMutationError: Error, Equatable, LocalizedError {
     case accessDenied, invalidTitle, invalidDateRange, invalidAllDayRange
     case recordNotFound, wrongRecordType, invalidCalendar, noWritableCalendar
     case readOnlyCalendar, recurringEvent, detachedEvent, meetingEvent, birthdayEvent
-    case missingRecordIdentifier
+    case missingRecordIdentifier, invalidTimeZone, unsupportedReminderInput
 
     var errorDescription: String? {
         switch self {
@@ -98,6 +167,8 @@ enum CalendarMutationError: Error, Equatable, LocalizedError {
         case .meetingEvent: return String(localized: "Open meeting invitations in the system app.")
         case .birthdayEvent: return String(localized: "Open birthdays in the system app.")
         case .missingRecordIdentifier: return String(localized: "The saved item could not be read.")
+        case .invalidTimeZone: return String(localized: "The time zone is invalid.")
+        case .unsupportedReminderInput: return String(localized: "This reminder writer cannot save time or metadata.")
         }
     }
 }

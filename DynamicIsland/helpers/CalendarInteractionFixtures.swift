@@ -202,30 +202,41 @@ final class CalendarInteractionMemoryService: CalendarServiceProviding {
                 existing = event
             } else { existing = nil }
             let calendar = try target(input.calendarID, originalID: existing?.calendar.id, reminder: false)
+            let metadata = try input.resolvedMetadata(
+                existingURL: existing?.url, existingTimeZone: eventID == nil ? self.calendar.timeZone : existing?.timeZone
+            )
             let saved = EventModel(
                 id: existing?.id ?? nextID(), start: input.start, end: input.end, title: input.title,
-                location: input.location, notes: input.notes, url: existing?.url, isAllDay: input.isAllDay,
-                type: .event(.unknown), calendar: calendar, participants: [], timeZone: self.calendar.timeZone,
+                location: input.location, notes: input.notes, url: metadata.url, isAllDay: input.isAllDay,
+                type: .event(.unknown), calendar: calendar, participants: [], timeZone: metadata.timeZone,
                 hasRecurrenceRules: false, priority: nil, conferenceURL: nil
             )
             return try CalendarMutationPolicy.performEventWrite(event: saved) { records[saved.id] = saved; return saved }
         }
     }
     func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel {
-        try await createTodoReminder(title: title, due: due, listID: listID)
+        try await createReminderRecord(input: CalendarReminderInput(title: title, due: due, isAllDay: true, listID: listID))
     }
 
     func createTodoReminder(title: String, due: Date?, listID: String? = nil) async throws -> EventModel {
+        try await createReminderRecord(input: CalendarReminderInput(title: title, due: due, isAllDay: true, listID: listID))
+    }
+
+    func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel {
         try await waitForWrite()
         return try performWrite(type: .reminder, creating: true) {
-            let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = input.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
-            let source = try target(listID, reminder: true)
-            let start = due.map { calendar.startOfDay(for: $0) } ?? .distantFuture
+            let source = try target(input.listID, reminder: true)
+            let components = try input.dueDateComponents(calendar: calendar)
+            let dateCalendar = components.map { CalendarRecordDates.calendar(for: $0, fallback: calendar) } ?? calendar
+            let start = components.flatMap { CalendarRecordDates.absoluteDate(from: $0, fallback: calendar) } ?? .distantFuture
             let saved = EventModel(
-                id: nextID(), start: start, end: due == nil ? .distantFuture : (calendar.date(byAdding: .day, value: 1, to: start) ?? start),
-                title: title, location: nil, notes: nil, url: nil, isAllDay: true, type: .reminder(completed: false),
-                calendar: source, participants: [], timeZone: calendar.timeZone, hasRecurrenceRules: false, priority: nil, conferenceURL: nil
+                id: nextID(), start: start, end: components == nil ? .distantFuture : CalendarRecordDates.endOfDay(for: start, calendar: dateCalendar),
+                title: title, location: nil, notes: input.notes, url: input.url,
+                isAllDay: components?.hour == nil, type: .reminder(completed: false),
+                calendar: source, participants: [], timeZone: components?.timeZone ?? components?.calendar?.timeZone,
+                hasRecurrenceRules: false, priority: nil, conferenceURL: nil
             )
             return try CalendarMutationPolicy.performReminderWrite(event: saved) { records[saved.id] = saved; return saved }
         }
