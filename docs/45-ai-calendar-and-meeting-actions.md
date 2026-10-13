@@ -149,11 +149,11 @@ T1 初版与修复已本地提交（`5ce6a319`、`2ac90b64`）：通用 AIHandle
 
 T6 已本地提交（`a4225282`、`f264c656`）：只读选区/复制菜单、独立详情动作、实际交互保护与选屏快捷计时取消，22 个离线回归。独立初审发现的长备注会议证据过滤、同步订阅重入和首页渲染读取均已修复；复审实际运行源码探针 49 断言、额外证据边界 4 断言和刷新快照 12 断言通过。
 
-T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 已编译。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
+T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 当时仅完成编译，现已随下述完整 815 用例运行。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
 
-T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。XCTest 尚未运行；单独纯 Release 已通过下述本轮验证，完整自动门、整体终审及人工门尚未完成，不能将此记录视为全范围验收通过。
+T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与新 Release/签名检查均通过；任务最终复审、整体终审与人工门仍未完成，不能将此记录视为全范围验收通过。
 
-### T8 验证入口与交付状态（离线实现及单独 Release）
+### T8 验证入口与交付状态（完整自动门已运行）
 
 五份关联文档、跟踪静态回归 `tests/test_general_ai_configuration.py` 与本轮 ignored `.workflow/ai-calendar/verify.sh` 已实现。wrapper 属本轮工作流证据工具，不作为 fresh clone 必备文件；正常 Python 回归可在没有 `.workflow` 和 `cd825466` 历史对象时运行。静态屏幕助手守卫采用已核实基线内容指纹（manager、selection、Constants 全文件和旧设置区段）；Constants 全文件也锁住无关 Defaults，未来合法修改须重新审核这个守卫基线。locale 使用主 app catalog 的本轮全部 105 个新增/变更 key，包含非 AI 前缀，检查 en/zh-Hans 和有限动态 key 的实际消费来源。
 
@@ -162,7 +162,7 @@ T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。XCTest
 | `bash .workflow/ai-calendar/verify.sh` | 非零拒绝；不启动宿主 |
 | `bash .workflow/ai-calendar/verify.sh --self-test` | 纯临时 fixture 正负向证据检查；不证明实际 XCTest/Release |
 | `bash .workflow/ai-calendar/verify.sh --verify-evidence` | 缺失/失败/陈旧/不匹配非零；绝不自动重跑或启动宿主，每次重跑静态 guard 和 diff |
-| `bash .workflow/ai-calendar/verify.sh --allow-test-host` | **仅取得新的明确桌面空闲授权后**执行完整门；本轮已进入 preflight 后失败，实际宿主尚未启动 |
+| `bash .workflow/ai-calendar/verify.sh --allow-test-host` | **仅取得明确桌面空闲授权后**执行完整门；首次 preflight 失败后修复，新 attempt 总退出 0、十阶段均退出 0 |
 
 完整门每次生成唯一 attempt 和未存在的 xcresult/DerivedData 路径，启动先将 latest 置 running，废止旧成功；按实际进程退出码逐阶段记录完整命令/日志/允许环境/时刻，失败即停止。只运行 DynamicIslandTests，禁并行，隔离 `PRODUCT_BUNDLE_IDENTIFIER=com.cmeng.gourd.calendar-tests.$(PRODUCT_NAME:rfc1034identifier)`，保持项目 `Gourd Local`；测试 profile 写本 attempt，不覆盖原 `default.profraw`。其后运行三个 Python 套件、纯 Release build（无 install/dmg）、Debug/Release 签名检查及 diff。新 Debug app/test bundle、Release app、xcresult 和日志均摘要绑定，不能用旧 app 存在冒充新产物。
 
@@ -178,9 +178,15 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与当时 wrapper 内容指纹，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户先回复「先继续不占桌面的工作」，随后于 2026-10-13 明确要求「现在进行测试验证，验证完安装到本机」，并进一步选择「自动测试与审查通过后安装，界面验收留到安装后」。由此恢复宿主测试许可，完整自动门与独立整体审查通过后执行本地安装，四类别 UI 在安装后逐项确认、未确认不 close；此记录不表示已经测试、安装或人工验收。
 
-控制器即时 Pear 查询 false、退出 0 后启动 attempt `20261013T182253-be28ba0a15484345b4f984ae1ad6aefa`；preflight 将跟踪的 framework `Resources` 目录 symlink 误交给普通文件哈希，失败于 `missing file .../MediaRemoteAdapter.framework/Resources`。阶段列表为空，未启动宿主；latest 保留 failed，不复用旧成功。wrapper 已限定修复输入指纹：逐组件解析 checkout 内链接，绑定链接自身 target、中间链、目标存在性与文件/目录内容；越界、受保护秘密路径、断链和循环拒绝，不能简单忽略 symlink。Git 清单原已包含 `Versions/A` 实际目标数据，修复补齐链接语义与目标内容绑定。纯隔离同型 framework fixture及本工作区 620 项输入快照通过，默认/failed latest/隔离缺证据复核仍非零；这些均不是宿主测试。wrapper 变化须重新有限复审，不能沿用旧指纹的 PASS。
+控制器即时 Pear 查询 false、退出 0 后启动 attempt `20261013T182253-be28ba0a15484345b4f984ae1ad6aefa`；preflight 将跟踪的 framework `Resources` 目录 symlink 误交给普通文件哈希，失败于 `missing file .../MediaRemoteAdapter.framework/Resources`。阶段列表为空，未启动宿主；该历史 attempt 保留 failed，不冒充后续成功。wrapper 已限定修复输入指纹：逐组件解析 checkout 内链接，绑定链接自身 target、中间链、目标存在性与文件/目录内容；越界、受保护秘密路径、断链和循环拒绝，不能简单忽略 symlink。Git 清单原已包含 `Versions/A` 实际目标数据，修复补齐链接语义与目标内容绑定。纯隔离同型 framework fixture及本工作区 620 项输入快照通过，当时默认/failed latest/隔离缺证据复核均非零；这些不替代宿主测试。修复后的实际 wrapper 指纹经独立有限复审 Spec/Quality PASS、无未处理问题。
 
-**当前实际证据为离线静态/fixture、单独纯 Release 成功与一次未启动宿主的失败 preflight。完整宿主 XCTest、新 xcresult 非零运行计数、完整 wrapper 成功 attempt（含其 Debug/test/Release 产物绑定）、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending，T8 不得记录完成。** 后续由控制器在本修复有限复审及即时宿主先决条件满足后启动新 attempt，完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI。任务审查通过后的 engine verify/close 属整体门，人工项未确认不关闭；本节不宣称已完成。
+**完整自动门实测（2026-10-13）**：控制器在实际本机信任环境执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；成功 attempt 为 `20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`，绑定源码 HEAD `35307761`、ai-calendar/cd825466 与 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均退出 0。新 xcresult 的 root/action 计数一致：实际执行 815、failed 0、skipped 0、actionStatus succeeded；legacy 的独立 passed/expectedFailures 仍为 null。三个 Python 套件实际 11 tests 通过。
+
+本 attempt 的新 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`；新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c/tests.xcresult`。Debug app 使用 `com.cmeng.gourd.calendar-tests.Gourd` 隔离域，其 test bundle、新 Release app 的内容摘要均绑定于同目录 `evidence.json`。Debug/Release deep strict 签名和实际 metadata 检查均退出 0、Authority Gourd Local；Release 为 `com.cmeng.gourd`、0.2.0（build 1200）。后续安装源为此新 DerivedData 下 `Build/Products/Release/Gourd.app`，不是旧单独 offline Release。各原日志及命令/阶段退出/允许环境/时刻/摘要均已保存，未将编译或旧产物当作本轮运行证据。
+
+控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；本次文档提交后的 docs-only 实际正向复核仍由控制器继续完成。
+
+**T8 完整自动证据已取得，任务最终复审与记录、文档回写后的实际证据复核、fresh 整体最强终审、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
 
 ## 已知限制
 
@@ -206,7 +212,7 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 
 凭据测试用替身，不读取真实账户或发送示例邀请。会议打开测试用注入 opener，不打开真实会议。系统接受分发、真实客户端成功加入、跨账户同步及模型供应商线上质量不能由单元测试证明。
 
-宿主运行限制：隔离 bundle/允许项环境不能封锁既有 Pear Desktop 自动切换链；Pear 活跃时会经 localhost 认证取得真实内存 token，这不是 Keychain 读取或仅本地监听。独立预审与控制器已采用运行契约：取得新的明确桌面空闲授权后，启动前即时只读查询精确 bundle `com.github.th-ch.youtube-music`，保存命令/时刻/退出码与 false；true 或查询失败则不启动。测试期间不启动 Pear、不操作真实设置/控制器/会议入口，结束后再次即时只读核对；历史 false 不可复用。该 baseline 旁路由 preflight 与持续空闲条件管理，没有新增生产 guard，wrapper 本身不检测 Pear。既有天气 HTTP、本地 RPC/XPC 监听与 AppleMusic 媒体观察仍可能发生，不宣称全宿主零副作用；它们不等于本轮模型/会议请求。桌面授权不解除真实 AI/秘密/会议/EventKit 写禁令。
+宿主运行限制：隔离 bundle/允许项环境不能封锁既有 Pear Desktop 自动切换链；Pear 活跃时会经 localhost 认证取得真实内存 token，这不是 Keychain 读取或仅本地监听。独立预审与控制器已采用运行契约：取得明确桌面空闲授权后，启动前即时只读查询精确 bundle `com.github.th-ch.youtube-music`，保存命令/时刻/退出码与 false；true 或查询失败则不启动。测试期间不启动 Pear、不操作真实设置/控制器/会议入口，结束后再次即时只读核对；历史 false 不可复用。本次实际完整门前后已查询 false/退出 0，这不构成未来运行许可或源码级封锁。该 baseline 旁路由 preflight 与持续空闲条件管理，没有新增生产 guard，wrapper 本身不检测 Pear。既有天气 HTTP、本地 RPC/XPC 监听与 AppleMusic 媒体观察仍可能发生，不宣称全宿主零副作用；它们不等于本轮模型/会议请求。桌面授权不解除真实 AI/秘密/会议/EventKit 写禁令。
 
 ## 验收标准
 
@@ -214,7 +220,7 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 
 完整 XCTest、Python 回归与 Release 构建通过；测试覆盖四协议请求/响应、配置/秘密失败、取消及并发、伪造会议域名/链接、华为双 ID、打开回退、三类邀请与普通语言、时间确认、草稿手改/过期结果、提醒备注/链接/时间及收回保护。全部采用离线替身，不需要真实模型或真实会议账户。
 
-人工逐项复核：① 首页/列表拖选复制、完成与独立详情；② 输入自动填稿、待确认项、切页收回恢复及失败重试；③ 独立 AI 设置保存/连接测试及屏幕助手原配置仍可用；④ 测试会议入口和拒绝回退。继承 D-26，不将旧自动 UI Runner 当成新强制门；已核实 XCTest 宿主启动会显示灵动岛，因此当前先编译测试；T8就绪后取得新的桌面空闲授权再运行，未获得时验证保持pending。人工项未确认不得宣布全范围验收完成。文档、指南及本轮整体独立终审必须与实际实现一致。
+人工逐项复核：① 首页/列表拖选复制、完成与独立详情；② 输入自动填稿、待确认项、切页收回恢复及失败重试；③ 独立 AI 设置保存/连接测试及屏幕助手原配置仍可用；④ 测试会议入口和拒绝回退。继承 D-26，不将旧自动 UI Runner 当成新强制门；此前因宿主显示窗口先编译，2026-10-13 用户恢复授权后已实际执行完整 815 个 XCTest。人工四项仍按用户选择留在安装后逐项确认，未确认不得宣布全范围验收完成或 close。文档、指南及本轮整体独立终审必须与实际实现一致。
 
 ## 决策摘要
 
