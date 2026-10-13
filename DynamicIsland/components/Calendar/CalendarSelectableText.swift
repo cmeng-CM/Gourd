@@ -1,0 +1,298 @@
+// Copyright (C) 2026 Gourd Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import AppKit
+import Combine
+import SwiftUI
+
+/// Copying uses cached display data and validated source evidence, without opening a meeting.
+struct CalendarCopyPayload: Equatable {
+    let title: String
+    let fullInformation: String
+    let meetingInformation: String
+
+    init(title: String, fullInformation: String, meetingSource: String = "") {
+        self.title = title
+        self.fullInformation = fullInformation
+        let targets = MeetingLinkResolver().resolve(text: meetingSource)
+        var evidence: [String] = []
+        for target in targets {
+            for value in [target.sourceURL?.absoluteString, target.httpsURL?.absoluteString].compactMap({ $0 })
+                + target.meetingCodes.map(\.sourceText) where !evidence.contains(value) {
+                evidence.append(value)
+            }
+        }
+        meetingInformation = evidence.joined(separator: "\n")
+    }
+
+    init(event: EventModel) {
+        let calendar = CalendarPanelDates.sourceCalendar(for: event)
+        var fields = [event.title, event.calendar.title]
+        if CalendarPanelDates.hasDueDate(event) {
+            fields.append(CalendarPanelDates.formatted(event.start, allDay: event.isAllDay, calendar: calendar))
+            if !event.type.isReminder {
+                let end = event.isAllDay
+                    ? CalendarEventInput.includedAllDayEnd(exclusiveEnd: event.end, calendar: calendar) ?? event.start : event.end
+                fields.append(CalendarPanelDates.formatted(end, allDay: event.isAllDay, calendar: calendar))
+            }
+        } else { fields.append(String(localized: "calendar.panel.noDueDate")) }
+        if event.isAllDay { fields.append(String(localized: "All-day")) }
+        if let zone = event.timeZone { fields.append(zone.identifier) }
+        fields += [event.location, event.notes, event.url?.absoluteString].compactMap { $0 }.filter { !$0.isEmpty }
+        if let url = event.conferenceURL?.absoluteString, !fields.contains(url) { fields.append(url) }
+        self.init(title: event.title, fullInformation: fields.joined(separator: "\n"),
+                  meetingSource: [event.title, event.location, event.notes, event.url?.absoluteString,
+                                  event.conferenceURL?.absoluteString].compactMap { $0 }.joined(separator: "\n"))
+    }
+
+    init(item: TodoBucketing.Item) {
+        var fields = [item.title, item.listName]
+        if let due = item.dueDate { fields.append(due.formatted()) }
+        self.init(title: item.title, fullInformation: fields.joined(separator: "\n"), meetingSource: item.title)
+    }
+}
+
+/// Each text view owns one token; selection/focus alone never keeps the island open.
+/// The same entry points are exercised by offline callback tests.
+@MainActor
+final class CalendarTextInteraction {
+    let token = UUID()
+    private(set) var dragging = false
+    private var menus = Set<ObjectIdentifier>()
+    private var active = false
+    private var stopped = false
+    private let setProtection: (Bool, UUID) -> Void
+    private let recheckHover: () -> Void
+
+    init(setProtection: @escaping (Bool, UUID) -> Void, recheckHover: @escaping () -> Void) {
+        self.setProtection = setProtection
+        self.recheckHover = recheckHover
+    }
+
+    func mouseDown() { guard !stopped else { return }; dragging = true; update() }
+    func mouseUp() { dragging = false; update() }
+    func trackingReturned() { mouseUp() }
+    func menuWillOpen(_ menu: AnyObject) { guard !stopped else { return }; menus.insert(ObjectIdentifier(menu)); update() }
+    func menuDidClose(_ menu: AnyObject) { menus.remove(ObjectIdentifier(menu)); update() }
+    func depart() { dragging = false; menus.removeAll(); update() }
+    func stop() { stopped = true; depart() }
+
+    private func update() {
+        let next = dragging || !menus.isEmpty
+        guard next != active else { return }
+        active = next
+        setProtection(next, token)
+        if !next { recheckHover() }
+    }
+}
+
+/// A real read-only NSTextView: AppKit owns dragging, Cmd-C and contextual menu tracking.
+struct CalendarSelectableText: NSViewRepresentable {
+    @EnvironmentObject private var vm: DynamicIslandViewModel
+    let text: String
+    let payload: CalendarCopyPayload
+    var font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+    var color: NSColor = .white
+    var maximumLines: Int = 0
+    var strikethrough = false
+
+    func makeNSView(context: Context) -> CalendarReadOnlyTextView {
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        view.connect(to: vm)
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: CalendarReadOnlyTextView, context: Context) {
+        view.connect(to: vm)
+        view.payload = payload
+        view.configure(text: text, font: font, color: color, maximumLines: maximumLines,
+                       strikethrough: strikethrough)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: CalendarReadOnlyTextView, context: Context) -> CGSize? {
+        nsView.measuredSize(width: proposal.width ?? 200)
+    }
+
+    static func dismantleNSView(_ view: CalendarReadOnlyTextView, coordinator: ()) { view.stop() }
+}
+
+@MainActor
+final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
+    var payload = CalendarCopyPayload(title: "", fullInformation: "")
+    private(set) var interaction: CalendarTextInteraction?
+    private weak var viewModel: DynamicIslandViewModel?
+    private var subscriptions = Set<AnyCancellable>()
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var upMonitor: Any?
+    private var ownedMenus: [NSMenu] = []
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        isEditable = false
+        isSelectable = true
+        isRichText = false
+        drawsBackground = false
+        textContainerInset = .zero
+        textContainer?.lineFragmentPadding = 0
+        isHorizontallyResizable = false
+        isVerticallyResizable = true
+        textContainer?.widthTracksTextView = true
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func connect(to vm: DynamicIslandViewModel) {
+        guard viewModel !== vm || interaction == nil else { return }
+        stop()
+        viewModel = vm
+        interaction = CalendarTextInteraction(
+            setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
+            recheckHover: { [weak vm] in vm?.shouldRecheckHover.toggle() }
+        )
+        vm.$notchState.dropFirst().sink { [weak self] state in
+            if state == .closed { self?.depart() }
+        }.store(in: &subscriptions)
+        attachObservers()
+    }
+
+    func configure(text: String, font: NSFont, color: NSColor, maximumLines: Int, strikethrough: Bool) {
+        let value = NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: color, .strikethroughStyle: strikethrough ? NSUnderlineStyle.single.rawValue : 0
+        ])
+        // Repeated SwiftUI updates must not erase a user's selection.
+        if textStorage?.isEqual(to: value) == false { textStorage?.setAttributedString(value) }
+        textContainer?.maximumNumberOfLines = maximumLines
+        textContainer?.lineBreakMode = maximumLines > 0 ? .byTruncatingTail : .byWordWrapping
+    }
+
+    func measuredSize(width: CGFloat) -> CGSize {
+        let width = max(1, width)
+        textContainer?.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
+        guard let container = textContainer, let manager = layoutManager else { return CGSize(width: width, height: 16) }
+        manager.ensureLayout(for: container)
+        return CGSize(width: width, height: max(ceil(manager.usedRect(for: container).height), ceil(font?.boundingRectForFont.height ?? 16)))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let owner = interaction
+        owner?.mouseDown()
+        installUpMonitor()
+        // NSTextView may consume mouseUp inside its own tracking loop.
+        defer { owner?.trackingReturned(); removeUpMonitor() }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        interaction?.mouseUp()
+        removeUpMonitor()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let copy = menu.addItem(withTitle: String(localized: "calendar.copy.selection"), action: #selector(copy(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = selectedRange().length > 0
+        menu.addItem(.separator())
+        for (key, action, enabled) in [
+            ("calendar.copy.title", #selector(copyTitle(_:)), true),
+            ("calendar.copy.fullInformation", #selector(copyFullInformation(_:)), true),
+            ("calendar.copy.meetingInformation", #selector(copyMeetingInformation(_:)), !payload.meetingInformation.isEmpty)
+        ] {
+            let item = menu.addItem(withTitle: NSLocalizedString(key, comment: ""), action: action, keyEquivalent: "")
+            item.target = self
+            item.isEnabled = enabled
+        }
+        menu.delegate = self
+        ownedMenus.append(menu)
+        return menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) { interaction?.menuWillOpen(menu) }
+    func menuDidClose(_ menu: NSMenu) {
+        interaction?.menuDidClose(menu)
+        menu.delegate = nil
+        ownedMenus.removeAll { $0 === menu }
+    }
+
+    @objc private func copyTitle(_ sender: Any?) { writeClipboard(payload.title) }
+    @objc private func copyFullInformation(_ sender: Any?) { writeClipboard(payload.fullInformation) }
+    @objc private func copyMeetingInformation(_ sender: Any?) { writeClipboard(payload.meetingInformation) }
+    private func writeClipboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        depart()
+        removeObservers()
+        if window != nil, interaction != nil { attachObservers() }
+    }
+
+    private func attachObservers() {
+        guard observers.isEmpty else { return }
+        for name in [NSApplication.didResignActiveNotification, NSApplication.willTerminateNotification] {
+            observe(NotificationCenter.default, name: name)
+        }
+        observe(NSWorkspace.shared.notificationCenter, name: NSWorkspace.didActivateApplicationNotification)
+        if let window { observe(NotificationCenter.default, name: NSWindow.willCloseNotification, object: window) }
+    }
+
+    private func observe(_ center: NotificationCenter, name: Notification.Name, object: AnyObject? = nil) {
+        let observer = center.addObserver(forName: name, object: object, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                if name == NSWorkspace.didActivateApplicationNotification,
+                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                   app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
+                self?.depart()
+            }
+        }
+        observers.append((center, observer))
+    }
+
+    private func installUpMonitor() {
+        guard upMonitor == nil else { return }
+        upMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.interaction?.mouseUp()
+            self?.removeUpMonitor()
+            return event
+        }
+    }
+
+    private func removeUpMonitor() {
+        if let upMonitor { NSEvent.removeMonitor(upMonitor) }
+        upMonitor = nil
+    }
+
+    private func removeObservers() {
+        for (center, observer) in observers { center.removeObserver(observer) }
+        observers.removeAll()
+    }
+
+    private func depart() {
+        interaction?.depart()
+        removeUpMonitor()
+        for menu in ownedMenus { menu.delegate = nil; menu.cancelTracking() }
+        ownedMenus.removeAll()
+    }
+
+    func stop() {
+        depart()
+        removeObservers()
+        subscriptions.removeAll()
+        interaction?.stop()
+        interaction = nil
+        viewModel = nil
+    }
+
+    deinit {
+        let owner = interaction
+        MainActor.assumeIsolated { owner?.stop() }
+        for (center, observer) in observers { center.removeObserver(observer) }
+        if let upMonitor { NSEvent.removeMonitor(upMonitor) }
+    }
+}

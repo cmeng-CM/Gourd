@@ -1642,8 +1642,7 @@ private struct TodoHomeTodayList: View {
                 groupHeader("calendar.quickAdd.kindEvent")
                 ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
-                        TodoHomeEventRow(event: event, open: { openEvent(event) })
-                            .disabled(!canOpenDetail)
+                        TodoHomeEventRow(event: event, canOpenDetail: canOpenDetail, open: { openEvent(event) })
                             .id(event.id)
                     }
                 }
@@ -1653,7 +1652,7 @@ private struct TodoHomeTodayList: View {
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
                         TodoHomeRow(
-                            item: item, tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
+                            item: item, event: CalendarManager.shared.event(withID: item.id), tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
                             open: { openTodo(item) }, complete: { completeTodo(item) }
                         ).id(item.id)
                     }
@@ -1673,28 +1672,33 @@ private struct TodoHomeTodayList: View {
 
 private struct TodoHomeEventRow: View {
     let event: EventModel
+    let canOpenDetail: Bool
     let open: () -> Void
 
     var body: some View {
-        Button(action: open) {
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color(event.calendar.color)).frame(width: 4, height: 24)
-                Text(event.title).font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95)).lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 6)
-                Text(TodoText.eventTimeLabel(for: event))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .monospacedDigit().foregroundStyle(.white.opacity(0.6)).lineLimit(1).fixedSize()
-            }.frame(height: TodosHomeBlockLayout.eventRowHeight)
-                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityIdentifier("home-item-" + event.id)
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color(event.calendar.color)).frame(width: 4, height: 24)
+            CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
+                                   font: .systemFont(ofSize: 11, weight: .semibold),
+                                   color: .white.withAlphaComponent(0.95), maximumLines: 1)
+            Text(TodoText.eventTimeLabel(for: event))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit().foregroundStyle(.white.opacity(0.6)).lineLimit(1).fixedSize()
+            if let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+            Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
+                .buttonStyle(.plain).disabled(!canOpenDetail)
+                .accessibilityLabel(Text("calendar.panel.details"))
+                .accessibilityIdentifier("home-item-" + event.id)
+        }.frame(height: TodosHomeBlockLayout.eventRowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 /// 宽窄两档都有独立完成圈；窄行只省去过期标签。
 private struct TodoHomeRow: View {
     let item: TodoBucketing.Item
+    let event: EventModel?
     let tier: TodosHomeBlockLayout.Tier
     let canOpenDetail: Bool
     let isSubmitting: Bool
@@ -1711,19 +1715,18 @@ private struct TodoHomeRow: View {
             }.buttonStyle(.plain).disabled(isSubmitting)
                 .accessibilityLabel(Text(LocalizedStringKey(item.isCompleted ? "calendar.panel.markIncomplete" : "calendar.panel.markComplete")))
                 .accessibilityIdentifier("home-complete-" + item.id)
-            Button(action: open) {
-                HStack(spacing: 4) {
-                    Text(item.title).font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(item.isCompleted ? 0.4 : 0.95))
-                        .strikethrough(item.isCompleted, color: .white.opacity(0.4))
-                        .lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 0)
-                    if tier == .full, TodoText.isOverdue(item) {
-                        Text(LocalizedStringKey("module.todos.overdue"))
-                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.red).fixedSize()
-                    }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(!canOpenDetail)
+            CalendarSelectableText(text: item.title, payload: event.map { CalendarCopyPayload(event: $0) } ?? CalendarCopyPayload(item: item),
+                                   font: .systemFont(ofSize: 11, weight: .medium),
+                                   color: .white.withAlphaComponent(item.isCompleted ? 0.4 : 0.95),
+                                   maximumLines: 1, strikethrough: item.isCompleted)
+            if tier == .full, TodoText.isOverdue(item) {
+                Text(LocalizedStringKey("module.todos.overdue"))
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.red).fixedSize()
+            }
+            if let event, let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+            Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
+                .buttonStyle(.plain).disabled(!canOpenDetail)
+                .accessibilityLabel(Text("calendar.panel.details"))
                 .accessibilityIdentifier("home-item-" + item.id)
         }.frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
     }

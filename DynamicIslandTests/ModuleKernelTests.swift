@@ -13257,3 +13257,168 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.draft?.notes, "User owns these notes")
     }
 }
+
+// T6 callbacks are offline: no NSTextView/NSWindow construction, clipboard or system data.
+@MainActor
+final class CalendarCopyInteractionTests: XCTestCase {
+    private func session() -> CalendarPanelSession {
+        CalendarPanelSession(saveEvent: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                             createReminder: { _ in throw CalendarMutationError.readOnlyCalendar },
+                             deleteEvent: { _ in }, completeReminder: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                             event: { _ in nil })
+    }
+
+    func testMouseUpAndTrackingReturnReleaseOnceWithoutSelectionProtection() {
+        var changes: [Bool] = [], rechecks = 0
+        let owner = CalendarTextInteraction(setProtection: { active, _ in changes.append(active) },
+                                            recheckHover: { rechecks += 1 })
+        owner.mouseDown()
+        owner.mouseUp()
+        owner.trackingReturned()
+        owner.mouseUp()
+        XCTAssertEqual(changes, [true, false])
+        XCTAssertEqual(rechecks, 1, "保持选区不常驻保护；重复 mouseUp/内部 tracking 返回幂等")
+    }
+
+    func testTrackingReturnReleasesWhenAppKitConsumesMouseUp() {
+        var protected = false, rechecks = 0
+        let owner = CalendarTextInteraction(setProtection: { active, _ in protected = active },
+                                            recheckHover: { rechecks += 1 })
+        owner.mouseDown()
+        owner.trackingReturned()
+        XCTAssertFalse(protected)
+        XCTAssertEqual(rechecks, 1)
+    }
+
+    func testMenuCloseWaitsForEveryOwnMenuAndDrag() {
+        var changes: [Bool] = [], rechecks = 0
+        let owner = CalendarTextInteraction(setProtection: { active, _ in changes.append(active) },
+                                            recheckHover: { rechecks += 1 })
+        let first = NSObject(), second = NSObject()
+        owner.menuWillOpen(first)
+        owner.menuWillOpen(second)
+        owner.mouseDown()
+        owner.menuDidClose(first)
+        owner.mouseUp()
+        XCTAssertEqual(changes, [true])
+        owner.menuDidClose(second)
+        owner.menuDidClose(second)
+        XCTAssertEqual(changes, [true, false])
+        XCTAssertEqual(rechecks, 1)
+    }
+
+    func testMouseUpCannotClearAnOpenMenuAndMenuCloseCannotClearDrag() {
+        var protected = false
+        let owner = CalendarTextInteraction(setProtection: { active, _ in protected = active }, recheckHover: {})
+        let menu = NSObject()
+        owner.mouseDown(); owner.menuWillOpen(menu); owner.mouseUp()
+        XCTAssertTrue(protected)
+        owner.mouseDown(); owner.menuDidClose(menu)
+        XCTAssertTrue(protected)
+        owner.trackingReturned()
+        XCTAssertFalse(protected)
+    }
+
+    func testIndependentOwnersReleaseOnlyTheirTokenAndRecheckHover() {
+        let unrelated = UUID()
+        var tokens: Set<UUID> = [unrelated], rechecks = 0
+        let change: (Bool, UUID) -> Void = { active, token in
+            if active { tokens.insert(token) } else { tokens.remove(token) }
+        }
+        let first = CalendarTextInteraction(setProtection: change, recheckHover: { rechecks += 1 })
+        let second = CalendarTextInteraction(setProtection: change, recheckHover: { rechecks += 1 })
+        let menu = NSObject()
+        first.mouseDown(); second.menuWillOpen(menu)
+        first.stop(); first.stop()
+        XCTAssertEqual(tokens, [unrelated, second.token])
+        second.menuDidClose(menu)
+        XCTAssertEqual(tokens, [unrelated])
+        XCTAssertEqual(rechecks, 2)
+    }
+
+    func testExternalDepartureAndLeavingWindowReleaseBothStatesAndAllowNewInteraction() {
+        for _ in 0..<2 { // App departure and view leaving its window use the same cleanup.
+            var protected = false, rechecks = 0
+            let owner = CalendarTextInteraction(setProtection: { active, _ in protected = active },
+                                                recheckHover: { rechecks += 1 })
+            let menu = NSObject()
+            owner.mouseDown(); owner.menuWillOpen(menu)
+            owner.depart(); owner.depart(); owner.trackingReturned(); owner.menuDidClose(menu)
+            XCTAssertFalse(protected)
+            XCTAssertEqual(rechecks, 1)
+            owner.mouseDown()
+            XCTAssertTrue(protected)
+            owner.mouseUp()
+            XCTAssertEqual(rechecks, 2)
+        }
+    }
+
+    func testDismantledOwnerRejectsLateMouseAndMenuCallbacks() {
+        var changes: [Bool] = []
+        let owner = CalendarTextInteraction(setProtection: { active, _ in changes.append(active) }, recheckHover: {})
+        let menu = NSObject()
+        owner.menuWillOpen(menu); owner.stop(); owner.stop()
+        owner.mouseDown(); owner.menuWillOpen(menu); owner.menuDidClose(menu); owner.trackingReturned()
+        XCTAssertEqual(changes, [true, false])
+    }
+
+    func testCapturedScreenProtectionCancelsOldTimerEvenAfterRelease() async {
+        let session = session(), selectedScreen = CurrentValueSubject<Bool, Never>(false)
+        let closed = expectation(description: "stale shortcut deadline must stay cancelled")
+        closed.isInverted = true
+        let timer = DispatchWorkItem { closed.fulfill() }
+        let protection = CalendarShortcutCloseProtection(session: session) { timer.cancel() }
+        protection.observeSuppression(selectedScreen.eraseToAnyPublisher())
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02, execute: timer)
+        selectedScreen.send(true); selectedScreen.send(false)
+        XCTAssertTrue(timer.isCancelled)
+        XCTAssertTrue(CalendarShortcutCloseProtection.permitsDeadline(session: session, suppressed: false))
+        await fulfillment(of: [closed], timeout: 0.08)
+        withExtendedLifetime(protection) {}
+    }
+
+    func testObserverReplacementStopAndInitialActiveProtection() {
+        let session = session()
+        let oldScreen = CurrentValueSubject<Bool, Never>(false), newScreen = CurrentValueSubject<Bool, Never>(true)
+        var cancellations = 0
+        let protection = CalendarShortcutCloseProtection(session: session) { cancellations += 1 }
+        protection.observeSuppression(oldScreen.eraseToAnyPublisher())
+        protection.observeSuppression(newScreen.eraseToAnyPublisher())
+        XCTAssertEqual(cancellations, 1, "新捕获屏幕已有保护时立即取消")
+        oldScreen.send(true)
+        XCTAssertEqual(cancellations, 1, "旧屏幕订阅已解除")
+        newScreen.send(false); newScreen.send(true)
+        XCTAssertEqual(cancellations, 2)
+        protection.stop(); protection.stop()
+        newScreen.send(false); newScreen.send(true)
+        session.beginCreate(kind: .event, on: Date(), calendarID: nil)
+        XCTAssertEqual(cancellations, 2, "销毁解除 session 与 VM 的所有订阅")
+    }
+
+    func testDeadlineReadsCapturedSuppressionAndLiveSessionProtection() {
+        let session = session()
+        XCTAssertTrue(CalendarShortcutCloseProtection.permitsDeadline(session: session, suppressed: false))
+        XCTAssertFalse(CalendarShortcutCloseProtection.permitsDeadline(session: session, suppressed: true))
+        session.beginCreate(kind: .event, on: Date(), calendarID: nil)
+        XCTAssertFalse(CalendarShortcutCloseProtection.permitsDeadline(session: session, suppressed: false))
+    }
+
+    func testMeetingCopyPreservesSeparateSourceCodesAndDoesNotInventLinks() {
+        let source = "邀请 https://meeting.huaweicloud.com/#/j/123456789 会议ID：987654321"
+        let payload = CalendarCopyPayload(title: "Review", fullInformation: source, meetingSource: source)
+        XCTAssertTrue(payload.meetingInformation.contains("https://meeting.huaweicloud.com/#/j/123456789"))
+        XCTAssertTrue(payload.meetingInformation.contains("987654321"))
+        XCTAssertFalse(payload.meetingInformation.contains("hwmeeting://"))
+        let noMeeting = CalendarCopyPayload(title: "Read", fullInformation: "Call 13800138000", meetingSource: "Call 13800138000")
+        XCTAssertEqual(noMeeting.meetingInformation, "")
+    }
+
+    func testTodoFallbackCopyKeepsTitleListAndDueWithoutCalendarNavigation() {
+        let due = Date(timeIntervalSince1970: 1_800_000_000)
+        let item = TodoBucketing.Item(id: "offline", title: "Read proposal", dueDate: due, isCompleted: false, listName: "Inbox")
+        let payload = CalendarCopyPayload(item: item)
+        XCTAssertEqual(payload.title, "Read proposal")
+        XCTAssertTrue(payload.fullInformation.contains("Inbox"))
+        XCTAssertTrue(payload.fullInformation.contains(due.formatted()))
+    }
+}

@@ -262,29 +262,30 @@ struct CalendarPanelPages: View {
         if event.type.isReminder {
             HStack(spacing: 10) {
                 completionButton(event)
-                Button { show(event) } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(event.title).fontWeight(.medium).lineLimit(showFullEventTitles ? nil : 2)
-                        Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: CalendarPanelDates.sourceCalendar(for: event))) : String(localized: "calendar.panel.noDueDate"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 4) {
+                    CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
+                                           font: .systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                                           maximumLines: showFullEventTitles ? 0 : 2)
+                    Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: CalendarPanelDates.sourceCalendar(for: event))) : String(localized: "calendar.panel.noDueDate"))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("calendar-item-\(event.id)")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+                Button { show(event) } label: { Image(systemName: "chevron.right") }
+                    .disabled(session.isSubmitting)
+                    .accessibilityLabel(Text("calendar.panel.details"))
+                    .accessibilityIdentifier("calendar-item-\(event.id)")
             }
             .padding(.horizontal, 11).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.1 : 0.05)))
             .opacity(isCompleted(event) ? 0.55 : 1)
             .onHover { hoveredID = $0 ? event.id : nil }
         } else {
-            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles)
+            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
+                              onDetail: { show(event) }, detailEnabled: !session.isSubmitting)
                 .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.05 : 0)))
                 .contentShape(Rectangle())
-                .onTapGesture { show(event) }
                 .onHover { hoveredID = $0 ? event.id : nil }
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("calendar-item-\(event.id)")
         }
     }
 
@@ -306,7 +307,8 @@ struct CalendarPanelPages: View {
     private func detailPage(_ event: EventModel) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(event.title).font(.headline).textSelection(.enabled)
+                CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
+                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .bold))
                 labeledText("calendar.panel.calendar", event.calendar.title)
                 if CalendarPanelDates.hasDueDate(event) {
                     labeledText(event.type.isReminder ? "calendar.panel.dueDate" : "calendar.panel.start", displayDate(event.start, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event)))
@@ -345,7 +347,9 @@ struct CalendarPanelPages: View {
     private func labeledText(_ key: LocalizedStringKey, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(key).font(.caption).foregroundStyle(.secondary)
-            Text(value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            if let event = session.detailEvent {
+                CalendarSelectableText(text: value, payload: CalendarCopyPayload(event: event))
+            }
         }
     }
 

@@ -271,11 +271,42 @@ final class CalendarEditorLifecycle: ObservableObject {
 /// The app injects its actual delegate's cancellation closure, independent of NSApp.delegate wrappers.
 @MainActor
 final class CalendarShortcutCloseProtection {
-    private var subscription: AnyCancellable?
+    private var sessionSubscription: AnyCancellable?
+    private var suppressionSubscription: AnyCancellable?
+    private let cancel: () -> Void
+
     init(session: CalendarPanelSession, cancel: @escaping () -> Void) {
-        subscription = session.$route.combineLatest(session.$isSubmitting).sink { route, submitting in
+        self.cancel = cancel
+        sessionSubscription = session.$route.combineLatest(session.$isSubmitting).sink { route, submitting in
             if route == .editor || submitting { cancel() }
         }
+    }
+
+    /// Rebind to the VM actually captured by the next deadline, including secondary screens.
+    func observe(_ viewModel: DynamicIslandViewModel) {
+        observeSuppression(viewModel.$isAutoCloseSuppressed.eraseToAnyPublisher())
+    }
+
+    func observeSuppression(_ publisher: AnyPublisher<Bool, Never>) {
+        suppressionSubscription?.cancel()
+        suppressionSubscription = publisher.removeDuplicates().sink { [cancel] protected in
+            if protected { cancel() }
+        }
+    }
+
+    static func permitsDeadline(session: CalendarPanelSession, suppressed: Bool) -> Bool {
+        !suppressed && !session.shouldProtectAutoClose && session.route != .editor
+    }
+
+    func stopObservingSuppression() {
+        suppressionSubscription?.cancel()
+        suppressionSubscription = nil
+    }
+
+    func stop() {
+        sessionSubscription?.cancel()
+        sessionSubscription = nil
+        stopObservingSuppression()
     }
 }
 

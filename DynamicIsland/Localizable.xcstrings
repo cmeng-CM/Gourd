@@ -1,6 +1,70 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "calendar.copy.selection": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy selection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制选中文字"
+          }
+        }
+      }
+    },
+    "calendar.copy.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy title"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制标题"
+          }
+        }
+      }
+    },
+    "calendar.copy.fullInformation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy full information"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制完整信息"
+          }
+        }
+      }
+    },
+    "calendar.copy.meetingInformation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy meeting information"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制会议信息"
+          }
+        }
+      }
+    },
     "calendar.generation.error.sourceTooLarge": {
       "localizations": {
         "en": {

@@ -42,7 +42,7 @@
 //  白系不透明度常量（`MonthGridLayout.cardSecondaryOpacity` / `cardSecondaryStrongOpacity`）——
 //  固定中灰在浅色 / 中间调玻璃（`.liquidGlass` / `.frostedGlass` + 浅色系统外观）上对比度归零，
 //  与日历页星期行同一根因（见 `MonthGridLayout` 的「次要文字的不透明度」一节）。
-//  勾选圈左置（待办）、`ConferenceJoinButton` 在正文列内（日程）——位置都不许动。
+//  勾选圈左置（待办）、`ConferenceJoinButton` 在正文列内（日程）；详情箭头独立于可选正文。
 //
 //  **2026-10-12：右栏行高随面板「日历」页等比放大**（docs/41-home-and-calendar-scale.md D-03 / D-04）：
 //  本文件里由 `MonthGridLayout.scale` 派生的只有两处**行高**——列容器的 `headerHeight`（26 → 31.2，
@@ -64,11 +64,12 @@
 //
 //  说明：本文件只含**纯展示**卡片——点击 / 悬停 / 打开系统 App 等宿主交互仍由宿主包装层负责
 //  （面板侧见 `StandaloneEventCardList.eventCard(_:)`；首页侧 T3 起由本文件的 `CalendarEventCardList`
-//  接详情浮层：卡片包 `CalendarEventHoverTarget` + `anchorPreference` 上报锚点，点击 `togglePin`）。
+//  接详情浮层：卡片包 `CalendarEventHoverTarget` + `anchorPreference` 上报锚点，独立箭头 `togglePin`）。
 //  `ReminderToggle` / `ConferenceJoinButton` 留在 `DynamicIslandCalendar.swift`（同模块可见），
 //  不随本次抽取搬迁。
 //
 
+import AppKit
 import Defaults
 import SwiftUI
 
@@ -80,6 +81,8 @@ struct CalendarEventCard: View {
     let event: EventModel
     /// 标题是否不限行（开「显示完整事件标题」时为 `true`，否则 2 行截断）。
     let showFullEventTitles: Bool
+    var onDetail: (() -> Void)? = nil
+    var detailEnabled = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -88,18 +91,14 @@ struct CalendarEventCard: View {
                 .frame(width: 4, height: 36)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.callout)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(showFullEventTitles ? nil : 2)
+                CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
+                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
+                                       maximumLines: showFullEventTitles ? 0 : 2)
 
                 if let location = event.location, !location.isEmpty {
-                    Text(location)
-                        .font(.caption)
-                        // p18：改前固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上卡片会整片看不清。
-                        .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
-                        .lineLimit(1)
+                    CalendarSelectableText(text: location, payload: CalendarCopyPayload(event: event),
+                                           font: .systemFont(ofSize: NSFont.smallSystemFontSize),
+                                           color: .white.withAlphaComponent(MonthGridLayout.cardSecondaryOpacity), maximumLines: 1)
                 }
 
                 if let conferenceURL = event.conferenceURL {
@@ -123,6 +122,12 @@ struct CalendarEventCard: View {
                         .font(.caption2)
                         .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 }
+            }
+            if let onDetail {
+                Button(action: onDetail) { Image(systemName: "chevron.right") }
+                    .buttonStyle(.plain).disabled(!detailEnabled)
+                    .accessibilityLabel(Text("calendar.panel.details"))
+                    .accessibilityIdentifier("calendar-item-" + event.id)
             }
         }
         .padding(.horizontal, 11)
@@ -149,6 +154,8 @@ struct ReminderCard: View {
     let showFullEventTitles: Bool
     /// 勾选圈写回：`true` = 标记完成、`false` = 标记未完成。
     let onToggle: (Bool) -> Void
+    var onDetail: (() -> Void)? = nil
+    var detailEnabled = true
 
     /// 完成态判定（原 builder 内的 `isCompleted` 局部量原样搬入）。
     private var isCompleted: Bool {
@@ -169,11 +176,9 @@ struct ReminderCard: View {
             )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.callout)
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .lineLimit(showFullEventTitles ? nil : 2)
+                CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
+                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                                       maximumLines: showFullEventTitles ? 0 : 2)
 
                 if event.isAllDay {
                     Text("All-day")
@@ -188,6 +193,12 @@ struct ReminderCard: View {
                 Text(event.start, style: .time)
                     .font(.caption)
                     .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryStrongOpacity))
+            }
+            if let onDetail {
+                Button(action: onDetail) { Image(systemName: "chevron.right") }
+                    .buttonStyle(.plain).disabled(!detailEnabled)
+                    .accessibilityLabel(Text("calendar.panel.details"))
+                    .accessibilityIdentifier("calendar-item-" + event.id)
             }
         }
         .padding(.horizontal, 11)
@@ -320,20 +331,13 @@ struct CalendarEventCardList: View {
     ///
     /// 外面统一包一层宿主交互（P11 / T3）：`CalendarEventHoverTarget`（悬停 0.3s → `details.hover`）
     /// + `anchorPreference`（把本卡的 bounds 按 id 上报给宿主的详情浮层）
-    /// + `contentShape(Rectangle())`（整块卡片（含色条与空隙）都可悬停 / 可点）
-    /// + `onTapGesture`（点击 → `details.togglePin`，同卡再点取消、点其它卡转移）。
+    /// + `contentShape(Rectangle())`（整块卡片可悬停）；只有独立箭头触发 `togglePin`。
     private func card(for event: EventModel) -> some View {
         CalendarEventHoverTarget(id: event.id, model: details) {
             cardBody(for: event)
         }
         .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
         .contentShape(Rectangle())
-        .onTapGesture {
-            details.togglePin(event.id)
-        }
-        // 辅助功能语义（T8b）：整块可点（点击 = 钉住详情），补 Button 语义——不加视觉、不加文案键
-        // （屏幕朗读仍读卡片内容，读者由此知道「这是可点开的条目」）。
-        .accessibilityAddTraits(.isButton)
     }
 
     /// 卡片本体分派（纯展示，不含宿主交互；交互见上面的 `card(for:)`）。
@@ -349,10 +353,12 @@ struct CalendarEventCardList: View {
                             reminderID: event.id, completed: completed
                         )
                     }
-                }
+                },
+                onDetail: { details.togglePin(event.id) }
             )
         } else {
-            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles)
+            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
+                              onDetail: { details.togglePin(event.id) })
         }
     }
 }

@@ -409,6 +409,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         tearDownAudioTapMusicObservers()
         cancelPendingNotchAutoClose()
         cancellables.removeAll()
+        calendarShortcutProtection?.stop()
         calendarShortcutProtection = nil
         extensionXPCServiceHost.stop()
         extensionRPCServer.stop()
@@ -469,6 +470,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func cleanupWindows(shouldInvert: Bool = false) {
+        cancelPendingNotchAutoClose()
         if shouldInvert ? !Defaults[.showOnAllDisplays] : Defaults[.showOnAllDisplays] {
             for (screen, window) in windows {
                 // Tear down the hosted ContentView before dropping the window
@@ -1220,21 +1222,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            self.closeNotchWorkItem?.cancel()
-            self.closeNotchWorkItem = nil
+            self.cancelPendingNotchAutoClose()
+            self.calendarShortcutProtection?.observe(viewModel)
 
             switch viewModel.notchState {
             case .closed:
                 viewModel.open()
 
-                let workItem = DispatchWorkItem { [weak viewModel] in
-                    guard !CalendarPanelSession.shared.shouldProtectAutoClose,
-                          CalendarPanelSession.shared.route != .editor else { return }
-                    viewModel?.close()
+                let workItem = DispatchWorkItem { [weak self, weak viewModel] in
+                    self?.cancelPendingNotchAutoClose()
+                    guard let viewModel,
+                          CalendarShortcutCloseProtection.permitsDeadline(
+                            session: .shared, suppressed: viewModel.isAutoCloseSuppressed) else { return }
+                    viewModel.close()
                 }
                 self.closeNotchWorkItem = workItem
 
-                if CalendarPanelSession.shared.route != .editor && !CalendarPanelSession.shared.isSubmitting {
+                if CalendarShortcutCloseProtection.permitsDeadline(session: .shared, suppressed: viewModel.isAutoCloseSuppressed) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
                 } else { self.cancelPendingNotchAutoClose() }
             case .open:
@@ -1558,10 +1562,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func cancelPendingNotchAutoClose() {
         closeNotchWorkItem?.cancel()
         closeNotchWorkItem = nil
+        calendarShortcutProtection?.stopObservingSuppression()
     }
 
     /// NSApplicationDelegateAdaptor may wrap NSApp.delegate; use this real delegate instance.
     func observeCalendarShortcutProtection(session: CalendarPanelSession) {
+        calendarShortcutProtection?.stop()
         calendarShortcutProtection = CalendarShortcutCloseProtection(session: session) { [weak self] in
             self?.cancelPendingNotchAutoClose()
         }
@@ -1749,6 +1755,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             
             for screen in windows.keys where !currentScreens.contains(screen) {
                 if let window = windows[screen] {
+                    cancelPendingNotchAutoClose()
                     viewModels[screen]?.onViewTeardown?()
                     viewModels[screen]?.onViewTeardown = nil
                     window.close()
