@@ -13202,6 +13202,30 @@ final class ScheduleGenerationTests: XCTestCase {
             } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
         }
     }
+    func testPairedHuaweiFallbackKeepsFullHTTPSWithSentencePunctuationAndQuery() async throws {
+        let native = MeetingInvitationFixtures.native
+        let https = MeetingInvitationFixtures.huaweiHTTPS
+        for source in [native + "\n" + https + "。", https + "。\n" + native] {
+            let text = "明天下午五点开会\n" + source
+            let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: text))
+            XCTAssertEqual(target.sourceText, native)
+            XCTAssertEqual(target.httpsURL?.absoluteString, https)
+            let (value, _) = try await parse(text, output: output(url: https))
+            XCTAssertEqual(value.url?.absoluteString, https)
+        }
+        let query = "https://meeting.huaweicloud.com/?name=Fixture,.#/j/960724861"
+        let text = "明天下午五点开会\n" + native + "\n" + query + "。"
+        let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: text))
+        XCTAssertEqual(target.httpsURL?.absoluteString, query)
+        let (value, _) = try await parse(text, output: output(url: query))
+        XCTAssertEqual(value.url?.absoluteString, query)
+        for truncated in [https, query.replacingOccurrences(of: "Fixture,.", with: "Fixture,"), query.replacingOccurrences(of: "960724861", with: "960724")] {
+            do {
+                _ = try await parse(text, output: output(url: truncated))
+                XCTFail("Paired fallback evidence must retain the complete original URL bytes")
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        }
+    }
     func testGenerationErrorsResolveActualBilingualCatalogValues() throws {
         let values: [(ScheduleParsingError, String, String)] = [
             (.sourceTooLarge, "Use no more than 20,000 characters.", "原文不能超过 20,000 个字符。"),

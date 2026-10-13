@@ -329,7 +329,9 @@ struct ScheduleParsing: ScheduleParser {
         let regex = try NSRegularExpression(pattern: #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"“”]+"#)
         let tokens = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range, in: text).map { String(text[$0]) } }
         let originalMeetings = MeetingLinkResolver().resolve(text: text)
-        let resolverEvidence = originalMeetings.contains { $0.sourceText == raw && ($0.sourceURL?.absoluteString == raw || $0.httpsURL?.absoluteString == raw) }
+        let resolverEvidence = originalMeetings.contains {
+            ($0.sourceText == raw && $0.sourceURL?.absoluteString == raw) || $0.httpsURL?.absoluteString == raw
+        }
         guard tokens.contains(raw) || resolverEvidence, let url = URL(string: raw), let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.user == nil, components.password == nil, components.host != nil,
               components.scheme == "https" || components.scheme == "http" || components.scheme == "cloudlink" else { throw ScheduleParsingError.invalidEvidence }
