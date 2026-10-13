@@ -12772,11 +12772,16 @@ final class MeetingOpeningTests: XCTestCase {
 private final class ScheduleAIStub: AIHandle {
     var requests: [AIRequest] = []
     var response: String
+    var responseForRequest: ((AIRequest) throws -> [String: Any])?
     init(_ object: [String: Any]) {
         response = String(data: try! JSONSerialization.data(withJSONObject: object), encoding: .utf8)!
     }
     func complete(_ request: AIRequest) async throws -> AIResponse {
         requests.append(request)
+        if let responseForRequest {
+            let data = try JSONSerialization.data(withJSONObject: responseForRequest(request))
+            return AIResponse(text: String(decoding: data, as: UTF8.self))
+        }
         return AIResponse(text: response)
     }
 }
@@ -13187,6 +13192,128 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertTrue(correct.confirmations.isEmpty)
         let (wrong, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", startEvidence: "10:00", end: "11:00", endEvidence: "12:00"))
         XCTAssertTrue(wrong.confirmations.contains(.time))
+    }
+    func testWholeSourceIndependentClocksRequireConfirmationRegardlessOfSelectedStart() async throws {
+        for (text, start) in [
+            ("2026-10-14 17:00开会，改到18:00，19:00结束", "17:00"),
+            ("2026-10-14 17:00开会，改到18:00，19:00结束", "18:00"),
+            ("2026-10-14 17:00开始，19:00结束，20:00复盘", "17:00")
+        ] {
+            let (value, _) = try await parse(text, output: output(date: "2026-10-14", evidence: "2026-10-14", start: start, startEvidence: start, end: "19:00", endEvidence: "19:00"))
+            XCTAssertEqual(value.confirmations, [.time], text + " selected " + start)
+        }
+        let (control, _) = try await parse("2026-10-14 17:00开会，19:00结束", output: output(date: "2026-10-14", evidence: "2026-10-14", startEvidence: "17:00", end: "19:00", endEvidence: "19:00"))
+        XCTAssertEqual(control.start, date(14, hour: 17))
+        XCTAssertEqual(control.end, date(14, hour: 19))
+        XCTAssertTrue(control.confirmations.isEmpty)
+    }
+    func testInvitationNumericMetadataDoesNotBecomeIndependentClockConflict() async throws {
+        let feishu = MeetingInvitationFixtures.feishu + """
+
+        会议时间：2026-10-13 15:00 - 16:30 (GMT+08:00)
+        会议 ID：384 462 190
+        手机拨号一键入会：+862122504720,,384462190 或 4008208888,,384462190
+        """
+        for (text, evidence, start, end, url) in [
+            (MeetingInvitationFixtures.huawei, "2026-10-13", "10:00", "10:45", MeetingInvitationFixtures.huaweiHTTPS),
+            (MeetingInvitationFixtures.tencent, "2026/10/13", "10:00", "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"),
+            (feishu, "2026-10-13", "15:00", "16:30", "https://vc.feishu.cn/j/384462190")
+        ] {
+            let (value, _) = try await parse(text, output: output(evidence: evidence, start: start, startEvidence: start, end: end, endEvidence: end, url: url))
+            XCTAssertTrue(value.confirmations.isEmpty, text)
+            XCTAssertEqual(value.url?.absoluteString, url)
+        }
+    }
+    func testRealParserSessionBlocksConflictingClocksBeforeWriterUntilExplicitConfirmation() async {
+        for (text, start, conflict) in [
+            ("2026-10-14 17:00开会，改到18:00，19:00结束", "17:00", true),
+            ("2026-10-14 17:00开会，改到18:00，19:00结束", "18:00", true),
+            ("2026-10-14 17:00开始，19:00结束，20:00复盘", "17:00", true),
+            ("2026-10-14 17:00开会，19:00结束", "17:00", false)
+        ] {
+            let backend = backend(), session = session(backend)
+            session.configureAI(ScheduleAIStub(output(date: "2026-10-14", evidence: "2026-10-14", start: start, startEvidence: start, end: "19:00", endEvidence: "19:00")))
+            session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+            session.updateSourceText(text)
+            await session.parseSource()
+            XCTAssertEqual(session.generationState, .ready)
+            XCTAssertEqual(session.draft?.confirmations, conflict ? [.time] : [])
+            XCTAssertEqual(backend.writeAttempts, 0)
+            let saved = await session.save()
+            XCTAssertEqual(saved, !conflict)
+            XCTAssertEqual(backend.writeAttempts, conflict ? 0 : 1)
+            if conflict {
+                XCTAssertEqual(session.error, ScheduleParsingError.confirmationRequired.localizedDescription)
+                XCTAssertNotNil(session.draft)
+                session.confirmSource(.time)
+                let confirmedSave = await session.save()
+                XCTAssertTrue(confirmedSave)
+                XCTAssertEqual(backend.writeAttempts, 1)
+            }
+        }
+    }
+    func testRealParserSessionFreezesReferenceInstantAndZoneAcrossRetryAndCancellation() async throws {
+        let backend = backend()
+        let firstInstant = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-12T16:30:00Z"))
+        var clockNow = firstInstant
+        let session = CalendarPanelSession(selectedDate: firstInstant, calendar: calendar, now: { clockNow },
+            saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+            createReminder: { try await backend.createReminderRecord(input: $0) },
+            deleteEvent: { try await backend.deleteEvent(id: $0) },
+            completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+            event: { backend.event(withID: $0) })
+        let ai = ScheduleAIStub(output())
+        // The fake follows each actual request's relative-date context, so a zone
+        // change would reproduce the previous one-day drift through the real parser.
+        ai.responseForRequest = { request in
+            let prompt = try XCTUnwrap(request.messages.first?.text)
+            let instantText = try XCTUnwrap(prompt.components(separatedBy: "Reference instant: ").last?.components(separatedBy: ". Reference IANA time zone: ").first)
+            let zoneText = try XCTUnwrap(prompt.components(separatedBy: "Reference IANA time zone: ").last?.components(separatedBy: ".").first)
+            let instant = try XCTUnwrap(ISO8601DateFormatter().date(from: instantText))
+            var referenceCalendar = Calendar(identifier: .gregorian)
+            referenceCalendar.timeZone = try XCTUnwrap(TimeZone(identifier: zoneText))
+            let tomorrow = try XCTUnwrap(referenceCalendar.date(byAdding: .day, value: 1, to: instant))
+            let formatter = DateFormatter()
+            formatter.calendar = referenceCalendar
+            formatter.timeZone = referenceCalendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            return self.output(date: formatter.string(from: tomorrow), startEvidence: "17:00", zone: "America/New_York")
+        }
+        session.configureAI(ai)
+        session.beginCreate(kind: .event, on: date(13), calendarID: "fixture-events")
+        session.updateSourceText("明天 17:00 America/New_York")
+        await session.parseSource()
+        let expectedStart = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-14T21:00:00Z"))
+        XCTAssertEqual(session.draft?.start, expectedStart)
+        XCTAssertEqual(session.draft?.timeZoneIdentifier, "America/New_York")
+        clockNow = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-14T16:30:00Z"))
+        await session.retrySourceParsing()
+        XCTAssertEqual(session.draft?.start, expectedStart)
+        XCTAssertEqual(session.draft?.confirmations, [])
+        XCTAssertEqual(session.generationState, .ready)
+        XCTAssertEqual(ai.requests.count, 2)
+        let frozenContext = "Reference instant: 2026-10-12T16:30:00Z. Reference IANA time zone: Asia/Shanghai."
+        for request in ai.requests { XCTAssertTrue(request.messages[0].text.contains(frozenContext)) }
+        XCTAssertEqual(try XCTUnwrap(session.draft).eventInput(calendar: calendar).timeZoneIdentifier, "America/New_York")
+        session.cancelSourceParsing()
+        await session.retrySourceParsing()
+        XCTAssertTrue(ai.requests[2].messages[0].text.contains(frozenContext))
+        XCTAssertEqual(session.draft?.start, expectedStart)
+        // A new revision takes both parts again from the current draft/reference clock.
+        session.updateSourceText("明天 17:00 America/New_York 开会")
+        await session.parseSource()
+        XCTAssertTrue(ai.requests[3].messages[0].text.contains("Reference instant: 2026-10-14T16:30:00Z. Reference IANA time zone: America/New_York."))
+        XCTAssertEqual(session.draft?.start, ISO8601DateFormatter().date(from: "2026-10-15T21:00:00Z"))
+        XCTAssertEqual(session.draft?.confirmations, [])
+        session.discardDraft()
+        session.beginCreate(kind: .event, on: date(15), calendarID: "fixture-events")
+        session.updateSourceText("明天 17:00 America/New_York")
+        await session.parseSource()
+        XCTAssertTrue(ai.requests[4].messages[0].text.contains("Reference instant: 2026-10-14T16:30:00Z. Reference IANA time zone: Asia/Shanghai."))
+        XCTAssertEqual(session.draft?.start, ISO8601DateFormatter().date(from: "2026-10-16T21:00:00Z"))
+        XCTAssertEqual(session.draft?.timeZoneIdentifier, "America/New_York")
+        XCTAssertEqual(backend.writeAttempts, 0)
     }
     func testResolverApprovedSentencePunctuationAndRealQueryBytesStayDistinct() async throws {
         let plain = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"

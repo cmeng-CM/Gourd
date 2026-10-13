@@ -98,7 +98,7 @@ public protocol GourdModule: AnyObject {
 
 设置「AI 模型」写独立非秘密配置与 Keychain 引用；模型协议为 OpenAI compatible、Anthropic、Gemini、Ollama。屏幕助手原管理器、模型选择、设置和 Defaults 凭据保持原链。第三方插件通道不消费这个 Swift 句柄，也不新增 RPC。
 
-日历模块自有 `CalendarPanelSession` 经 surface 工厂同时传到首页与日历页面；`configuredAI` 只读暴露实际注入对象供会议动作使用。原文解析约 800ms debounce，携带修订/草稿/参考时区，候选只合并未手改字段；确认与保存守卫在 session，保存沿已有 EventKit 读回链。正文由 `CalendarSelectableText` 提供真实只读选区，详情按钮独立；拖选/菜单 owner 释放后重新检查 hover。会议由同一 resolver 验证来源，再由可注入 opener 分发与拒绝回退。
+`CalendarModule` 与 `TodosModule` 分别将各自注入的 `CalendarPanelSession` 经 surface 工厂传入日历页与首页；生产默认使用 `.shared`，显式注入时保持原对象；`configuredAI` 只读暴露实际注入对象供会议动作使用。原文解析约 800ms debounce，携带修订/草稿/参考时区，候选只合并未手改字段；确认与保存守卫在 session，保存沿已有 EventKit 读回链。正文由 `CalendarSelectableText` 提供真实只读选区，详情按钮独立；拖选/菜单 owner 释放后重新检查 hover。会议由同一 resolver 验证来源，再由可注入 opener 分发与拒绝回退。
 
 机制、权威签名、时区及人工验证边界见 [45](45-ai-calendar-and-meeting-actions.md)；以下早期规划表中的「AI 对话不投入」仅指旧屏幕助手，不排除本次增量。
 

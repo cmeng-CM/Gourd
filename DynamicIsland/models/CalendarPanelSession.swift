@@ -148,7 +148,13 @@ final class CalendarPanelSession: ObservableObject {
     private var notesWereEdited = false
     private var ai: (any AIHandle)?
     private var sourceRevision = 0
-    private var sourceReferenceDate: Date?
+    private struct SourceReferenceContext {
+        let date: Date
+        let timeZone: TimeZone
+    }
+    // Relative dates use this revision's reference zone, never a merged candidate's
+    // source zone. Keep the instant and zone together through retries and cancellation.
+    private var sourceReferenceContext: SourceReferenceContext?
     private var parsingTask: Task<ScheduleCandidate, Error>?
     private var parsingID: UUID?
 
@@ -162,7 +168,7 @@ final class CalendarPanelSession: ObservableObject {
 
     private func sourceDidChange() {
         sourceRevision += 1
-        sourceReferenceDate = nil
+        sourceReferenceContext = nil
         parsingTask?.cancel()
         parsingTask = nil
         parsingID = nil
@@ -187,15 +193,17 @@ final class CalendarPanelSession: ObservableObject {
         parsingTask?.cancel()
         let requestID = UUID()
         let revision = sourceRevision
-        let reference = sourceReferenceDate ?? now()
-        sourceReferenceDate = reference
-        let zone = TimeZone(identifier: snapshot.timeZoneIdentifier ?? calendar.timeZone.identifier) ?? calendar.timeZone
+        let reference = sourceReferenceContext ?? SourceReferenceContext(
+            date: now(),
+            timeZone: TimeZone(identifier: snapshot.timeZoneIdentifier ?? calendar.timeZone.identifier) ?? calendar.timeZone
+        )
+        sourceReferenceContext = reference
         parsingID = requestID
         draft?.generationMode = .required
         draft?.confirmations = Set(ScheduleConfirmation.allCases)
         generationState = .parsing
         generationError = nil
-        let task = Task { try await parser.parse(text: snapshot.sourceText, referenceDate: reference, timeZone: zone) }
+        let task = Task { try await parser.parse(text: snapshot.sourceText, referenceDate: reference.date, timeZone: reference.timeZone) }
         parsingTask = task
         do {
             let candidate = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
@@ -446,7 +454,7 @@ final class CalendarPanelSession: ObservableObject {
         baseline = newDraft
         generationState = .idle
         generationError = nil
-        sourceReferenceDate = nil
+        sourceReferenceContext = nil
         draftContext = context
         draftError = nil
         returnSource = context.source
@@ -523,6 +531,7 @@ final class CalendarPanelSession: ObservableObject {
         parsingTask = nil
         parsingID = nil
         sourceRevision += 1
+        sourceReferenceContext = nil
         generationState = .idle
         generationError = nil
         notesWereEdited = false

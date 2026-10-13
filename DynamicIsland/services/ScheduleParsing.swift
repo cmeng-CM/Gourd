@@ -158,6 +158,14 @@ struct ScheduleParsing: ScheduleParser {
         for range in Self.timeRanges(in: text) where range.start != value.start || range.end != value.end {
             confirmations.insert(.time)
         }
+        // Selected evidence cannot hide another independent clock in the source. Use the
+        // same period inheritance and GMT/UTC exclusion as evidence validation; do not
+        // guess which clock a rescheduling phrase supersedes.
+        for hint in Self.timeHints(in: text) {
+            if hint.clock == nil || (hint.clock != value.start && hint.clock != value.end) {
+                confirmations.insert(.time)
+            }
+        }
         if allDay, let day { start = day; end = CalendarRecordDates.endOfDay(for: day, calendar: calendar) }
         if let start, let end, end <= start { throw ScheduleParsingError.invalidResponse }
         if day == nil, !allDay { confirmations.insert(.time) }

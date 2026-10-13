@@ -117,7 +117,7 @@ stateDiagram-v2
 | ScheduleParser / ScheduleParsing.parse(text:referenceDate:timeZone:) async throws -> ScheduleCandidate | @MainActor 可注入解析契约；生产实现调用 AI；候选含标题、日期、可选精确起止、全天、地点、备注、原文 URL、来源时区与 date/time 确认项，不保存 |
 | CalendarDraft 新字段 | sourceText、url、timeZoneIdentifier、确认状态；默认兼容手工旧草稿 |
 | CalendarPanelSession.parseSource(using:) / cancelSourceParsing() | 单草稿代数与逐字段合并；可注入解析器；取消保留原文和保存阻断 |
-| updateSourceText / retrySourceParsing / useManualEntry / confirmSource | 原文改动立即失效旧确认；重试复用该修订参考时刻；手工退出仍逐项确认当前 date/time |
+| updateSourceText / retrySourceParsing / useManualEntry / confirmSource | 原文改动立即失效旧确认；重试复用该修订成对的参考时刻与参考时区；手工退出仍逐项确认当前 date/time |
 | CalendarPanelSession.configuredAI | 只读可选 AIHandle，取自模块实际 configureAI；会议动作使用同一注入对象，视图不另建全局服务 |
 | CalendarEventInput | URL 和时区默认可选；编辑加载原值，保存不得清掉既有未知时区 |
 | CalendarReminderInput | title/due/isAllDay/notes/url/listID/timeZoneIdentifier；到期时刻换算为绝对时间，并将可用来源时区写入 DateComponents，兼容旧 title/due/listID 调用者 |
@@ -131,9 +131,9 @@ stateDiagram-v2
 
 编辑页日期控件与全天转换使用草稿来源 calendar/timeZone，和保存校验一致。提醒时刻按秒精度验证 DateComponents 读回：不能保全绝对时刻时拒绝保存并保留草稿，不用固定偏移悄悄替换来源 IANA 标识。
 
-解析 JSON 必须且只能含 `title/date/dateEvidence/start/startEvidence/end/endEvidence/isAllDay/location/notes/url/timeZoneIdentifier`；缺值为 null，日期为 YYYY-MM-DD，时刻为 HH:mm 或 HH:mm:ss，证据是原文连续片段。不能仅凭模型选中的局部证据消除原文其他日期或时间提示；来源日期须严格回读校验，不能由 Foundation 进位。相对日和本周规则先在请求参考时区求年月日，再于日程来源时区构造该自然日。证据不足或范围遗漏保留确认；只有原文确实缺结束时间才使用一小时默认。
+解析 JSON 必须且只能含 `title/date/dateEvidence/start/startEvidence/end/endEvidence/isAllDay/location/notes/url/timeZoneIdentifier`；缺值为 null，日期为 YYYY-MM-DD，时刻为 HH:mm 或 HH:mm:ss，证据是原文连续片段。不能仅凭模型选中的局部证据消除原文其他日期或时间提示；来源日期须严格回读校验，不能由 Foundation 进位。相对日和本周规则先在请求参考时区求年月日，再于日程来源时区构造该自然日。候选起止共同确定后，使用与选中证据相同的 `timeHints` 词法核对全文时刻：保留 range 的时段继承和 GMT/UTC 偏移排除，不能由模型选择或「改到」措辞推断旧提示已被废弃。任何无法解释或不等于候选起止的独立时刻保留 `.time` 确认；合法两个独立起止不会额外确认，邀请中的日期、会议号和电话沿既有词法处理。证据不足或范围遗漏保留确认；只有原文确实缺结束时间才使用一小时默认。
 
-`sourceText/generationMode/confirmations` 属于草稿 dirty 状态。会话同步失效与保存守卫独立于 T7 的 800ms 调度；`generationState` 为 idle/debouncing/parsing/ready/failed/cancelled。首次提交解析冻结该修订参考时刻，重试复用。备注一旦手改便持续由用户持有，重解析不再自动追加原文，独立原文仍可恢复。
+`sourceText/generationMode/confirmations` 属于草稿 dirty 状态。会话同步失效与保存守卫独立于 T7 的 800ms 调度；`generationState` 为 idle/debouncing/parsing/ready/failed/cancelled。首次提交解析用 `SourceReferenceContext` 成对冻结该修订的 reference instant 与 reference time zone，重试和取消后重试均复用。参考区用于解释相对年月日；候选来源区继续用于显示、日期控件和保存，不得回流改写同修订的参考区。原文变化、载入新稿与清稿统一清除此上下文；新修订重新取当前时刻及当时草稿区（未指定则用会话区）。备注一旦手改便持续由用户持有，重解析不再自动追加原文，独立原文仍可恢复。
 
 文字桥接按建议宽度测量行高，不嵌套 NSScrollView，保留页面外层全量滚动。实际拖选开始和菜单打开各占局部 owner；AppKit 的 mouseDown 跟踪返回、mouseUp、菜单关闭、离开应用/窗口及拆毁释放并复检 hover。快捷收回观察当前选屏，保护开始取消旧 deadline，释放不恢复旧三秒计时。观察安装以 binding ID 防止同步 publisher 回调中的停止或替换被返回的旧订阅覆盖。
 
@@ -151,7 +151,7 @@ T6 已本地提交（`a4225282`、`f264c656`）：只读选区/复制菜单、�
 
 T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 当时仅完成编译，现已随下述完整 815 用例运行。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
 
-T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与新 Release/签名检查均通过；任务最终复审、整体终审与人工门仍未完成，不能将此记录视为全范围验收通过。
+T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述修复前完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与当时新 Release/签名检查均通过；首次整体终审随后为 No，本波代码新增后必须取得新的自动证据，不能将历史成功视为当前实现或全范围验收通过。
 
 ### T8 验证入口与交付状态（完整自动门已运行）
 
@@ -182,11 +182,19 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 **完整自动门实测（2026-10-13）**：控制器在实际本机信任环境执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；成功 attempt 为 `20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`，绑定源码 HEAD `35307761`、ai-calendar/cd825466 与 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均退出 0。新 xcresult 的 root/action 计数一致：实际执行 815、failed 0、skipped 0、actionStatus succeeded；legacy 的独立 passed/expectedFailures 仍为 null。三个 Python 套件实际 11 tests 通过。
 
-本 attempt 的新 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`；新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c/tests.xcresult`。Debug app 使用 `com.cmeng.gourd.calendar-tests.Gourd` 隔离域，其 test bundle、新 Release app 的内容摘要均绑定于同目录 `evidence.json`。Debug/Release deep strict 签名和实际 metadata 检查均退出 0、Authority Gourd Local；Release 为 `com.cmeng.gourd`、0.2.0（build 1200）。后续安装源为此新 DerivedData 下 `Build/Products/Release/Gourd.app`，不是旧单独 offline Release。各原日志及命令/阶段退出/允许环境/时刻/摘要均已保存，未将编译或旧产物当作本轮运行证据。
+本 attempt 的新 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`；新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c/tests.xcresult`。Debug app 使用 `com.cmeng.gourd.calendar-tests.Gourd` 隔离域，其 test bundle、新 Release app 的内容摘要均绑定于同目录 `evidence.json`。Debug/Release deep strict 签名和实际 metadata 检查均退出 0、Authority Gourd Local；Release 为 `com.cmeng.gourd`、0.2.0（build 1200）。该历史 attempt 曾以此新 DerivedData 下 `Build/Products/Release/Gourd.app` 作为待安装源；本波生产/测试修改后旧 success 不可复用，后续安装须绑定本波新的成功 attempt，不使用此历史产物或旧单独 offline Release。各原日志及命令/阶段退出/允许环境/时刻/摘要均已保存，未将编译或旧产物当作本轮运行证据。
 
 控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；本次文档提交后的 docs-only 实际正向复核仍由控制器继续完成。
 
-**T8 完整自动证据已取得，任务最终复审与记录、文档回写后的实际证据复核、fresh 整体最强终审、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
+**T8 修复前完整自动证据已取得，任务最终复审及 docs-only 证据复核随后完成；首次 fresh 整体终审为 No（Critical 0 / Important 2 / Minor 2）。本波修复后的完整自动门、独立复审、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
+
+### 首次整体终审与同波修复（2026-10-13）
+
+首次独立整体终审在 `172cc65e` 判定 No：I-01 的三个独立时刻可被模型选中的局部证据漏掉；I-02 的重试只冻结 instant，候选纽约来源区回流改变上海参考日期。两项均恢复 D-04/D-07/D-15/D-16 原契约，不降为已知可接受限制。该波还校正用户指南的来源区编辑承诺、架构的 CalendarModule/TodosModule 各自 surface 注入描述，不新增时区选择器或改变产品范围。
+
+`ScheduleParsing.swift` 新增全文 `timeHints` 与共同起止的一致性核验；`CalendarPanelSession.swift` 用成对参考上下文隔离重试。新增四个 XCTest 方法覆盖模型选旧/新时刻、漏第三时刻、合法两个独立起止、真实 session 保存零写入阻断及明确确认后的内存保存、三类邀请的 GMT/日期/会议号/电话无误报；真实 session→真实 parser→fake AI 在固定 `2026-10-12T16:30Z`、上海参考/纽约来源下检查两次请求 instant+zone 一致、start 稳定、来源区仍正确，并检查取消重试、新修订及弃稿/新稿的上下文生命周期。既有 range/period/default-duration、手改与 DST 断言保留。
+
+本波新增源码尚待控制器新的实际完整自动门与独立复审；旧 815/11 成功仅为历史。实现者实际运行纯 Foundation 源码/fake AI 探针 46 断言、Python 三套 11 tests，均退出 0；新的独立 DerivedData 中 build-for-testing 退出 0（沿项目 Gourd Local，无 identity override），仅证明新测试编译，不表示 XCTest 已运行。具体命令与失败尝试另记本波报告，这些不能替代新宿主 XCTest/Release 十阶段或宣称 Ready to merge。安装仍在新自动门与独立审查通过后，四个人工类别仍 pending。
 
 ## 已知限制
 
@@ -240,8 +248,8 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 | D-12 | Kernel/Factory 共享 runtime，加载错误显式保留；空白密钥保留/开关清除；默认选择立即保存，连接测试为不保存的文字探针 | agent：T2 候选裁定经控制器采用，确保模块下一次请求读取新配置，避免测试与保存混淆；加载失败恢复和视觉验证限制见已知限制 |
 | D-13 | 华为原生必填/选填按官方契约验证；HTTPS 回退须同平台/标识且双侧唯一；旧平台保留受支持 HTTPS 路径；AI 证据重过同一白名单并保留原文多入口歧义 | agent：T3 技术候选与独立审查修复经控制器采用，不猜测不同编号的关系，也不从原文之外补入口；平台路径覆盖限制见已知限制 |
 | D-14 | 未指定 event 元数据保留；legacy 提醒不能保全则拒绝；来源时区编辑与保存一致；提醒秒精度读回失败明确拒绝 | agent：T4 技术候选与独立审查复现暴露的两处边界经控制器采用，确保元数据和绝对时刻不被静默改变；不能表示的 DST 重复时刻限制见已知限制 |
-| D-15 | AI 输出含连续来源证据；全原文仍校验日期/时段；相对日先用参考时区，来源时区只构造时刻；无法证实保留确认，默认一小时须确实无结束提示 | agent：T5 初版及独立审查的离线复现暴露局部证据遗漏、日期进位及跨区问题，控制器采用严格校验与人工确认修复边界；未覆盖语法可能增加确认或手工回退，不放宽保存守卫 |
-| D-16 | 每修订首次提交解析冻结参考时刻；手改备注持续归用户；调度在 UI，同步失效与保存阻断在会话 | agent：T5 候选裁定经控制器采用，与第 2 节既有提交时刻契约一致；重试不跨午夜改变含义，原文变更才重新取参考时刻，手改备注之后不自动追加新原文 |
+| D-15 | AI 输出含连续来源证据；全原文校验日期/时段及所有独立时刻，未被共同起止解释的提示保留时间确认；相对日先用参考时区，来源时区只构造时刻；无法证实保留确认，默认一小时须确实无结束提示 | agent：T5 初版及独立审查的离线复现暴露局部证据遗漏、日期进位及跨区问题，控制器采用严格校验与人工确认修复边界；首次整体终审 I-01 暴露独立时刻覆盖遗漏，同波沿既有 timeHints 恢复全文核验，不猜改期语义；未覆盖语法可能增加确认或手工回退，不放宽保存守卫 |
+| D-16 | 每修订首次提交解析成对冻结参考时刻与参考时区；手改备注持续归用户；调度在 UI，同步失效与保存阻断在会话 | agent：T5 候选裁定经控制器采用，与第 2 节既有提交时刻契约一致；首次整体终审 I-02 暴露候选来源区回流，同波把参考区与来源区职责分离；同修订重试（含取消后）复用两者，原文变化/新稿/弃稿清理，重试不跨午夜改变含义；手改备注之后不自动追加新原文 |
 | D-17 | Unicode decimal 显式规范化后严格回读日期；原文 resolver 认可的完整 HTTPS fallback 不受配对后的 native sourceText 限制 | agent：T5 限定修复与独立离线复核后采用；不扩展非 decimal 字符或未认可入口，任何 URL/query/path 截短仍拒绝 |
 | D-18 | 完整自动门取得新桌面授权后实际执行；回写文档后只复核绑定同代码/环境/产物的本轮最新成功 attempt；整体终审/人工确认/engine收尾移至任务后整体门 | agent：控制器解除 T8 验收中 close 自依赖；复用限同工作流/基线、24小时内且同自然日，仅 docs Markdown 可变化，其他输入和产物须匹配；新 attempt 废止旧成功，缺失、陈旧、跨 workflow、不匹配或失败/中断须非零，复核不能自动启动宿主 |
 | D-19 | T7 用只读 session.configuredAI 接通会议视图的实际 ModuleContext.ai | agent：控制器定位现有 ai 为 private、叶子视图无 context；补会话只读接口及六文件原子任务，避免默认全局服务绕过模块注入，不增加密钥访问或新请求边界 |
