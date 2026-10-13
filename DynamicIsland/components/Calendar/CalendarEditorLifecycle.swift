@@ -14,6 +14,7 @@ final class CalendarEditorLifecycle: ObservableObject {
     var editorHasFocus: Bool { session.editorHasFocus }
     var ownedMenuCount: Int { session.ownedMenuCount }
     var datePopoverPresented: Bool { session.datePopoverPresented }
+    // Generation may continue after departure; only input ownership and writes protect closing.
     var shouldProtectAutoClose: Bool { session.shouldProtectAutoClose }
 
     private let protectionToken = UUID()

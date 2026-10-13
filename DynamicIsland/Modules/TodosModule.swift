@@ -835,6 +835,7 @@ final class TodosModule: GourdModule {
         config: nil
     )
 
+    private let session: CalendarPanelSession
     private let context: ModuleContext
     private let store: TodoStore
 
@@ -862,13 +863,19 @@ final class TodosModule: GourdModule {
     /// **吃余量**（docs/38 D-04）：第三排两块都弹性，富余按各自 ideal 等比分配。
     static var homeBlockAbsorbsSurplus: Bool { true }
 
-    init(context: ModuleContext) {
+    convenience init(context: ModuleContext) {
+        self.init(context: context, session: .shared)
+    }
+
+    init(context: ModuleContext, session: CalendarPanelSession) {
+        self.session = session
         self.context = context
         self.store = TodoStore(logger: context.logger)
     }
 
     /// 只订阅变更 + 已授权时首取；**不请求权限**（见文件头的授权口径）。
     func activate() async throws {
+        session.configureAI(context.ai)
         store.start()
         context.logger.info("todos 模块已激活（提醒授权=\(Self.authorizationDescription(store.authorization))）")
     }

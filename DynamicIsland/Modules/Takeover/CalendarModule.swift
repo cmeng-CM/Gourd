@@ -91,9 +91,15 @@ final class CalendarModule: GourdModule {
         config: nil
     )
 
+    private let session: CalendarPanelSession
     private let context: ModuleContext
 
-    init(context: ModuleContext) {
+    convenience init(context: ModuleContext) {
+        self.init(context: context, session: .shared)
+    }
+
+    init(context: ModuleContext, session: CalendarPanelSession) {
+        self.session = session
         self.context = context
     }
 
@@ -115,6 +121,7 @@ final class CalendarModule: GourdModule {
     /// 只记一条日志：日历没有常驻副作用（事件数据与刷新都在上游 `CalendarManager` 里，
     /// 本批只搬渲染归属，不搬生命周期）。
     func activate() async throws {
+        session.configureAI(context.ai)
         context.logger.info("calendar 模块已激活（非接管：面板日历页由组件页那一颗开关控制）")
     }
 

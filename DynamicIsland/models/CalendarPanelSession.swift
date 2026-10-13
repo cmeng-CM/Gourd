@@ -15,6 +15,13 @@ enum CalendarPanelRoute: Equatable { case list, detail, editor }
 enum CalendarDraftConflictChoice { case resume, discardAndStart, cancel }
 enum CalendarTerminationChoice { case save, discard, cancel }
 
+enum CalendarGenerationMode: Equatable { case manual, required, ready }
+
+enum CalendarGenerationState: Equatable {
+    case idle, debouncing, parsing, ready, failed, cancelled
+    var labelKey: String { "calendar.generation.state.\(self)" }
+}
+
 struct CalendarDraft: Equatable {
     enum Kind: Equatable { case event, reminder }
 
@@ -31,8 +38,17 @@ struct CalendarDraft: Equatable {
     var url: URL? = nil
     var timeZoneIdentifier: String? = nil
 
+    var sourceText: String = ""
+    var generationMode: CalendarGenerationMode = .manual
+    var confirmations: Set<ScheduleConfirmation> = []
+
+    func validateGeneration() throws {
+        guard generationMode != .required, confirmations.isEmpty else { throw ScheduleParsingError.confirmationRequired }
+    }
+
     func eventInput(calendar: Calendar = .current) throws -> CalendarEventInput {
         guard kind == .event else { throw CalendarMutationError.wrongRecordType }
+        try validateGeneration()
         try validateTarget()
         return try CalendarEventInput(
             title: title, start: start, end: end, isAllDay: isAllDay,
@@ -43,6 +59,7 @@ struct CalendarDraft: Equatable {
 
     func reminderInput() throws -> CalendarReminderInput {
         guard kind == .reminder else { throw CalendarMutationError.wrongRecordType }
+        try validateGeneration()
         try validateTarget()
         return CalendarReminderInput(
             title: title.trimmingCharacters(in: .whitespacesAndNewlines), due: start, isAllDay: isAllDay,
@@ -71,7 +88,15 @@ final class CalendarPanelSession: ObservableObject {
     @Published private(set) var returnSource: CalendarPanelSource
     @Published var calendarScrollAnchor: String?
     @Published var homeScrollAnchor: String?
-    @Published var draft: CalendarDraft?
+    @Published var draft: CalendarDraft? {
+        didSet {
+            if !applyingCandidate, oldValue != nil, draft != nil, oldValue?.notes != draft?.notes { notesWereEdited = true }
+            if oldValue?.sourceText != draft?.sourceText, draft != nil,
+               oldValue != nil || draft?.sourceText.isEmpty == false { sourceDidChange() }
+        }
+    }
+    @Published private(set) var generationState: CalendarGenerationState = .idle
+    @Published private(set) var generationError: String?
     @Published private(set) var baseline: CalendarDraft?
     @Published private(set) var isSubmitting = false
     @Published private(set) var error: String?
@@ -119,6 +144,138 @@ final class CalendarPanelSession: ObservableObject {
     private var submission: Task<Bool, Never>?
     private var submissionID: UUID?
     private var termination: Task<Bool, Never>?
+    private var applyingCandidate = false
+    private var notesWereEdited = false
+    private var ai: (any AIHandle)?
+    private var sourceRevision = 0
+    private var sourceReferenceDate: Date?
+    private var parsingTask: Task<ScheduleCandidate, Error>?
+    private var parsingID: UUID?
+
+    /// Composition root supplies the same handle to every shared-session consumer.
+    func configureAI(_ ai: any AIHandle) { self.ai = ai }
+
+    func updateSourceText(_ text: String) { draft?.sourceText = text }
+
+    private func sourceDidChange() {
+        sourceRevision += 1
+        sourceReferenceDate = nil
+        parsingTask?.cancel()
+        parsingTask = nil
+        parsingID = nil
+        draft?.generationMode = .required
+        draft?.confirmations = Set(ScheduleConfirmation.allCases)
+        generationState = .debouncing
+        generationError = nil
+    }
+
+    /// T7 owns debounce scheduling; invalidation has already happened synchronously on input.
+    func parseSource() async {
+        guard let ai else {
+            generationState = .failed
+            generationError = AIError.missingDefault(.text).localizedDescription
+            return
+        }
+        await parseSource(using: ScheduleParsing(ai: ai))
+    }
+
+    func parseSource(using parser: any ScheduleParser) async {
+        guard !isSubmitting, let snapshot = draft, let id = draftID else { return }
+        parsingTask?.cancel()
+        let requestID = UUID()
+        let revision = sourceRevision
+        let reference = sourceReferenceDate ?? now()
+        sourceReferenceDate = reference
+        let zone = TimeZone(identifier: snapshot.timeZoneIdentifier ?? calendar.timeZone.identifier) ?? calendar.timeZone
+        parsingID = requestID
+        draft?.generationMode = .required
+        draft?.confirmations = Set(ScheduleConfirmation.allCases)
+        generationState = .parsing
+        generationError = nil
+        let task = Task { try await parser.parse(text: snapshot.sourceText, referenceDate: reference, timeZone: zone) }
+        parsingTask = task
+        do {
+            let candidate = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            guard draftID == id, sourceRevision == revision, parsingID == requestID, var current = draft else { return }
+            if Task.isCancelled || task.isCancelled {
+                generationState = .cancelled
+                parsingTask = nil
+                parsingID = nil
+                return
+            }
+            if current.title == snapshot.title { current.title = candidate.title }
+            if current.start == snapshot.start {
+                if let start = candidate.start { current.start = start }
+                else if let day = candidate.date {
+                    let sourceCalendar = try CalendarRecordDates.calendar(timeZoneIdentifier: candidate.timeZoneIdentifier, fallback: calendar)
+                    let clock = sourceCalendar.dateComponents([.hour, .minute, .second], from: current.start)
+                    current.start = sourceCalendar.date(bySettingHour: clock.hour ?? 0, minute: clock.minute ?? 0, second: clock.second ?? 0, of: day) ?? current.start
+                }
+            }
+            if current.end == snapshot.end {
+                if let end = candidate.end { current.end = end }
+                else if candidate.date != nil, candidate.start == nil {
+                    // Preserve the manual duration while moving only the date hint; time still needs confirmation.
+                    current.end = current.start.addingTimeInterval(snapshot.end.timeIntervalSince(snapshot.start))
+                }
+            }
+            if current.isAllDay == snapshot.isAllDay { current.isAllDay = candidate.isAllDay }
+            if current.location == snapshot.location { current.location = candidate.location }
+            if !notesWereEdited, current.notes == snapshot.notes {
+                current.notes = [candidate.notes, snapshot.sourceText].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            }
+            if current.url == snapshot.url { current.url = candidate.url }
+            if current.timeZoneIdentifier == snapshot.timeZoneIdentifier { current.timeZoneIdentifier = candidate.timeZoneIdentifier }
+            current.confirmations = candidate.confirmations
+            if current.start != snapshot.start && candidate.start != current.start {
+                current.confirmations.formUnion([.date, .time])
+            }
+            if current.end != snapshot.end && candidate.end != current.end { current.confirmations.insert(.time) }
+            if current.isAllDay != snapshot.isAllDay && candidate.isAllDay != current.isAllDay { current.confirmations.insert(.time) }
+            if current.timeZoneIdentifier != snapshot.timeZoneIdentifier && current.timeZoneIdentifier != candidate.timeZoneIdentifier {
+                current.confirmations.formUnion([.date, .time])
+            }
+            current.generationMode = .ready
+            applyingCandidate = true
+            draft = current
+            applyingCandidate = false
+            generationState = .ready
+            generationError = nil
+        } catch {
+            guard draftID == id, sourceRevision == revision, parsingID == requestID else { return }
+            generationState = task.isCancelled || Task.isCancelled ? .cancelled : .failed
+            // Do not surface arbitrary parser/provider text containing source data.
+            generationError = (error as? AIError)?.localizedDescription ?? (error as? ScheduleParsingError)?.localizedDescription ?? ScheduleParsingError.failed.localizedDescription
+        }
+        if parsingID == requestID { parsingTask = nil; parsingID = nil }
+    }
+
+    func retrySourceParsing() async { await parseSource() }
+
+    func cancelSourceParsing() {
+        parsingTask?.cancel()
+        parsingTask = nil
+        parsingID = nil
+        if draft?.generationMode != .manual {
+            draft?.generationMode = .required
+            draft?.confirmations = Set(ScheduleConfirmation.allCases)
+        }
+        generationState = .cancelled
+        generationError = nil
+    }
+
+    /// Explicit manual fallback still requires acknowledgment of current date and time.
+    func useManualEntry() {
+        cancelSourceParsing()
+        draft?.generationMode = .manual
+        draft?.confirmations = Set(ScheduleConfirmation.allCases)
+        generationState = .idle
+    }
+
+    func confirmSource(_ item: ScheduleConfirmation) {
+        guard draft?.generationMode != .required else { return }
+        draft?.confirmations.remove(item)
+    }
 
     init(
         selectedDate: Date = Date(), calendar: Calendar = .autoupdatingCurrent,
@@ -280,9 +437,13 @@ final class CalendarPanelSession: ObservableObject {
 
     private func installDraft(_ newDraft: CalendarDraft, context: DraftContext) {
         changeNavigation()
+        notesWereEdited = false
+        draftID = UUID()
         draft = newDraft
         baseline = newDraft
-        draftID = UUID()
+        generationState = .idle
+        generationError = nil
+        sourceReferenceDate = nil
         draftContext = context
         draftError = nil
         returnSource = context.source
@@ -355,6 +516,13 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     private func clearDraft() {
+        parsingTask?.cancel()
+        parsingTask = nil
+        parsingID = nil
+        sourceRevision += 1
+        generationState = .idle
+        generationError = nil
+        notesWereEdited = false
         draft = nil
         baseline = nil
         draftID = nil
@@ -375,8 +543,10 @@ final class CalendarPanelSession: ObservableObject {
             return false
         }
         do {
+            try submitted.validateGeneration()
             try submitted.validateTarget()
             if submitted.kind == .event { _ = try submitted.eventInput(calendar: calendar) }
+            else { _ = try submitted.reminderInput().dueDateComponents(calendar: calendar) }
         } catch {
             self.error = error.localizedDescription
             draftError = self.error

@@ -12765,3 +12765,361 @@ final class MeetingOpeningTests: XCTestCase {
         XCTAssertEqual(fake.urls, [try XCTUnwrap(target.nativeURL)])
     }
 }
+
+// MARK: - AI schedule candidates and revision-isolated generation
+
+@MainActor
+private final class ScheduleAIStub: AIHandle {
+    var requests: [AIRequest] = []
+    var response: String
+    init(_ object: [String: Any]) {
+        response = String(data: try! JSONSerialization.data(withJSONObject: object), encoding: .utf8)!
+    }
+    func complete(_ request: AIRequest) async throws -> AIResponse {
+        requests.append(request)
+        return AIResponse(text: response)
+    }
+}
+
+@MainActor
+private final class ControlledScheduleParser: ScheduleParser {
+    var continuation: CheckedContinuation<ScheduleCandidate, Error>?
+    var text: String?
+    var reference: Date?
+    func parse(text: String, referenceDate: Date, timeZone: TimeZone) async throws -> ScheduleCandidate {
+        self.text = text
+        reference = referenceDate
+        return try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func finish(_ candidate: ScheduleCandidate) { continuation?.resume(returning: candidate); continuation = nil }
+    func fail() { continuation?.resume(throwing: ScheduleParsingError.invalidResponse); continuation = nil }
+}
+
+@MainActor
+final class ScheduleGenerationTests: XCTestCase {
+    private var calendar: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return value
+    }
+    private func date(_ day: Int, hour: Int = 0, minute: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute))!
+    }
+    private func output(date: String? = "2026-10-13", evidence: String? = "明天", start: String? = "17:00", startEvidence: String? = "下午五点", end: String? = nil, endEvidence: String? = nil, url: String? = nil, zone: String = "Asia/Shanghai", allDay: Bool = false) -> [String: Any] {
+        ["title": "周会", "date": date as Any? ?? NSNull(), "dateEvidence": evidence as Any? ?? NSNull(),
+         "start": start as Any? ?? NSNull(), "startEvidence": startEvidence as Any? ?? NSNull(),
+         "end": end as Any? ?? NSNull(), "endEvidence": endEvidence as Any? ?? NSNull(),
+         "isAllDay": allDay, "location": "", "notes": "", "url": url as Any? ?? NSNull(), "timeZoneIdentifier": zone]
+    }
+    private func parse(_ text: String, output object: [String: Any], reference: Date? = nil) async throws -> (ScheduleCandidate, ScheduleAIStub) {
+        let ai = ScheduleAIStub(object)
+        let candidate = try await ScheduleParsing(ai: ai).parse(text: text, referenceDate: reference ?? date(12, hour: 12), timeZone: calendar.timeZone)
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertEqual(ai.requests[0].purpose, "schedule-draft")
+        XCTAssertEqual(ai.requests[0].messages.last?.text, text)
+        XCTAssertTrue(ai.requests[0].messages[0].text.contains("Asia/Shanghai"))
+        return (candidate, ai)
+    }
+    private func candidate() -> ScheduleCandidate {
+        ScheduleCandidate(title: "Generated", date: date(13), start: date(13, hour: 17), end: date(13, hour: 18), isAllDay: false, location: "Room", notes: "Summary", url: URL(string: "https://example.com/task"), timeZoneIdentifier: "Asia/Shanghai", confirmations: [])
+    }
+    private func session(_ backend: CalendarInteractionMemoryService) -> CalendarPanelSession {
+        CalendarPanelSession(selectedDate: date(12), calendar: calendar, now: { self.date(12, hour: 12) },
+                             saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                             createReminder: { try await backend.createReminderRecord(input: $0) },
+                             deleteEvent: { try await backend.deleteEvent(id: $0) },
+                             completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                             event: { backend.event(withID: $0) })
+    }
+    private func backend() -> CalendarInteractionMemoryService {
+        CalendarInteractionFixtures.makeBackend(count: 0, on: date(12), calendar: calendar)
+    }
+    private func wait(_ parser: ControlledScheduleParser) async {
+        for _ in 0..<100 where parser.continuation == nil { await Task.yield() }
+        XCTAssertNotNil(parser.continuation)
+    }
+
+    func testInitialManualDraftKeepsLegacySavePathAndInjectedCalendarModuleHandle() async throws {
+        let backend = backend(), session = session(backend)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        XCTAssertFalse(session.hasDirtyDraft)
+        XCTAssertEqual(session.draft?.generationMode, .manual)
+        session.draft?.title = "Manual"
+        let saved = await session.save(); XCTAssertTrue(saved)
+        let ai = ScheduleAIStub(output())
+        let context = ModuleContextFactory.make(manifest: CalendarModule.manifest, redraw: {}, ai: ai)
+        let module = CalendarModule(context: context, session: session)
+        try await module.activate()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("明天下午五点进行周会")
+        await session.parseSource()
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertEqual(session.generationState, .ready)
+        await module.deactivate()
+    }
+    func testExplicitGMTContradictionAndInventedAllDayFail() async {
+        for (text, object) in [
+            ("明天下午五点 GMT+09:00", output()),
+            ("明天进行周会", output(start: nil, startEvidence: nil, allDay: true))
+        ] {
+            do { _ = try await parse(text, output: object); XCTFail() }
+            catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        }
+    }
+    func testExpiredSuccessCannotPopulateReplacementDraft() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("old")
+        let request = Task { await session.parseSource(using: parser) }; await wait(parser)
+        session.discardDraft()
+        session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
+        parser.finish(candidate()); await request.value
+        XCTAssertEqual(session.draft?.title, "")
+        XCTAssertEqual(session.draft?.sourceText, "")
+        XCTAssertEqual(session.draft?.start, date(14))
+        XCTAssertEqual(session.generationState, .idle)
+    }
+    func testConfirmationStateIsDirtyAndGuardedOutsideSessionSave() async throws {
+        let backend = backend(), session = session(backend)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.draft?.title = "Manual"
+        session.updateSourceText("unknown date")
+        XCTAssertThrowsError(try XCTUnwrap(session.draft).eventInput(calendar: calendar)) {
+            XCTAssertEqual($0 as? ScheduleParsingError, .confirmationRequired)
+        }
+        session.useManualEntry()
+        session.confirmSource(.date)
+        XCTAssertThrowsError(try XCTUnwrap(session.draft).eventInput(calendar: calendar))
+        session.confirmSource(.time)
+        XCTAssertNoThrow(try XCTUnwrap(session.draft).eventInput(calendar: calendar))
+        XCTAssertTrue(session.hasDirtyDraft)
+    }
+
+    func testPreciseNaturalLanguageUsesAIAndDefaultsOneHourWithoutRecurrence() async throws {
+        let (value, _) = try await parse("明天下午五点进行周会", output: output())
+        XCTAssertEqual(value.start, date(13, hour: 17))
+        XCTAssertEqual(value.end, date(13, hour: 18))
+        XCTAssertTrue(value.confirmations.isEmpty)
+    }
+    func testWeekdayMorningHasDateButNoInventedClock() async throws {
+        let (value, _) = try await parse("本周四上午开发xxx需求", output: output(date: "2026-10-15", evidence: "本周四", start: nil, startEvidence: nil))
+        XCTAssertEqual(value.date, date(15))
+        XCTAssertNil(value.start)
+        XCTAssertNil(value.end)
+        XCTAssertEqual(value.confirmations, [.time])
+        do {
+            _ = try await parse("本周四上午开发xxx需求", output: output(date: "2026-10-15", evidence: "本周四", start: "09:00", startEvidence: "上午"))
+            XCTFail("A vague period must not substantiate 09:00")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+    }
+    func testMissingDateAndTimeRequireConfirmation() async throws {
+        let (value, _) = try await parse("开发需求", output: output(date: nil, evidence: nil, start: nil, startEvidence: nil))
+        XCTAssertNil(value.date)
+        XCTAssertEqual(value.confirmations, [.date, .time])
+    }
+    func testHuaweiAndTencentInvitationsUseAIAndOriginalLinks() async throws {
+        for (text, dateText, end, link) in [
+            (MeetingInvitationFixtures.huawei, "2026-10-13", "10:45", MeetingInvitationFixtures.huaweiHTTPS),
+            (MeetingInvitationFixtures.tencent, "2026/10/13", "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz")
+        ] {
+            let (value, _) = try await parse(text, output: output(evidence: dateText, start: "10:00", startEvidence: "10:00", end: end, endEvidence: end, url: link))
+            XCTAssertEqual(value.start, date(13, hour: 10))
+            XCTAssertEqual(value.url?.absoluteString, link)
+            XCTAssertTrue(value.confirmations.isEmpty)
+            XCTAssertEqual(value.url, MeetingLinkResolver().uniqueOpenTarget(text: text)?.sourceURL)
+        }
+    }
+    func testYearlessFeishuInvitationAndRelativeConflictRequireDateConfirmation() async throws {
+        let text = """
+        蔡锰邀请你加入飞书视频会议
+        会议主题：AI先锋队项目汇报
+        会议时间：10月13日 (明天) 15:00 - 16:30 (GMT+8)
+        会议 ID：384 462 190
+        会议链接：https://vc.feishu.cn/j/384462190
+        手机拨号一键入会
+        +862122504720,,384462190
+        4008208888,,384462190
+        """
+        for reference in [date(12), date(13)] {
+            let (value, _) = try await parse(text, output: output(evidence: "10月13日", start: "15:00", startEvidence: "15:00", end: "16:30", endEvidence: "16:30", url: "https://vc.feishu.cn/j/384462190"), reference: reference)
+            XCTAssertEqual(value.start, date(13, hour: 15))
+            XCTAssertEqual(value.confirmations, [.date])
+        }
+        let (conflict, _) = try await parse("2026-10-13 (明天) 15:00", output: output(evidence: "2026-10-13", start: "15:00", startEvidence: "15:00"), reference: date(13))
+        XCTAssertEqual(conflict.confirmations, [.date])
+    }
+    func testModelChoosingRelativeDateCannotHideYearlessInvitationConflict() async throws {
+        let (value, _) = try await parse("10月13日 (明天) 下午五点", output: output(date: "2026-10-14"), reference: date(13))
+        XCTAssertEqual(value.date, date(14))
+        XCTAssertEqual(value.confirmations, [.date])
+    }
+    func testURLPrefixAndFabricationAreRejected() async {
+        for url in ["https://meeting.tencent.com/dm/VUYt", "https://meeting.tencent.com/dm/invented"] {
+            do {
+                _ = try await parse(MeetingInvitationFixtures.tencent, output: output(evidence: "2026/10/13", start: "10:00", startEvidence: "10:00", url: url))
+                XCTFail("Only a complete original token is evidence")
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        }
+    }
+    func testStrictSchemaAndInvalidDateRejected() async {
+        var extra = output()
+        extra["recurrence"] = "weekly"
+        for object in [extra, output(date: "2026-02-30")] {
+            do { _ = try await parse("明天下午五点进行周会", output: object); XCTFail() }
+            catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
+        }
+    }
+    func testSourceLimitFailsBeforeAI() async {
+        let ai = ScheduleAIStub(output())
+        do {
+            _ = try await ScheduleParsing(ai: ai).parse(text: String(repeating: "字", count: 20_001), referenceDate: date(12), timeZone: calendar.timeZone)
+            XCTFail()
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .sourceTooLarge) }
+        XCTAssertTrue(ai.requests.isEmpty)
+    }
+    func testExplicitZoneUsesAbsoluteTimeAndReferenceWeekCrossesMonth() async throws {
+        let (value, _) = try await parse("明天 17:00 GMT+09:00", output: output(startEvidence: "17:00", zone: "Asia/Tokyo"))
+        XCTAssertEqual(value.start, date(13, hour: 16))
+        XCTAssertEqual(value.timeZoneIdentifier, "Asia/Tokyo")
+        let (week, _) = try await parse("本周四上午开发需求", output: output(date: "2026-10-29", evidence: "本周四", start: nil, startEvidence: nil), reference: date(31))
+        XCTAssertEqual(week.date, date(29))
+    }
+    func testInFlightEditsPreservedAndDepartureDoesNotReopenEditor() async throws {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("明天下午五点进行周会")
+        XCTAssertTrue(session.hasDirtyDraft)
+        let request = Task { await session.parseSource(using: parser) }
+        await wait(parser)
+        XCTAssertEqual(parser.reference, date(12, hour: 12))
+        session.draft?.title = "Manual title"
+        session.draft?.notes = "Manual notes"
+        session.draft?.start = date(14, hour: 11)
+        session.suspend()
+        XCTAssertFalse(session.shouldProtectAutoClose)
+        parser.finish(candidate())
+        await request.value
+        XCTAssertEqual(session.route, .list)
+        XCTAssertEqual(session.draft?.title, "Manual title")
+        XCTAssertEqual(session.draft?.notes, "Manual notes")
+        XCTAssertEqual(session.draft?.start, date(14, hour: 11))
+        XCTAssertEqual(session.draft?.confirmations, [.date, .time])
+    }
+    func testSourceChangeImmediatelyBlocksSaveAndStaleSuccessCannotClearIt() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.draft?.title = "Initial"
+        session.updateSourceText("明天下午五点进行周会")
+        let request = Task { await session.parseSource(using: parser) }
+        await wait(parser)
+        session.updateSourceText("本周四上午开发需求")
+        XCTAssertEqual(session.generationState, .debouncing)
+        let saved = await session.save()
+        XCTAssertFalse(saved)
+        parser.finish(candidate())
+        await request.value
+        XCTAssertEqual(session.draft?.title, "Initial")
+        XCTAssertEqual(session.draft?.generationMode, .required)
+    }
+    func testConfirmedCandidateSourceRevisionBlocksDuringDebounceFailureAndClear() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("明天下午五点进行周会")
+        let first = Task { await session.parseSource(using: parser) }; await wait(parser)
+        var ambiguous = candidate(); ambiguous.confirmations = [.date]
+        parser.finish(ambiguous); await first.value
+        session.confirmSource(.date)
+        XCTAssertTrue(session.draft?.confirmations.isEmpty == true)
+        session.updateSourceText("上午开会")
+        let debounceSave = await session.save(); XCTAssertFalse(debounceSave)
+        let second = Task { await session.parseSource(using: parser) }; await wait(parser)
+        parser.fail(); await second.value
+        let failureSave = await session.save(); XCTAssertFalse(failureSave)
+        session.updateSourceText("")
+        let clearedSave = await session.save(); XCTAssertFalse(clearedSave)
+        XCTAssertEqual(session.draft?.generationMode, .required)
+    }
+    func testCancelManualFallbackRequiresCurrentDateAndTimeConfirmation() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.draft?.title = "Manual"
+        session.updateSourceText("上午开会")
+        let request = Task { await session.parseSource(using: parser) }; await wait(parser)
+        session.cancelSourceParsing()
+        session.confirmSource(.date); session.confirmSource(.time)
+        let cancelledSave = await session.save(); XCTAssertFalse(cancelledSave)
+        session.useManualEntry()
+        let unconfirmedSave = await session.save(); XCTAssertFalse(unconfirmedSave)
+        session.confirmSource(.date); session.confirmSource(.time)
+        parser.fail(); await request.value
+        XCTAssertEqual(session.generationState, .idle)
+        let saved = await session.save(); XCTAssertTrue(saved)
+    }
+    func testRetryAndNewDraftIsolateLateError() async {
+        let backend = backend(), session = session(backend), first = ControlledScheduleParser(), second = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("old")
+        let old = Task { await session.parseSource(using: first) }; await wait(first)
+        let retry = Task { await session.parseSource(using: second) }; await wait(second)
+        second.finish(candidate()); await retry.value
+        first.fail(); await old.value
+        XCTAssertEqual(session.generationState, .ready)
+        XCTAssertNil(session.generationError)
+        let third = ControlledScheduleParser()
+        let abandoned = Task { await session.parseSource(using: third) }; await wait(third)
+        session.discardDraft()
+        session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
+        third.fail(); await abandoned.value
+        XCTAssertEqual(session.draft?.kind, .reminder)
+        XCTAssertEqual(session.generationState, .idle)
+        XCTAssertNil(session.generationError)
+    }
+    func testGeneratedReminderPreservesFullMetadataAndOriginalNotes() async throws {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .reminder, on: date(12), calendarID: "fixture-reminders")
+        let source = "明天下午五点进行周会"
+        session.updateSourceText(source)
+        let request = Task { await session.parseSource(using: parser) }; await wait(parser)
+        parser.finish(candidate()); await request.value
+        let input = try XCTUnwrap(session.draft).reminderInput()
+        XCTAssertEqual(input.due, date(13, hour: 17))
+        XCTAssertFalse(input.isAllDay)
+        XCTAssertEqual(input.timeZoneIdentifier, "Asia/Shanghai")
+        XCTAssertEqual(input.notes, "Summary\n\n" + source)
+        XCTAssertEqual(input.url, candidate().url)
+        let saved = await session.save(); XCTAssertTrue(saved)
+        let savedRecord = try XCTUnwrap(session.detailEvent)
+        XCTAssertEqual(savedRecord.start, input.due)
+        XCTAssertEqual(savedRecord.notes, input.notes)
+        XCTAssertEqual(savedRecord.url, input.url)
+        XCTAssertEqual(savedRecord.timeZone?.identifier, input.timeZoneIdentifier)
+    }
+    func testGeneratedReminderSecondDSTFoldRejectedBeforeWriter() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .reminder, on: date(12), calendarID: "fixture-reminders")
+        session.updateSourceText("2026-11-01 01:30 America/Los_Angeles")
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let secondFold = utc.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 9, minute: 30))!
+        var value = candidate()
+        value.start = secondFold; value.end = secondFold.addingTimeInterval(3600)
+        value.timeZoneIdentifier = "America/Los_Angeles"
+        let request = Task { await session.parseSource(using: parser) }; await wait(parser)
+        parser.finish(value); await request.value
+        let saved = await session.save(); XCTAssertFalse(saved)
+        XCTAssertNotNil(session.draft)
+        XCTAssertEqual(session.error, CalendarMutationError.unrepresentableReminderTime.localizedDescription)
+    }
+
+    func testManualNotesRemainAcrossSubsequentReparse() async {
+        let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        session.updateSourceText("first")
+        let first = Task { await session.parseSource(using: parser) }; await wait(parser)
+        parser.finish(candidate()); await first.value
+        session.draft?.notes = "User owns these notes"
+        session.updateSourceText("second")
+        let second = Task { await session.parseSource(using: parser) }; await wait(parser)
+        parser.finish(candidate()); await second.value
+        XCTAssertEqual(session.draft?.notes, "User owns these notes")
+    }
+}
