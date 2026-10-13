@@ -68,7 +68,7 @@ final class AIURLSessionTransport: AIHTTPTransport {
         guard responseLimit > 0 else { throw AIError.invalidRequest }
         let receiver = AILimitedHTTPReceiver(limit: responseLimit, configuration: configuration)
         return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
+            if Task.isCancelled { throw AIError.cancelled }
             return try await withCheckedThrowingContinuation { continuation in
                 receiver.start(request: request, continuation: continuation)
             }
@@ -79,7 +79,7 @@ final class AIURLSessionTransport: AIHTTPTransport {
 }
 
 /// URLSession delegate callbacks和Task取消可能并发，锁只保护该次请求状态。
-private final class AILimitedHTTPReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+final class AILimitedHTTPReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
     private var buffer = Data()

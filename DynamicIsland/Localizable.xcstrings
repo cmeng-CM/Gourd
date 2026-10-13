@@ -1,6 +1,326 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "ai.error.missingDefault": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a default AI model first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先选择默认 AI 模型。"
+          }
+        }
+      }
+    },
+    "ai.error.profileNotFound": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected AI configuration no longer exists."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选 AI 配置已不存在。"
+          }
+        }
+      }
+    },
+    "ai.error.capabilityMismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected model does not declare the required capability."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选模型未声明所需能力。"
+          }
+        }
+      }
+    },
+    "ai.error.invalidEndpoint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use HTTPS or loopback HTTP without account information, queries, or fragments."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端点须为 HTTPS 或本机 HTTP，且不能包含账户信息、查询或片段。"
+          }
+        }
+      }
+    },
+    "ai.error.invalidConfiguration": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI configuration is invalid."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 配置格式无效。"
+          }
+        }
+      }
+    },
+    "ai.error.configurationReadFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to read the AI configuration."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 AI 配置。"
+          }
+        }
+      }
+    },
+    "ai.error.configurationWriteFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to save the AI configuration."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存 AI 配置。"
+          }
+        }
+      }
+    },
+    "ai.error.secretReadFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to read the AI credential."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 AI 凭据。"
+          }
+        }
+      }
+    },
+    "ai.error.secretWriteFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to save the AI credential."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存 AI 凭据。"
+          }
+        }
+      }
+    },
+    "ai.error.secretDeleteFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to delete the AI credential."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法删除 AI 凭据。"
+          }
+        }
+      }
+    },
+    "ai.error.rollbackFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving failed and the credential could not be restored. Check the configuration again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存失败且无法恢复凭据，请重新检查配置。"
+          }
+        }
+      }
+    },
+    "ai.error.invalidRequest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI request content or output limit is invalid."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 请求内容或输出限额无效。"
+          }
+        }
+      }
+    },
+    "ai.error.missingCredential": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure an AI credential first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先配置 AI 凭据。"
+          }
+        }
+      }
+    },
+    "ai.error.timedOut": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI request timed out."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 请求超时。"
+          }
+        }
+      }
+    },
+    "ai.error.cancelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI request was cancelled."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 请求已取消。"
+          }
+        }
+      }
+    },
+    "ai.error.transportFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to connect to the AI endpoint."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接 AI 端点。"
+          }
+        }
+      }
+    },
+    "ai.error.redirectRejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI endpoint redirect was rejected."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 端点跳转已拒绝。"
+          }
+        }
+      }
+    },
+    "ai.error.responseTooLarge": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI response exceeds the 1 MiB limit."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 响应超过 1 MiB 限额。"
+          }
+        }
+      }
+    },
+    "ai.error.httpStatus": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI endpoint returned HTTP %ld."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 端点返回 HTTP %ld。"
+          }
+        }
+      }
+    },
+    "ai.error.invalidResponse": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The AI response is invalid or contains no text."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 响应格式无效或没有文本。"
+          }
+        }
+      }
+    },
     "calendar.panel.quitTitle": {
       "localizations": {
         "en": {

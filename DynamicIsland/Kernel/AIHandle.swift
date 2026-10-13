@@ -87,26 +87,27 @@ public enum AIError: Error, Equatable, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .missingDefault: return "请先选择默认 AI 模型。"
-        case .profileNotFound: return "所选 AI 配置已不存在。"
-        case .capabilityMismatch: return "所选模型未声明所需能力。"
-        case .invalidEndpoint: return "端点须为 HTTPS 或本机 HTTP，且不能包含账户信息、查询或片段。"
-        case .invalidConfiguration: return "AI 配置格式无效。"
-        case .configurationReadFailed: return "无法读取 AI 配置。"
-        case .configurationWriteFailed: return "无法保存 AI 配置。"
-        case .secretReadFailed: return "无法读取 AI 凭据。"
-        case .secretWriteFailed: return "无法保存 AI 凭据。"
-        case .secretDeleteFailed: return "无法删除 AI 凭据。"
-        case .rollbackFailed: return "保存失败且无法恢复凭据，请重新检查配置。"
-        case .invalidRequest: return "AI 请求内容或输出限额无效。"
-        case .missingCredential: return "请先配置 AI 凭据。"
-        case .timedOut: return "AI 请求超时。"
-        case .cancelled: return "AI 请求已取消。"
-        case .transportFailed: return "无法连接 AI 端点。"
-        case .redirectRejected: return "AI 端点跳转已拒绝。"
-        case .responseTooLarge: return "AI 响应超过 1 MiB 限额。"
-        case .httpStatus(let status): return "AI 端点返回 HTTP \(status)。"
-        case .invalidResponse: return "AI 响应格式无效或没有文本。"
+        case .missingDefault: return String(localized: "ai.error.missingDefault")
+        case .profileNotFound: return String(localized: "ai.error.profileNotFound")
+        case .capabilityMismatch: return String(localized: "ai.error.capabilityMismatch")
+        case .invalidEndpoint: return String(localized: "ai.error.invalidEndpoint")
+        case .invalidConfiguration: return String(localized: "ai.error.invalidConfiguration")
+        case .configurationReadFailed: return String(localized: "ai.error.configurationReadFailed")
+        case .configurationWriteFailed: return String(localized: "ai.error.configurationWriteFailed")
+        case .secretReadFailed: return String(localized: "ai.error.secretReadFailed")
+        case .secretWriteFailed: return String(localized: "ai.error.secretWriteFailed")
+        case .secretDeleteFailed: return String(localized: "ai.error.secretDeleteFailed")
+        case .rollbackFailed: return String(localized: "ai.error.rollbackFailed")
+        case .invalidRequest: return String(localized: "ai.error.invalidRequest")
+        case .missingCredential: return String(localized: "ai.error.missingCredential")
+        case .timedOut: return String(localized: "ai.error.timedOut")
+        case .cancelled: return String(localized: "ai.error.cancelled")
+        case .transportFailed: return String(localized: "ai.error.transportFailed")
+        case .redirectRejected: return String(localized: "ai.error.redirectRejected")
+        case .responseTooLarge: return String(localized: "ai.error.responseTooLarge")
+        case .httpStatus(let status):
+            return String(format: String(localized: "ai.error.httpStatus"), status)
+        case .invalidResponse: return String(localized: "ai.error.invalidResponse")
         }
     }
 }

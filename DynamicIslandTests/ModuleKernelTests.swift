@@ -11165,12 +11165,19 @@ private final class AIConfigurationMemory: AIConfigurationPersistence {
     var data: Data?
     var readFails = false
     var writeFails = false
+    var writeCount = 0
+    var failedWriteNumbers: Set<Int> = []
+    var attemptedWrites: [Data] = []
     func read() throws -> Data? {
         if readFails { throw AIError.configurationReadFailed }
         return data
     }
     func write(_ data: Data) throws {
-        if writeFails { throw AIError.configurationWriteFailed }
+        writeCount += 1
+        attemptedWrites.append(data)
+        if writeFails || failedWriteNumbers.contains(writeCount) {
+            throw NSError(domain: "fixture-secret original-text", code: 1)
+        }
         self.data = data
     }
 }
@@ -11181,16 +11188,27 @@ private final class AISecretMemory: AISecretStore {
     var readFails = false
     var writeFails = false
     var deleteFails = false
+    var writtenReferences: [UUID] = []
+    var deletedReferences: [UUID] = []
+    var deleteFailures: [UUID: Set<Int>] = [:]
+    var failedDeleteNumbers: Set<Int> = []
+    var deleteCounts: [UUID: Int] = [:]
     func read(reference: UUID) throws -> String? {
         if readFails { throw AIError.secretReadFailed }
         return values[reference]
     }
     func write(_ secret: String, reference: UUID) throws {
+        writtenReferences.append(reference)
         if writeFails { throw AIError.secretWriteFailed }
         values[reference] = secret
     }
     func delete(reference: UUID) throws {
-        if deleteFails { throw AIError.secretDeleteFailed }
+        deletedReferences.append(reference)
+        deleteCounts[reference, default: 0] += 1
+        if deleteFails || failedDeleteNumbers.contains(deletedReferences.count) ||
+            deleteFailures[reference]?.contains(deleteCounts[reference]!) == true {
+            throw NSError(domain: "fixture-secret original-text", code: 2)
+        }
         values.removeValue(forKey: reference)
     }
 }
@@ -11316,6 +11334,63 @@ final class AIConfigurationTests: XCTestCase {
         try store.save(text, apiKey: "")
         XCTAssertNil(store.profiles[0].secretReference)
         XCTAssertTrue(secrets.values.isEmpty)
+    }
+
+    private func assertReplacementFailure(recoveryWriteFails: Bool, newSecretCleanupFails: Bool,
+                                          expectedError: AIError) throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        var connection = profile()
+        try store.save(connection, apiKey: "old-fixture-secret")
+        let original = store.configuration
+        let oldReference = try XCTUnwrap(store.profiles[0].secretReference)
+        secrets.deleteFailures[oldReference] = [1]
+        if recoveryWriteFails { memory.failedWriteNumbers = [3] }
+        if newSecretCleanupFails { secrets.failedDeleteNumbers = [2] }
+        connection.displayName = "changed fixture"
+        do { try store.save(connection, apiKey: "new-fixture-secret"); XCTFail("Replacement must fail") }
+        catch {
+            XCTAssertEqual(error as? AIError, expectedError)
+            for privateText in ["original-text", "old-fixture-secret", "new-fixture-secret", "fixture-secret"] {
+                XCTAssertFalse(error.localizedDescription.contains(privateText))
+            }
+        }
+        XCTAssertEqual(secrets.writtenReferences.count, 2)
+        let newReference = try XCTUnwrap(secrets.writtenReferences.last)
+        XCTAssertNotEqual(oldReference, newReference)
+        XCTAssertEqual(store.configuration, original)
+        XCTAssertEqual(memory.writeCount, 3)
+        XCTAssertEqual(try JSONDecoder().decode(AIConfiguration.self, from: memory.attemptedWrites[2]), original)
+        let disk = try JSONDecoder().decode(AIConfiguration.self, from: XCTUnwrap(memory.data))
+        XCTAssertEqual(disk.profiles[0].secretReference, recoveryWriteFails ? newReference : oldReference)
+        XCTAssertEqual(disk.profiles[0].displayName, recoveryWriteFails ? "changed fixture" : original.profiles[0].displayName)
+        XCTAssertEqual(secrets.values[oldReference], "old-fixture-secret")
+        if recoveryWriteFails || newSecretCleanupFails {
+            XCTAssertEqual(secrets.values[newReference], "new-fixture-secret")
+            XCTAssertEqual(Set(secrets.values.keys), [oldReference, newReference])
+        } else {
+            XCTAssertNil(secrets.values[newReference])
+            XCTAssertEqual(Set(secrets.values.keys), [oldReference])
+        }
+        XCTAssertEqual(secrets.deletedReferences, recoveryWriteFails ? [oldReference] : [oldReference, newReference])
+        XCTAssertEqual(secrets.deleteCounts[oldReference], 1)
+        XCTAssertEqual(secrets.deleteCounts[newReference, default: 0], recoveryWriteFails ? 0 : 1)
+    }
+
+    func testReplacementOldSecretDeleteFailureRestoresDiskAndCleansNewReference() throws {
+        try assertReplacementFailure(recoveryWriteFails: false, newSecretCleanupFails: false,
+                                     expectedError: .secretDeleteFailed)
+    }
+
+    func testReplacementConfigurationRestoreFailureLeavesBothSecretsAndReportsRollback() throws {
+        try assertReplacementFailure(recoveryWriteFails: true, newSecretCleanupFails: false,
+                                     expectedError: .rollbackFailed)
+    }
+
+    func testReplacementNewReferenceCleanupFailureKeepsOriginalConfigAndReportsRollback() throws {
+        try assertReplacementFailure(recoveryWriteFails: false, newSecretCleanupFails: true,
+                                     expectedError: .rollbackFailed)
     }
 
     func testCorruptAndUnreadableConfigurationNeverPretendToLoad() throws {
@@ -11561,5 +11636,175 @@ final class AIHTTPTransportTests: XCTestCase {
         }
         let response = try await transport.send(URLRequest(url: URL(string: "https://fixture.invalid/exact")!), responseLimit: 9)
         XCTAssertEqual(response.body, Data("123456789".utf8))
+    }
+}
+
+/// 只在测试内登记的URLProtocol实例；每个唯一URL独立暂停、完成和统计停止。
+private final class AIPausedHTTPControl: @unchecked Sendable {
+    let started = XCTestExpectation(description: "offline URLProtocol started")
+    let stopped = XCTestExpectation(description: "offline URLProtocol stopped")
+    private let lock = NSLock()
+    private var instance: AIPausableURLProtocol?
+    private var starts = 0
+    private var stops = 0
+
+    var startCount: Int { lock.lock(); defer { lock.unlock() }; return starts }
+    var stopCount: Int { lock.lock(); defer { lock.unlock() }; return stops }
+
+    func begin(_ instance: AIPausableURLProtocol) {
+        lock.lock()
+        starts += 1
+        if stops == 0 { self.instance = instance }
+        lock.unlock()
+        started.fulfill()
+    }
+
+    func stop() {
+        lock.lock()
+        stops += 1
+        let firstStop = stops == 1
+        instance = nil
+        lock.unlock()
+        if firstStop { stopped.fulfill() }
+    }
+
+    func complete(body: Data = Data("survivor".utf8)) {
+        lock.lock()
+        let instance = self.instance
+        self.instance = nil
+        lock.unlock()
+        guard let instance, let url = instance.request.url else { return }
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+        instance.client?.urlProtocol(instance, didReceive: response, cacheStoragePolicy: .notAllowed)
+        instance.client?.urlProtocol(instance, didLoad: body)
+        instance.client?.urlProtocolDidFinishLoading(instance)
+    }
+}
+
+private final class AIPausedHTTPRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var controls: [String: AIPausedHTTPControl] = [:]
+
+    func set(_ control: AIPausedHTTPControl?, for token: String) {
+        lock.lock()
+        controls[token] = control
+        lock.unlock()
+    }
+
+    func get(_ token: String) -> AIPausedHTTPControl? {
+        lock.lock()
+        defer { lock.unlock() }
+        return controls[token]
+    }
+}
+
+private final class AIPausableURLProtocol: URLProtocol {
+    static let registry = AIPausedHTTPRegistry()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let control = Self.registry.get(request.url!.lastPathComponent) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
+            return
+        }
+        control.begin(self)
+    }
+    override func stopLoading() {
+        if let token = request.url?.lastPathComponent { Self.registry.get(token)?.stop() }
+    }
+}
+
+@MainActor
+final class AIHTTPTransportCancellationTests: XCTestCase {
+    private func configuration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AIPausableURLProtocol.self]
+        return configuration
+    }
+
+    private func fixture() -> (String, AIPausedHTTPControl, URLRequest) {
+        let token = UUID().uuidString
+        let control = AIPausedHTTPControl()
+        AIPausableURLProtocol.registry.set(control, for: token)
+        return (token, control, URLRequest(url: URL(string: "https://fixture.invalid/\(token)")!))
+    }
+
+    func testAlreadyCancelledTransportTaskDoesNotStartURLProtocol() async throws {
+        let (token, control, request) = fixture()
+        defer { AIPausableURLProtocol.registry.set(nil, for: token) }
+        let transport = AIURLSessionTransport(configuration: configuration())
+        let operation = Task { try await transport.send(request, responseLimit: 1024) }
+        operation.cancel()
+        let result = await operation.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertEqual($0 as? AIError, .cancelled) }
+        XCTAssertEqual(control.startCount, 0)
+    }
+
+    func testReceiverCancelledBeforeStartKeepsFirstTerminalResult() async throws {
+        let (token, control, request) = fixture()
+        defer { AIPausableURLProtocol.registry.set(nil, for: token) }
+        let receiver = AILimitedHTTPReceiver(limit: 1024, configuration: configuration())
+        receiver.finish(.failure(AIError.cancelled))
+        receiver.finish(.success(AIHTTPResponse(statusCode: 200, body: Data())))
+        let operation = Task<AIHTTPResponse, Error> {
+            try await withCheckedThrowingContinuation { receiver.start(request: request, continuation: $0) }
+        }
+        let result = await operation.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertEqual($0 as? AIError, .cancelled) }
+        XCTAssertEqual(control.startCount, 0)
+    }
+
+    func testProductionTransportCancellationStopsOnePausedRequestAndOtherContinues() async throws {
+        let (firstToken, firstControl, firstRequest) = fixture()
+        let (secondToken, secondControl, secondRequest) = fixture()
+        defer {
+            AIPausableURLProtocol.registry.set(nil, for: firstToken)
+            AIPausableURLProtocol.registry.set(nil, for: secondToken)
+        }
+        let transport = AIURLSessionTransport(configuration: configuration())
+        let firstDone = XCTestExpectation(description: "cancelled transport continuation completes")
+        let first = Task {
+            defer { firstDone.fulfill() }
+            return try await transport.send(firstRequest, responseLimit: 1024)
+        }
+        let second = Task { try await transport.send(secondRequest, responseLimit: 1024) }
+        await fulfillment(of: [firstControl.started, secondControl.started], timeout: 2)
+        first.cancel()
+        await fulfillment(of: [firstDone], timeout: 2)
+        // 若生产取消被删，释放假响应使测试退出；先前的超时和成功结果都会使断言失败。
+        firstControl.complete()
+        let firstResult = await first.result
+        XCTAssertThrowsError(try firstResult.get()) { XCTAssertEqual($0 as? AIError, .cancelled) }
+        await fulfillment(of: [firstControl.stopped], timeout: 2)
+        XCTAssertEqual(firstControl.stopCount, 1)
+        XCTAssertEqual(secondControl.stopCount, 0)
+        secondControl.complete()
+        let survivor = try await second.value
+        XCTAssertEqual(survivor.body, Data("survivor".utf8))
+        XCTAssertEqual(firstControl.startCount, 1)
+        XCTAssertEqual(secondControl.startCount, 1)
+    }
+
+    func testReceiverOwnTerminationAndLateCancellationCompleteContinuationOnce() async throws {
+        let (token, control, request) = fixture()
+        defer { AIPausableURLProtocol.registry.set(nil, for: token) }
+        let receiver = AILimitedHTTPReceiver(limit: 1024, configuration: configuration())
+        let completed = XCTestExpectation(description: "receiver continuation completes once")
+        completed.assertForOverFulfill = true
+        let operation = Task<AIHTTPResponse, Error> {
+            defer { completed.fulfill() }
+            return try await withCheckedThrowingContinuation { receiver.start(request: request, continuation: $0) }
+        }
+        await fulfillment(of: [control.started], timeout: 2)
+        receiver.finish(.failure(AIError.responseTooLarge))
+        receiver.finish(.failure(AIError.cancelled))
+        await fulfillment(of: [completed, control.stopped], timeout: 2)
+        let result = await operation.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertEqual($0 as? AIError, .responseTooLarge) }
+        XCTAssertEqual(control.startCount, 1)
+        XCTAssertEqual(control.stopCount, 1)
+        // 模拟完成回调之后再次出现取消，终态不变，也不重入已恢复的continuation。
+        receiver.finish(.failure(AIError.cancelled))
+        control.complete()
     }
 }
