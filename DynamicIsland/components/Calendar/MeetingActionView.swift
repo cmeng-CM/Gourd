@@ -45,8 +45,8 @@ struct CalendarMeetingSource: Equatable {
     }
     var hasMeetingInformation: Bool {
         if !targets.isEmpty { return true }
-        // Invitation intent only; an ordinary task mentioning a meeting room is not an invitation.
-        let hints = #"(?i)(会议邀请|会议主题\s*[:：]|会议链接\s*[:：]|邀请[^\n]{0,40}(?:参加|加入)[^\n]{0,15}会议|(?:请|欢迎)[^\n]{0,20}(?:参加|加入)[^\n]{0,20}会议|(?:meeting|conference)\s+invit(?:ation|e)|(?:join|invited)[^\n]{0,40}(?:meeting|conference))"#
+        // Require a separator after Chinese invitation terms: “会议室” is not “会议”.
+        let hints = #"(?i)(会议邀请(?=$|[\s\p{P}])|会议(?:主题|链接)\s*[:：]|邀请[^\n]{0,40}(?:参加|加入)[^\n]{0,15}会议(?=$|[\s\p{P}])|(?:请|欢迎)[^\n]{0,20}(?:参加|加入)[^\n]{0,20}会议(?=$|[\s\p{P}])|\b(?:meeting|conference)\s+invit(?:ation|e)\b|\b(?:join|invited)\b[^\n]{0,40}\b(?:meeting|conference)\b)"#
         return textFields.contains { $0.range(of: hints, options: .regularExpression) != nil }
     }
 }

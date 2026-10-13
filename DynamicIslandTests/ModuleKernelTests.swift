@@ -13899,4 +13899,26 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        reference.addingTimeInterval(10_000_000))
     }
 
+    func testInvitationIntentRequiresCompleteMeetingTermsAndKeepsExplicitInvitations() {
+        let owned = makeSession()
+        let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
+                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
+        for notes in ["请参加会议室保洁工作", "欢迎加入会议室保洁工作", "邀请你参加会议室保洁工作",
+                      "请参加会议记录整理", "请加入会议材料准备", "制作会议邀请函模板",
+                      "Please join the meetingroom cleaning task"] {
+            let source = CalendarMeetingSource(event: event(notes: notes))
+            XCTAssertTrue(source.targets.isEmpty, notes)
+            XCTAssertFalse(source.hasMeetingInformation, notes)
+            XCTAssertNil(list.eventRow(event(notes: notes)).meetingAction, notes)
+        }
+        for notes in ["请参加会议", "请参加年度总结会议。", "邀请你加入会议：年度计划讨论", "欢迎参加会议！",
+                      "会议邀请：请加入会议，入口稍后通知", "会议主题：年度计划", "会议链接：稍后提供",
+                      "Meeting invitation: annual planning", "Please join the meeting.", "You are invited to a conference.",
+                      "会议ID：987654321", MeetingInvitationFixtures.huawei, MeetingInvitationFixtures.tencent,
+                      MeetingInvitationFixtures.feishu] {
+            XCTAssertTrue(CalendarMeetingSource(event: event(notes: notes)).hasMeetingInformation, notes)
+            XCTAssertNotNil(list.eventRow(event(notes: notes)).meetingAction, notes)
+        }
+    }
+
 }
