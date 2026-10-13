@@ -45,8 +45,8 @@ struct CalendarMeetingSource: Equatable {
     }
     var hasMeetingInformation: Bool {
         if !targets.isEmpty { return true }
-        // Require a separator after Chinese invitation terms: “会议室” is not “会议”.
-        let hints = #"(?i)(会议邀请(?=$|[\s\p{P}])|会议(?:主题|链接)\s*[:：]|邀请[^\n]{0,40}(?:参加|加入)[^\n]{0,15}会议(?=$|[\s\p{P}])|(?:请|欢迎)[^\n]{0,20}(?:参加|加入)[^\n]{0,20}会议(?=$|[\s\p{P}])|\b(?:meeting|conference)\s+invit(?:ation|e)\b|\b(?:join|invited)\b[^\n]{0,40}\b(?:meeting|conference)\b)"#
+        // Exclude known place/material nouns, while allowing invitation follow-up actions.
+        let hints = #"(?i)(会议邀请(?=$|[\s\p{P}])|会议(?:主题|链接)\s*[:：]|邀请[^\n]{0,40}(?:参加|加入)[^\n]{0,15}会议(?!室|记录|材料|纪要|资料|文档)|(?:请|欢迎)[^\n]{0,20}(?:参加|加入)[^\n]{0,20}会议(?!室|记录|材料|纪要|资料|文档)|\b(?:meeting|conference)\s+invit(?:ation|e)\b|\b(?:join|invited)\b[^\n]{0,40}\b(?:meeting|conference)\b(?![\s-]+(?:rooms?|notes|minutes|materials|documents)\b))"#
         return textFields.contains { $0.range(of: hints, options: .regularExpression) != nil }
     }
 }

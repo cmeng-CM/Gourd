@@ -13899,13 +13899,19 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        reference.addingTimeInterval(10_000_000))
     }
 
-    func testInvitationIntentRequiresCompleteMeetingTermsAndKeepsExplicitInvitations() {
+    func testInvitationIntentExcludesPlaceAndMaterialNounsWhileKeepingFollowUpActions() async {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
                                     canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
         for notes in ["请参加会议室保洁工作", "欢迎加入会议室保洁工作", "邀请你参加会议室保洁工作",
                       "请参加会议记录整理", "请加入会议材料准备", "制作会议邀请函模板",
-                      "Please join the meetingroom cleaning task"] {
+                      "Please join the meetingroom cleaning task", "Please join the meeting room cleaning task",
+                      "You are invited to a conference room cleaning task", "请参加会议纪要整理", "请加入会议资料归档",
+                      "Please join the meeting notes preparation task", "Please join the meeting-room cleaning task",
+                      "You are invited to a conference-room cleaning task", "Please join the meeting rooms cleaning task",
+                      "You are invited to the conference-rooms cleaning task", "Please join the meeting-rooms cleaning task",
+                      "You are invited to the conference rooms cleaning task", "https://meeting.tencent.com.evil/dm/fixture",
+                      "https://evil.example/meeting.tencent.com/dm/fixture"] {
             let source = CalendarMeetingSource(event: event(notes: notes))
             XCTAssertTrue(source.targets.isEmpty, notes)
             XCTAssertFalse(source.hasMeetingInformation, notes)
@@ -13915,10 +13921,28 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                       "会议邀请：请加入会议，入口稍后通知", "会议主题：年度计划", "会议链接：稍后提供",
                       "Meeting invitation: annual planning", "Please join the meeting.", "You are invited to a conference.",
                       "会议ID：987654321", MeetingInvitationFixtures.huawei, MeetingInvitationFixtures.tencent,
-                      MeetingInvitationFixtures.feishu] {
+                      MeetingInvitationFixtures.feishu, "请参加会议并做好准备", "欢迎加入会议进行讨论"] {
             XCTAssertTrue(CalendarMeetingSource(event: event(notes: notes)).hasMeetingInformation, notes)
             XCTAssertNotNil(list.eventRow(event(notes: notes)).meetingAction, notes)
         }
+        let opener = MeetingFakeOpener([])
+        let emptyInvitation = MeetingActionModel(event: event(notes: "请参加会议并做好准备"), session: owned,
+                                                 opener: opener, now: { self.reference }, copyText: { _ in })
+        let unrelatedTarget = MeetingLinkResolver().resolve(text: MeetingInvitationFixtures.huaweiHTTPS)[0]
+        XCTAssertTrue(emptyInvitation.isJoinable)
+        XCTAssertTrue(unrelatedTarget.canOpen)
+        emptyInvitation.open(unrelatedTarget)
+        XCTAssertFalse(emptyInvitation.isOpening, "Invitation intent must not authorize another source's URL")
+        XCTAssertTrue(opener.urls.isEmpty)
+        owned.configureAI(MeetingEvidenceAI(["https://meeting.tencent.com/dm/fabricated"]))
+        let verified = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huaweiHTTPS), session: owned,
+                                          opener: opener, now: { self.reference }, copyText: { _ in })
+        let originalTargets = verified.targets
+        verified.recognize()
+        await drain { !verified.isRecognizing }
+        XCTAssertEqual(verified.statusKey, "calendar.meeting.recognitionFailed")
+        XCTAssertEqual(verified.targets, originalTargets)
+        XCTAssertTrue(opener.urls.isEmpty)
     }
 
 }
