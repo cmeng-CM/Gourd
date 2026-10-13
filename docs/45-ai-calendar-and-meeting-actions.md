@@ -176,7 +176,7 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 签名只读复核保留两种环境的结果：沙盒内 `codesign --verify --deep --strict` 退出 1（`CSSMERR_TP_NOT_TRUSTED`）、display 退出 0 但 Authority unavailable；同一产物在实际本机信任环境 verify/display 均退出 0、`Authority=Gourd Local`。没有导入证书、改变信任或重签来修正沙盒结果。完整日志 `.workflow/ai-calendar/reports/T8-offline-release.log` SHA256 为 `e2595c5fb41bcd60ed0aacc53f29dceafdcd08b9a213e481e4712c0d4cd0f8ef`；Mach-O SHA256 为 `1ac59b4b71b1f28d481cecffe94d7be626dd8b85609ce94933a99d9b2f1b4b19`，CDHash 为 `f897341e8b26019829d6181cb236419dfd11ef7c`。该单独 Release 验证不构成 wrapper 完整成功 attempt。
 
-独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与上述 wrapper hash，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户在新的桌面询问后明确回答「先继续不占桌面的工作」，故没有宿主启动授权。
+独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与实际 wrapper 内容指纹，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户在新的桌面询问后明确回答「先继续不占桌面的工作」，故没有宿主启动授权。
 
 **当前实际证据为离线静态/fixture 与单独纯 Release 成功。完整宿主 XCTest、新 xcresult 非零运行计数、完整 wrapper 成功 attempt（含其 Debug/test/Release 产物绑定）、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending，T8 不得记录完成。** 后续由控制器取得新的明确桌面空闲授权并落实宿主先决条件后再跑完整门。任务审查通过后的 engine verify/close 属整体门，本节不宣称已完成。
 
