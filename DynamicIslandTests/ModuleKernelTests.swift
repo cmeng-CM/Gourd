@@ -11157,3 +11157,409 @@ private final class CalendarInteractionServiceFake: CalendarServiceProviding {
     func authorizationStatus(for type: EKEntityType) -> EKAuthorizationStatus { .fullAccess }
     func setReminderPriority(reminderID: String, priority: Int) async -> Bool { false }
 }
+
+// MARK: - 独立通用 AI（只用内存配置、假秘密、离线 transport）
+
+@MainActor
+private final class AIConfigurationMemory: AIConfigurationPersistence {
+    var data: Data?
+    var readFails = false
+    var writeFails = false
+    func read() throws -> Data? {
+        if readFails { throw AIError.configurationReadFailed }
+        return data
+    }
+    func write(_ data: Data) throws {
+        if writeFails { throw AIError.configurationWriteFailed }
+        self.data = data
+    }
+}
+
+@MainActor
+private final class AISecretMemory: AISecretStore {
+    var values: [UUID: String] = [:]
+    var readFails = false
+    var writeFails = false
+    var deleteFails = false
+    func read(reference: UUID) throws -> String? {
+        if readFails { throw AIError.secretReadFailed }
+        return values[reference]
+    }
+    func write(_ secret: String, reference: UUID) throws {
+        if writeFails { throw AIError.secretWriteFailed }
+        values[reference] = secret
+    }
+    func delete(reference: UUID) throws {
+        if deleteFails { throw AIError.secretDeleteFailed }
+        values.removeValue(forKey: reference)
+    }
+}
+
+@MainActor
+private final class AITransportFake: AIHTTPTransport {
+    var requests: [URLRequest] = []
+    var limits: [Int] = []
+    var handler: (URLRequest) async throws -> AIHTTPResponse = { _ in
+        AIHTTPResponse(statusCode: 200, body: Data(#"{"choices":[{"message":{"content":"ok"}}]}"#.utf8))
+    }
+    func send(_ request: URLRequest, responseLimit: Int) async throws -> AIHTTPResponse {
+        requests.append(request)
+        limits.append(responseLimit)
+        return try await handler(request)
+    }
+}
+
+@MainActor
+final class AIConfigurationTests: XCTestCase {
+    private func profile(_ apiProtocol: AIProtocol = .openAICompatible) -> AIModelProfile {
+        AIModelProfile(displayName: "自定义连接", apiProtocol: apiProtocol, baseURL: "https://fixture.invalid/v1", modelID: "test-model")
+    }
+
+    func testProfilesDefaultsAndSecretReferencesRoundTripWithoutSecretEncoding() throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        let text = profile()
+        var vision = profile(.anthropic)
+        vision.capabilities = [.text, .vision]
+        try store.save(text, apiKey: "fixture-secret-text")
+        try store.save(vision, apiKey: "fixture-secret-vision")
+        try store.setDefault(text.id, for: .text)
+        try store.setDefault(vision.id, for: .vision)
+        let references = try store.profiles.map { try XCTUnwrap($0.secretReference) }
+        XCTAssertEqual(Set(references).count, 2)
+        let data = try XCTUnwrap(memory.data)
+        let encoded = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(encoded.contains("fixture-secret"))
+        let restored = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        XCTAssertEqual(restored.configuration, store.configuration)
+        XCTAssertEqual(try restored.profile(for: AIRequest(purpose: "text", messages: [])).id, text.id)
+        XCTAssertEqual(try restored.profile(for: AIRequest(purpose: "vision", messages: [], requiredCapability: .vision)).id, vision.id)
+        XCTAssertEqual(try restored.credential(for: restored.profiles[0]), "fixture-secret-text")
+        try restored.remove(profileID: text.id)
+        XCTAssertNil(restored.configuration.defaultTextProfileID)
+        XCTAssertNil(secrets.values[references[0]])
+        XCTAssertEqual(restored.profiles.count, 1)
+    }
+
+    func testMissingDefaultsCapabilityAndInvalidEndpointsAreExplicit() throws {
+        let store = try AIConfigurationStore(persistence: AIConfigurationMemory(), secretStore: AISecretMemory())
+        XCTAssertThrowsError(try store.profile(for: AIRequest(purpose: "test", messages: []))) {
+            XCTAssertEqual($0 as? AIError, .missingDefault(.text))
+        }
+        let text = profile()
+        try store.save(text)
+        XCTAssertThrowsError(try store.setDefault(text.id, for: .vision)) {
+            XCTAssertEqual($0 as? AIError, .capabilityMismatch)
+        }
+        XCTAssertThrowsError(try store.setDefault(UUID(), for: .text)) {
+            XCTAssertEqual($0 as? AIError, .profileNotFound)
+        }
+        for endpoint in ["http://example.com", "https://name:password@example.com", "https://example.com/#fragment", "https://example.com/?key=secret", "file:///tmp/model", "https://"] {
+            var invalid = text
+            invalid.baseURL = endpoint
+            XCTAssertThrowsError(try store.save(invalid), endpoint) {
+                XCTAssertEqual($0 as? AIError, .invalidEndpoint)
+            }
+        }
+        for endpoint in ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"] {
+            var local = text
+            local.baseURL = endpoint
+            XCTAssertNoThrow(try AIEndpoint.url(for: local))
+        }
+    }
+
+    func testWriteFailuresDoNotChangeConfigurationAndCredentialCleanupIsObservable() throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        let text = profile()
+        secrets.writeFails = true
+        XCTAssertThrowsError(try store.save(text, apiKey: "fixture-secret")) {
+            XCTAssertEqual($0 as? AIError, .secretWriteFailed)
+        }
+        XCTAssertTrue(store.profiles.isEmpty)
+        secrets.writeFails = false
+        memory.writeFails = true
+        XCTAssertThrowsError(try store.save(text, apiKey: "fixture-secret")) {
+            XCTAssertEqual($0 as? AIError, .configurationWriteFailed)
+        }
+        XCTAssertTrue(secrets.values.isEmpty)
+        XCTAssertTrue(store.profiles.isEmpty)
+        memory.writeFails = false
+        try store.save(text, apiKey: "fixture-secret")
+        let original = store.configuration
+        secrets.deleteFails = true
+        XCTAssertThrowsError(try store.remove(profileID: text.id)) {
+            XCTAssertEqual($0 as? AIError, .secretDeleteFailed)
+        }
+        XCTAssertEqual(store.configuration, original)
+        XCTAssertEqual(try JSONDecoder().decode(AIConfiguration.self, from: XCTUnwrap(memory.data)), original)
+        secrets.readFails = true
+        XCTAssertThrowsError(try store.credential(for: store.profiles[0])) {
+            XCTAssertEqual($0 as? AIError, .secretReadFailed)
+        }
+    }
+
+    func testCredentialReplacementAndRemovalAreExplicit() throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        let text = profile()
+        try store.save(text, apiKey: "first")
+        let first = try XCTUnwrap(store.profiles[0].secretReference)
+        try store.save(text)
+        XCTAssertEqual(store.profiles[0].secretReference, first)
+        try store.save(text, apiKey: "second")
+        XCTAssertNil(secrets.values[first])
+        XCTAssertEqual(secrets.values.count, 1)
+        try store.save(text, apiKey: "")
+        XCTAssertNil(store.profiles[0].secretReference)
+        XCTAssertTrue(secrets.values.isEmpty)
+    }
+
+    func testCorruptAndUnreadableConfigurationNeverPretendToLoad() throws {
+        let memory = AIConfigurationMemory()
+        memory.data = Data("invalid".utf8)
+        XCTAssertThrowsError(try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())) {
+            XCTAssertEqual($0 as? AIError, .invalidConfiguration)
+        }
+        memory.readFails = true
+        XCTAssertThrowsError(try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())) {
+            XCTAssertEqual($0 as? AIError, .configurationReadFailed)
+        }
+    }
+}
+
+@MainActor
+final class AIServiceTests: XCTestCase {
+    private let prompt = AIRequest(purpose: "fixture", messages: [
+        AIMessage(role: .system, text: "instruction"),
+        AIMessage(role: .user, text: "question", images: [AIImage(data: Data([1, 2, 3]), mimeType: "image/png")]),
+        AIMessage(role: .assistant, text: "previous")
+    ], requiredCapability: .vision, maxOutputTokens: 17)
+
+    private func profile(_ apiProtocol: AIProtocol) -> AIModelProfile {
+        AIModelProfile(displayName: "fixture", apiProtocol: apiProtocol, baseURL: "https://fixture.invalid", modelID: "any-model", capabilities: [.text, .vision])
+    }
+
+    private func service(_ transport: AITransportFake? = nil) throws -> AIService {
+        AIService(configurationStore: try AIConfigurationStore(persistence: AIConfigurationMemory(), secretStore: AISecretMemory()), transport: transport)
+    }
+
+    func testFourProtocolsEncodeRolesImagesLimitsHeadersAndDecodeText() async throws {
+        let responses: [AIProtocol: String] = [
+            .openAICompatible: #"{"choices":[{"message":{"content":"answer"}}]}"#,
+            .anthropic: #"{"content":[{"type":"text","text":"answer"},{"type":"tool_use","name":"ignored"}]}"#,
+            .gemini: #"{"candidates":[{"content":{"parts":[{"thought":true,"text":"private"},{"text":"answer"}]}}]}"#,
+            .ollama: #"{"message":{"content":"answer"},"done":true}"#
+        ]
+        for apiProtocol in AIProtocol.allCases {
+            let fake = AITransportFake()
+            fake.handler = { _ in AIHTTPResponse(statusCode: 200, body: Data(responses[apiProtocol]!.utf8)) }
+            let ai = try service(fake)
+            let response = try await ai.complete(prompt, profile: profile(apiProtocol), apiKey: "fixture-key")
+            XCTAssertEqual(response.text, "answer")
+            let request = try XCTUnwrap(fake.requests.first)
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.timeoutInterval, 30)
+            XCTAssertEqual(fake.limits, [1_048_576])
+            XCTAssertNil(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.query)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            XCTAssertFalse(String(decoding: request.httpBody!, as: UTF8.self).contains("fixture-key"))
+            switch apiProtocol {
+            case .openAICompatible:
+                XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-key")
+                XCTAssertEqual(body["max_tokens"] as? Int, 17)
+                let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+                XCTAssertEqual(messages.map { $0["role"] as? String }, ["system", "user", "assistant"])
+                let content = try XCTUnwrap(messages[1]["content"] as? [[String: Any]])
+                XCTAssertEqual((content[1]["image_url"] as? [String: String])?["url"], "data:image/png;base64,AQID")
+            case .anthropic:
+                XCTAssertEqual(request.url?.path, "/v1/messages")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "fixture-key")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+                XCTAssertEqual(body["system"] as? String, "instruction")
+                XCTAssertEqual(body["max_tokens"] as? Int, 17)
+                let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+                let content = try XCTUnwrap(messages[0]["content"] as? [[String: Any]])
+                XCTAssertEqual((content[1]["source"] as? [String: String])?["data"], "AQID")
+            case .gemini:
+                XCTAssertEqual(request.url?.path, "/v1beta/models/any-model:generateContent")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), "fixture-key")
+                XCTAssertNotNil(body["systemInstruction"])
+                XCTAssertEqual((body["generationConfig"] as? [String: Int])?["maxOutputTokens"], 17)
+                let contents = try XCTUnwrap(body["contents"] as? [[String: Any]])
+                XCTAssertEqual(contents.map { $0["role"] as? String }, ["user", "model"])
+                let parts = try XCTUnwrap(contents[0]["parts"] as? [[String: Any]])
+                XCTAssertEqual((parts[1]["inlineData"] as? [String: String])?["mimeType"], "image/png")
+            case .ollama:
+                XCTAssertEqual(request.url?.path, "/api/chat")
+                XCTAssertEqual(body["stream"] as? Bool, false)
+                XCTAssertEqual((body["options"] as? [String: Int])?["num_predict"], 17)
+                let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+                XCTAssertEqual(messages[1]["images"] as? [String], ["AQID"])
+            }
+        }
+    }
+
+    func testEndpointNormalizationAndProtocolIndependentConnections() throws {
+        for (apiProtocol, bases, path) in [
+            (AIProtocol.openAICompatible, ["https://fixture.invalid", "https://fixture.invalid/v1/", "https://fixture.invalid/v1/chat/completions"], "/v1/chat/completions"),
+            (.anthropic, ["https://fixture.invalid", "https://fixture.invalid/v1", "https://fixture.invalid/v1/messages"], "/v1/messages"),
+            (.gemini, ["https://fixture.invalid", "https://fixture.invalid/v1beta", "https://fixture.invalid/v1beta/models/old:generateContent"], "/v1beta/models/any-model:generateContent"),
+            (.ollama, ["https://fixture.invalid", "https://fixture.invalid/api/", "https://fixture.invalid/api/chat"], "/api/chat")
+        ] {
+            for base in bases {
+                var connection = profile(apiProtocol)
+                connection.baseURL = base
+                XCTAssertEqual(try AIEndpoint.url(for: connection).path, path)
+            }
+        }
+        var prefixed = profile(.openAICompatible)
+        prefixed.baseURL = "https://fixture.invalid/proxy/v1"
+        XCTAssertEqual(try AIEndpoint.url(for: prefixed).path, "/proxy/v1/chat/completions")
+    }
+
+    func testErrorsAreSanitizedAndOversizeResponsesAreRejected() async throws {
+        let fake = AITransportFake()
+        let ai = try service(fake)
+        for (response, expected) in [
+            (AIHTTPResponse(statusCode: 401, body: Data("fixture-key original-text".utf8)), AIError.httpStatus(401)),
+            (AIHTTPResponse(statusCode: 200, body: Data("not-json original-text".utf8)), .invalidResponse),
+            (AIHTTPResponse(statusCode: 200, body: Data(#"{"choices":[]}"#.utf8)), .invalidResponse),
+            (AIHTTPResponse(statusCode: 200, body: Data(repeating: 0, count: 1_048_577)), .responseTooLarge)
+        ] {
+            fake.handler = { _ in response }
+            do { _ = try await ai.complete(prompt, profile: profile(.openAICompatible), apiKey: "fixture-key"); XCTFail() }
+            catch {
+                XCTAssertEqual(error as? AIError, expected)
+                XCTAssertFalse(error.localizedDescription.contains("fixture-key"))
+                XCTAssertFalse(error.localizedDescription.contains("original-text"))
+            }
+        }
+        fake.handler = { _ in throw URLError(.timedOut) }
+        do { _ = try await ai.complete(prompt, profile: profile(.openAICompatible), apiKey: nil); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .timedOut) }
+        fake.handler = { _ in throw NSError(domain: "fixture-key original-text", code: 7) }
+        do { _ = try await ai.complete(prompt, profile: profile(.openAICompatible), apiKey: nil); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .transportFailed) }
+    }
+
+    func testSnapshotDoesNotPersistAndRequestValidationRunsBeforeTransport() async throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let fake = AITransportFake()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        let ai = AIService(configurationStore: store, transport: fake)
+        _ = try await ai.complete(prompt, profile: profile(.openAICompatible), apiKey: "unsaved-secret")
+        XCTAssertNil(memory.data)
+        XCTAssertTrue(secrets.values.isEmpty)
+        XCTAssertTrue(store.profiles.isEmpty)
+        var textOnly = profile(.openAICompatible)
+        textOnly.capabilities = [.text]
+        do { _ = try await ai.complete(prompt, profile: textOnly, apiKey: nil); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .capabilityMismatch) }
+        do { _ = try await ai.complete(prompt, profile: profile(.anthropic), apiKey: nil); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .missingCredential) }
+        XCTAssertEqual(fake.requests.count, 1)
+    }
+
+    func testPublicHandleResolvesDefaultAndSecretFailuresBeforeSending() async throws {
+        let memory = AIConfigurationMemory()
+        let secrets = AISecretMemory()
+        let fake = AITransportFake()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: secrets)
+        let handle: any AIHandle = AIService(configurationStore: store, transport: fake)
+        let request = AIRequest(purpose: "default", messages: [AIMessage(role: .user, text: "fixture")])
+        do { _ = try await handle.complete(request); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .missingDefault(.text)) }
+        let connection = profile(.openAICompatible)
+        try store.save(connection, apiKey: "fixture-key")
+        try store.setDefault(connection.id, for: .text)
+        let response = try await handle.complete(request)
+        XCTAssertEqual(response.text, "ok")
+        XCTAssertEqual(fake.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer fixture-key")
+        secrets.readFails = true
+        do { _ = try await handle.complete(request); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .secretReadFailed) }
+        secrets.readFails = false
+        secrets.values.removeAll()
+        do { _ = try await handle.complete(request); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .missingCredential) }
+        XCTAssertEqual(fake.requests.count, 1)
+    }
+
+    func testConcurrentRequestsAndCallerCancellationAreIndependent() async throws {
+        let fake = AITransportFake()
+        fake.handler = { request in
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            let model = body["model"] as? String
+            if model == "cancelled" { try await Task.sleep(nanoseconds: 60_000_000_000) }
+            else { await Task.yield() }
+            return AIHTTPResponse(statusCode: 200, body: Data(#"{"choices":[{"message":{"content":"survived"}}]}"#.utf8))
+        }
+        let ai = try service(fake)
+        var cancelledProfile = profile(.openAICompatible)
+        cancelledProfile.modelID = "cancelled"
+        let first = Task { try await ai.complete(prompt, profile: cancelledProfile, apiKey: nil) }
+        let second = Task { try await ai.complete(prompt, profile: profile(.openAICompatible), apiKey: nil) }
+        while fake.requests.count < 2 { await Task.yield() }
+        first.cancel()
+        do { _ = try await first.value; XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .cancelled) }
+        let survivor = try await second.value
+        XCTAssertEqual(survivor.text, "survived")
+        XCTAssertEqual(fake.requests.count, 2)
+    }
+}
+
+/// 捕获全部 URL 请求并在内存提供字节，无法访问真实网络。
+private final class AIOfflineURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        if url.path == "/redirect" {
+            let redirected = URLRequest(url: URL(string: "https://other-fixture.invalid/destination")!)
+            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Location": redirected.url!.absoluteString])!
+            client?.urlProtocol(self, wasRedirectedTo: redirected, redirectResponse: response)
+            return
+        }
+        let headers = url.path == "/announced" ? ["Content-Length": "9"] : [:]
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("1234".utf8))
+        client?.urlProtocol(self, didLoad: Data("56789".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
+@MainActor
+final class AIHTTPTransportTests: XCTestCase {
+    func testCrossOriginRedirectIsRejectedByOfflineTransport() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AIOfflineURLProtocol.self]
+        let transport = AIURLSessionTransport(configuration: configuration)
+        var request = URLRequest(url: URL(string: "https://fixture.invalid/redirect")!)
+        request.setValue("Bearer fixture-key", forHTTPHeaderField: "Authorization")
+        do { _ = try await transport.send(request, responseLimit: 1024); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .redirectRejected) }
+    }
+
+    func testReceivingLimitRejectsAnnouncedAndChunkedBodiesWithoutRealNetwork() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AIOfflineURLProtocol.self]
+        let transport = AIURLSessionTransport(configuration: configuration)
+        for path in ["announced", "chunked"] {
+            let request = URLRequest(url: URL(string: "https://fixture.invalid/\(path)")!)
+            do { _ = try await transport.send(request, responseLimit: 8); XCTFail(path) }
+            catch { XCTAssertEqual(error as? AIError, .responseTooLarge, path) }
+        }
+        let response = try await transport.send(URLRequest(url: URL(string: "https://fixture.invalid/exact")!), responseLimit: 9)
+        XCTAssertEqual(response.body, Data("123456789".utf8))
+    }
+}
