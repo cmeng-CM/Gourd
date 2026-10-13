@@ -113,7 +113,9 @@ struct CalendarPanelPages: View {
     @State private var deleteConfirmation = false
     @State private var targets: [CalendarModel] = []
     @State private var authorizationRevision = 0
+    @State private var nativeEditorFocused = false
     @State private var hoveredID: String?
+    @StateObject private var sourceDebouncer = CalendarSourceDebouncer()
 
     init(session: CalendarPanelSession, manager: CalendarManager,
          onReturnSource: @escaping (CalendarPanelSource) -> Void) {
@@ -125,7 +127,7 @@ struct CalendarPanelPages: View {
 
     private var ownerID: UUID { lifecycle.ownerID }
 
-    private enum Field: Hashable { case title, startTime, endTime, location, notes }
+    private enum Field: Hashable { case title, startTime, endTime, location, notes, source, url }
     private enum DateField: String, Identifiable { case start, end; var id: String { rawValue } }
 
     private var events: [EventModel] {
@@ -166,19 +168,21 @@ struct CalendarPanelPages: View {
             }
             footer
         }
+        .environment(\.calendarMeetingSession, session)
         .font(.callout)
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(CalendarEditorWindowReader(lifecycle: lifecycle).frame(width: 0, height: 0))
         .onAppear { lifecycle.connect(to: vm) }
         .onChange(of: focusedField) { _, value in
-            lifecycle.setEditorFocus(value != nil)
+            lifecycle.setEditorFocus(value != nil || nativeEditorFocused)
         }
         .onChange(of: datePopover) { _, value in
             lifecycle.setDatePopoverPresented(value != nil)
         }
         .onChange(of: session.route) { _, _ in
             focusedField = nil
+            nativeEditorFocused = false
             datePopover = nil
             deleteConfirmation = false
             lifecycle.clearLocalInput()
@@ -270,7 +274,7 @@ struct CalendarPanelPages: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+                MeetingActionView(event: event, session: session)
                 Button { show(event) } label: { Image(systemName: "chevron.right") }
                     .disabled(session.isSubmitting)
                     .accessibilityLabel(Text("calendar.panel.details"))
@@ -281,8 +285,13 @@ struct CalendarPanelPages: View {
             .opacity(isCompleted(event) ? 0.55 : 1)
             .onHover { hoveredID = $0 ? event.id : nil }
         } else {
-            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
-                              onDetail: { show(event) }, detailEnabled: !session.isSubmitting)
+            VStack(alignment: .leading, spacing: 3) {
+                CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
+                                  onDetail: { show(event) }, detailEnabled: !session.isSubmitting)
+                if event.conferenceURL == nil {
+                    MeetingActionView(event: event, session: session)
+                }
+            }
                 .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.05 : 0)))
                 .contentShape(Rectangle())
                 .onHover { hoveredID = $0 ? event.id : nil }
@@ -325,7 +334,7 @@ struct CalendarPanelPages: View {
                     Text("calendar.panel.notesEnd").font(.caption2).foregroundStyle(.secondary)
                         .accessibilityIdentifier("calendar-notes-end")
                 }
-                if let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+                MeetingActionView(event: event, session: session)
                 if event.type.isReminder {
                     Text(LocalizedStringKey(event.calendar.allowsContentModifications ? "Edit saved reminders in the system app." : "This calendar is read-only."))
                         .font(.caption).foregroundStyle(.secondary)
@@ -365,6 +374,7 @@ struct CalendarPanelPages: View {
                         .pickerStyle(.segmented).controlSize(.small)
                         .accessibilityIdentifier("calendar-kind")
                     }
+                    if draft.eventID == nil { generationControls(draft) }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("calendar.panel.title").font(.caption).foregroundStyle(.secondary)
                         TextField("calendar.quickAdd.title", text: stringBinding(\.title), axis: .vertical)
@@ -385,13 +395,19 @@ struct CalendarPanelPages: View {
                         TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
                             .textFieldStyle(.roundedBorder).focused($focusedField, equals: .location)
                             .accessibilityIdentifier("calendar-location")
-                        Text("calendar.panel.notes").font(.caption).foregroundStyle(.secondary)
-                        TextEditor(text: stringBinding(\.notes))
-                            .frame(minHeight: 90).focused($focusedField, equals: .notes)
-                            .accessibilityIdentifier("calendar-notes")
                     } else {
+                        Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox)
+                            .accessibilityIdentifier("calendar-all-day")
                         dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
                     }
+                    Text("calendar.panel.notes").font(.caption).foregroundStyle(.secondary)
+                    CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
+                                              onFocus: setNativeEditorFocus)
+                        .accessibilityIdentifier("calendar-notes")
+                    TextField("calendar.panel.url", text: urlBinding)
+                        .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
+                        .accessibilityIdentifier("calendar-url")
+                    confirmationControls(draft)
                     if !hasAccess { Text("Calendar access is required.").font(.caption).foregroundStyle(.secondary) }
                 }
                 .disabled(session.isSubmitting)
@@ -401,7 +417,80 @@ struct CalendarPanelPages: View {
         }
         .accessibilityIdentifier("calendar-editor-scroll")
         .onHover { lifecycle.setScrolling($0) }
-        .task { focusedField = .title }
+        .onAppear {
+            focusedField = session.draft?.sourceText.isEmpty == true ? .title : nil
+            sourceDebouncer.schedule(session: session)
+        }
+        .onChange(of: session.draft?.sourceText) { _, _ in sourceDebouncer.schedule(session: session) }
+        .onDisappear { sourceDebouncer.cancel() }
+    }
+
+    private func setNativeEditorFocus(_ focused: Bool) {
+        nativeEditorFocused = focused
+        lifecycle.setEditorFocus(focused || focusedField != nil)
+    }
+
+    private var urlBinding: Binding<String> {
+        Binding(get: { session.draft?.url?.absoluteString ?? "" }, set: {
+            session.draft?.url = $0.isEmpty ? nil : URL(string: $0)
+        })
+    }
+
+    private func generationControls(_ draft: CalendarDraft) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("calendar.generation.source").font(.caption).foregroundStyle(.secondary)
+            CalendarGrowingTextEditor(text: Binding(get: { session.draft?.sourceText ?? "" },
+                                                    set: { session.updateSourceText($0) }),
+                                      label: "calendar.generation.source", onFocus: setNativeEditorFocus)
+                .accessibilityIdentifier("calendar-generation-source")
+            Text("calendar.generation.sendingScope").font(.caption2).foregroundStyle(.secondary)
+            Text("calendar.generation.model").font(.caption2).foregroundStyle(.secondary)
+            Button("calendar.generation.settings") { CalendarAISettingsNavigation.open() }
+                .font(.caption).accessibilityIdentifier("calendar-generation-settings")
+            if session.configuredAI == nil {
+                Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                if session.generationState == .parsing { ProgressView().controlSize(.mini) }
+                Text(LocalizedStringKey(session.generationState.labelKey)).font(.caption)
+                    .accessibilityIdentifier("calendar-generation-state")
+                Spacer(minLength: 0)
+                if session.generationState == .parsing || session.generationState == .debouncing {
+                    Button("Cancel") { sourceDebouncer.cancel(); session.cancelSourceParsing() }
+                        .accessibilityIdentifier("calendar-generation-cancel")
+                } else if !draft.sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("calendar.generation.retry") {
+                        sourceDebouncer.cancel()
+                        Task { await session.retrySourceParsing() }
+                    }.accessibilityIdentifier("calendar-generation-retry")
+                }
+            }
+            if let error = session.generationError {
+                Text(error).font(.caption2).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("calendar-generation-error")
+            }
+            if draft.generationMode == .required || session.generationState == .failed || session.generationState == .cancelled {
+                Button("calendar.generation.manual") { sourceDebouncer.cancel(); session.useManualEntry() }
+                    .font(.caption).accessibilityIdentifier("calendar-generation-manual")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func confirmationControls(_ draft: CalendarDraft) -> some View {
+        if draft.generationMode == .required || !draft.confirmations.isEmpty {
+            Text("calendar.generation.blocked").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("calendar-generation-blocked")
+            if draft.generationMode != .required {
+                ForEach(ScheduleConfirmation.allCases, id: \.rawValue) { item in
+                    if draft.confirmations.contains(item) {
+                        Button(LocalizedStringKey(item.labelKey)) { session.confirmSource(item) }
+                            .font(.caption).accessibilityIdentifier("calendar-generation-confirm-" + item.rawValue)
+                    }
+                }
+            }
+        }
     }
 
     private func stringBinding(_ path: WritableKeyPath<CalendarDraft, String>) -> Binding<String> {
@@ -414,13 +503,10 @@ struct CalendarPanelPages: View {
             let calendar = CalendarPanelDates.sourceCalendar(for: draft)
             draft.kind = kind
             draft.calendarID = kind == .event ? manager.preferredEventCalendarID : manager.preferredReminderCalendarID
-            if kind == .event {
+            if kind == .event, draft.sourceText.isEmpty {
                 draft.isAllDay = false
                 draft.start = CalendarQuickAdd.defaultStart(on: draft.start, now: Date(), calendar: calendar)
                 draft.end = CalendarQuickAdd.defaultEnd(start: draft.start)
-            } else {
-                draft.isAllDay = true
-                draft.start = calendar.startOfDay(for: draft.start)
             }
             session.draft = draft
         })
@@ -535,7 +621,8 @@ struct CalendarPanelPages: View {
                     Spacer(minLength: 0)
                     if hasAccess {
                         Button("calendar.panel.save") { Task { _ = await session.save() } }
-                            .disabled(targets.isEmpty || session.draft?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
+                            .disabled(targets.isEmpty || session.draft?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+                                      || session.draft?.generationMode == .required || session.draft?.confirmations.isEmpty != true)
                             .accessibilityIdentifier("calendar-save")
                     } else { authorizationButton }
                 }.disabled(session.isSubmitting).font(.caption).frame(height: 28)

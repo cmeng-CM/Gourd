@@ -1481,47 +1481,11 @@ enum ConferenceProvider: CaseIterable {
 struct ConferenceJoinButton: View {
     let url: URL
     let event: EventModel
-    @State private var openingTask: Task<Void, Never>?
-    private var provider: ConferenceProvider { .detect(from: url) }
-    private var joinTarget: MeetingJoinTarget? {
-        let source = [url.absoluteString, event.url?.absoluteString, event.location, event.notes]
-            .compactMap { $0 }.joined(separator: "\n")
-        return MeetingLinkResolver().uniqueOpenTarget(text: source)
-    }
-    private var isJoinable: Bool {
-        event.start.addingTimeInterval(-15 * 60) <= Date()
-    }
-    
-    private var buttonText: String {
-        event.eventStatus == .inProgress ? "Rejoin" : "Join"
-    }
-    
+    var session: CalendarPanelSession? = nil
+    @Environment(\.calendarMeetingSession) private var environmentSession
+
     var body: some View {
-        Button(action: {
-            guard let target = joinTarget else { return }
-            openingTask?.cancel()
-            openingTask = Task { _ = await MeetingOpening().open(target) }
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 9))
-                Text(provider.name.isEmpty ? buttonText : "\(buttonText) \(provider.name)")
-                    .font(.caption2)
-                    .fontWeight(.medium)
-            }
-            .foregroundColor(isJoinable ? .white : Color(white: 0.5))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isJoinable ? provider.color.opacity(0.85) : Color.gray.opacity(0.3))
-            .cornerRadius(6)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .onDisappear {
-            openingTask?.cancel()
-            openingTask = nil
-        }
-        .disabled(!isJoinable || joinTarget == nil)
-        .help(isJoinable ? "Join the meeting" : "Meeting starts at \(event.start.formatted(date: .omitted, time: .shortened))")
+        MeetingActionView(event: event, url: url, session: session ?? environmentSession ?? .shared)
     }
 }
 

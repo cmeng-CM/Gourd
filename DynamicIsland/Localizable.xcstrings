@@ -1,6 +1,473 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "calendar.meeting.sendingScope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI receives this invitation text and its original links only."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 仅接收此邀请原文及原始链接。"
+          }
+        }
+      }
+    }
+,
+    "calendar.generation.source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generate from text"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用文字生成"
+          }
+        }
+      }
+    },
+    "calendar.generation.settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Models settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 模型设置"
+          }
+        }
+      }
+    },
+    "calendar.generation.retry": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generate again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新生成"
+          }
+        }
+      }
+    },
+    "calendar.generation.manual": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch to manual entry"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改为手工填写"
+          }
+        }
+      }
+    },
+    "calendar.generation.blocked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review the current date and time. Saving is blocked until generation and confirmations are complete."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请检查当前日期和时间。完成生成及确认前无法保存。"
+          }
+        }
+      }
+    }
+,
+    "calendar.generation.sendingScope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only this source text and its reference date/time zone are sent. AI fills a draft; review before saving."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅发送此原文及参考日期/时区。AI 只填写草稿，请检查后保存。"
+          }
+        }
+      }
+    },
+    "calendar.generation.model": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses the default text model from AI Models settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用「AI 模型」设置中的默认文字模型。"
+          }
+        }
+      }
+    },
+    "calendar.generation.unconfigured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The calendar module has no configured AI handle. Configure AI Models to generate a draft."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日历模块尚未配置 AI。请在「AI 模型」中配置后生成草稿。"
+          }
+        }
+      }
+    },
+    "calendar.panel.url": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "链接"
+          }
+        }
+      }
+    },
+    "calendar.meeting.actions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting actions"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议操作"
+          }
+        }
+      }
+    },
+    "calendar.meeting.menuHelp": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View verified entries, copy meeting details, or identify with AI."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看已验证的入口、复制会议信息或用 AI 识别。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.configure": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure AI Models before identifying this invitation."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先配置「AI 模型」，再识别邀请。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.recognizing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identifying meeting evidence…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在识别会议证据…"
+          }
+        }
+      }
+    },
+    "calendar.meeting.noEvidence": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No verified meeting link or labeled meeting code found."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到已验证的会议链接或带标签的会议号。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.choose": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an entry explicitly. AI does not open meetings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请明确选择入口；AI 不会自动打开会议。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.sourceTooLarge": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source exceeds the AI input limit. Verified entries remain available to copy or open."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原文超过 AI 输入上限；已验证入口仍可复制或打开。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.recognitionFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identification failed. Retry AI, copy the source, or choose a verified entry."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "识别失败。可重试 AI、复制原文或选择已验证入口。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.opening": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requesting the system to open the entry…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在请求系统打开入口…"
+          }
+        }
+      }
+    },
+    "calendar.meeting.accepted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system accepted the link. Joining the meeting is not confirmed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统已接受链接请求，尚未确认是否加入会议。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.fallback": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system accepted the original HTTPS fallback. Joining is not confirmed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统已接受原始 HTTPS 回退请求，尚未确认是否加入会议。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system refused the entry. Copy the link or meeting code and open it manually."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统拒绝打开入口。请复制链接或会议号，手工打开。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.cancelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request cancelled. You can retry or copy the invitation."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求已取消。可重试或复制邀请。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.tooEarly": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening is available 15 minutes before start. Viewing, copying and AI identification are available now."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开始前 15 分钟可打开；现在即可查看、复制或用 AI 识别。"
+          }
+        }
+      }
+    },
+    "calendar.meeting.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open this entry"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开此入口"
+          }
+        }
+      }
+    },
+    "calendar.meeting.copyLink": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy original link"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制原始链接"
+          }
+        }
+      }
+    },
+    "calendar.meeting.copyCodeFormat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy code: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制会议号：%@"
+          }
+        }
+      }
+    },
+    "calendar.meeting.recognize": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identify meeting with AI"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 AI 识别会议"
+          }
+        }
+      }
+    },
+    "calendar.meeting.copySource": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy invitation source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制邀请原文"
+          }
+        }
+      }
+    }
+,
     "calendar.copy.selection": {
       "localizations": {
         "en": {

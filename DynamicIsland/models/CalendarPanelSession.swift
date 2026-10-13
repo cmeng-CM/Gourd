@@ -155,6 +155,9 @@ final class CalendarPanelSession: ObservableObject {
     /// Composition root supplies the same handle to every shared-session consumer.
     func configureAI(_ ai: any AIHandle) { self.ai = ai }
 
+    /// Read-only access to the module-injected handle; meeting UI must use this same object.
+    var configuredAI: (any AIHandle)? { ai }
+
     func updateSourceText(_ text: String) { draft?.sourceText = text }
 
     private func sourceDidChange() {
@@ -685,4 +688,38 @@ final class CalendarPanelSession: ObservableObject {
         case .cancel: return false
         }
     }
+}
+
+/// Only source revisions schedule parsing. Injectable delay keeps tests off the host UI and network.
+@MainActor
+final class CalendarSourceDebouncer: ObservableObject {
+    private let delay: () async throws -> Void
+    private var task: Task<Void, Never>?
+    private var revision = 0
+
+    init(delay: @escaping () async throws -> Void = { try await Task.sleep(for: .milliseconds(800)) }) {
+        self.delay = delay
+    }
+
+    func schedule(session: CalendarPanelSession, parse: (() async -> Void)? = nil) {
+        cancel()
+        guard session.generationState == .debouncing,
+              let source = session.draft?.sourceText, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let current = revision
+        task = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            do { try await self.delay() } catch { return }
+            guard !Task.isCancelled, self.revision == current, session.draft?.sourceText == source,
+                  session.generationState == .debouncing else { return }
+            if let parse { await parse() } else { await session.parseSource() }
+        }
+    }
+
+    func cancel() {
+        revision += 1
+        task?.cancel()
+        task = nil
+    }
+
+    deinit { task?.cancel() }
 }

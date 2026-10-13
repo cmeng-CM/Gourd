@@ -340,7 +340,27 @@ private struct SettingsForm<Content: View>: View {
     }
 }
 
+/// Persistent until consumed: a request can arrive before the settings window is constructed.
+@MainActor
+final class CalendarAISettingsNavigation: ObservableObject {
+    static let shared = CalendarAISettingsNavigation()
+    @Published private(set) var pendingRequest: UUID?
+
+    func request() { pendingRequest = UUID() }
+    func consume(selectedTab: inout SettingsTab, searchText: inout String) {
+        guard pendingRequest != nil else { return }
+        searchText = ""
+        selectedTab = .generalAI
+        pendingRequest = nil
+    }
+    static func open() {
+        shared.request()
+        SettingsWindowController.shared.showWindow()
+    }
+}
+
 struct SettingsView: View {
+    @ObservedObject private var calendarAINavigation = CalendarAISettingsNavigation.shared
     @State private var selectedTab: SettingsTab = .general
     @State private var searchText: String = ""
     @StateObject private var highlightCoordinator = SettingsHighlightCoordinator()
@@ -393,6 +413,8 @@ struct SettingsView: View {
             detailView(for: resolvedSelection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .onAppear { consumeCalendarAIRequest() }
+        .onChange(of: calendarAINavigation.pendingRequest) { _, _ in consumeCalendarAIRequest() }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
         .toolbar { toolbarSpacingShim }
@@ -426,6 +448,10 @@ struct SettingsView: View {
             }
             .ignoresSafeArea()
         }
+    }
+
+    private func consumeCalendarAIRequest() {
+        calendarAINavigation.consume(selectedTab: &selectedTab, searchText: &searchText)
     }
 
     private var resolvedSelection: SettingsTab {

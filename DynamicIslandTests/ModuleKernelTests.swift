@@ -13572,3 +13572,232 @@ final class CalendarCopyReviewRegressionTests: XCTestCase {
         XCTAssertFalse(store.hasInitializedEventStore)
     }
 }
+
+// MARK: - T7 injected generation scheduling and meeting actions (no host UI or real services)
+
+@MainActor
+private final class CalendarDebounceGate {
+    var waits: [CheckedContinuation<Void, Error>?] = []
+    func delay() async throws {
+        try await withCheckedThrowingContinuation { waits.append($0) }
+    }
+    func release(_ index: Int) { waits[index]?.resume(); waits[index] = nil }
+}
+
+@MainActor
+final class CalendarGenerationAndMeetingActionTests: XCTestCase {
+    private let reference = Date(timeIntervalSince1970: 1_792_000_000)
+    private func makeSession() -> CalendarPanelSession {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                           saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                           createReminder: { try await backend.createReminderRecord(input: $0) },
+                                           deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                           completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                           event: { backend.event(withID: $0) })
+        session.beginCreate(kind: .event, on: reference, calendarID: "fixture-events")
+        return session
+    }
+    private func event(notes: String, start: Date? = nil) -> EventModel {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 1, on: reference)
+        let template = backend.event(withID: "fixture-event-01")!
+        return EventModel(id: template.id, start: start ?? reference, end: (start ?? reference).addingTimeInterval(3_600),
+                          title: template.title, location: nil, notes: notes, url: nil, isAllDay: false,
+                          type: template.type, calendar: template.calendar, participants: [], timeZone: template.timeZone,
+                          hasRecurrenceRules: false, priority: nil, conferenceURL: nil, isDetached: false)
+    }
+    private func drain(until condition: () -> Bool) async {
+        for _ in 0..<1_000 where !condition() { await Task.yield() }
+        XCTAssertTrue(condition())
+    }
+
+    func testDebounceOnlySubmitsLatestSourceAndDoesNotSubmitTitleOrConfirmationChanges() async {
+        let session = makeSession(), gate = CalendarDebounceGate()
+        let debouncer = CalendarSourceDebouncer(delay: { try await gate.delay() })
+        var calls: [String] = []
+        session.updateSourceText("first")
+        debouncer.schedule(session: session, parse: { calls.append(session.draft!.sourceText) })
+        await drain { gate.waits.count == 1 }
+        session.updateSourceText("latest")
+        debouncer.schedule(session: session, parse: { calls.append(session.draft!.sourceText) })
+        await drain { gate.waits.count == 2 }
+        session.draft?.title = "Hand edited"
+        gate.release(0)
+        await Task.yield()
+        XCTAssertTrue(calls.isEmpty)
+        gate.release(1)
+        await drain { calls.count == 1 }
+        XCTAssertEqual(calls, ["latest"])
+        session.useManualEntry()
+        session.confirmSource(.date)
+        session.confirmSource(.time)
+        debouncer.schedule(session: session, parse: { calls.append("unexpected") })
+        await Task.yield()
+        XCTAssertEqual(gate.waits.count, 2)
+        XCTAssertEqual(calls.count, 1)
+    }
+
+    func testCancelBeforeDelayDoesNotAutoResendOnRestoreAndManualRequiresBothConfirmations() async throws {
+        let session = makeSession(), gate = CalendarDebounceGate()
+        let debouncer = CalendarSourceDebouncer(delay: { try await gate.delay() })
+        var calls = 0
+        session.updateSourceText("retain original")
+        debouncer.schedule(session: session, parse: { calls += 1 })
+        await drain { gate.waits.count == 1 }
+        debouncer.cancel()
+        session.cancelSourceParsing()
+        gate.release(0)
+        session.suspend()
+        session.resumeDraft()
+        debouncer.schedule(session: session, parse: { calls += 1 })
+        await Task.yield()
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(session.draft?.sourceText, "retain original")
+        XCTAssertThrowsError(try session.draft!.eventInput())
+        session.useManualEntry()
+        session.draft?.title = "Manual"
+        session.confirmSource(.date)
+        XCTAssertThrowsError(try session.draft!.eventInput())
+        session.confirmSource(.time)
+        XCTAssertNoThrow(try session.draft!.eventInput())
+    }
+
+    func testMissingAIAndSourceChangesBlockSaveUntilManualConfirmation() async {
+        let session = makeSession()
+        session.draft?.title = "Manual title"
+        session.updateSourceText("new invitation")
+        await session.parseSource()
+        XCTAssertEqual(session.generationState, .failed)
+        XCTAssertNotNil(session.generationError)
+        let saved = await session.save()
+        XCTAssertFalse(saved)
+        session.useManualEntry()
+        session.confirmSource(.date)
+        session.confirmSource(.time)
+        session.updateSourceText("another revision")
+        XCTAssertEqual(session.draft?.generationMode, .required)
+        XCTAssertEqual(session.draft?.confirmations, Set(ScheduleConfirmation.allCases))
+    }
+
+    func testMeetingAIUsesExactConfiguredHandleNeverAutomaticallyOpensAndPreservesChoices() async {
+        let session = makeSession()
+        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        session.configureAI(ai)
+        XCTAssertTrue((session.configuredAI as AnyObject?) === ai)
+        let opener = MeetingFakeOpener([true])
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei + "\n" + MeetingInvitationFixtures.tencent),
+                                      session: session, opener: opener, now: { self.reference })
+        model.recognize()
+        await drain { !model.isRecognizing }
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertEqual(ai.requests[0].purpose, "meeting-evidence")
+        XCTAssertEqual(model.targets.filter(\.canOpen).count, 2)
+        XCTAssertTrue(opener.urls.isEmpty)
+        XCTAssertEqual(session.route, .editor)
+    }
+
+    func testEarlierMeetingAllowsAIAndCopyButBlocksDispatch() async throws {
+        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        session.configureAI(ai)
+        let opener = MeetingFakeOpener([true])
+        var copied: [String] = []
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei, start: reference.addingTimeInterval(3_600)),
+                                      session: session, opener: opener, now: { self.reference }, copyText: { copied.append($0) })
+        XCTAssertFalse(model.isJoinable)
+        let target = try XCTUnwrap(model.targets.first(where: \.canOpen))
+        model.copy(target.sourceURL!.absoluteString)
+        model.copySource()
+        model.open(target)
+        model.recognize()
+        await drain { !model.isRecognizing }
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertEqual(copied.count, 2)
+        XCTAssertTrue(copied[1].contains(MeetingInvitationFixtures.huaweiHTTPS))
+        XCTAssertTrue(opener.urls.isEmpty)
+    }
+
+    func testRefusedThenExplicitRetryAcceptedStatusDoesNotClaimJoined() async throws {
+        let session = makeSession(), opener = MeetingFakeOpener([false, true])
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.tencent, start: reference),
+                                      session: session, opener: opener, now: { self.reference }, copyText: { _ in })
+        let target = try XCTUnwrap(model.targets.first(where: \.canOpen))
+        model.open(target)
+        await drain { !model.isOpening }
+        XCTAssertEqual(model.statusKey, "calendar.meeting.refused")
+        model.open(target)
+        await drain { !model.isOpening }
+        XCTAssertEqual(model.statusKey, "calendar.meeting.accepted")
+        XCTAssertEqual(opener.urls.count, 2)
+    }
+
+    func testCancellationInvalidatesLateMeetingRecognitionAndNeverOpens() async {
+        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        let gate = MeetingResponseGate()
+        ai.beforeResponse = { await gate.wait() }
+        session.configureAI(ai)
+        let opener = MeetingFakeOpener([true])
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                      opener: opener, copyText: { _ in })
+        let original = model.targets
+        model.recognize()
+        await drain { ai.requests.count == 1 }
+        model.cancel()
+        gate.resume()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(model.targets, original)
+        XCTAssertEqual(model.statusKey, "calendar.meeting.cancelled")
+        XCTAssertFalse(model.isBusy)
+        XCTAssertTrue(opener.urls.isEmpty)
+    }
+
+    func testLongExistingNotesKeepVerifiedURLAndAIFailureDoesNotEraseIt() async {
+        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        session.configureAI(ai)
+        let notes = String(repeating: "long note\n", count: 3_000) + MeetingInvitationFixtures.huawei
+        let model = MeetingActionModel(event: event(notes: notes), session: session,
+                                      opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(model.targets.filter(\.canOpen).count, 1)
+        model.recognize()
+        await drain { !model.isRecognizing }
+        XCTAssertEqual(model.statusKey, "calendar.meeting.sourceTooLarge")
+        XCTAssertTrue(ai.requests.isEmpty)
+        XCTAssertEqual(model.targets.filter(\.canOpen).count, 1)
+    }
+
+    func testCodeOnlyMeetingCopiesExactEvidenceWithoutConstructingURL() async throws {
+        let session = makeSession(), opener = MeetingFakeOpener([true])
+        var copied: [String] = []
+        let model = MeetingActionModel(event: event(notes: "会议ID：987654321"), session: session,
+                                      opener: opener, copyText: { copied.append($0) })
+        let target = try XCTUnwrap(model.targets.first)
+        XCTAssertFalse(target.canOpen)
+        model.copy(target.meetingCodes[0].sourceText)
+        model.open(target)
+        XCTAssertEqual(copied, ["会议ID：987654321"])
+        XCTAssertTrue(opener.urls.isEmpty)
+    }
+
+    func testSettingsRequestPersistsBeforeAppearanceAndRepeatClearsSearch() {
+        let navigation = CalendarAISettingsNavigation()
+        var tab = SettingsTab.general
+        var search = "old filter"
+        navigation.request()
+        XCTAssertNotNil(navigation.pendingRequest)
+        navigation.consume(selectedTab: &tab, searchText: &search)
+        XCTAssertEqual(tab, .generalAI)
+        XCTAssertEqual(search, "")
+        XCTAssertNil(navigation.pendingRequest)
+        tab = .calendar
+        search = "new filter"
+        navigation.request()
+        navigation.request()
+        navigation.consume(selectedTab: &tab, searchText: &search)
+        XCTAssertEqual(tab, .generalAI)
+        XCTAssertEqual(search, "")
+        tab = .general
+        search = "keep without request"
+        navigation.consume(selectedTab: &tab, searchText: &search)
+        XCTAssertEqual(tab, .general)
+        XCTAssertEqual(search, "keep without request")
+    }
+}
