@@ -274,6 +274,8 @@ final class CalendarShortcutCloseProtection {
     private var sessionSubscription: AnyCancellable?
     private var suppressionSubscription: AnyCancellable?
     private let cancel: () -> Void
+    private var suppressionBinding = UUID()
+    private var stopped = false
 
     init(session: CalendarPanelSession, cancel: @escaping () -> Void) {
         self.cancel = cancel
@@ -288,10 +290,17 @@ final class CalendarShortcutCloseProtection {
     }
 
     func observeSuppression(_ publisher: AnyPublisher<Bool, Never>) {
-        suppressionSubscription?.cancel()
-        suppressionSubscription = publisher.removeDuplicates().sink { [cancel] protected in
-            if protected { cancel() }
+        guard !stopped else { return }
+        stopObservingSuppression()
+        let binding = UUID()
+        suppressionBinding = binding
+        let candidate = publisher.removeDuplicates().sink { [weak self] protected in
+            guard let self, self.suppressionBinding == binding, !self.stopped else { return }
+            if protected { self.cancel() }
         }
+        // @Published/CurrentValueSubject can cancel or replace this binding before sink returns.
+        if suppressionBinding == binding, !stopped { suppressionSubscription = candidate }
+        else { candidate.cancel() }
     }
 
     static func permitsDeadline(session: CalendarPanelSession, suppressed: Bool) -> Bool {
@@ -299,11 +308,13 @@ final class CalendarShortcutCloseProtection {
     }
 
     func stopObservingSuppression() {
+        suppressionBinding = UUID()
         suppressionSubscription?.cancel()
         suppressionSubscription = nil
     }
 
     func stop() {
+        stopped = true
         sessionSubscription?.cancel()
         sessionSubscription = nil
         stopObservingSuppression()

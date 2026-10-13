@@ -5,16 +5,63 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Copying uses cached display data and validated source evidence, without opening a meeting.
+/// Extract whole lexical evidence from existing records before applying the resolver's input cap.
+/// No fragment is split or truncated; oversized individual tokens are rejected in their entirety.
+/// Each complete candidate is still validated by the unchanged T3 resolver, including domain/path rules.
+enum CalendarMeetingEvidence {
+    static func resolve(textFields: [String], structuredURLs: [URL] = []) -> [MeetingJoinTarget] {
+        let resolver = MeetingLinkResolver()
+        let patterns = [
+            #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"“”]+"#,
+            #"(?i)(?:#腾讯会议|会议\s*(?:ID|号)|meeting\s*(?:ID|code))\s*[:：]\s*([0-9](?:[0-9 -]{3,18})[0-9])(?![0-9])"#
+        ]
+        var fragments: [String] = []
+        var independentTargets: [MeetingJoinTarget] = []
+        var seen = Set<String>()
+        func collect(_ raw: String) {
+            guard raw.count <= MeetingLinkResolver.maximumSourceCharacters else { return }
+            // Resolve the COMPLETE candidate first. The scanner never authorizes a prefix.
+            for target in resolver.resolve(text: raw) {
+                let values = (target.sourceURL == nil ? [] : [target.sourceText]) + target.meetingCodes.map(\.sourceText)
+                for value in values where seen.insert(value).inserted {
+                    fragments.append(value)
+                    independentTargets += resolver.resolve(text: value)
+                }
+            }
+        }
+        for field in textFields {
+            let range = NSRange(field.startIndex..., in: field)
+            let matches = patterns.flatMap { pattern in
+                (try? NSRegularExpression(pattern: pattern))?.matches(in: field, range: range) ?? []
+            }.sorted { $0.range.location < $1.range.location }
+            for match in matches {
+                if let range = Range(match.range, in: field) { collect(String(field[range])) }
+            }
+        }
+        for url in structuredURLs { collect(url.absoluteString) }
+
+        // Pair only when the COMPLETE evidence set fits the validator's input contract.
+        // Splitting it into batches could wrongly make an ambiguous fallback look unique.
+        let evidence = fragments.joined(separator: "\n")
+        if evidence.count <= MeetingLinkResolver.maximumSourceCharacters { return resolver.resolve(text: evidence) }
+        return independentTargets
+    }
+}
+
+/// Copying uses display snapshots and validated complete source evidence, without opening a meeting.
 struct CalendarCopyPayload: Equatable {
     let title: String
     let fullInformation: String
     let meetingInformation: String
 
     init(title: String, fullInformation: String, meetingSource: String = "") {
+        self.init(title: title, fullInformation: fullInformation,
+                  targets: CalendarMeetingEvidence.resolve(textFields: [meetingSource]))
+    }
+
+    private init(title: String, fullInformation: String, targets: [MeetingJoinTarget]) {
         self.title = title
         self.fullInformation = fullInformation
-        let targets = MeetingLinkResolver().resolve(text: meetingSource)
         var evidence: [String] = []
         for target in targets {
             for value in [target.sourceURL?.absoluteString, target.httpsURL?.absoluteString].compactMap({ $0 })
@@ -41,8 +88,9 @@ struct CalendarCopyPayload: Equatable {
         fields += [event.location, event.notes, event.url?.absoluteString].compactMap { $0 }.filter { !$0.isEmpty }
         if let url = event.conferenceURL?.absoluteString, !fields.contains(url) { fields.append(url) }
         self.init(title: event.title, fullInformation: fields.joined(separator: "\n"),
-                  meetingSource: [event.title, event.location, event.notes, event.url?.absoluteString,
-                                  event.conferenceURL?.absoluteString].compactMap { $0 }.joined(separator: "\n"))
+                  targets: CalendarMeetingEvidence.resolve(
+                    textFields: [event.title, event.location, event.notes].compactMap { $0 },
+                    structuredURLs: [event.url, event.conferenceURL].compactMap { $0 }))
     }
 
     init(item: TodoBucketing.Item) {

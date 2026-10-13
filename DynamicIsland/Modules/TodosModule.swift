@@ -307,6 +307,8 @@ final class TodoStore: ObservableObject {
 
     /// 归一化后的条目（未完成 + 窗口内已完成）。
     @Published private(set) var items: [TodoBucketing.Item] = []
+    /// Full models built from the same fetch, never read EventKit while rendering a row.
+    @Published private(set) var reminderRecords: [String: EventModel] = [:]
     /// 优先级的**乐观层**（读回的真值 + 用户刚点出的未确认值）。视图读 `priority(for:)`。
     @Published private(set) var priorityOverlay = TodoPriorityOverlay()
     /// 提醒的当前授权状态。**只读**：请求权限只有 `requestAccess()` 一个入口，由用户点击触发。
@@ -459,6 +461,7 @@ final class TodoStore: ObservableObject {
         authorization = authorizationStatus()
         guard hasFullAccess else {
             if !items.isEmpty { items = [] }
+            reminderRecords = [:]
             priorityOverlay = TodoPriorityOverlay()
             return
         }
@@ -475,6 +478,7 @@ final class TodoStore: ObservableObject {
             let fetched = await readItems()
             guard refreshGeneration == generation else { return }
             items = TodosHomeBlockLayout.uniqueTodos(fetched)
+            reminderRecords = [:] // This legacy injected reader provides no full metadata.
             return
         }
         #if DEBUG
@@ -490,6 +494,8 @@ final class TodoStore: ObservableObject {
                     isCompleted: completed, completionDate: completion, listName: event.calendar.title
                 )
             }
+            let representedIDs = Set(items.map(\.id))
+            reminderRecords = Dictionary(uniqueKeysWithValues: reminders.filter { representedIDs.contains($0.id) }.map { ($0.id, $0) })
             priorityOverlay.rebuild(from: Dictionary(uniqueKeysWithValues: reminders.map {
                 ($0.id, Self.fixturePriority($0.priority))
             }))
@@ -511,20 +517,24 @@ final class TodoStore: ObservableObject {
         // 两个谓词的结果可能重叠（`predicateForReminders(in:)` 也含已完成条目），按 id 去重：
         // 已完成者优先（它在第二个谓词里出现过），未完成者才会被 `!isCompleted` 收进来。
         var merged: [String: TodoBucketing.Item] = [:]
+        var records: [String: EventModel] = [:]
         var priorities: [String: TodoPriority] = [:]
         var openCount = 0
         for reminder in allReminders where !reminder.isCompleted {
             merged[reminder.calendarItemIdentifier] = Self.item(from: reminder, calendar: calendar)
+            records[reminder.calendarItemIdentifier] = EventModel(from: reminder)
             priorities[reminder.calendarItemIdentifier] = TodoPriority.priority(fromEventKit: reminder.priority)
             openCount += 1
         }
         var doneCount = 0
         for reminder in recentCompleted where reminder.isCompleted {
             merged[reminder.calendarItemIdentifier] = Self.item(from: reminder, calendar: calendar)
+            records[reminder.calendarItemIdentifier] = EventModel(from: reminder)
             priorities[reminder.calendarItemIdentifier] = TodoPriority.priority(fromEventKit: reminder.priority)
             doneCount += 1
         }
 
+        reminderRecords = records
         items = Array(merged.values)
         priorityOverlay.rebuild(from: priorities)
         log.info("待办取数：未完成 \(openCount)、最近 \(Self.completedWindowDays) 天已完成 \(doneCount)")
@@ -1492,7 +1502,7 @@ private struct TodosHomeBlockView: View {
                 ScrollViewReader { scrollProxy in
                     ScrollView(.vertical) {
                         TodoHomeTodayList(
-                            entries: entries, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
+                            entries: entries, reminderRecords: store.reminderRecords, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
                             canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
                             isSubmitting: session.isSubmitting || completingItemID != nil,
                             openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo
@@ -1622,6 +1632,7 @@ private struct TodoHomeEmptyRow: View {
 /// 两个组共用一个滚动区；行 ID 同时供来源锚点与 UI 验收使用。
 private struct TodoHomeTodayList: View {
     let entries: [TodosHomeBlockLayout.ScheduleEntry]
+    let reminderRecords: [String: EventModel]
     let tier: TodosHomeBlockLayout.Tier
     let canOpenDetail: Bool
     let isSubmitting: Bool
@@ -1652,7 +1663,7 @@ private struct TodoHomeTodayList: View {
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
                         TodoHomeRow(
-                            item: item, event: CalendarManager.shared.event(withID: item.id), tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
+                            item: item, event: reminderRecords[item.id], tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
                             open: { openTodo(item) }, complete: { completeTodo(item) }
                         ).id(item.id)
                     }

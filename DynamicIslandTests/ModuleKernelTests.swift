@@ -13422,3 +13422,153 @@ final class CalendarCopyInteractionTests: XCTestCase {
         XCTAssertTrue(payload.fullInformation.contains(due.formatted()))
     }
 }
+
+@MainActor
+final class CalendarCopyReviewRegressionTests: XCTestCase {
+    private func session() -> CalendarPanelSession {
+        CalendarPanelSession(saveEvent: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                             createReminder: { _ in throw CalendarMutationError.readOnlyCalendar },
+                             deleteEvent: { _ in }, completeReminder: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                             event: { _ in nil })
+    }
+
+    private func record(notes: String, url: URL? = nil, conferenceURL: URL? = nil) -> EventModel {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        return EventModel(id: "long-copy", start: date, end: date.addingTimeInterval(3600), title: "Review",
+                          location: "Room", notes: notes, url: url, isAllDay: false, type: .event(.unknown),
+                          calendar: CalendarModel(accountName: "Fixture", id: "fixture-events", title: "Fixture", color: .systemBlue,
+                                                  isSubscribed: false, isReminder: false), participants: [], timeZone: nil,
+                          hasRecurrenceRules: false, priority: nil, conferenceURL: conferenceURL)
+    }
+
+    func testLongNotesDoNotHideIndependentStructuredURLsAndFullText() {
+        let notes = String(repeating: "长🙂", count: 12_000)
+        let huawei = URL(string: "https://meeting.huaweicloud.com/#/j/123456789")!
+        let tencent = URL(string: "https://meeting.tencent.com/dm/fixture")!
+        let payload = CalendarCopyPayload(event: record(notes: notes, url: huawei, conferenceURL: tencent))
+        XCTAssertTrue(payload.fullInformation.contains(notes))
+        XCTAssertTrue(payload.meetingInformation.contains(huawei.absoluteString))
+        XCTAssertTrue(payload.meetingInformation.contains(tencent.absoluteString))
+    }
+
+    func testLongNotesKeepCompleteEmbeddedLinkAndSeparateMeetingCodeAtLimitBoundary() {
+        let link = "https://meeting.huaweicloud.com/#/j/123456789"
+        let notes = String(repeating: "a", count: 19_990) + "\n" + link + "\n会议ID：987654321\n" + String(repeating: "tail", count: 1_000)
+        let payload = CalendarCopyPayload(event: record(notes: notes))
+        XCTAssertTrue(payload.fullInformation.contains(notes))
+        XCTAssertTrue(payload.meetingInformation.contains(link))
+        XCTAssertTrue(payload.meetingInformation.contains("会议ID：987654321"))
+        XCTAssertFalse(payload.meetingInformation.contains("cloudlink://"))
+    }
+
+    func testOversizedURLTokenNeverCreatesAValidTruncatedPrefix() {
+        let prefix = "https://meeting.huaweicloud.com/#/j/123456789"
+        let malformed = prefix + String(repeating: "x", count: 20_001)
+        let targets = CalendarMeetingEvidence.resolve(textFields: [malformed], structuredURLs: [URL(string: "https://meeting.huaweicloud.com.evil.example/#/j/123456789")!])
+        XCTAssertTrue(targets.isEmpty)
+        let payload = CalendarCopyPayload(title: "Read", fullInformation: malformed, meetingSource: malformed)
+        XCTAssertEqual(payload.fullInformation, malformed)
+        XCTAssertEqual(payload.meetingInformation, "")
+    }
+
+    func testLongFieldHelperKeepsNativePairingDifferentCodesAndAllCandidates() {
+        let notes = String(repeating: "padding\n", count: 4_000) + "会议ID：987654321\n" + MeetingInvitationFixtures.native
+        let targets = CalendarMeetingEvidence.resolve(textFields: [notes], structuredURLs: [URL(string: MeetingInvitationFixtures.huaweiHTTPS)!])
+        XCTAssertEqual(targets.count, 1)
+        XCTAssertEqual(targets.first?.nativeURL?.absoluteString, MeetingInvitationFixtures.native)
+        XCTAssertEqual(targets.first?.httpsURL?.absoluteString, MeetingInvitationFixtures.huaweiHTTPS)
+        XCTAssertEqual(targets.first?.meetingCodes.map(\.value), ["987654321"])
+        let extra = CalendarMeetingEvidence.resolve(textFields: [notes], structuredURLs: [
+            URL(string: MeetingInvitationFixtures.huaweiHTTPS)!, URL(string: "https://meeting.huaweicloud.com/#/j/123456789")!
+        ])
+        XCTAssertEqual(extra.filter(\.canOpen).count, 2)
+    }
+
+    func testEvidenceExceedingSingleBatchPreservesEveryCompleteURL() {
+        let urls = (0..<650).map { URL(string: "https://meeting.huaweicloud.com/#/j/\(123456789 + $0)")! }
+        let text = urls.map(\.absoluteString).joined(separator: "\n")
+        XCTAssertGreaterThan(text.count, MeetingLinkResolver.maximumSourceCharacters)
+        let targets = CalendarMeetingEvidence.resolve(textFields: [text])
+        XCTAssertEqual(Set(targets.compactMap(\.sourceURL)), Set(urls))
+    }
+
+    func testOversizedEvidenceSetNeverPairsAnAmbiguousFallbackWithinPartialBatch() {
+        let extras = (0..<650).map { "https://meeting.huaweicloud.com/#/j/\(123456789 + $0)" }
+        let first = "https://meeting.huaweicloud.com/?first=1#/j/960724861"
+        let second = "https://meeting.huaweicloud.com/?second=2#/j/960724861"
+        let text = ([MeetingInvitationFixtures.native, first] + extras + [second]).joined(separator: "\n")
+        let targets = CalendarMeetingEvidence.resolve(textFields: [text])
+        XCTAssertEqual(targets.filter(\.canOpen).count, 653)
+        XCTAssertNil(targets.first(where: { $0.nativeURL != nil })?.httpsURL,
+                     "不能按部分证据把全局不唯一的 HTTPS 候选配给原生入口")
+    }
+
+    func testSynchronousInitialProtectionStopDoesNotReinstallReturnedSubscription() {
+        let publisher = CurrentValueSubject<Bool, Never>(true)
+        var calls = 0
+        var protection: CalendarShortcutCloseProtection?
+        protection = CalendarShortcutCloseProtection(session: session()) {
+            calls += 1
+            protection?.stopObservingSuppression() // Matches AppDelegate.cancelPendingNotchAutoClose.
+        }
+        protection?.observeSuppression(publisher.eraseToAnyPublisher())
+        XCTAssertEqual(calls, 1)
+        publisher.send(false); publisher.send(true)
+        XCTAssertEqual(calls, 1, "sink 同步重入停止后不得在返回时重新安装")
+        protection?.observeSuppression(publisher.eraseToAnyPublisher())
+        XCTAssertEqual(calls, 2)
+        publisher.send(false); publisher.send(true)
+        XCTAssertEqual(calls, 2)
+        protection?.stop(); protection = nil
+    }
+
+    func testSynchronousInitialProtectionFullStopRejectsLaterBinding() {
+        let publisher = CurrentValueSubject<Bool, Never>(true)
+        var calls = 0
+        var protection: CalendarShortcutCloseProtection?
+        protection = CalendarShortcutCloseProtection(session: session()) {
+            calls += 1
+            protection?.stop()
+        }
+        protection?.observeSuppression(publisher.eraseToAnyPublisher())
+        publisher.send(false); publisher.send(true)
+        protection?.observeSuppression(publisher.eraseToAnyPublisher())
+        XCTAssertEqual(calls, 1)
+        protection = nil
+    }
+
+    func testSynchronousReplacementRetainsNewBindingAndRejectsOldBinding() {
+        let old = CurrentValueSubject<Bool, Never>(true), replacement = CurrentValueSubject<Bool, Never>(false)
+        var calls = 0
+        var protection: CalendarShortcutCloseProtection?
+        protection = CalendarShortcutCloseProtection(session: session()) {
+            calls += 1
+            if calls == 1 { protection?.observeSuppression(replacement.eraseToAnyPublisher()) }
+        }
+        protection?.observeSuppression(old.eraseToAnyPublisher())
+        old.send(false); old.send(true)
+        XCTAssertEqual(calls, 1)
+        replacement.send(true)
+        XCTAssertEqual(calls, 2)
+        protection?.stop(); protection = nil
+    }
+
+    func testHomeFullRecordSnapshotRefreshAndPermissionLossAvoidEventKit() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 3, on: Date())
+        let store = TodoStore(logger: ModuleLogger(moduleID: "com.cmeng.gourd.todos", shortID: "todos"), fixtureBackend: backend)
+        await store.refresh()
+        XCTAssertEqual(Set(store.reminderRecords.keys), Set(store.items.map(\.id)))
+        let record = try XCTUnwrap(store.reminderRecords["fixture-reminder-02"])
+        XCTAssertEqual(record.notes, backend.event(withID: record.id)?.notes)
+        XCTAssertTrue(CalendarCopyPayload(event: record).fullInformation.contains(record.notes!))
+        XCTAssertFalse(store.hasInitializedEventStore)
+        try await backend.deleteReminder(id: record.id)
+        await store.refresh()
+        XCTAssertNil(store.reminderRecords[record.id])
+        backend.setAuthorization(.denied, for: .reminder)
+        await store.refresh()
+        XCTAssertTrue(store.reminderRecords.isEmpty)
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertFalse(store.hasInitializedEventStore)
+    }
+}
