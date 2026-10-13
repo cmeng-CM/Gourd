@@ -45,7 +45,8 @@ public enum ModuleContextFactory {
     public static func make(
         manifest: ModuleManifest,
         redraw: @escaping () -> Void,
-        collapse: @escaping () -> Void = {}
+        collapse: @escaping () -> Void = {},
+        ai: (any AIHandle)? = nil
     ) -> ModuleContext {
         let logger = ModuleLogger(moduleID: manifest.id, shortID: manifest.shortID)
         return ModuleContext(
@@ -53,7 +54,8 @@ public enum ModuleContextFactory {
             host: hostInfo(),
             config: ManifestConfigHandle(manifest: manifest, logger: logger),
             logger: logger,
-            ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw, collapse: collapse)
+            ui: RedrawUIHandle(moduleID: manifest.id, redraw: redraw, collapse: collapse),
+            ai: ai
         )
     }
 
@@ -191,4 +193,50 @@ private final class RedrawUIHandle: UIHandle {
     func requestCollapse() {
         collapse()
     }
+}
+
+// MARK: - 通用 AI composition root
+
+/// 设置与所有内置模块共享配置和服务；保存后下一请求直接读取新配置。
+/// 加载失败保留明确错误，不把损坏配置伪装成未配置。
+@MainActor
+final class GeneralAIRuntime {
+    static let shared = GeneralAIRuntime()
+    let configurationStore: AIConfigurationStore?
+    let service: AIService?
+    let handle: any AIHandle
+    let loadError: AIError?
+
+    init(store: AIConfigurationStore, transport: (any AIHTTPTransport)? = nil) {
+        let service = AIService(configurationStore: store, transport: transport)
+        self.configurationStore = store
+        self.service = service
+        self.handle = service
+        self.loadError = nil
+    }
+
+    init(defaults: UserDefaults = .standard, secretStore: (any AISecretStore)? = nil,
+         transport: (any AIHTTPTransport)? = nil) {
+        do {
+            let store = try AIConfigurationStore(defaults: defaults, secretStore: secretStore)
+            let service = AIService(configurationStore: store, transport: transport)
+            self.configurationStore = store
+            self.service = service
+            self.handle = service
+            self.loadError = nil
+        } catch {
+            let failure = error as? AIError ?? .configurationReadFailed
+            self.configurationStore = nil
+            self.service = nil
+            self.handle = UnavailableAIHandle(error: failure)
+            self.loadError = failure
+        }
+    }
+}
+
+@MainActor
+private final class UnavailableAIHandle: AIHandle {
+    private let error: AIError
+    init(error: AIError) { self.error = error }
+    func complete(_ request: AIRequest) async throws -> AIResponse { throw error }
 }

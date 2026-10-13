@@ -41,6 +41,19 @@ public struct ModuleContext {
     /// 自动带 moduleID 与 subsystem 前缀。
     public let logger: ModuleLogger
     public let ui: UIHandle
+    /// 通用模型接口，只暴露请求与响应，不暴露配置凭据。
+    public let ai: any AIHandle
+
+    /// 保持既有构造调用兼容；宿主与设置页共用同一配置实例。
+    public init(moduleID: String, host: HostInfo, config: ConfigHandle,
+                logger: ModuleLogger, ui: UIHandle, ai: (any AIHandle)? = nil) {
+        self.moduleID = moduleID
+        self.host = host
+        self.config = config
+        self.logger = logger
+        self.ui = ui
+        self.ai = ai ?? GeneralAIRuntime.shared.handle
+    }
 }
 
 /// 宿主信息（06 §3.4 的本批子集：`buildKind` / `epoch` 未纳入）。

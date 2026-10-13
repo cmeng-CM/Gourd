@@ -11808,3 +11808,178 @@ final class AIHTTPTransportCancellationTests: XCTestCase {
         control.complete()
     }
 }
+
+// MARK: - 通用 AI 设置与内核注入（离线，不启动界面）
+
+@MainActor
+private final class SettingsAIHandleFake: AIHandle {
+    var requests: [AIRequest] = []
+    func complete(_ request: AIRequest) async throws -> AIResponse {
+        requests.append(request)
+        return AIResponse(text: "injected")
+    }
+}
+
+@MainActor
+final class GeneralAISettingsTests: XCTestCase {
+    private func profile() -> AIModelProfile {
+        AIModelProfile(displayName: "fixture", apiProtocol: .openAICompatible,
+                       baseURL: "https://fixture.invalid", modelID: "before")
+    }
+
+    func testFactoryAndCompatibleInitializerAcceptInjectedHandle() async throws {
+        let fake = SettingsAIHandleFake()
+        let manifest = StubModule.manifest
+        let factory = ModuleContextFactory.make(manifest: manifest, redraw: {}, ai: fake)
+        let explicit = ModuleContext(moduleID: manifest.id, host: factory.host,
+                                     config: factory.config, logger: factory.logger, ui: factory.ui, ai: fake)
+        let request = AIRequest(purpose: "injection", messages: [AIMessage(role: .user, text: "fixture")])
+        let first = try await factory.ai.complete(request)
+        let second = try await explicit.ai.complete(request)
+        XCTAssertEqual(first.text, "injected")
+        XCTAssertEqual(second.text, "injected")
+        XCTAssertEqual(fake.requests, [request, request])
+    }
+
+    func testSettingsSaveImmediatelyChangesExistingModuleHandleAndReload() async throws {
+        let memory = AIConfigurationMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())
+        let transport = AITransportFake()
+        let runtime = GeneralAIRuntime(store: store, transport: transport)
+        let context = ModuleContextFactory.make(manifest: StubModule.manifest, redraw: {}, ai: runtime.handle)
+        let settings = GeneralAISettingsModel(runtime: runtime)
+        settings.select(profile())
+        settings.save()
+        settings.setDefault(settings.draft.id, for: .text)
+        let request = AIRequest(purpose: "shared", messages: [AIMessage(role: .user, text: "fixture")])
+        _ = try await context.ai.complete(request)
+        settings.draft.modelID = "after"
+        settings.save()
+        _ = try await context.ai.complete(request)
+        let body = try XCTUnwrap(transport.requests.last?.httpBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["model"] as? String, "after")
+        let restored = try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())
+        XCTAssertEqual(restored.configuration, store.configuration)
+        XCTAssertEqual(restored.profiles.first?.modelID, "after")
+    }
+
+    func testBlankFormKeyPreservesSecretAndExplicitClearRemovesIt() throws {
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: AIConfigurationMemory(), secretStore: secrets)
+        let original = profile()
+        try store.save(original, apiKey: "fixture-key")
+        let saved = try XCTUnwrap(store.profiles.first)
+        secrets.readFails = true
+        let settings = GeneralAISettingsModel(runtime: GeneralAIRuntime(store: store, transport: AITransportFake()))
+        settings.draft.modelID = "edited"
+        settings.save()
+        XCTAssertEqual(store.profiles.first?.secretReference, saved.secretReference)
+        XCTAssertEqual(secrets.values[saved.secretReference!], "fixture-key")
+        settings.clearStoredKey = true
+        settings.save()
+        XCTAssertNil(store.profiles.first?.secretReference)
+        XCTAssertTrue(secrets.values.isEmpty)
+    }
+
+    func testUnsavedConnectionUsesFormSnapshotAndDoesNotPersist() async throws {
+        let memory = AIConfigurationMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())
+        let transport = AITransportFake()
+        let settings = GeneralAISettingsModel(runtime: GeneralAIRuntime(store: store, transport: transport))
+        settings.select(profile())
+        settings.draft.modelID = "unsaved-model"
+        settings.apiKey = "unsaved-key"
+        settings.testConnection()
+        await settings.connectionTask?.value
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer unsaved-key")
+        let body = try XCTUnwrap(transport.requests.first?.httpBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["model"] as? String, "unsaved-model")
+        XCTAssertNil(memory.data)
+        XCTAssertTrue(store.profiles.isEmpty)
+        XCTAssertEqual(settings.connectionFeedback, String(localized: "ai.settings.testSucceeded"))
+    }
+
+    func testExplicitConnectionTestReadsPreservedFakeCredentialAndReportsReadFailure() async throws {
+        let secrets = AISecretMemory()
+        let store = try AIConfigurationStore(persistence: AIConfigurationMemory(), secretStore: secrets)
+        try store.save(profile(), apiKey: "saved-fixture")
+        let transport = AITransportFake()
+        let settings = GeneralAISettingsModel(runtime: GeneralAIRuntime(store: store, transport: transport))
+        settings.testConnection()
+        await settings.connectionTask?.value
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer saved-fixture")
+        secrets.readFails = true
+        settings.testConnection()
+        XCTAssertEqual(settings.connectionFeedback, AIError.secretReadFailed.localizedDescription)
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    func testEditingSwitchingAndLeavingInvalidateLateConnectionResults() async throws {
+        for action in 0..<3 {
+            let store = try AIConfigurationStore(persistence: AIConfigurationMemory(), secretStore: AISecretMemory())
+            let transport = AITransportFake()
+            var release: CheckedContinuation<AIHTTPResponse, Never>?
+            let settings = GeneralAISettingsModel(runtime: GeneralAIRuntime(store: store, transport: transport))
+            settings.select(profile())
+            await withCheckedContinuation { (started: CheckedContinuation<Void, Never>) in
+                transport.handler = { _ in
+                    await withCheckedContinuation { response in
+                        release = response
+                        started.resume()
+                    }
+                }
+                settings.testConnection()
+            }
+            let task = settings.connectionTask
+            let continuation = try XCTUnwrap(release)
+            switch action {
+            case 0: settings.draft.modelID = "changed"
+            case 1: settings.select(nil)
+            default: settings.invalidateConnectionTest()
+            }
+            continuation.resume(returning: AIHTTPResponse(statusCode: 200, body: Data(#"{"choices":[{"message":{"content":"ok"}}]}"#.utf8)))
+            await task?.value
+            XCTAssertNil(settings.connectionFeedback)
+            XCTAssertFalse(settings.isTesting)
+        }
+    }
+
+    func testSaveFailureIsVisibleAndDoesNotReplaceSavedProfile() throws {
+        let memory = AIConfigurationMemory()
+        let store = try AIConfigurationStore(persistence: memory, secretStore: AISecretMemory())
+        let settings = GeneralAISettingsModel(runtime: GeneralAIRuntime(store: store, transport: AITransportFake()))
+        settings.select(profile())
+        memory.writeFails = true
+        settings.save()
+        XCTAssertEqual(settings.feedback, AIError.configurationWriteFailed.localizedDescription)
+        XCTAssertTrue(settings.configuration.profiles.isEmpty)
+    }
+
+    func testUnconfiguredRuntimeAndCorruptConfigurationExposeDifferentErrors() async throws {
+        let suite = "gourd.settings-fixture.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let request = AIRequest(purpose: "missing", messages: [AIMessage(role: .user, text: "fixture")])
+        let empty = GeneralAIRuntime(defaults: defaults, secretStore: AISecretMemory(), transport: AITransportFake())
+        XCTAssertNil(empty.loadError)
+        do { _ = try await empty.handle.complete(request); XCTFail("Expected missing default") }
+        catch { XCTAssertEqual(error as? AIError, .missingDefault(.text)) }
+        defaults.set(Data("broken".utf8), forKey: AIDefaultsConfigurationPersistence.key)
+        let broken = GeneralAIRuntime(defaults: defaults, secretStore: AISecretMemory(), transport: AITransportFake())
+        XCTAssertEqual(broken.loadError, .invalidConfiguration)
+        XCTAssertNil(broken.configurationStore)
+        XCTAssertEqual(GeneralAISettingsModel(runtime: broken).loadError, .invalidConfiguration)
+        do { _ = try await broken.handle.complete(request); XCTFail("Expected load error") }
+        catch { XCTAssertEqual(error as? AIError, .invalidConfiguration) }
+    }
+
+    func testGeneralAITabIsIndependentAndGroupedWithIntegrations() {
+        XCTAssertTrue(SettingsTab.allCases.contains(.generalAI))
+        XCTAssertEqual(SettingsTab.generalAI.group, .integrations)
+        XCTAssertEqual(SettingsTab.screenAssistant.group, .productivity)
+        XCTAssertFalse(SettingsTab.generalAI.title.isEmpty)
+        XCTAssertFalse(SettingsTab.generalAI.systemImage.isEmpty)
+    }
+}

@@ -80,7 +80,7 @@ enum SettingsTabGroup: String, CaseIterable, Identifiable {
         case .timer, .clipboard, .calendar, .stats, .terminal, .shelf,
              .colorPicker, .downloads, .screenAssistant, .shortcuts:         return .productivity
         case .hudAndOSD, .battery:                                           return .system
-        case .extensions:                                                    return .integrations
+        case .extensions, .generalAI:                                        return .integrations
         case .notes:                                                         return .productivity
         case .about:                                                         return .info
         }
@@ -103,6 +103,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case stats
     case clipboard
     case screenAssistant
+    case generalAI
     case colorPicker
     case downloads
     case shelf
@@ -141,6 +142,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return String(localized: "Battery")
         case .stats: return String(localized: "Stats")
         case .clipboard: return String(localized: "Clipboard")
+        case .generalAI: return String(localized: "ai.settings.title")
         case .screenAssistant: return String(localized: "Screen Assistant")
         case .colorPicker: return String(localized: "Color Picker")
         case .downloads: return String(localized: "Downloads")
@@ -168,6 +170,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return "battery.100.bolt"
         case .stats: return "chart.xyaxis.line"
         case .clipboard: return "clipboard"
+        case .generalAI: return "sparkles"
         case .screenAssistant: return "brain.head.profile"
         case .colorPicker: return "eyedropper"
         case .downloads: return "square.and.arrow.down"
@@ -195,6 +198,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return Color(red: 0.202, green: 0.783, blue: 0.348, opacity: 1.000)
         case .stats: return .teal
         case .clipboard: return .mint
+        case .generalAI: return .purple
         case .screenAssistant: return .pink
         case .colorPicker: return .accentColor
         case .downloads: return .gray
@@ -573,7 +577,8 @@ struct SettingsView: View {
             // System
             .hudAndOSD,
             .battery,
-            // Integrations（T11 起只剩扩展一页：组件已移入 Media & Display，两页不再相邻）
+            // Integrations（通用 AI 模型与扩展；组件在 Media & Display）
+            .generalAI,
             .extensions,
             // Info
             .about
@@ -761,6 +766,8 @@ struct SettingsView: View {
 
     private var settingsSearchIndex: [SettingsSearchEntry] {
         [
+            SettingsSearchEntry(tab: .generalAI, title: String(localized: "ai.settings.title"), keywords: ["AI", "model", "模型", "协议", "API", "密钥", "base URL", "vision", "视觉"], highlightID: nil),
+            SettingsSearchEntry(tab: .generalAI, title: String(localized: "ai.settings.defaults"), keywords: ["default", "text", "默认", "文字"], highlightID: SettingsTab.generalAI.highlightID(for: "defaults")),
             // General
             SettingsSearchEntry(tab: .general, title: "Enable Minimalistic UI", keywords: ["minimalistic", "ui mode", "general"], highlightID: SettingsTab.general.highlightID(for: "Enable Minimalistic UI")),
             SettingsSearchEntry(tab: .general, title: "Menubar icon", keywords: ["menu bar", "status bar", "icon"], highlightID: SettingsTab.general.highlightID(for: "Menubar icon")),
@@ -1023,7 +1030,7 @@ struct SettingsView: View {
         switch tab {
         // `modules` 与 `.appearance` 同处置：mini 模式下也保留——组件开关决定的是首页
         // 有哪些块，与界面风格无关（docs/17 §改动点设计 5）。
-        case .modules:
+        case .modules, .generalAI:
             return true
         // `.notes` 留在这一档里是**代码保留**的印记（T5 摘的是入口，不是功能）：
         // 它的页已经不在 `availableTabs` 里，这一档今天走不到；将来把 `.notes` 加回去时，
@@ -1089,6 +1096,10 @@ struct SettingsView: View {
         case .clipboard:
             SettingsForm(tab: .clipboard) {
                 ClipboardSettings()
+            }
+        case .generalAI:
+            SettingsForm(tab: .generalAI) {
+                GeneralAISettings()
             }
         case .screenAssistant:
             SettingsForm(tab: .screenAssistant) {
