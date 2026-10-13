@@ -1,6 +1,6 @@
 # 通用 AI 与日程输入、复制及会议入口
 
-状态：已接受，实施中；最后更新 2026-10-13。讨论入口为本轮对话；独立计划语义审查零 BLOCKER/零 WARNING，控制器依用户的两道门审核委托记锁。本文为 spec-anchored，交付后继续按代码维护。范围来自用户选择「完整范围」，时间规则来自用户确认的自然语言日程方案。设计档位为重点：新增跨模块服务、凭据保存与异步草稿状态；读者为实现者、审查者及维护者；前五节用于判断方案，「接口与数据形状」用于实现。常规局部细节可自定，改变范围/兼容/保存边界先问，禁止模型自动写入或执行命令。
+状态：已接受；实现与自动证据终审通过，已本地安装并启动；人工验收未完成，工作流未关闭。最后更新 2026-10-13。讨论入口为本轮对话；独立计划语义审查零 BLOCKER/零 WARNING，控制器依用户的两道门审核委托记锁。本文为 spec-anchored，交付后继续按代码维护。范围来自用户选择「完整范围」，时间规则来自用户确认的自然语言日程方案。设计档位为重点：新增跨模块服务、凭据保存与异步草稿状态；读者为实现者、审查者及维护者；前五节用于判断方案，「接口与数据形状」用于实现。常规局部细节可自定，改变范围/兼容/保存边界先问，禁止模型自动写入或执行命令。
 
 ## 一句话方案
 
@@ -151,7 +151,7 @@ T6 已本地提交（`a4225282`、`f264c656`）：只读选区/复制菜单、�
 
 T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 当时仅完成编译，现已随下述完整 815 用例运行。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
 
-T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述修复前完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与当时新 Release/签名检查均通过；首次整体终审随后为 No。唯一同波修复 `23c34167` 后已取得下述新完整自动证据（819 个 XCTest），旧成功仍只适用历史源码；最终整体审查、安装和人工验收仍待进行。
+T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述修复前完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与当时新 Release/签名检查均通过；首次整体终审随后为 No。唯一同波修复 `23c34167` 后已取得下述新完整自动证据（819 个 XCTest），旧成功仍只适用历史源码；最终独立整体审查已通过，本地安装与启动已完成，人工验收仍待进行。
 
 ### T8 验证入口与交付状态（完整自动门已运行）
 
@@ -184,9 +184,9 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 本 attempt 的新 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`；新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c/tests.xcresult`。Debug app 使用 `com.cmeng.gourd.calendar-tests.Gourd` 隔离域，其 test bundle、新 Release app 的内容摘要均绑定于同目录 `evidence.json`。Debug/Release deep strict 签名和实际 metadata 检查均退出 0、Authority Gourd Local；Release 为 `com.cmeng.gourd`、0.2.0（build 1200）。该历史 attempt 曾以此新 DerivedData 下 `Build/Products/Release/Gourd.app` 作为待安装源；本波生产/测试修改后旧 success 不可复用，后续安装须绑定本波新的成功 attempt，不使用此历史产物或旧单独 offline Release。各原日志及命令/阶段退出/允许环境/时刻/摘要均已保存，未将编译或旧产物当作本轮运行证据。
 
-控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；该修复前文档提交后的 docs-only 实际正向复核随后由控制器完成。
+在该修复前历史 attempt，控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；当时未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；该修复前文档提交后的 docs-only 实际正向复核随后由控制器完成。
 
-**T8 修复前完整自动证据、任务最终复审及 docs-only 证据复核已取得；首次 fresh 整体终审为 No（Critical 0 / Important 2 / Minor 2）。唯一同波修复后新的完整自动门已通过；最终文档的实际证据绑定、独立整体复审最终判决、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
+**T8 修复前完整自动证据、任务最终复审及 docs-only 证据复核已取得；首次 fresh 整体终审为 No（Critical 0 / Important 2 / Minor 2）。唯一同波修复后新的完整自动门及独立整体终审已通过（Ready to merge: Yes，Critical 0 / Important 0 / Minor 0）；本地安装与启动已完成。** 四类别人工确认和 engine 收尾尚未完成，本次交付事实文档提交后的 engine 实际最终 verify 由控制器继续执行；未确认不 close。本节不宣称全范围或人工界面验收通过。
 
 ### 首次整体终审与同波修复（2026-10-13）
 
@@ -198,9 +198,15 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 **修复后完整自动门实测（2026-10-13）**：控制器实际执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；新 attempt `20261013T192520-101cb7e60c2a4a1799d322d9805ec796` 绑定 source HEAD `23c341671235bb397611a77fdfb84e7f16f61a74`、ai-calendar/cd825466 及同一 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均实际退出 0；控制器重核十份原日志 SHA256 与 evidence 一致。新 xcresult 的 root/action 计数一致：819 executed、failed 0、skipped 0、actionStatus succeeded；legacy 不提供的 passed/expectedFailures 仍为 null。四个新增回归已随完整 XCTest 实际执行；三个 Python 套件实际 11 tests 通过。
 
-本新 attempt 的独立 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T192520-101cb7e60c2a4a1799d322d9805ec796`，新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T192520-101cb7e60c2a4a1799d322d9805ec796/tests.xcresult`；Debug app、test bundle、Release app 与 xcresult 摘要均绑定同目录 `evidence.json`。Debug `com.cmeng.gourd.calendar-tests.Gourd`、Release `com.cmeng.gourd`，版本均 0.2.0（build 1200）；Debug/Release deep strict 签名和实际 Authority Gourd Local 检查均退出 0。新门前、开始时及宿主退出后 Pear 精确只读查询均 false/exit 0，TestHosts 已为空；此事实不作为未来宿主运行许可。最终文档只复核此新 attempt，后续安装源须为本新 DerivedData 下 `Build/Products/Release/Gourd.app`，不复用旧 815 attempt 或单独 offline Release。
+本新 attempt 的独立 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T192520-101cb7e60c2a4a1799d322d9805ec796`，新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T192520-101cb7e60c2a4a1799d322d9805ec796/tests.xcresult`；Debug app、test bundle、Release app 与 xcresult 摘要均绑定同目录 `evidence.json`。Debug `com.cmeng.gourd.calendar-tests.Gourd`、Release `com.cmeng.gourd`，版本均 0.2.0（build 1200）；Debug/Release deep strict 签名和实际 Authority Gourd Local 检查均退出 0。新门前、开始时及宿主退出后 Pear 精确只读查询均 false/exit 0，TestHosts 已为空；此事实不作为未来宿主运行许可。文档证据复核与本次安装均绑定此新 attempt；实际安装源为本新 DerivedData 下 `Build/Products/Release/Gourd.app`，未复用旧 815 attempt 或单独 offline Release。
 
-最终 docs HEAD 的 docs-only 实际正向证据复核、独立整体审查最终判决及安装尚待控制器执行；本节不宣称 Ready to merge 或真实 AI、Keychain、会议、EventKit 写入及 UI 验收通过。四个人工类别仍 pending，按用户选择安装后逐项确认，未确认不 close。
+### 最终独立终审与本地交付（2026-10-13）
+
+控制器在文档 HEAD `4b1cb733bfbc891d9a14176afd131818d4dd5423` 实际执行 docs-only `--verify-evidence`，exit 0，绑定新 819/11 成功 attempt。fresh 独立整体审查最终判决为 **Ready to merge: Yes**，未解决 Critical/Important/Minor 均为 0；首次 I-01/I-02/M-01/M-02 全部闭环。该判决覆盖实现、文档一致性与自动证据门，不能替代人工界面或线上服务验收。
+
+安装前控制器再次实际 `--verify-evidence` exit 0，随后按新 Release 阶段的允许环境、同一新 DerivedData 及 SPM flags 执行现有 `tools/build.sh --install`，exit 0。安装路径 `/Applications/壶中天.app`，bundle `com.cmeng.gourd`、version 0.2.0、build 1200；安装副本 deep/strict 签名核对 exit 0、display exit 0 且 Authority Gourd Local。安装前后源产物摘要均与完整成功 evidence 一致；安装副本的非签名资源、链接与文件/目录权限一致，Info.plist 仅 CFBundleName 从 Gourd 改为壶中天。只对临时二进制副本移除签名后核对 main executable SHA256 一致（`c6489c54be66a22f4f7a83dc5390113bf114ac4236250523e74469234a7ff94f`），真实源 app 和安装 app 的签名未被移除。
+
+`open -a /Applications/壶中天.app` 实际 exit 0；控制器用 NSWorkspace 精确安装路径只读确认启动（当时 pid 59052、检查 exit 0）。此事实只证明应用已启动，不代表 UI 验收。原命令、退出及内容/签名核对证据见 `.workflow/ai-calendar/reports/local-install.md`、`local-install.json` 和 `local-install-*.log`；新最终审查见 `overall-review-final.md`。本次交付事实文档回写后的 engine 实际最终 verify 仍待控制器执行，不宣称 engine 已完成或工作流已关闭。四个人工类别仍 pending，按用户选择安装后逐项确认；真实 AI、Keychain、会议、EventKit 写入及 UI 验收未验证，未确认不 close。
 
 ## 已知限制
 
