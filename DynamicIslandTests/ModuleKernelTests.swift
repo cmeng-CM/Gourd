@@ -11983,3 +11983,321 @@ final class GeneralAISettingsTests: XCTestCase {
         XCTAssertFalse(SettingsTab.generalAI.systemImage.isEmpty)
     }
 }
+
+// MARK: - AI calendar T3: deterministic meeting evidence and URL dispatch
+
+private enum MeetingInvitationFixtures {
+    static let huawei = """
+    蔡锰 邀请您参加会议
+    主题: 需求沟通会议
+    时间: 2026-10-13 10:00-10:45(GMT+08:00) 北京, 重庆, 香港特别行政区, 乌鲁木齐, 台北
+    点击链接加入会议：https://meeting.huaweicloud.com/#/j/960724861
+    使用会议ID入会：会议ID：940 948 346
+    无密码
+    电话语音入会: 拨打0518-80148838（中文）或021-60381524（中英双语），按照语音提示，输入会议号940948346，7#静音8#解除静音
+    """
+    static let tencent = """
+    蔡锰 邀请您参加腾讯会议
+    会议主题：测试项沟通会议
+    会议时间：2026/10/13 10:00-10:30 (GMT+08:00) 中国标准时间 - 北京
+    点击链接入会，或添加至会议列表：https://meeting.tencent.com/dm/VUYtCU0Ssrfz
+    #腾讯会议：817-450-376
+    复制该信息，打开手机腾讯会议即可参与
+    """
+    static let feishu = """
+    飞书会议邀请
+    需求沟通，点击链接：https://vc.feishu.cn/j/384462190
+    """
+    static let native = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=Fixture&server_url=meeting.huaweicloud.com&port=443&enter_code=&open_mic=false&open_camera=false"
+    static let minimalNative = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=Fixture"
+    static let huaweiHTTPS = "https://meeting.huaweicloud.com/#/j/960724861"
+}
+
+final class MeetingLinkResolverTests: XCTestCase {
+    private let resolver = MeetingLinkResolver()
+
+    func testThreeOriginalInvitationsKeepURLsAndSeparateHuaweiIDs() throws {
+        let huawei = try XCTUnwrap(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.huawei))
+        XCTAssertEqual(huawei.provider, .huawei)
+        XCTAssertEqual(huawei.sourceURL?.absoluteString, MeetingInvitationFixtures.huaweiHTTPS)
+        XCTAssertEqual(huawei.httpsURL, huawei.sourceURL)
+        XCTAssertNil(huawei.nativeURL)
+        XCTAssertEqual(huawei.urlIdentifier, "960724861")
+        XCTAssertEqual(huawei.meetingCodes.map(\.value), ["940948346"])
+        XCTAssertFalse(huawei.meetingCodes.contains { ["051880148838", "02160381524"].contains($0.value) })
+        let tencent = try XCTUnwrap(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.tencent))
+        XCTAssertEqual(tencent.provider, .tencent)
+        XCTAssertEqual(tencent.sourceURL?.absoluteString, "https://meeting.tencent.com/dm/VUYtCU0Ssrfz")
+        XCTAssertEqual(tencent.meetingCodes.map(\.value), ["817450376"])
+        XCTAssertNil(tencent.nativeURL)
+        let feishu = try XCTUnwrap(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.feishu))
+        XCTAssertEqual(feishu.provider, .feishu)
+        XCTAssertEqual(feishu.sourceURL?.absoluteString, "https://vc.feishu.cn/j/384462190")
+        XCTAssertNil(feishu.nativeURL)
+    }
+
+    func testStrictRulesPreserveExistingProviders() throws {
+        let fixtures: [(String, MeetingProvider)] = [
+            ("https://us02web.zoom.us/j/123456789?pwd=fixture", .zoom),
+            ("https://zoom.us/my/fixture.room", .zoom),
+            ("https://teams.microsoft.com/l/meetup-join/19%3ameeting_fixture/0?context=fixture", .teams),
+            ("https://meet.google.com/abc-defg-hij", .meet),
+            ("https://fixture.webex.com/meet/fixture", .webex),
+            ("https://fixture.webex.com/fixture/j.php?MTID=fixture", .webex),
+            ("https://facetime.apple.com/join?v=fixture", .facetime),
+            ("https://global.gotomeeting.com/join/123456789", .gotomeeting),
+            ("https://bluejeans.com/123456789", .bluejeans),
+            ("https://whereby.com/fixture-room", .whereby),
+            ("https://meet.jit.si/fixture-room", .jitsi),
+            ("https://discord.gg/fixture", .discord),
+            ("https://discord.com/invite/fixture", .discord),
+            ("https://discord.com/channels/123/456", .discord)
+        ]
+        for (source, provider) in fixtures {
+            let target = try XCTUnwrap(resolver.uniqueOpenTarget(text: source), source)
+            XCTAssertEqual(target.provider, provider, source)
+            XCTAssertEqual(ConferenceProvider.detect(from: try XCTUnwrap(URL(string: source))), conferenceProvider(provider), source)
+            XCTAssertNil(target.nativeURL, source)
+        }
+    }
+
+    private func conferenceProvider(_ provider: MeetingProvider) -> ConferenceProvider {
+        switch provider {
+        case .zoom: return .zoom
+        case .teams: return .teams
+        case .meet: return .meet
+        case .webex: return .webex
+        case .facetime: return .facetime
+        case .gotomeeting: return .gotomeeting
+        case .bluejeans: return .bluejeans
+        case .whereby: return .whereby
+        case .jitsi: return .jitsi
+        case .discord: return .discord
+        case .huawei: return .huawei
+        case .tencent: return .tencent
+        case .feishu: return .feishu
+        }
+    }
+
+    func testMaliciousDomainsSchemesPathsAndCredentialsAreRejected() {
+        let invalid = [
+            "https://zoom.us.attacker.example/j/123456789", "https://evilzoom.us/j/123456789",
+            "https://meeting.tencent.com.attacker.example/dm/fixture", "https://vc.feishu.cn.attacker.example/j/123",
+            "https://attacker.example/meeting.tencent.com/dm/fixture", "https://meeting.tencent.com@attacker.example/dm/fixture",
+            "https://user:secret@meeting.tencent.com/dm/fixture", "http://meeting.tencent.com/dm/fixture",
+            "file://meeting.tencent.com/dm/fixture", "javascript://meeting.tencent.com/dm/fixture",
+            "https://meeting.tencent.com:8443/dm/fixture", "https://zoom.us/pricing",
+            "https://meeting.tencent.com/download", "https://vc.feishu.cn/settings", "https://meet.jit.si.evil/room",
+            "https://jitsi.evil/room", "msteams://teams.microsoft.com/l/meetup-join/fixture/0"
+        ]
+        for source in invalid {
+            XCTAssertTrue(resolver.resolve(text: source).isEmpty, source)
+            if let url = URL(string: source) { XCTAssertEqual(ConferenceProvider.detect(from: url), .generic, source) }
+        }
+    }
+
+    func testOriginalURLQueryBytesArePreservedAndProsePunctuationIsExcluded() throws {
+        let original = "https://zoom.us/j/123456789?pwd=fixture)"
+        XCTAssertEqual(try XCTUnwrap(resolver.uniqueOpenTarget(text: original)).httpsURL?.absoluteString, original)
+        let source = "Click https://meeting.tencent.com/dm/VUYtCU0Ssrfz."
+        XCTAssertEqual(try XCTUnwrap(resolver.uniqueOpenTarget(text: source)).httpsURL?.absoluteString,
+                       "https://meeting.tencent.com/dm/VUYtCU0Ssrfz")
+        XCTAssertTrue(resolver.resolve(text: "https://zoom.us/j/123456789?pwd=fixture%0D%0Ainjected").isEmpty)
+    }
+
+    func testNativeRequiredAndOptionalFieldsValidateWithoutInventingParameters() throws {
+        let minimal = try XCTUnwrap(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.minimalNative))
+        XCTAssertEqual(minimal.nativeURL?.absoluteString, MeetingInvitationFixtures.minimalNative)
+        XCTAssertNil(minimal.httpsURL)
+        let full = try XCTUnwrap(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.native))
+        XCTAssertEqual(full.nativeURL?.absoluteString, MeetingInvitationFixtures.native)
+        XCTAssertNotNil(resolver.uniqueOpenTarget(text: MeetingInvitationFixtures.native.replacingOccurrences(of: "joinConfByLink", with: "joinTmpConfByLink")))
+        let invalid = [
+            MeetingInvitationFixtures.minimalNative.replacingOccurrences(of: "&name=Fixture", with: ""),
+            MeetingInvitationFixtures.native + "&conf_id=999999999",
+            MeetingInvitationFixtures.native.replacingOccurrences(of: "open_mic=false", with: "open_mic=1"),
+            MeetingInvitationFixtures.native.replacingOccurrences(of: "server_url=meeting.huaweicloud.com", with: "server_url=attacker.example"),
+            MeetingInvitationFixtures.native.replacingOccurrences(of: "server_url=meeting.huaweicloud.com", with: "server_url=https%3A%2F%2Fmeeting.huaweicloud.com"),
+            MeetingInvitationFixtures.native.replacingOccurrences(of: "port=443", with: "port=0"),
+            MeetingInvitationFixtures.native.replacingOccurrences(of: "name=Fixture", with: "name=Fixture%0D%0AInjected"),
+            MeetingInvitationFixtures.native + "&unexpected=fixture"
+        ]
+        for source in invalid { XCTAssertTrue(resolver.resolve(text: source).isEmpty, source) }
+    }
+
+    func testMultipleCandidatesRemainExplicitAndCodesNeverBecomeURLs() throws {
+        let source = MeetingInvitationFixtures.tencent + "\n" + MeetingInvitationFixtures.feishu
+        XCTAssertEqual(resolver.resolve(text: source).count, 2)
+        XCTAssertNil(resolver.uniqueOpenTarget(text: source))
+        let code = try XCTUnwrap(resolver.resolve(text: "会议号：817-450-376\n联系电话：13800138000").first)
+        XCTAssertEqual(code.meetingCodes.map(\.value), ["817450376"])
+        XCTAssertNil(code.sourceURL)
+        XCTAssertFalse(code.canOpen)
+        XCTAssertTrue(resolver.resolve(text: "拨打0518-80148838 或021-60381524 联系13800138000").isEmpty)
+        XCTAssertTrue(resolver.resolve(text: String(repeating: "x", count: 20_001)).isEmpty)
+    }
+
+    func testNativeFallbackPairsOnlyUnambiguousSameIdentityRegardlessOfOrder() throws {
+        for source in [
+            MeetingInvitationFixtures.native + "\n" + MeetingInvitationFixtures.huaweiHTTPS,
+            MeetingInvitationFixtures.huaweiHTTPS + "\n" + MeetingInvitationFixtures.native
+        ] {
+            let target = try XCTUnwrap(resolver.uniqueOpenTarget(text: source))
+            XCTAssertEqual(target.nativeURL?.absoluteString, MeetingInvitationFixtures.native)
+            XCTAssertEqual(target.httpsURL?.absoluteString, MeetingInvitationFixtures.huaweiHTTPS)
+        }
+        let differing = MeetingInvitationFixtures.native + "\nhttps://meeting.huaweicloud.com/#/j/940948346"
+        XCTAssertEqual(resolver.resolve(text: differing).count, 2)
+        XCTAssertNil(resolver.uniqueOpenTarget(text: differing))
+    }
+
+    func testCalendarExtractionUsesSameRulesAndDoesNotPickFirstOfMany() {
+        let store = EKEventStore()
+        let event = EKEvent(eventStore: store)
+        event.url = URL(string: "https://zoom.us.attacker.example/j/123456789")
+        event.notes = MeetingInvitationFixtures.huawei
+        XCTAssertEqual(event.extractConferenceURL()?.absoluteString, MeetingInvitationFixtures.huaweiHTTPS)
+        event.location = "https://vc.feishu.cn/j/384462190"
+        XCTAssertNil(event.extractConferenceURL())
+    }
+}
+
+@MainActor
+private final class MeetingEvidenceAI: AIHandle {
+    let response: String
+    var beforeResponse: (() async -> Void)?
+    var requests: [AIRequest] = []
+    init(_ fragments: [String]) {
+        response = String(data: try! JSONSerialization.data(withJSONObject: ["evidence": fragments]), encoding: .utf8)!
+    }
+    func complete(_ request: AIRequest) async throws -> AIResponse {
+        requests.append(request)
+        await beforeResponse?()
+        return AIResponse(text: response)
+    }
+}
+
+@MainActor
+final class MeetingEvidenceTests: XCTestCase {
+    func testAIOnlyReturnsVerifiedSourceURLsAndMultipleCandidates() async throws {
+        let fragments = ["https://meeting.tencent.com/dm/VUYtCU0Ssrfz", "https://vc.feishu.cn/j/384462190"]
+        let ai = MeetingEvidenceAI(fragments)
+        let result = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.tencent + "\n" + MeetingInvitationFixtures.feishu, using: ai)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, fragments)
+        XCTAssertEqual(ai.requests.count, 1)
+    }
+
+    func testAIFabricatedOrUnsafeEvidenceRejectsEntireResponse() async {
+        for fragment in ["https://meeting.tencent.com/dm/invented", "https://meeting.tencent.com.evil/dm/fixture", "817450376"] {
+            let source = MeetingInvitationFixtures.tencent + "\nhttps://meeting.tencent.com.evil/dm/fixture"
+            do {
+                _ = try await MeetingLinkResolver().recognize(text: source, using: MeetingEvidenceAI([fragment]))
+                XCTFail("Expected invalid evidence")
+            } catch { XCTAssertEqual(error as? MeetingRecognitionError, .invalidEvidence) }
+        }
+    }
+
+    func testAICodeEvidenceStaysCopyOnlyEvenWhenOriginalAlsoHasURL() async throws {
+        let result = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.tencent, using: MeetingEvidenceAI(["#腾讯会议：817-450-376"]))
+        XCTAssertEqual(result.count, 1)
+        XCTAssertFalse(result[0].canOpen)
+        XCTAssertEqual(result[0].meetingCodes.map(\.value), ["817450376"])
+    }
+
+    func testCancellationBeforeAndAfterAIResponseNeverDispatches() async {
+        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        let opener = MeetingFakeOpener([true])
+        let task = Task {
+            let targets = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.huawei, using: ai)
+            for target in targets { _ = await MeetingOpening(opener: opener).open(target) }
+        }
+        task.cancel()
+        do { try await task.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(opener.urls.isEmpty)
+        XCTAssertTrue(ai.requests.isEmpty)
+
+        let gate = MeetingResponseGate()
+        ai.beforeResponse = { await gate.wait() }
+        let inFlight = Task { try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.huawei, using: ai) }
+        while ai.requests.isEmpty { await Task.yield() }
+        inFlight.cancel()
+        gate.resume()
+        do { _ = try await inFlight.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(opener.urls.isEmpty)
+    }
+}
+
+@MainActor
+private final class MeetingResponseGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func resume() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class MeetingFakeOpener: MeetingURLOpening {
+    var urls: [URL] = []
+    var replies: [Bool]
+    var beforeReply: (() -> Void)?
+    init(_ replies: [Bool]) { self.replies = replies }
+    func open(_ url: URL) async -> Bool {
+        urls.append(url)
+        beforeReply?()
+        return replies.isEmpty ? false : replies.removeFirst()
+    }
+}
+
+@MainActor
+final class MeetingOpeningTests: XCTestCase {
+    func testHTTPSAcceptedMeansDispatchOnly() async throws {
+        let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: MeetingInvitationFixtures.tencent))
+        let fake = MeetingFakeOpener([true])
+        let result = await MeetingOpening(opener: fake).open(target)
+        XCTAssertEqual(result, .accepted(try XCTUnwrap(target.httpsURL)))
+        XCTAssertEqual(fake.urls, [try XCTUnwrap(target.httpsURL)])
+    }
+
+    func testNativeRefusedUsesExactOriginalHTTPSFallbackAndBothRefusedAreExplicit() async throws {
+        let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: MeetingInvitationFixtures.native + "\n" + MeetingInvitationFixtures.huaweiHTTPS))
+        let fallback = MeetingFakeOpener([false, true])
+        let result = await MeetingOpening(opener: fallback).open(target)
+        XCTAssertEqual(result, .fallback(try XCTUnwrap(target.httpsURL)))
+        XCTAssertEqual(fallback.urls, [try XCTUnwrap(target.nativeURL), try XCTUnwrap(target.httpsURL)])
+        let refused = MeetingFakeOpener([false, false])
+        let refusedResult = await MeetingOpening(opener: refused).open(target)
+        XCTAssertEqual(refusedResult, .refused(refused.urls))
+        XCTAssertEqual(refused.urls.count, 2)
+        let native = MeetingFakeOpener([true])
+        let accepted = await MeetingOpening(opener: native).open(target)
+        XCTAssertEqual(accepted, .accepted(try XCTUnwrap(target.nativeURL)))
+        XCTAssertEqual(native.urls.count, 1)
+    }
+
+    func testCopyOnlyAndCancelledTargetsNeverOpenAndCancellationPreventsFallback() async throws {
+        let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: MeetingInvitationFixtures.native + "\n" + MeetingInvitationFixtures.huaweiHTTPS))
+        let fake = MeetingFakeOpener([false, true])
+        let cancelled = Task { await MeetingOpening(opener: fake).open(target) }
+        cancelled.cancel()
+        let cancelledResult = await cancelled.value
+        XCTAssertEqual(cancelledResult, .cancelled)
+        XCTAssertTrue(fake.urls.isEmpty)
+        let code = try XCTUnwrap(MeetingLinkResolver().resolve(text: "会议ID：940 948 346").first)
+        let unavailable = await MeetingOpening(opener: fake).open(code)
+        XCTAssertEqual(unavailable, .unavailable)
+        XCTAssertTrue(fake.urls.isEmpty)
+        fake.beforeReply = { withUnsafeCurrentTask { $0?.cancel() } }
+        let during = Task { await MeetingOpening(opener: fake).open(target) }
+        let result = await during.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(fake.urls, [try XCTUnwrap(target.nativeURL)])
+    }
+}

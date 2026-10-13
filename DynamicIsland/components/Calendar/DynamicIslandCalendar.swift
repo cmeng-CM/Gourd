@@ -1419,6 +1419,7 @@ struct ReminderToggle: View {
 
 enum ConferenceProvider: CaseIterable {
     case zoom, teams, meet, webex, facetime, gotomeeting, bluejeans, whereby, jitsi, discord, generic
+    case huawei, tencent, feishu
     
     var name: String {
         switch self {
@@ -1432,6 +1433,9 @@ enum ConferenceProvider: CaseIterable {
         case .whereby: return "Whereby"
         case .jitsi: return "Jitsi"
         case .discord: return "Discord"
+        case .huawei: return "Huawei Cloud Meeting"
+        case .tencent: return "Tencent Meeting"
+        case .feishu: return "Feishu"
         case .generic: return ""
         }
     }
@@ -1448,41 +1452,27 @@ enum ConferenceProvider: CaseIterable {
         case .whereby: return Color(red: 0.27, green: 0.51, blue: 0.96)
         case .jitsi: return Color(red: 0.16, green: 0.68, blue: 0.95)
         case .discord: return Color(red: 0.35, green: 0.39, blue: 0.98)
-        case .generic: return Color.accentColor
+        case .huawei, .tencent, .feishu, .generic: return Color.accentColor
         }
     }
     
-    private var hostIdentifiers: [String] {
-        switch self {
-        case .zoom: return ["zoom.us"]
-        case .teams: return ["teams.microsoft.com"]
-        case .meet: return ["meet.google.com"]
-        case .webex: return ["webex.com"]
-        case .facetime: return ["facetime.apple.com"]
-        case .gotomeeting: return ["gotomeeting.com"]
-        case .bluejeans: return ["bluejeans.com"]
-        case .whereby: return ["whereby.com"]
-        case .jitsi: return ["meet.jit.si", "jitsi"]
-        case .discord: return ["discord.gg", "discord.com"]
-        case .generic: return []
-        }
-    }
-    
-    var nativeURLScheme: String? {
-        switch self {
-        case .zoom: return "zoommtg"
-        case .teams: return "msteams"
-        case .facetime: return "facetime"
-        case .discord: return "discord"
-        default: return nil
-        }
-    }
-
     static func detect(from url: URL) -> ConferenceProvider {
-        let host = url.host?.lowercased() ?? ""
-        return allCases.first { provider in
-            provider.hostIdentifiers.contains { host.contains($0) }
-        } ?? .generic
+        guard let provider = MeetingLinkResolver.provider(for: url) else { return .generic }
+        switch provider {
+        case .huawei: return .huawei
+        case .tencent: return .tencent
+        case .feishu: return .feishu
+        case .zoom: return .zoom
+        case .teams: return .teams
+        case .meet: return .meet
+        case .webex: return .webex
+        case .facetime: return .facetime
+        case .gotomeeting: return .gotomeeting
+        case .bluejeans: return .bluejeans
+        case .whereby: return .whereby
+        case .jitsi: return .jitsi
+        case .discord: return .discord
+        }
     }
 }
 
@@ -1491,9 +1481,13 @@ enum ConferenceProvider: CaseIterable {
 struct ConferenceJoinButton: View {
     let url: URL
     let event: EventModel
-    @Environment(\.openURL) private var openURL
-    
+    @State private var openingTask: Task<Void, Never>?
     private var provider: ConferenceProvider { .detect(from: url) }
+    private var joinTarget: MeetingJoinTarget? {
+        let source = [url.absoluteString, event.url?.absoluteString, event.location, event.notes]
+            .compactMap { $0 }.joined(separator: "\n")
+        return MeetingLinkResolver().uniqueOpenTarget(text: source)
+    }
     private var isJoinable: Bool {
         event.start.addingTimeInterval(-15 * 60) <= Date()
     }
@@ -1504,15 +1498,9 @@ struct ConferenceJoinButton: View {
     
     var body: some View {
         Button(action: {
-            if let scheme = provider.nativeURLScheme,
-               var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-                components.scheme = scheme
-                if let nativeURL = components.url {
-                    openURL(nativeURL)
-                    return
-                }
-            }
-            openURL(url)
+            guard let target = joinTarget else { return }
+            openingTask?.cancel()
+            openingTask = Task { _ = await MeetingOpening().open(target) }
         }) {
             HStack(spacing: 4) {
                 Image(systemName: "video.fill")
@@ -1528,7 +1516,11 @@ struct ConferenceJoinButton: View {
             .cornerRadius(6)
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(!isJoinable)
+        .onDisappear {
+            openingTask?.cancel()
+            openingTask = nil
+        }
+        .disabled(!isJoinable || joinTarget == nil)
         .help(isJoinable ? "Join the meeting" : "Meeting starts at \(event.start.formatted(date: .omitted, time: .shortened))")
     }
 }

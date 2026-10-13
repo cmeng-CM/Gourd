@@ -543,58 +543,13 @@ private extension EKEvent {
         return startDate == startOfDay && endDate == endOfDay
     }
     
-    /// Extract conference call URL from various sources
+}
+
+extension EKEvent {
+    /// Multiple invitations remain unresolved for the selection UI; never choose the first link.
     func extractConferenceURL() -> URL? {
-        // First try the URL field if it's a conference URL
-        if let eventURL = url, isConferenceURL(eventURL) {
-            return eventURL
-        }
-        
-        // Then try to extract from location field
-        if let location = location, let conferenceURL = extractURLFromText(location) {
-            return conferenceURL
-        }
-        
-        // Finally try to extract from notes
-        if let notes = notes, let conferenceURL = extractURLFromText(notes) {
-            return conferenceURL
-        }
-        
-        return nil
-    }
-    
-    /// Check if a URL is likely a conference URL
-    private func isConferenceURL(_ url: URL) -> Bool {
-        let host = url.host?.lowercased() ?? ""
-        let conferenceHosts = [
-            "zoom.us",
-            "teams.microsoft.com",
-            "meet.google.com",
-            "webex.com",
-            "gotomeeting.com",
-            "bluejeans.com",
-            "whereby.com",
-            "meet.jit.si",
-            "discord.gg",
-            "discord.com",
-            "facetime.apple.com"
-        ]
-        
-        return conferenceHosts.contains { host.contains($0) }
-    }
-    
-    /// Extract first valid conference URL from text
-    private func extractURLFromText(_ text: String) -> URL? {
-        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-        let matches = detector?.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
-        
-        for match in matches ?? [] {
-            if let url = match.url, isConferenceURL(url) {
-                return url
-            }
-        }
-        
-        return nil
+        let source = [url?.absoluteString, location, notes].compactMap { $0 }.joined(separator: "\n")
+        return MeetingLinkResolver().uniqueOpenTarget(text: source)?.sourceURL
     }
 }
 
