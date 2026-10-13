@@ -141,7 +141,7 @@ stateDiagram-v2
 
 ## 明确不做
 
-屏幕助手迁移、第三方插件 AI RPC、自动写日历、后台抓取其他日程、自动入会操作、凭会议号猜深链、联系人或系统设置调查、退出后草稿恢复、远端推送/合并/发布和安装本轮构建均不在本次范围。此前停止桌面操作要求继续有效；界面验收就绪后再安排。
+屏幕助手迁移、第三方插件 AI RPC、自动写日历、后台抓取其他日程、自动入会操作、凭会议号猜深链、联系人或系统设置调查、退出后草稿恢复、远端推送/合并/发布均不在本次范围；不运行旧自动 UI Runner，验证不读取真实秘密、不发真实 AI/会议请求或写真实 EventKit 记录。用户于 2026-10-13 明确恢复宿主测试授权，并授权完整自动门与独立整体审查通过后本地安装本轮构建。四类别 UI 验收留在安装后逐项确认，未确认时工作流不 close；安装本身不代表验收完成。
 
 ## 实际交付
 
@@ -176,11 +176,11 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 签名只读复核保留两种环境的结果：沙盒内 `codesign --verify --deep --strict` 退出 1（`CSSMERR_TP_NOT_TRUSTED`）、display 退出 0 但 Authority unavailable；同一产物在实际本机信任环境 verify/display 均退出 0、`Authority=Gourd Local`。没有导入证书、改变信任或重签来修正沙盒结果。完整日志 `.workflow/ai-calendar/reports/T8-offline-release.log` SHA256 为 `e2595c5fb41bcd60ed0aacc53f29dceafdcd08b9a213e481e4712c0d4cd0f8ef`；Mach-O SHA256 为 `1ac59b4b71b1f28d481cecffe94d7be626dd8b85609ce94933a99d9b2f1b4b19`，CDHash 为 `f897341e8b26019829d6181cb236419dfd11ef7c`。该单独 Release 验证不构成 wrapper 完整成功 attempt。
 
-独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与当时 wrapper 内容指纹，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户先回复「先继续不占桌面的工作」，随后明确要求「现在进行测试验证，验证完安装到本机」，恢复宿主测试许可并将安装授权置于验证之后；此记录不表示已经测试或安装。
+独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与当时 wrapper 内容指纹，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户先回复「先继续不占桌面的工作」，随后于 2026-10-13 明确要求「现在进行测试验证，验证完安装到本机」，并进一步选择「自动测试与审查通过后安装，界面验收留到安装后」。由此恢复宿主测试许可，完整自动门与独立整体审查通过后执行本地安装，四类别 UI 在安装后逐项确认、未确认不 close；此记录不表示已经测试、安装或人工验收。
 
 控制器即时 Pear 查询 false、退出 0 后启动 attempt `20261013T182253-be28ba0a15484345b4f984ae1ad6aefa`；preflight 将跟踪的 framework `Resources` 目录 symlink 误交给普通文件哈希，失败于 `missing file .../MediaRemoteAdapter.framework/Resources`。阶段列表为空，未启动宿主；latest 保留 failed，不复用旧成功。wrapper 已限定修复输入指纹：逐组件解析 checkout 内链接，绑定链接自身 target、中间链、目标存在性与文件/目录内容；越界、受保护秘密路径、断链和循环拒绝，不能简单忽略 symlink。Git 清单原已包含 `Versions/A` 实际目标数据，修复补齐链接语义与目标内容绑定。纯隔离同型 framework fixture及本工作区 620 项输入快照通过，默认/failed latest/隔离缺证据复核仍非零；这些均不是宿主测试。wrapper 变化须重新有限复审，不能沿用旧指纹的 PASS。
 
-**当前实际证据为离线静态/fixture、单独纯 Release 成功与一次未启动宿主的失败 preflight。完整宿主 XCTest、新 xcresult 非零运行计数、完整 wrapper 成功 attempt（含其 Debug/test/Release 产物绑定）、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending，T8 不得记录完成。** 后续由控制器在本修复有限复审及即时宿主先决条件满足后启动新 attempt，完整验证通过后再执行已授权安装。任务审查通过后的 engine verify/close 属整体门，本节不宣称已完成。
+**当前实际证据为离线静态/fixture、单独纯 Release 成功与一次未启动宿主的失败 preflight。完整宿主 XCTest、新 xcresult 非零运行计数、完整 wrapper 成功 attempt（含其 Debug/test/Release 产物绑定）、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending，T8 不得记录完成。** 后续由控制器在本修复有限复审及即时宿主先决条件满足后启动新 attempt，完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI。任务审查通过后的 engine verify/close 属整体门，人工项未确认不关闭；本节不宣称已完成。
 
 ## 已知限制
 
@@ -228,7 +228,7 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 | D-06 | 统一模型调用，协议与厂商解耦，独立配置及新 Keychain 引用 | 用户要求其他模块共用；agent 选可测试协议与秘密隔离实现 |
 | D-07 | 请求按草稿/修订隔离，保留手改与原文，保存层确认校验 | 承接用户要求的草稿保护及既有会话语义 |
 | D-08 | 复制独立于导航，以实际拖选/菜单生命周期释放保护 | 用户问题与已批准轻量处理边界；agent 修交互竞争 |
-| D-09 | 单元/Release/人工 UI；不占桌面、不安装、不发真实模型/会议请求 | 承接用户停桌面及 D-26；测试证据须区分编译与运行 |
+| D-09 | 单元/Release/人工 UI；宿主测试已恢复授权，完整自动门与独立整体审查通过后本地安装，四类别 UI 留安装后；仍禁止真实 AI/秘密/会议/EventKit 写与旧 UI Runner | 用户 2026-10-13 明确「现在进行测试验证，验证完安装到本机」及「自动测试与审查通过后安装，界面验收留到安装后」；继承 D-26，区分编译与运行，人工项未逐项确认不 close |
 | D-10 | 八个纵向任务，部分超过五文件但串行提交审查（T1/T4/T5 包含错误文案 en/zh-Hans 本地化） | agent：跨层字段/设置/保护必须原子贯通；不按文件拆散行为 |
 | D-11 | 全部拒绝 redirect、Base URL 无 query、Gemini header 密钥/裸模型 ID、兼容及 Ollama 可无认证、快照测试显式凭据、新秘密引用替换并报告回滚失败 | agent：T1 候选裁定经控制器采用；依赖 D-06 的秘密隔离，代价和配置要求见已知限制 |
 | D-12 | Kernel/Factory 共享 runtime，加载错误显式保留；空白密钥保留/开关清除；默认选择立即保存，连接测试为不保存的文字探针 | agent：T2 候选裁定经控制器采用，确保模块下一次请求读取新配置，避免测试与保存混淆；加载失败恢复和视觉验证限制见已知限制 |
