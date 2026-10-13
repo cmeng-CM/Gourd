@@ -151,7 +151,7 @@ T6 已本地提交（`a4225282`、`f264c656`）：只读选区/复制菜单、�
 
 T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 当时仅完成编译，现已随下述完整 815 用例运行。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
 
-T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述修复前完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与当时新 Release/签名检查均通过；首次整体终审随后为 No，本波代码新增后必须取得新的自动证据，不能将历史成功视为当前实现或全范围验收通过。
+T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。2026-10-13 下述修复前完整自动门实际运行 815 个 XCTest，失败/跳过均为 0，Python 与当时新 Release/签名检查均通过；首次整体终审随后为 No。唯一同波修复 `23c34167` 后已取得下述新完整自动证据（819 个 XCTest），旧成功仍只适用历史源码；最终整体审查、安装和人工验收仍待进行。
 
 ### T8 验证入口与交付状态（完整自动门已运行）
 
@@ -180,21 +180,27 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 控制器即时 Pear 查询 false、退出 0 后启动 attempt `20261013T182253-be28ba0a15484345b4f984ae1ad6aefa`；preflight 将跟踪的 framework `Resources` 目录 symlink 误交给普通文件哈希，失败于 `missing file .../MediaRemoteAdapter.framework/Resources`。阶段列表为空，未启动宿主；该历史 attempt 保留 failed，不冒充后续成功。wrapper 已限定修复输入指纹：逐组件解析 checkout 内链接，绑定链接自身 target、中间链、目标存在性与文件/目录内容；越界、受保护秘密路径、断链和循环拒绝，不能简单忽略 symlink。Git 清单原已包含 `Versions/A` 实际目标数据，修复补齐链接语义与目标内容绑定。纯隔离同型 framework fixture及本工作区 620 项输入快照通过，当时默认/failed latest/隔离缺证据复核均非零；这些不替代宿主测试。修复后的实际 wrapper 指纹经独立有限复审 Spec/Quality PASS、无未处理问题。
 
-**完整自动门实测（2026-10-13）**：控制器在实际本机信任环境执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；成功 attempt 为 `20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`，绑定源码 HEAD `35307761`、ai-calendar/cd825466 与 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均退出 0。新 xcresult 的 root/action 计数一致：实际执行 815、failed 0、skipped 0、actionStatus succeeded；legacy 的独立 passed/expectedFailures 仍为 null。三个 Python 套件实际 11 tests 通过。
+**修复前完整自动门历史实测（2026-10-13）**：控制器在实际本机信任环境执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；成功 attempt 为 `20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`，绑定源码 HEAD `35307761`、ai-calendar/cd825466 与 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均退出 0。新 xcresult 的 root/action 计数一致：实际执行 815、failed 0、skipped 0、actionStatus succeeded；legacy 的独立 passed/expectedFailures 仍为 null。三个 Python 套件实际 11 tests 通过。
 
 本 attempt 的新 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c`；新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T183709-1c7a4d116a984b348993cbb011ae4f7c/tests.xcresult`。Debug app 使用 `com.cmeng.gourd.calendar-tests.Gourd` 隔离域，其 test bundle、新 Release app 的内容摘要均绑定于同目录 `evidence.json`。Debug/Release deep strict 签名和实际 metadata 检查均退出 0、Authority Gourd Local；Release 为 `com.cmeng.gourd`、0.2.0（build 1200）。该历史 attempt 曾以此新 DerivedData 下 `Build/Products/Release/Gourd.app` 作为待安装源；本波生产/测试修改后旧 success 不可复用，后续安装须绑定本波新的成功 attempt，不使用此历史产物或旧单独 offline Release。各原日志及命令/阶段退出/允许环境/时刻/摘要均已保存，未将编译或旧产物当作本轮运行证据。
 
-控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；本次文档提交后的 docs-only 实际正向复核仍由控制器继续完成。
+控制器实测 Pear 启动前/测试后精确查询均 false、退出 0，测试宿主已退出（TestHosts 空）；未运行旧 UI Runner、安装或真实 AI/秘密/会议/EventKit 写操作。回写前实际 `--verify-evidence` 已退出 0，另重跑 4 个静态回归且没有启动宿主；该修复前文档提交后的 docs-only 实际正向复核随后由控制器完成。
 
-**T8 修复前完整自动证据已取得，任务最终复审及 docs-only 证据复核随后完成；首次 fresh 整体终审为 No（Critical 0 / Important 2 / Minor 2）。本波修复后的完整自动门、独立复审、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
+**T8 修复前完整自动证据、任务最终复审及 docs-only 证据复核已取得；首次 fresh 整体终审为 No（Critical 0 / Important 2 / Minor 2）。唯一同波修复后新的完整自动门已通过；最终文档的实际证据绑定、独立整体复审最终判决、安装、四类别人工确认及 engine 收尾尚未完成。** 完整自动门与独立整体审查通过后执行已授权安装，再逐项确认四类别 UI；未确认不 close。本节不宣称全范围验收通过或已安装。
 
 ### 首次整体终审与同波修复（2026-10-13）
 
-首次独立整体终审在 `172cc65e` 判定 No：I-01 的三个独立时刻可被模型选中的局部证据漏掉；I-02 的重试只冻结 instant，候选纽约来源区回流改变上海参考日期。两项均恢复 D-04/D-07/D-15/D-16 原契约，不降为已知可接受限制。该波还校正用户指南的来源区编辑承诺、架构的 CalendarModule/TodosModule 各自 surface 注入描述，不新增时区选择器或改变产品范围。
+首次独立整体终审在 `172cc65e` 判定 No；唯一修复波次已本地提交 `23c341671235bb397611a77fdfb84e7f16f61a74`：I-01 的三个独立时刻可被模型选中的局部证据漏掉；I-02 的重试只冻结 instant，候选纽约来源区回流改变上海参考日期。两项均恢复 D-04/D-07/D-15/D-16 原契约，不降为已知可接受限制。该波还校正用户指南的来源区编辑承诺、架构的 CalendarModule/TodosModule 各自 surface 注入描述，不新增时区选择器或改变产品范围。
 
 `ScheduleParsing.swift` 新增全文 `timeHints` 与共同起止的一致性核验；`CalendarPanelSession.swift` 用成对参考上下文隔离重试。新增四个 XCTest 方法覆盖模型选旧/新时刻、漏第三时刻、合法两个独立起止、真实 session 保存零写入阻断及明确确认后的内存保存、三类邀请的 GMT/日期/会议号/电话无误报；真实 session→真实 parser→fake AI 在固定 `2026-10-12T16:30Z`、上海参考/纽约来源下检查两次请求 instant+zone 一致、start 稳定、来源区仍正确，并检查取消重试、新修订及弃稿/新稿的上下文生命周期。既有 range/period/default-duration、手改与 DST 断言保留。
 
-本波新增源码尚待控制器新的实际完整自动门与独立复审；旧 815/11 成功仅为历史。实现者实际运行纯 Foundation 源码/fake AI 探针 46 断言、Python 三套 11 tests，均退出 0；新的独立 DerivedData 中 build-for-testing 退出 0（沿项目 Gourd Local，无 identity override），仅证明新测试编译，不表示 XCTest 已运行。具体命令与失败尝试另记本波报告，这些不能替代新宿主 XCTest/Release 十阶段或宣称 Ready to merge。安装仍在新自动门与独立审查通过后，四个人工类别仍 pending。
+实现者在提交前实际运行纯 Foundation 源码/fake AI 探针 46 断言、Python 三套 11 tests，均退出 0；独立 DerivedData 中 build-for-testing 退出 0（沿项目 Gourd Local，无 identity override），当时仅证明新测试编译。初次沙盒编译 exit 74 与后续编译成功日志保留；这些离线证据不替代下述控制器实际新完整门。
+
+**修复后完整自动门实测（2026-10-13）**：控制器实际执行 `sh .workflow/ai-calendar/verify.sh --allow-test-host`，总退出 0；新 attempt `20261013T192520-101cb7e60c2a4a1799d322d9805ec796` 绑定 source HEAD `23c341671235bb397611a77fdfb84e7f16f61a74`、ai-calendar/cd825466 及同一 wrapper SHA256 `cfaf6bd71ef0ce437bd64b853f8298a031167c39aa42c5d823fb67748f6558ec`，latest 为 succeeded。static/xctest/xcresult/python/release/debug-signature/debug-metadata/release-signature/release-metadata/diff 十阶段均实际退出 0；控制器重核十份原日志 SHA256 与 evidence 一致。新 xcresult 的 root/action 计数一致：819 executed、failed 0、skipped 0、actionStatus succeeded；legacy 不提供的 passed/expectedFailures 仍为 null。四个新增回归已随完整 XCTest 实际执行；三个 Python 套件实际 11 tests 通过。
+
+本新 attempt 的独立 DerivedData 为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar/20261013T192520-101cb7e60c2a4a1799d322d9805ec796`，新 xcresult 在 `.workflow/ai-calendar/evidence/20261013T192520-101cb7e60c2a4a1799d322d9805ec796/tests.xcresult`；Debug app、test bundle、Release app 与 xcresult 摘要均绑定同目录 `evidence.json`。Debug `com.cmeng.gourd.calendar-tests.Gourd`、Release `com.cmeng.gourd`，版本均 0.2.0（build 1200）；Debug/Release deep strict 签名和实际 Authority Gourd Local 检查均退出 0。新门前、开始时及宿主退出后 Pear 精确只读查询均 false/exit 0，TestHosts 已为空；此事实不作为未来宿主运行许可。最终文档只复核此新 attempt，后续安装源须为本新 DerivedData 下 `Build/Products/Release/Gourd.app`，不复用旧 815 attempt 或单独 offline Release。
+
+最终 docs HEAD 的 docs-only 实际正向证据复核、独立整体审查最终判决及安装尚待控制器执行；本节不宣称 Ready to merge 或真实 AI、Keychain、会议、EventKit 写入及 UI 验收通过。四个人工类别仍 pending，按用户选择安装后逐项确认，未确认不 close。
 
 ## 已知限制
 
@@ -228,7 +234,7 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 
 完整 XCTest、Python 回归与 Release 构建通过；测试覆盖四协议请求/响应、配置/秘密失败、取消及并发、伪造会议域名/链接、华为双 ID、打开回退、三类邀请与普通语言、时间确认、草稿手改/过期结果、提醒备注/链接/时间及收回保护。全部采用离线替身，不需要真实模型或真实会议账户。
 
-人工逐项复核：① 首页/列表拖选复制、完成与独立详情；② 输入自动填稿、待确认项、切页收回恢复及失败重试；③ 独立 AI 设置保存/连接测试及屏幕助手原配置仍可用；④ 测试会议入口和拒绝回退。继承 D-26，不将旧自动 UI Runner 当成新强制门；此前因宿主显示窗口先编译，2026-10-13 用户恢复授权后已实际执行完整 815 个 XCTest。人工四项仍按用户选择留在安装后逐项确认，未确认不得宣布全范围验收完成或 close。文档、指南及本轮整体独立终审必须与实际实现一致。
+人工逐项复核：① 首页/列表拖选复制、完成与独立详情；② 输入自动填稿、待确认项、切页收回恢复及失败重试；③ 独立 AI 设置保存/连接测试及屏幕助手原配置仍可用；④ 测试会议入口和拒绝回退。继承 D-26，不将旧自动 UI Runner 当成新强制门；此前因宿主显示窗口先编译，2026-10-13 用户恢复授权后修复前实际执行 815 个 XCTest，唯一整体修复后新完整门实际执行 819 个（含四个新增回归）。人工四项仍按用户选择留在安装后逐项确认，未确认不得宣布全范围验收完成或 close。文档、指南及本轮整体独立终审必须与实际实现一致。
 
 ## 决策摘要
 
