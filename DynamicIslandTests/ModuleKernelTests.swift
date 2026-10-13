@@ -13110,6 +13110,116 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.error, CalendarMutationError.unrepresentableReminderTime.localizedDescription)
     }
 
+    func testUnicodeSourceDatesNeverIndexUnconvertedComponents() async throws {
+        for evidence in ["２０２６-１０-１３", "٢٠٢٦-١٠-١٣", "2026年10月13日"] {
+            let (value, _) = try await parse("明天下午五点，参考日期" + evidence, output: output())
+            XCTAssertEqual(value.date, date(13))
+            XCTAssertTrue(value.confirmations.isEmpty)
+            let (selected, _) = try await parse(evidence + " 下午五点", output: output(evidence: evidence))
+            XCTAssertEqual(selected.date, date(13))
+        }
+        let (conflict, _) = try await parse("明天下午五点，参考日期２０２６-１０-１４", output: output())
+        XCTAssertEqual(conflict.confirmations, [.date])
+    }
+    func testInvalidSourceDateCannotNormalizeIntoConfirmedCandidate() async throws {
+        for source in ["2026-02-30", "2026年02月30日", "2月30日", "2/30", "2026-13-02", "2026-00-13"] {
+            let (value, _) = try await parse(source + " 17:00", output: output(date: "2026-03-02", evidence: source, startEvidence: "17:00"))
+            XCTAssertTrue(value.confirmations.contains(.date), source)
+        }
+    }
+    func testWholeSourceNumericMonthDayAndWeekdayConflictsCannotBeOmitted() async throws {
+        for text in ["10/12（明天）下午五点", "10-12（明天）下午五点", "本周四（明天）下午五点", "１０/１２（明天）下午五点"] {
+            let (value, _) = try await parse(text, output: output())
+            XCTAssertTrue(value.confirmations.contains(.date), text)
+        }
+        let (same, _) = try await parse("10/13（明天）下午五点", output: output())
+        XCTAssertTrue(same.confirmations.contains(.date), "The year is missing even when the hints agree")
+    }
+    func testRelativeDatesUseReferenceZoneBeforeConstructingSourceZone() async throws {
+        let westReference = date(13, hour: 0, minute: 30)
+        let (west, _) = try await parse("明天 17:00 America/New_York", output: output(date: "2026-10-14", startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
+        XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(west.start)), "2026-10-14T21:00:00Z")
+        XCTAssertTrue(west.confirmations.isEmpty)
+        do {
+            _ = try await parse("明天 17:00 America/New_York", output: output(startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
+            XCTFail("Source-zone yesterday must not shift the relative day")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        let eastReference = date(12, hour: 23, minute: 30)
+        let (east, _) = try await parse("明天 17:00 Pacific/Auckland", output: output(startEvidence: "17:00", zone: "Pacific/Auckland"), reference: eastReference)
+        XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(east.start)), "2026-10-13T04:00:00Z")
+        XCTAssertTrue(east.confirmations.isEmpty)
+        let (week, _) = try await parse("本周四 17:00 America/New_York", output: output(date: "2026-10-15", evidence: "本周四", startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
+        XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(week.start)), "2026-10-15T21:00:00Z")
+    }
+    func testExplicitOffsetUsesSourceClockAfterDSTTransition() async throws {
+        let (value, _) = try await parse("2026-11-01 17:00 GMT-08:00 America/Los_Angeles", output: output(date: "2026-11-01", evidence: "2026-11-01", startEvidence: "17:00", zone: "America/Los_Angeles"))
+        XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(value.start)), "2026-11-02T01:00:00Z")
+        XCTAssertTrue(value.confirmations.isEmpty)
+    }
+    func testPartialClockEvidenceCannotDiscardAfternoonContext() async throws {
+        let (wrong, _) = try await parse("明天下午10:00开会", output: output(start: "10:00", startEvidence: "10:00"))
+        XCTAssertTrue(wrong.confirmations.contains(.time))
+        let (correct, _) = try await parse("明天下午10:00开会", output: output(start: "22:00", startEvidence: "10:00"))
+        XCTAssertEqual(correct.start, date(13, hour: 22))
+        XCTAssertTrue(correct.confirmations.isEmpty)
+    }
+    func testUnresolvedModifierOrApproximationRetainsTimeConfirmation() async throws {
+        for text in ["明天下午约10:00开会", "明天10:00 PM开会", "明天10:00左右开会", "明天晚上3:00开会"] {
+            let (value, _) = try await parse(text, output: output(start: text.contains("3:00") ? "03:00" : "10:00", startEvidence: text.contains("3:00") ? "3:00" : "10:00"))
+            XCTAssertTrue(value.confirmations.contains(.time), text)
+        }
+    }
+    func testExplicitEndOmissionDoesNotUseDefaultOneHour() async throws {
+        for text in ["明天 10:00-12:00开会", "明天 10:00到12:00开会", "明天 10:00开始，12:00结束", "明天 10:00开会两小时"] {
+            let (value, _) = try await parse(text, output: output(start: "10:00", startEvidence: "10:00"))
+            XCTAssertNil(value.end, text)
+            XCTAssertTrue(value.confirmations.contains(.time), text)
+        }
+        let (range, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", startEvidence: "10:00", end: "12:00", endEvidence: "12:00"))
+        XCTAssertEqual(range.end, date(13, hour: 12))
+        XCTAssertTrue(range.confirmations.isEmpty)
+    }
+    func testRangePeriodInheritanceAndMismatchedEndRequireConfirmation() async throws {
+        let text = "明天下午10:00-11:00开会"
+        let (correct, _) = try await parse(text, output: output(start: "22:00", startEvidence: "10:00", end: "23:00", endEvidence: "11:00"))
+        XCTAssertEqual(correct.start, date(13, hour: 22))
+        XCTAssertEqual(correct.end, date(13, hour: 23))
+        XCTAssertTrue(correct.confirmations.isEmpty)
+        let (wrong, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", startEvidence: "10:00", end: "11:00", endEvidence: "12:00"))
+        XCTAssertTrue(wrong.confirmations.contains(.time))
+    }
+    func testResolverApprovedSentencePunctuationAndRealQueryBytesStayDistinct() async throws {
+        let plain = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"
+        let (value, _) = try await parse("明天下午五点开会，链接：" + plain + "。", output: output(url: plain))
+        XCTAssertEqual(value.url?.absoluteString, plain)
+        let queried = plain + "?name=Fixture,."
+        let (query, _) = try await parse("明天下午五点开会 " + queried, output: output(url: queried))
+        XCTAssertEqual(query.url?.absoluteString, queried)
+        for truncated in [plain, plain + "?name=Fixture,"] {
+            do {
+                _ = try await parse("明天下午五点开会 " + queried, output: output(url: truncated))
+                XCTFail("Valid query punctuation must not be treated as removable prose")
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        }
+    }
+    func testGenerationErrorsResolveActualBilingualCatalogValues() throws {
+        let values: [(ScheduleParsingError, String, String)] = [
+            (.sourceTooLarge, "Use no more than 20,000 characters.", "原文不能超过 20,000 个字符。"),
+            (.emptySource, "Enter source text to generate a draft.", "请输入用于生成草稿的原文。"),
+            (.invalidResponse, "The model returned an invalid schedule. Try again or enter it manually.", "模型返回的日程格式无效，请重试或改为手工填写。"),
+            (.invalidEvidence, "The schedule could not be verified against the source.", "无法根据原文验证生成的日程。"),
+            (.confirmationRequired, "Confirm the current date and time before saving.", "请确认当前日期和时间后再保存。"),
+            (.failed, "Generation failed. Try again or enter it manually.", "生成失败，请重试或改为手工填写。")
+        ]
+        for language in ["en", "zh-Hans"] {
+            let resource = try XCTUnwrap(Bundle.main.url(forResource: language, withExtension: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(url: resource))
+            for (error, english, chinese) in values {
+                XCTAssertEqual(error.localizedDescription(bundle: bundle, locale: Locale(identifier: language)), language == "en" ? english : chinese)
+            }
+        }
+    }
+
     func testManualNotesRemainAcrossSubsequentReparse() async {
         let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
