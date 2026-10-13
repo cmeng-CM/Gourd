@@ -274,7 +274,7 @@ struct CalendarPanelPages: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                MeetingActionView(event: event, session: session)
+                meetingAction(event)
                 Button { show(event) } label: { Image(systemName: "chevron.right") }
                     .disabled(session.isSubmitting)
                     .accessibilityLabel(Text("calendar.panel.details"))
@@ -289,7 +289,7 @@ struct CalendarPanelPages: View {
                 CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
                                   onDetail: { show(event) }, detailEnabled: !session.isSubmitting)
                 if event.conferenceURL == nil {
-                    MeetingActionView(event: event, session: session)
+                    meetingAction(event)
                 }
             }
                 .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.05 : 0)))
@@ -334,7 +334,7 @@ struct CalendarPanelPages: View {
                     Text("calendar.panel.notesEnd").font(.caption2).foregroundStyle(.secondary)
                         .accessibilityIdentifier("calendar-notes-end")
                 }
-                MeetingActionView(event: event, session: session)
+                meetingAction(event)
                 if event.type.isReminder {
                     Text(LocalizedStringKey(event.calendar.allowsContentModifications ? "Edit saved reminders in the system app." : "This calendar is read-only."))
                         .font(.caption).foregroundStyle(.secondary)
@@ -347,6 +347,10 @@ struct CalendarPanelPages: View {
         }
         .accessibilityIdentifier("calendar-detail-scroll")
         .onHover { lifecycle.setScrolling($0) }
+    }
+
+    func meetingAction(_ event: EventModel) -> MeetingActionView {
+        MeetingActionView(event: event, session: session)
     }
 
     private func displayDate(_ date: Date, allDay: Bool, calendar: Calendar) -> String {

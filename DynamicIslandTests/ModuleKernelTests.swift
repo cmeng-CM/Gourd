@@ -13800,4 +13800,103 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(tab, .general)
         XCTAssertEqual(search, "keep without request")
     }
+
+    func testCalendarActualContentSurfaceKeepsOwnedSessionThroughPanelAndMeetingAI() async throws {
+        let owned = makeSession(), other = makeSession()
+        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        let unrelatedAI = MeetingEvidenceAI([])
+        other.configureAI(unrelatedAI)
+        let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
+        let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+        let context = ModuleContextFactory.make(manifest: CalendarModule.manifest, redraw: {}, ai: ai)
+        let module = CalendarModule(context: context, session: owned, manager: manager)
+        try await module.activate()
+        let request = ContentRequest(surface: .expanded, phase: .expanded, reason: .initial)
+        guard case .view = module.content(for: request) else { return XCTFail("Actual calendar content must create its expanded surface") }
+        let surface = module.expandedSurface()
+        XCTAssertTrue(surface.session === owned)
+        XCTAssertTrue(surface.calendarManager === manager)
+        let panel = surface.panelPages(onReturnSource: { _ in })
+        XCTAssertTrue(panel.session === owned)
+        let action = panel.meetingAction(event(notes: MeetingInvitationFixtures.huawei))
+        XCTAssertTrue(action.session === owned)
+        let opener = MeetingFakeOpener([])
+        let model = MeetingActionModel(source: action.source, session: action.session, opener: opener, copyText: { _ in })
+        model.recognize()
+        await drain { !model.isRecognizing }
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertTrue(unrelatedAI.requests.isEmpty)
+        XCTAssertTrue(opener.urls.isEmpty)
+        await module.deactivate()
+    }
+
+    func testTodosActualHomeSurfaceRowsKeepOwnedSessionWithoutCalendarNavigation() async throws {
+        let owned = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
+        let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+        let context = ModuleContextFactory.make(manifest: TodosModule.manifest, redraw: {}, ai: ai)
+        let store = TodoStore(logger: context.logger, fixtureBackend: backend)
+        let module = TodosModule(context: context, session: owned, manager: manager, store: store)
+        try await module.activate()
+        guard case .view = module.content(for: ContentRequest(surface: .home, phase: .expanded, reason: .initial)) else {
+            return XCTFail("Actual todos content must create its home surface")
+        }
+        let surface = module.homeSurface()
+        XCTAssertTrue(surface.session === owned)
+        XCTAssertTrue(surface.calendarManager === manager)
+        XCTAssertTrue(surface.store === store)
+        let list = surface.listContent.withTier(.full)
+        XCTAssertTrue(list.session === owned)
+        // No registry activation is required for the meeting branch. Navigation is separately disabled.
+        let unavailableCalendarList = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: list.session,
+                                                        canOpenDetail: false, isSubmitting: false,
+                                                        openEvent: { _ in XCTFail("Must not navigate") },
+                                                        openTodo: { _ in XCTFail("Must not navigate") }, completeTodo: { _ in })
+        let row = unavailableCalendarList.eventRow(event(notes: MeetingInvitationFixtures.huawei))
+        XCTAssertFalse(row.canOpenDetail)
+        let action = try XCTUnwrap(row.meetingAction)
+        XCTAssertTrue(action.session === owned)
+        let opener = MeetingFakeOpener([])
+        let model = MeetingActionModel(source: action.source, session: action.session, opener: opener, copyText: { _ in })
+        model.recognize()
+        await drain { !model.isRecognizing }
+        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertTrue(opener.urls.isEmpty)
+        XCTAssertFalse(store.hasInitializedEventStore)
+        await module.deactivate()
+    }
+
+    func testSourceAwareHomeEntryIncludesAmbiguousLongCodeAndInvitationButHidesOrdinaryItems() throws {
+        let owned = makeSession()
+        let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
+                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
+        for notes in [MeetingInvitationFixtures.huaweiHTTPS,
+                      MeetingInvitationFixtures.huaweiHTTPS + "\n" + MeetingInvitationFixtures.tencent,
+                      String(repeating: "长备注\n", count: 5_000) + MeetingInvitationFixtures.huaweiHTTPS,
+                      "会议ID：987654321", "会议邀请：请加入会议，入口稍后通知"] {
+            let row = list.eventRow(event(notes: notes))
+            XCTAssertNotNil(row.meetingAction, notes)
+            XCTAssertTrue(row.meetingAction?.session === owned)
+        }
+        XCTAssertNil(list.eventRow(event(notes: "整理会议室，准备投影仪")).meetingAction)
+        let item = TodoBucketing.Item(id: "fallback", title: "会议邀请：请参加会议", dueDate: nil, isCompleted: false,
+                                     completionDate: nil, listName: "Fixture")
+        let fallback = list.todoRow(item)
+        let action = try XCTUnwrap(fallback.meetingAction)
+        XCTAssertTrue(action.session === owned)
+        XCTAssertNil(action.source.start)
+        XCTAssertTrue(action.source.targets.isEmpty)
+        let model = MeetingActionModel(source: action.source, session: owned, opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertTrue(model.isJoinable, "No known start must not create a fictional permanent time gate")
+        let undated = EventModel(id: "undated", start: .distantFuture, end: .distantFuture, title: "会议ID：987654321",
+                                 location: nil, notes: nil, url: nil, isAllDay: true, type: .reminder(completed: false),
+                                 calendar: event(notes: "").calendar, participants: [], timeZone: nil, hasRecurrenceRules: false,
+                                 priority: nil, conferenceURL: nil)
+        XCTAssertNil(CalendarMeetingSource(event: undated).start)
+        XCTAssertNotNil(list.eventRow(undated).meetingAction)
+        XCTAssertEqual(CalendarMeetingSource(event: event(notes: MeetingInvitationFixtures.huaweiHTTPS,
+                                                         start: reference.addingTimeInterval(10_000_000))).start,
+                       reference.addingTimeInterval(10_000_000))
+    }
+
 }

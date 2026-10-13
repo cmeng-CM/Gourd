@@ -93,14 +93,20 @@ final class CalendarModule: GourdModule {
 
     private let session: CalendarPanelSession
     private let context: ModuleContext
+    private let calendarManager: CalendarManager?
 
     convenience init(context: ModuleContext) {
         self.init(context: context, session: .shared)
     }
 
-    init(context: ModuleContext, session: CalendarPanelSession) {
+    init(context: ModuleContext, session: CalendarPanelSession, manager: CalendarManager? = nil) {
         self.session = session
         self.context = context
+        calendarManager = manager
+    }
+
+    func expandedSurface() -> StandaloneCalendarView {
+        StandaloneCalendarView(session: session, manager: calendarManager ?? .shared)
     }
 
     /// 接管三件套之一：**2026-10-10 起留白——本模块不再是「接管键」模块**（docs/37 D-06）。
@@ -128,12 +134,12 @@ final class CalendarModule: GourdModule {
     /// 没有要收的东西：本模块不起 Task、不订阅、不持有视图外的资源（见 `activate()`）。
     func deactivate() async {}
 
-    /// 只答 `expanded`：那个孤儿视图逐字接住（`StandaloneCalendarView()`，零参数）。
+    /// 只答 `expanded`：将本模块配置的会话传入独立日历页。
     /// `.compact` / `.lockscreen` / `.home` 一律 `.none`（口径 1：不占位、不算失败）。
     func content(for request: ContentRequest) -> ModuleContent {
         switch request.surface {
         case .expanded:
-            return .view(AnyView(StandaloneCalendarView()))
+            return .view(AnyView(expandedSurface()))
         case .compact, .lockscreen, .home:
             return .none
         }

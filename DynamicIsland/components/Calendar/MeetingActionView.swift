@@ -15,6 +15,42 @@ extension EnvironmentValues {
     }
 }
 
+/// Original record evidence and optional start; visibility is independent of calendar navigation.
+struct CalendarMeetingSource: Equatable {
+    let recordID: String
+    let textFields: [String]
+    let structuredURLs: [URL]
+    let start: Date?
+
+    init(event: EventModel, url: URL? = nil) {
+        recordID = event.id
+        textFields = [event.title, event.location, event.notes].compactMap { $0 }
+        structuredURLs = [url, event.url, event.conferenceURL].compactMap { $0 }
+        start = event.start == .distantFuture ? nil : event.start
+    }
+
+    init(item: TodoBucketing.Item) {
+        recordID = item.id
+        textFields = [item.title]
+        structuredURLs = []
+        start = item.dueDate
+    }
+
+    var text: String { (textFields + structuredURLs.map(\.absoluteString)).joined(separator: "\n") }
+    var targets: [MeetingJoinTarget] {
+        CalendarMeetingEvidence.resolve(textFields: textFields, structuredURLs: structuredURLs)
+    }
+    var identity: [String] {
+        [recordID, start.map { String($0.timeIntervalSince1970) } ?? ""] + textFields + structuredURLs.map(\.absoluteString)
+    }
+    var hasMeetingInformation: Bool {
+        if !targets.isEmpty { return true }
+        // Invitation intent only; an ordinary task mentioning a meeting room is not an invitation.
+        let hints = #"(?i)(会议邀请|会议主题\s*[:：]|会议链接\s*[:：]|邀请[^\n]{0,40}(?:参加|加入)[^\n]{0,15}会议|(?:请|欢迎)[^\n]{0,20}(?:参加|加入)[^\n]{0,20}会议|(?:meeting|conference)\s+invit(?:ation|e)|(?:join|invited)[^\n]{0,40}(?:meeting|conference))"#
+        return textFields.contains { $0.range(of: hints, options: .regularExpression) != nil }
+    }
+}
+
 /// An injected, offline-testable action controller. Recognition never opens a candidate.
 @MainActor
 final class MeetingActionModel: ObservableObject {
@@ -23,7 +59,7 @@ final class MeetingActionModel: ObservableObject {
     @Published private(set) var isOpening = false
     @Published private(set) var statusKey: String?
     private let source: String
-    private let start: Date
+    private let start: Date?
     private let session: CalendarPanelSession
     private let opening: MeetingOpening
     private let now: () -> Date
@@ -31,24 +67,32 @@ final class MeetingActionModel: ObservableObject {
     private var task: Task<Void, Never>?
     private var revision = 0
 
-    init(event: EventModel, url: URL? = nil, session: CalendarPanelSession,
+    convenience init(event: EventModel, url: URL? = nil, session: CalendarPanelSession,
+                     opener: (any MeetingURLOpening)? = nil, now: @escaping () -> Date = Date.init,
+                     copyText: @escaping (String) -> Void = {
+                         NSPasteboard.general.clearContents()
+                         NSPasteboard.general.setString($0, forType: .string)
+                     }) {
+        self.init(source: CalendarMeetingSource(event: event, url: url), session: session,
+                  opener: opener, now: now, copyText: copyText)
+    }
+
+    init(source: CalendarMeetingSource, session: CalendarPanelSession,
          opener: (any MeetingURLOpening)? = nil, now: @escaping () -> Date = Date.init,
          copyText: @escaping (String) -> Void = {
              NSPasteboard.general.clearContents()
              NSPasteboard.general.setString($0, forType: .string)
          }) {
         self.session = session
-        self.start = event.start
+        self.start = source.start
         self.now = now
         self.copyText = copyText
         opening = MeetingOpening(opener: opener)
-        let fields = [event.title, event.location, event.notes].compactMap { $0 }
-        let urls = [url, event.url, event.conferenceURL].compactMap { $0 }
-        source = (fields + urls.map(\.absoluteString)).joined(separator: "\n")
-        targets = CalendarMeetingEvidence.resolve(textFields: fields, structuredURLs: urls)
+        self.source = source.text
+        targets = source.targets
     }
 
-    var isJoinable: Bool { start.addingTimeInterval(-15 * 60) <= now() }
+    var isJoinable: Bool { start.map { $0.addingTimeInterval(-15 * 60) <= now() } ?? true }
     var hasAI: Bool { session.configuredAI != nil }
     var hasSource: Bool { !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var isBusy: Bool { isRecognizing || isOpening }
@@ -115,17 +159,22 @@ final class MeetingActionModel: ObservableObject {
 
 /// The entry is available before start−15m; only actual URL dispatch keeps the old time gate.
 struct MeetingActionView: View {
-    let event: EventModel
-    var url: URL? = nil
+    let source: CalendarMeetingSource
     let session: CalendarPanelSession
 
-    private var sourceIdentity: [String] {
-        [event.id, event.title, event.location ?? "", event.notes ?? "", event.url?.absoluteString ?? "",
-         event.conferenceURL?.absoluteString ?? "", url?.absoluteString ?? "", String(event.start.timeIntervalSince1970)]
+    init(event: EventModel, url: URL? = nil, session: CalendarPanelSession) {
+        source = CalendarMeetingSource(event: event, url: url)
+        self.session = session
+    }
+    init(source: CalendarMeetingSource, session: CalendarPanelSession) {
+        self.source = source
+        self.session = session
     }
     var body: some View {
-        MeetingActionContent(event: event, url: url, session: session)
-            .id(sourceIdentity)
+        if source.hasMeetingInformation {
+            MeetingActionContent(source: source, session: session)
+                .id(source.identity)
+        }
     }
 }
 
@@ -133,8 +182,8 @@ private struct MeetingActionContent: View {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @StateObject private var model: MeetingActionModel
 
-    init(event: EventModel, url: URL? = nil, session: CalendarPanelSession) {
-        _model = StateObject(wrappedValue: MeetingActionModel(event: event, url: url, session: session))
+    init(source: CalendarMeetingSource, session: CalendarPanelSession) {
+        _model = StateObject(wrappedValue: MeetingActionModel(source: source, session: session))
     }
 
     var body: some View {

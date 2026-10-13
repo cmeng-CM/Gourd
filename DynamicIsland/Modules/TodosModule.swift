@@ -848,6 +848,7 @@ final class TodosModule: GourdModule {
     private let session: CalendarPanelSession
     private let context: ModuleContext
     private let store: TodoStore
+    private let calendarManager: CalendarManager?
 
     /// 首页块**高度申报**（docs/37 D-05；p13 按 docs/38 §做法 五 调到与通知块对齐）：
     /// 固定 = 顶部内缩 + 表头 + 6 行（按日程行高 34）= **228**。
@@ -877,10 +878,15 @@ final class TodosModule: GourdModule {
         self.init(context: context, session: .shared)
     }
 
-    init(context: ModuleContext, session: CalendarPanelSession) {
+    init(context: ModuleContext, session: CalendarPanelSession, manager: CalendarManager? = nil, store: TodoStore? = nil) {
         self.session = session
         self.context = context
-        self.store = TodoStore(logger: context.logger)
+        self.store = store ?? TodoStore(logger: context.logger)
+        calendarManager = manager
+    }
+
+    func homeSurface() -> TodosHomeBlockView {
+        TodosHomeBlockView(store: store, session: session, manager: calendarManager ?? .shared)
     }
 
     /// 只订阅变更 + 已授权时首取；**不请求权限**（见文件头的授权口径）。
@@ -904,7 +910,7 @@ final class TodosModule: GourdModule {
         case .expanded:
             return .view(AnyView(TodosModuleView(store: store)))
         case .home:
-            return .view(AnyView(TodosHomeBlockView(store: store)))
+            return .view(AnyView(homeSurface()))
         case .lockscreen:
             return .none
         }
@@ -1463,17 +1469,31 @@ enum TodosHomeBlockLayout {
 }
 
 /// 固定统计头，下方单一滚动区展示日程与待办；轻量完成和详情导航彼此独立。
-private struct TodosHomeBlockView: View {
+struct TodosHomeBlockView: View {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var store: TodoStore
-    @ObservedObject private var calendarManager = CalendarManager.shared
-    @ObservedObject private var session = CalendarPanelSession.shared
+    @ObservedObject var calendarManager: CalendarManager
+    @ObservedObject var session: CalendarPanelSession
     @ObservedObject private var registry = ModuleRegistry.shared
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @State private var actionError: String?
     @State private var completingItemID: String?
     @State private var scrollToken = UUID()
+
+    init(store: TodoStore, session: CalendarPanelSession = .shared, manager: CalendarManager = .shared) {
+        self.store = store
+        self.session = session
+        calendarManager = manager
+    }
+
+    var listContent: TodoHomeTodayList {
+        TodoHomeTodayList(entries: entries, reminderRecords: store.reminderRecords,
+                          tier: .full, session: session,
+                          canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
+                          isSubmitting: session.isSubmitting || completingItemID != nil,
+                          openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo)
+    }
 
     private var summary: TodoBucketing.Summary {
         TodoBucketing.classify(TodosHomeBlockLayout.uniqueTodos(store.items))
@@ -1501,12 +1521,7 @@ private struct TodosHomeBlockView: View {
                 }
                 ScrollViewReader { scrollProxy in
                     ScrollView(.vertical) {
-                        TodoHomeTodayList(
-                            entries: entries, reminderRecords: store.reminderRecords, tier: TodosHomeBlockLayout.listTier(forWidth: proxy.size.width),
-                            canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
-                            isSubmitting: session.isSubmitting || completingItemID != nil,
-                            openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo
-                        )
+                        listContent.withTier(TodosHomeBlockLayout.listTier(forWidth: proxy.size.width))
                         if entries.isEmpty, store.hasFullAccess { TodoHomeEmptyRow() }
                     }
                     .scrollPosition(id: $session.homeScrollAnchor, anchor: .top)
@@ -1630,15 +1645,30 @@ private struct TodoHomeEmptyRow: View {
 }
 
 /// 两个组共用一个滚动区；行 ID 同时供来源锚点与 UI 验收使用。
-private struct TodoHomeTodayList: View {
+struct TodoHomeTodayList: View {
     let entries: [TodosHomeBlockLayout.ScheduleEntry]
     let reminderRecords: [String: EventModel]
     let tier: TodosHomeBlockLayout.Tier
+    let session: CalendarPanelSession
     let canOpenDetail: Bool
     let isSubmitting: Bool
     let openEvent: (EventModel) -> Void
     let openTodo: (TodoBucketing.Item) -> Void
     let completeTodo: (TodoBucketing.Item) -> Void
+
+    func withTier(_ tier: TodosHomeBlockLayout.Tier) -> TodoHomeTodayList {
+        TodoHomeTodayList(entries: entries, reminderRecords: reminderRecords, tier: tier, session: session,
+                          canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
+                          openEvent: openEvent, openTodo: openTodo, completeTodo: completeTodo)
+    }
+    func eventRow(_ event: EventModel) -> TodoHomeEventRow {
+        TodoHomeEventRow(event: event, session: session, canOpenDetail: canOpenDetail, open: { openEvent(event) })
+    }
+    func todoRow(_ item: TodoBucketing.Item) -> TodoHomeRow {
+        TodoHomeRow(item: item, event: reminderRecords[item.id], tier: tier, session: session,
+                    canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
+                    open: { openTodo(item) }, complete: { completeTodo(item) })
+    }
 
     private var eventEntries: [TodosHomeBlockLayout.ScheduleEntry] {
         entries.filter { if case .event = $0 { return true }; return false }
@@ -1653,8 +1683,7 @@ private struct TodoHomeTodayList: View {
                 groupHeader("calendar.quickAdd.kindEvent")
                 ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
-                        TodoHomeEventRow(event: event, canOpenDetail: canOpenDetail, open: { openEvent(event) })
-                            .id(event.id)
+                        eventRow(event).id(event.id)
                     }
                 }
             }
@@ -1662,10 +1691,7 @@ private struct TodoHomeTodayList: View {
                 groupHeader("calendar.quickAdd.kindReminder")
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
-                        TodoHomeRow(
-                            item: item, event: reminderRecords[item.id], tier: tier, canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
-                            open: { openTodo(item) }, complete: { completeTodo(item) }
-                        ).id(item.id)
+                        todoRow(item).id(item.id)
                     }
                 }
             }
@@ -1681,10 +1707,16 @@ private struct TodoHomeTodayList: View {
     }
 }
 
-private struct TodoHomeEventRow: View {
+struct TodoHomeEventRow: View {
     let event: EventModel
+    let session: CalendarPanelSession
     let canOpenDetail: Bool
     let open: () -> Void
+
+    var meetingAction: MeetingActionView? {
+        let source = CalendarMeetingSource(event: event)
+        return source.hasMeetingInformation ? MeetingActionView(source: source, session: session) : nil
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1696,7 +1728,7 @@ private struct TodoHomeEventRow: View {
             Text(TodoText.eventTimeLabel(for: event))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit().foregroundStyle(.white.opacity(0.6)).lineLimit(1).fixedSize()
-            if let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+            if let meetingAction { meetingAction }
             Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
                 .buttonStyle(.plain).disabled(!canOpenDetail)
                 .accessibilityLabel(Text("calendar.panel.details"))
@@ -1707,14 +1739,20 @@ private struct TodoHomeEventRow: View {
 }
 
 /// 宽窄两档都有独立完成圈；窄行只省去过期标签。
-private struct TodoHomeRow: View {
+struct TodoHomeRow: View {
     let item: TodoBucketing.Item
     let event: EventModel?
     let tier: TodosHomeBlockLayout.Tier
+    let session: CalendarPanelSession
     let canOpenDetail: Bool
     let isSubmitting: Bool
     let open: () -> Void
     let complete: () -> Void
+
+    var meetingAction: MeetingActionView? {
+        let source = event.map { CalendarMeetingSource(event: $0) } ?? CalendarMeetingSource(item: item)
+        return source.hasMeetingInformation ? MeetingActionView(source: source, session: session) : nil
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1734,7 +1772,7 @@ private struct TodoHomeRow: View {
                 Text(LocalizedStringKey("module.todos.overdue"))
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(.red).fixedSize()
             }
-            if let event, let conferenceURL = event.conferenceURL { ConferenceJoinButton(url: conferenceURL, event: event) }
+            if let meetingAction { meetingAction }
             Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
                 .buttonStyle(.plain).disabled(!canOpenDetail)
                 .accessibilityLabel(Text("calendar.panel.details"))

@@ -1257,11 +1257,20 @@ struct MonthGridView: View {
 
 struct StandaloneCalendarView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
-    @ObservedObject private var calendarManager = CalendarManager.shared
-    @ObservedObject private var session = CalendarPanelSession.shared
+    @ObservedObject var calendarManager: CalendarManager
+    @ObservedObject var session: CalendarPanelSession
     @State private var datePickerScrollTarget: Date?
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
+
+    init(session: CalendarPanelSession = .shared, manager: CalendarManager = .shared) {
+        self.session = session
+        calendarManager = manager
+    }
+
+    func panelPages(onReturnSource: @escaping (CalendarPanelSource) -> Void) -> CalendarPanelPages {
+        CalendarPanelPages(session: session, manager: calendarManager, onReturnSource: onReturnSource)
+    }
 
     /// 浏览日期只改共享路由；暂存稿的日期、目标和字段由会话保留。
     private var selectedDate: Binding<Date> {
@@ -1339,7 +1348,7 @@ struct StandaloneCalendarView: View {
                 .frame(height: monthGridHeight, alignment: .topLeading)
                 .layoutPriority(1)
 
-            CalendarPanelPages(session: session, manager: calendarManager) { source in
+            panelPages { source in
                 if case .home = source { vm.coordinator.currentView = .home }
             }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
