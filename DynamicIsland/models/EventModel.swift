@@ -106,6 +106,13 @@ struct CalendarReminderInput: Equatable {
             components.calendar = calendar
             components.timeZone = calendar.timeZone
         }
+        if !isAllDay {
+            // Calendar.date(from:) selects a DST occurrence; reject shifts but allow subsecond loss.
+            guard let readback = CalendarRecordDates.absoluteDate(from: components, fallback: calendar),
+                  readback.timeIntervalSince1970.rounded(.down) == due.timeIntervalSince1970.rounded(.down) else {
+                throw CalendarMutationError.unrepresentableReminderTime
+            }
+        }
         return components
     }
 
@@ -149,7 +156,7 @@ enum CalendarMutationError: Error, Equatable, LocalizedError {
     case accessDenied, invalidTitle, invalidDateRange, invalidAllDayRange
     case recordNotFound, wrongRecordType, invalidCalendar, noWritableCalendar
     case readOnlyCalendar, recurringEvent, detachedEvent, meetingEvent, birthdayEvent
-    case missingRecordIdentifier, invalidTimeZone, unsupportedReminderInput
+    case missingRecordIdentifier, invalidTimeZone, unsupportedReminderInput, unrepresentableReminderTime
 
     var errorDescription: String? {
         switch self {
@@ -169,6 +176,7 @@ enum CalendarMutationError: Error, Equatable, LocalizedError {
         case .missingRecordIdentifier: return String(localized: "The saved item could not be read.")
         case .invalidTimeZone: return String(localized: "The time zone is invalid.")
         case .unsupportedReminderInput: return String(localized: "This reminder writer cannot save time or metadata.")
+        case .unrepresentableReminderTime: return String(localized: "This due time cannot be preserved in its time zone. Choose another time or use all-day.")
         }
     }
 }

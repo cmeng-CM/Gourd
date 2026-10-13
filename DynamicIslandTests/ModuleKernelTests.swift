@@ -11320,6 +11320,144 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(backend.allRecords(), before)
     }
 
+    func testSourceZoneEditorAllDayConversionsAndDateChangesRemainSavableAcrossDST() throws {
+        var source = testCalendar
+        source.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        for (month, day, hours) in [(3, 8, 23.0), (11, 1, 25.0)] {
+            let start = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: month, day: day, hour: 9)))
+            let end = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: month, day: day, hour: 10)))
+            let draft = CalendarDraft(kind: .event, eventID: nil, originalDate: start, title: "Source zone", start: start, end: end, isAllDay: false, notes: "Keep notes", calendarID: "fixture-events", url: URL(string: "https://example.com/source"), timeZoneIdentifier: source.timeZone.identifier)
+            let allDay = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+            XCTAssertEqual(allDay.start, source.startOfDay(for: start))
+            XCTAssertEqual(allDay.end.timeIntervalSince(allDay.start), hours * 3600)
+            XCTAssertEqual(CalendarPanelDates.includedEnd(of: allDay, calendar: testCalendar), allDay.start)
+            XCTAssertNoThrow(try allDay.eventInput(calendar: testCalendar))
+            let nextDay = try XCTUnwrap(source.date(byAdding: .day, value: 1, to: start))
+            let extended = CalendarPanelDates.settingEnd(nextDay, in: allDay, calendar: testCalendar)
+            let changed = CalendarPanelDates.settingStart(nextDay, in: extended, calendar: testCalendar)
+            XCTAssertEqual(changed.start, source.startOfDay(for: nextDay))
+            XCTAssertEqual(CalendarPanelDates.includedEnd(of: changed, calendar: testCalendar), changed.start)
+            XCTAssertNoThrow(try changed.eventInput(calendar: testCalendar))
+            let timed = CalendarPanelDates.settingAllDay(false, in: allDay, calendar: testCalendar)
+            XCTAssertEqual(timed.start, start)
+            XCTAssertEqual(timed.end, end)
+            XCTAssertNoThrow(try timed.eventInput(calendar: testCalendar))
+            let moved = CalendarPanelDates.changingDay(nextDay, preservingTimeOf: start, calendar: CalendarPanelDates.sourceCalendar(for: draft, fallback: testCalendar))
+            XCTAssertEqual(moved, nextDay)
+            XCTAssertEqual(changed.url, draft.url)
+            XCTAssertEqual(changed.notes, draft.notes)
+            XCTAssertEqual(changed.timeZoneIdentifier, draft.timeZoneIdentifier)
+        }
+    }
+
+    func testEditorNilSourceZoneKeepsLegacyFallbackAndSourceFormattingIsConsistent() throws {
+        let draft = pageDraft(start: date(day: 11, hour: 9), end: date(day: 11, hour: 10))
+        XCTAssertEqual(CalendarPanelDates.sourceCalendar(for: draft, fallback: testCalendar).timeZone, testCalendar.timeZone)
+        let allDay = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+        XCTAssertEqual(allDay.start, date(day: 11))
+        XCTAssertEqual(allDay.end, date(day: 12))
+        let extended = CalendarPanelDates.settingEnd(date(day: 13, hour: 12), in: allDay, calendar: testCalendar)
+        let moved = CalendarPanelDates.settingStart(date(day: 12, hour: 18), in: extended, calendar: testCalendar)
+        XCTAssertEqual(moved.start, date(day: 12))
+        XCTAssertEqual(CalendarPanelDates.includedEnd(of: moved, calendar: testCalendar), date(day: 13))
+        XCTAssertNoThrow(try moved.eventInput(calendar: testCalendar))
+        var zoned = draft
+        zoned.timeZoneIdentifier = "America/Los_Angeles"
+        let source = CalendarPanelDates.sourceCalendar(for: zoned, fallback: testCalendar)
+        let midnight = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z"))
+        let sourceLabel = CalendarPanelDates.formatted(midnight, allDay: true, calendar: source)
+        XCTAssertEqual(sourceLabel, midnight.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, calendar: source, timeZone: source.timeZone)))
+        XCTAssertNotEqual(sourceLabel, CalendarPanelDates.formatted(midnight, allDay: true, calendar: testCalendar))
+    }
+
+    func testSourceZoneEditorSharedConversionsReachProductionSessionSave() async throws {
+        let backend = panelBackend()
+        let manager = CalendarManager(service: backend, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let session = CalendarPanelSession(manager: manager)
+        session.beginCreate(kind: .event, on: date(day: 14), calendarID: "fixture-events")
+        var draft = try XCTUnwrap(session.draft)
+        draft.title = "Cross-zone all day"
+        draft.timeZoneIdentifier = "America/Los_Angeles"
+        let source = CalendarPanelDates.sourceCalendar(for: draft, fallback: testCalendar)
+        draft.start = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 9)))
+        draft.end = draft.start.addingTimeInterval(3600)
+        draft = CalendarPanelDates.settingAllDay(true, in: draft, calendar: testCalendar)
+        let included = try XCTUnwrap(source.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 12)))
+        draft = CalendarPanelDates.settingEnd(included, in: draft, calendar: testCalendar)
+        draft = CalendarPanelDates.settingStart(included, in: draft, calendar: testCalendar)
+        session.draft = draft
+        let saved = await session.save()
+        XCTAssertTrue(saved)
+        let event = try XCTUnwrap(backend.allRecords().first { $0.id.hasPrefix("fixture-created-") })
+        XCTAssertTrue(event.isAllDay)
+        XCTAssertEqual(event.start, source.startOfDay(for: included))
+        XCTAssertEqual(event.end, source.date(byAdding: .day, value: 1, to: event.start))
+        XCTAssertEqual(event.timeZone?.identifier, draft.timeZoneIdentifier)
+        XCTAssertNil(session.draft)
+    }
+
+    func testReminderFirstDSTFoldReadsBackExactlyAndSecondFoldIsRejected() throws {
+        let formatter = ISO8601DateFormatter()
+        let first = try XCTUnwrap(formatter.date(from: "2026-11-01T08:30:00Z"))
+        let second = try XCTUnwrap(formatter.date(from: "2026-11-01T09:30:00Z"))
+        var input = CalendarReminderInput(title: "DST first", due: first, isAllDay: false, timeZoneIdentifier: "America/Los_Angeles")
+        let components = try XCTUnwrap(input.dueDateComponents(calendar: testCalendar))
+        XCTAssertEqual(components.hour, 1)
+        XCTAssertEqual(components.minute, 30)
+        XCTAssertEqual(components.timeZone?.identifier, "America/Los_Angeles")
+        XCTAssertEqual(CalendarRecordDates.absoluteDate(from: components, fallback: testCalendar), first)
+        input.due = second
+        XCTAssertThrowsError(try input.dueDateComponents(calendar: testCalendar)) { XCTAssertEqual($0 as? CalendarMutationError, .unrepresentableReminderTime) }
+        input.isAllDay = true
+        let allDay = try XCTUnwrap(input.dueDateComponents(calendar: testCalendar))
+        XCTAssertNil(allDay.hour)
+        XCTAssertEqual(allDay.timeZone?.identifier, "America/Los_Angeles")
+    }
+
+    func testTimedReminderNormalFractionalDatesPreserveWholeSecondWithoutFalseRejection() throws {
+        let formatter = ISO8601DateFormatter()
+        for literal in ["2026-10-13T16:20:45Z", "2026-11-01T08:30:00Z"] {
+            let second = try XCTUnwrap(formatter.date(from: literal))
+            let due = second.addingTimeInterval(0.875)
+            let input = CalendarReminderInput(title: "Fractional", due: due, isAllDay: false, timeZoneIdentifier: "America/Los_Angeles")
+            let components = try XCTUnwrap(input.dueDateComponents(calendar: testCalendar))
+            let readback = try XCTUnwrap(CalendarRecordDates.absoluteDate(from: components, fallback: testCalendar))
+            XCTAssertEqual(readback, second)
+            XCTAssertEqual(readback.timeIntervalSince1970.rounded(.down), due.timeIntervalSince1970.rounded(.down))
+            XCTAssertEqual(components.timeZone?.identifier, "America/Los_Angeles")
+        }
+    }
+
+    func testUnrepresentableReminderFoldKeepsEntireDraftAndWritesNoRecordThenValidTimeCanSave() async throws {
+        let formatter = ISO8601DateFormatter()
+        let backend = panelBackend()
+        let manager = CalendarManager(service: backend, now: { self.date(day: 11) }, calendar: testCalendar, startMonitoring: false)
+        let session = CalendarPanelSession(manager: manager)
+        session.beginCreate(kind: .reminder, on: date(day: 14), calendarID: "fixture-reminders")
+        session.draft?.title = "Second fold"
+        session.draft?.isAllDay = false
+        session.draft?.start = try XCTUnwrap(formatter.date(from: "2026-11-01T09:30:00Z"))
+        session.draft?.notes = "Original invitation"
+        session.draft?.url = URL(string: "https://example.com/original")
+        session.draft?.timeZoneIdentifier = "America/Los_Angeles"
+        let before = backend.allRecords()
+        let submitted = session.draft
+        let rejected = await session.save()
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(session.draft, submitted)
+        XCTAssertTrue(session.hasDirtyDraft)
+        XCTAssertEqual(session.error, CalendarMutationError.unrepresentableReminderTime.localizedDescription)
+        XCTAssertEqual(backend.allRecords(), before)
+        session.draft?.start = try XCTUnwrap(formatter.date(from: "2026-11-01T08:30:00Z"))
+        let accepted = await session.save()
+        XCTAssertTrue(accepted)
+        let reminder = try XCTUnwrap(backend.allRecords().first { $0.id.hasPrefix("fixture-created-") })
+        XCTAssertEqual(reminder.start, formatter.date(from: "2026-11-01T08:30:00Z"))
+        XCTAssertEqual(reminder.notes, submitted?.notes)
+        XCTAssertEqual(reminder.url, submitted?.url)
+        XCTAssertEqual(reminder.timeZone?.identifier, submitted?.timeZoneIdentifier)
+    }
+
     func testFixtureAuthorizationIsInMemoryAndSharedManagerChoosesFixtureBeforeStore() async throws {
         XCTAssertTrue(CalendarInteractionFixtures.isEnabled)
         XCTAssertEqual(CalendarManager.shared.liveCalendarAuthorization, .fullAccess)

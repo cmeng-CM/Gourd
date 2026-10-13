@@ -1121,6 +1121,38 @@
         }
       }
     },
+    "This due time cannot be preserved in its time zone. Choose another time or use all-day.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This due time cannot be preserved in its time zone. Choose another time or use all-day."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此到期时刻无法在来源时区中准确保存。请选择其他时刻，或改为全天。"
+          }
+        }
+      }
+    },
+    "calendar.panel.sourceTimeZoneFormat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time zone: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源时区：%@"
+          }
+        }
+      }
+    },
     "The time zone is invalid.": {
       "localizations": {
         "en": {

@@ -317,9 +317,10 @@ class CalendarService: CalendarServiceProviding {
             let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { throw CalendarMutationError.invalidTitle }
             let calendar = try self.targetCalendar(requestedID: listID, type: .reminder)
+            let components = try dueDateComponents()
             let reminder = EKReminder(eventStore: self.store)
             reminder.title = title
-            reminder.dueDateComponents = try dueDateComponents()
+            reminder.dueDateComponents = components
             reminder.notes = notes
             reminder.url = url
             reminder.calendar = calendar

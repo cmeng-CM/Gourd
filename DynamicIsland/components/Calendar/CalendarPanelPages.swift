@@ -9,13 +9,43 @@ import SwiftUI
 
 /// 界面使用包含尾日；共享草稿始终存 EventKit 的排他尾日。
 enum CalendarPanelDates {
+    /// Invalid identifiers remain unchanged in the draft and are rejected by the save layer.
+    static func sourceCalendar(for draft: CalendarDraft, fallback: Calendar = .current) -> Calendar {
+        (try? CalendarRecordDates.calendar(timeZoneIdentifier: draft.timeZoneIdentifier, fallback: fallback)) ?? fallback
+    }
+
+    static func sourceCalendar(for event: EventModel, fallback: Calendar = .current) -> Calendar {
+        var calendar = fallback
+        if let zone = event.timeZone { calendar.timeZone = zone }
+        return calendar
+    }
+
+    static func formatted(_ date: Date, allDay: Bool, calendar: Calendar) -> String {
+        date.formatted(Date.FormatStyle(date: .abbreviated, time: allDay ? .omitted : .shortened,
+                                       calendar: calendar, timeZone: calendar.timeZone))
+    }
+
+    static func formattedTime(_ date: Date, calendar: Calendar) -> String {
+        date.formatted(Date.FormatStyle(date: .omitted, time: .shortened,
+                                       calendar: calendar, timeZone: calendar.timeZone))
+    }
+
+    static func settingStart(_ date: Date, in draft: CalendarDraft, calendar: Calendar = .current) -> CalendarDraft {
+        let calendar = sourceCalendar(for: draft, fallback: calendar)
+        var result = draft
+        result.start = draft.isAllDay ? calendar.startOfDay(for: date) : date
+        return result
+    }
+
     static func includedEnd(of draft: CalendarDraft, calendar: Calendar = .current) -> Date {
-        draft.isAllDay
+        let calendar = sourceCalendar(for: draft, fallback: calendar)
+        return draft.isAllDay
             ? CalendarEventInput.includedAllDayEnd(exclusiveEnd: draft.end, calendar: calendar) ?? draft.start
             : draft.end
     }
 
     static func settingEnd(_ date: Date, in draft: CalendarDraft, calendar: Calendar = .current) -> CalendarDraft {
+        let calendar = sourceCalendar(for: draft, fallback: calendar)
         var result = draft
         result.end = draft.isAllDay
             ? CalendarEventInput.exclusiveAllDayEnd(including: date, calendar: calendar) ?? draft.end
@@ -25,6 +55,7 @@ enum CalendarPanelDates {
 
     static func settingAllDay(_ allDay: Bool, in draft: CalendarDraft, calendar: Calendar = .current) -> CalendarDraft {
         guard draft.isAllDay != allDay else { return draft }
+        let calendar = sourceCalendar(for: draft, fallback: calendar)
         var result = draft
         if allDay {
             let first = calendar.startOfDay(for: draft.start)
@@ -234,7 +265,7 @@ struct CalendarPanelPages: View {
                 Button { show(event) } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(event.title).fontWeight(.medium).lineLimit(showFullEventTitles ? nil : 2)
-                        Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : event.start.formatted(date: .omitted, time: .shortened)) : String(localized: "calendar.panel.noDueDate"))
+                        Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: CalendarPanelDates.sourceCalendar(for: event))) : String(localized: "calendar.panel.noDueDate"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -278,10 +309,10 @@ struct CalendarPanelPages: View {
                 Text(event.title).font(.headline).textSelection(.enabled)
                 labeledText("calendar.panel.calendar", event.calendar.title)
                 if CalendarPanelDates.hasDueDate(event) {
-                    labeledText(event.type.isReminder ? "calendar.panel.dueDate" : "calendar.panel.start", displayDate(event.start, allDay: event.isAllDay))
+                    labeledText(event.type.isReminder ? "calendar.panel.dueDate" : "calendar.panel.start", displayDate(event.start, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event)))
                     if !event.type.isReminder {
-                        let end = event.isAllDay ? CalendarEventInput.includedAllDayEnd(exclusiveEnd: event.end) ?? event.start : event.end
-                        labeledText("calendar.panel.end", displayDate(end, allDay: event.isAllDay))
+                        let end = event.isAllDay ? CalendarEventInput.includedAllDayEnd(exclusiveEnd: event.end, calendar: CalendarPanelDates.sourceCalendar(for: event)) ?? event.start : event.end
+                        labeledText("calendar.panel.end", displayDate(end, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event)))
                     }
                 } else { Text("calendar.panel.noDueDate").foregroundStyle(.secondary) }
                 if event.isAllDay { Text("All-day").font(.caption).foregroundStyle(.secondary) }
@@ -307,8 +338,8 @@ struct CalendarPanelPages: View {
         .onHover { lifecycle.setScrolling($0) }
     }
 
-    private func displayDate(_ date: Date, allDay: Bool) -> String {
-        allDay ? date.formatted(date: .abbreviated, time: .omitted) : date.formatted(date: .abbreviated, time: .shortened)
+    private func displayDate(_ date: Date, allDay: Bool, calendar: Calendar) -> String {
+        CalendarPanelDates.formatted(date, allDay: allDay, calendar: calendar)
     }
 
     private func labeledText(_ key: LocalizedStringKey, _ value: String) -> some View {
@@ -337,6 +368,10 @@ struct CalendarPanelPages: View {
                             .accessibilityIdentifier("calendar-title")
                     }
                     targetPicker(draft)
+                    if let identifier = draft.timeZoneIdentifier, identifier != TimeZone.current.identifier {
+                        Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if draft.kind == .event {
                         Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox)
                             .accessibilityIdentifier("calendar-all-day")
@@ -351,7 +386,7 @@ struct CalendarPanelPages: View {
                             .frame(minHeight: 90).focused($focusedField, equals: .notes)
                             .accessibilityIdentifier("calendar-notes")
                     } else {
-                        dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: true)
+                        dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
                     }
                     if !hasAccess { Text("Calendar access is required.").font(.caption).foregroundStyle(.secondary) }
                 }
@@ -372,15 +407,16 @@ struct CalendarPanelPages: View {
     private var kindBinding: Binding<CalendarDraft.Kind> {
         Binding(get: { session.draft?.kind ?? .reminder }, set: { kind in
             guard var draft = session.draft else { return }
+            let calendar = CalendarPanelDates.sourceCalendar(for: draft)
             draft.kind = kind
             draft.calendarID = kind == .event ? manager.preferredEventCalendarID : manager.preferredReminderCalendarID
             if kind == .event {
                 draft.isAllDay = false
-                draft.start = CalendarQuickAdd.defaultStart(on: draft.start, now: Date(), calendar: .current)
+                draft.start = CalendarQuickAdd.defaultStart(on: draft.start, now: Date(), calendar: calendar)
                 draft.end = CalendarQuickAdd.defaultEnd(start: draft.start)
             } else {
                 draft.isAllDay = true
-                draft.start = Calendar.current.startOfDay(for: draft.start)
+                draft.start = calendar.startOfDay(for: draft.start)
             }
             session.draft = draft
         })
@@ -398,7 +434,7 @@ struct CalendarPanelPages: View {
             return field == .start ? draft.start : CalendarPanelDates.includedEnd(of: draft)
         }, set: { date in
             guard var draft = session.draft else { return }
-            if field == .start { draft.start = draft.isAllDay ? Calendar.current.startOfDay(for: date) : date }
+            if field == .start { draft = CalendarPanelDates.settingStart(date, in: draft) }
             else { draft = CalendarPanelDates.settingEnd(date, in: draft) }
             session.draft = draft
         })
@@ -407,16 +443,20 @@ struct CalendarPanelPages: View {
     private func dayBinding(_ field: DateField) -> Binding<Date> {
         let binding = dateBinding(field)
         return Binding(get: { binding.wrappedValue }, set: { date in
-            binding.wrappedValue = CalendarPanelDates.changingDay(date, preservingTimeOf: binding.wrappedValue)
+            guard let draft = session.draft else { return }
+            binding.wrappedValue = CalendarPanelDates.changingDay(
+                date, preservingTimeOf: binding.wrappedValue, calendar: CalendarPanelDates.sourceCalendar(for: draft)
+            )
         })
     }
 
     private func dateRow(_ key: LocalizedStringKey, field: DateField, date: Date, allDay: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let calendar = session.draft.map { CalendarPanelDates.sourceCalendar(for: $0) } ?? .current
+        return VStack(alignment: .leading, spacing: 4) {
             Text(key).font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Button { datePopover = field } label: {
-                    Label(date.formatted(date: .abbreviated, time: .omitted), systemImage: "calendar")
+                    Label(CalendarPanelDates.formatted(date, allDay: true, calendar: calendar), systemImage: "calendar")
                         .font(.caption)
                 }
                 .accessibilityIdentifier("calendar-\(field.rawValue)-date")
@@ -424,6 +464,8 @@ struct CalendarPanelPages: View {
                     VStack(spacing: 8) {
                         DatePicker(key, selection: dayBinding(field), displayedComponents: .date)
                             .datePickerStyle(.graphical).labelsHidden()
+                            .environment(\.calendar, calendar)
+                            .environment(\.timeZone, calendar.timeZone)
                         Button("calendar.panel.done") { datePopover = nil }
                     }
                     .padding(12)
@@ -431,6 +473,8 @@ struct CalendarPanelPages: View {
                 if !allDay {
                     DatePicker(key, selection: dateBinding(field), displayedComponents: .hourAndMinute)
                         .labelsHidden().controlSize(.small)
+                        .environment(\.calendar, calendar)
+                        .environment(\.timeZone, calendar.timeZone)
                         .focused($focusedField, equals: field == .start ? .startTime : .endTime)
                         .accessibilityIdentifier("calendar-\(field.rawValue)-time")
                 }
@@ -550,7 +594,7 @@ struct CalendarPanelPages: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("calendar.panel.deleteQuestion").font(.headline)
                     Text(event.title)
-                    Text(displayDate(event.start, allDay: event.isAllDay)).font(.caption).foregroundStyle(.secondary)
+                    Text(displayDate(event.start, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event))).font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
