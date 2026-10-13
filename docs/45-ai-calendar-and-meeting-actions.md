@@ -151,9 +151,9 @@ T6 已本地提交（`a4225282`、`f264c656`）：只读选区/复制菜单、�
 
 T7 已本地提交（`e4e6b953`、`f0a54cad`、`c22e1936`、`9bed9efc`）：原文自动调度与确认/取消/重试、增长输入、精确待办时间、会议操作菜单与通用 AI 设置导航；模块自有会话贯通实际首页/日历界面。新增 14 个 XCTest 已编译。独立审查发现的会话断链和邀请提示词界问题均已修复，最后有限复审 Spec/Quality PASS、无未处理问题；Swift 5 源码探针 43、144 及扩展 396 项通过。这些探针使用离线壳，不证明实际 SwiftUI 布局或桌面交互。
 
-T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。XCTest 尚未运行；完整 Release、整体终审及人工门尚未完成，不能将此记录视为全范围验收通过。
+T1–T7 增量 build-for-testing 均退出 0，独立任务审查通过。XCTest 尚未运行；单独纯 Release 已通过下述本轮验证，完整自动门、整体终审及人工门尚未完成，不能将此记录视为全范围验收通过。
 
-### T8 验证入口与交付状态（初次离线实现）
+### T8 验证入口与交付状态（离线实现及单独 Release）
 
 五份关联文档、跟踪静态回归 `tests/test_general_ai_configuration.py` 与本轮 ignored `.workflow/ai-calendar/verify.sh` 已实现。wrapper 属本轮工作流证据工具，不作为 fresh clone 必备文件；正常 Python 回归可在没有 `.workflow` 和 `cd825466` 历史对象时运行。静态屏幕助手守卫采用已核实基线内容指纹（manager、selection、Constants 全文件和旧设置区段）；Constants 全文件也锁住无关 Defaults，未来合法修改须重新审核这个守卫基线。locale 使用主 app catalog 的本轮全部 105 个新增/变更 key，包含非 AI 前缀，检查 en/zh-Hans 和有限动态 key 的实际消费来源。
 
@@ -172,7 +172,13 @@ D-18 复核只认可 ai-calendar/cd825466、本轮最新成功 attempt、24 小�
 
 **本次离线实测**：三个 Python 套件共 11 tests，退出 0；本地浅 clone（无 `.workflow`、无基线对象）同样 11 tests 退出 0；wrapper self-test 的 24 个证据 fixture 加真实临时文件/浅仓库 docs-only、源码/lock/ignored tool/wrapper/产物及 legacy schema 检查退出 0；默认入口与无证据复核均退出 1，未启动宿主。
 
-**当前实测只到离线静态及 fixture 检查。完整宿主 XCTest、真实 Release、新 xcresult 非零运行计数、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending。** 初次 T8 提交须接受独立 offline 预审，随后由控制器取得新的桌面授权再跑完整门。任务审查通过后的 engine verify/close 属整体门，本节不宣称已完成。
+**单独纯 Release 实测（2026-10-13）**：绑定代码 `bd31fc2e`，控制器以允许项环境执行 `GOURD_DERIVED_DATA=/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar-offline sh tools/build.sh -clonedSourcePackagesDirPath /Users/cm/Library/Developer/Xcode/Gourd/SourcePackages -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -skipPackageUpdates`，profile 指向本轮独立 reports 路径，实际进程退出 0、日志含 `BUILD SUCCEEDED`。未启动宿主/应用，也未安装。实际产物为 `/Users/cm/Library/Developer/Xcode/Gourd-ai-calendar-offline/Build/Products/Release/Gourd.app`，arm64，bundle `com.cmeng.gourd`、version `0.2.0`。
+
+签名只读复核保留两种环境的结果：沙盒内 `codesign --verify --deep --strict` 退出 1（`CSSMERR_TP_NOT_TRUSTED`）、display 退出 0 但 Authority unavailable；同一产物在实际本机信任环境 verify/display 均退出 0、`Authority=Gourd Local`。没有导入证书、改变信任或重签来修正沙盒结果。完整日志 `.workflow/ai-calendar/reports/T8-offline-release.log` SHA256 为 `e2595c5fb41bcd60ed0aacc53f29dceafdcd08b9a213e481e4712c0d4cd0f8ef`；Mach-O SHA256 为 `1ac59b4b71b1f28d481cecffe94d7be626dd8b85609ce94933a99d9b2f1b4b19`，CDHash 为 `f897341e8b26019829d6181cb236419dfd11ef7c`。该单独 Release 验证不构成 wrapper 完整成功 attempt。
+
+独立 T8 offline 预审绑定 `9bed9efc..bd31fc2e` 与上述 wrapper hash，Spec/Quality PASS，未处理实现缺陷 C/I/M 为 0/0/0；实际执行仍须满足下述宿主先决条件。用户在新的桌面询问后明确回答「先继续不占桌面的工作」，故没有宿主启动授权。
+
+**当前实际证据为离线静态/fixture 与单独纯 Release 成功。完整宿主 XCTest、新 xcresult 非零运行计数、完整 wrapper 成功 attempt（含其 Debug/test/Release 产物绑定）、docs-only 实际成功证据复核、整体最强终审和人工四类别逐项确认均 pending，T8 不得记录完成。** 后续由控制器取得新的明确桌面空闲授权并落实宿主先决条件后再跑完整门。任务审查通过后的 engine verify/close 属整体门，本节不宣称已完成。
 
 ## 已知限制
 
@@ -197,6 +203,8 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 ### 7. 尚须外部验证
 
 凭据测试用替身，不读取真实账户或发送示例邀请。会议打开测试用注入 opener，不打开真实会议。系统接受分发、真实客户端成功加入、跨账户同步及模型供应商线上质量不能由单元测试证明。
+
+宿主运行限制：隔离 bundle/允许项环境不能封锁既有 Pear Desktop 自动切换链；Pear 活跃时会经 localhost 认证取得真实内存 token，这不是 Keychain 读取或仅本地监听。独立预审与控制器已采用运行契约：取得新的明确桌面空闲授权后，启动前即时只读查询精确 bundle `com.github.th-ch.youtube-music`，保存命令/时刻/退出码与 false；true 或查询失败则不启动。测试期间不启动 Pear、不操作真实设置/控制器/会议入口，结束后再次即时只读核对；历史 false 不可复用。该 baseline 旁路由 preflight 与持续空闲条件管理，没有新增生产 guard，wrapper 本身不检测 Pear。既有天气 HTTP、本地 RPC/XPC 监听与 AppleMusic 媒体观察仍可能发生，不宣称全宿主零副作用；它们不等于本轮模型/会议请求。桌面授权不解除真实 AI/秘密/会议/EventKit 写禁令。
 
 ## 验收标准
 
