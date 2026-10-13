@@ -12151,6 +12151,22 @@ final class MeetingLinkResolverTests: XCTestCase {
         XCTAssertNil(resolver.uniqueOpenTarget(text: differing))
     }
 
+    func testTwoNativeCandidatesDoNotConsumeAnHTTPSCandidateInEitherSourceOrder() throws {
+        let nativeA = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=A"
+        let nativeB = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=B"
+        let https = "https://meeting.huaweicloud.com/#/j/960724861"
+        for sources in [[nativeA, nativeB, https], [https, nativeA, nativeB]] {
+            let source = sources.joined(separator: "\n")
+            let targets = resolver.resolve(text: source)
+            XCTAssertEqual(targets.count, 3)
+            XCTAssertEqual(targets.compactMap { $0.sourceURL?.absoluteString }, sources)
+            XCTAssertEqual(targets.filter { $0.nativeURL != nil }.count, 2)
+            XCTAssertTrue(targets.filter { $0.nativeURL != nil }.allSatisfy { $0.httpsURL == nil })
+            XCTAssertEqual(targets.filter { $0.httpsURL != nil }.count, 1)
+            XCTAssertNil(resolver.uniqueOpenTarget(text: source))
+        }
+    }
+
     func testCalendarExtractionUsesSameRulesAndDoesNotPickFirstOfMany() {
         let store = EKEventStore()
         let event = EKEvent(eventStore: store)
@@ -12186,6 +12202,68 @@ final class MeetingEvidenceTests: XCTestCase {
         XCTAssertEqual(result.count, 2)
         XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, fragments)
         XCTAssertEqual(ai.requests.count, 1)
+    }
+
+    func testAIOmittingFeishuCannotHideOriginalTencentAndFeishuAmbiguity() async throws {
+        let tencent = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"
+        let feishu = "https://vc.feishu.cn/j/384462190"
+        let result = try await MeetingLinkResolver().recognize(
+            text: tencent + "\n" + feishu, using: MeetingEvidenceAI([tencent])
+        )
+        XCTAssertEqual(result.filter(\.canOpen).count, 2)
+        XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, [tencent, feishu])
+    }
+
+    func testAIOmittingNativeOrHTTPSCandidatesCannotHideSourceAmbiguity() async throws {
+        let native = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=A"
+        let https = "https://meeting.huaweicloud.com/#/j/940948346"
+        for sources in [[native, https], [https, native]] {
+            for returned in [native, https] {
+                let result = try await MeetingLinkResolver().recognize(
+                    text: sources.joined(separator: "\n"), using: MeetingEvidenceAI([returned])
+                )
+                XCTAssertEqual(result.filter(\.canOpen).count, 2)
+                XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, sources)
+            }
+        }
+    }
+
+    func testAIKeepsAllThreeUnpairedSourcesWhenTwoNativeCandidatesShareOneHTTPSIdentity() async throws {
+        let nativeA = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=A"
+        let nativeB = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=B"
+        let https = "https://meeting.huaweicloud.com/#/j/960724861"
+        for sources in [[nativeA, nativeB, https], [https, nativeA, nativeB]] {
+            let result = try await MeetingLinkResolver().recognize(
+                text: sources.joined(separator: "\n"), using: MeetingEvidenceAI([nativeA])
+            )
+            XCTAssertEqual(result.filter(\.canOpen).count, 3)
+            XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, sources)
+            XCTAssertTrue(result.filter { $0.nativeURL != nil }.allSatisfy { $0.httpsURL == nil })
+        }
+    }
+
+    func testAICodeOnlyEvidenceDoesNotPromoteAnyOfMultipleOriginalURLs() async throws {
+        let source = """
+        https://meeting.tencent.com/dm/VUYtCU0Ssrfz
+        https://vc.feishu.cn/j/384462190
+        #腾讯会议：817-450-376
+        """
+        let result = try await MeetingLinkResolver().recognize(
+            text: source, using: MeetingEvidenceAI(["#腾讯会议：817-450-376"])
+        )
+        XCTAssertEqual(result.count, 1)
+        XCTAssertTrue(result.allSatisfy { !$0.canOpen && $0.sourceURL == nil })
+        XCTAssertEqual(result[0].meetingCodes.map(\.value), ["817450376"])
+    }
+
+    func testPartialValidAIEvidenceStillRejectsASecondFabricatedFragment() async {
+        let source = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz\nhttps://vc.feishu.cn/j/384462190"
+        do {
+            _ = try await MeetingLinkResolver().recognize(text: source, using: MeetingEvidenceAI([
+                "https://meeting.tencent.com/dm/VUYtCU0Ssrfz", "https://vc.feishu.cn/j/999999999"
+            ]))
+            XCTFail("Expected fabricated fragment rejection")
+        } catch { XCTAssertEqual(error as? MeetingRecognitionError, .invalidEvidence) }
     }
 
     func testAIFabricatedOrUnsafeEvidenceRejectsEntireResponse() async {

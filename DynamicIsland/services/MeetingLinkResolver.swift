@@ -67,7 +67,7 @@ struct MeetingLinkResolver {
                 urlIdentifier: parsed.identifier, meetingCodes: codes, sourceText: evidence
             ))
         }
-        // A fallback is associated only by the same validated provider and URL identity.
+        // A fallback is associated only when both native and HTTPS sides are unique for the same identity.
         // Differing Huawei invitation/link codes stay independent evidence.
         var consumed: Set<String> = []
         var combined: [MeetingJoinTarget] = []
@@ -77,7 +77,10 @@ struct MeetingLinkResolver {
                 let alternatives = targets.filter {
                     $0.provider == target.provider && $0.httpsURL != nil && $0.urlIdentifier == identifier
                 }
-                if alternatives.count == 1, let alternative = alternatives.first {
+                let nativeCandidates = targets.filter {
+                    $0.provider == target.provider && $0.nativeURL != nil && $0.urlIdentifier == identifier
+                }
+                if nativeCandidates.count == 1, alternatives.count == 1, let alternative = alternatives.first {
                     consumed.insert(alternative.id)
                     combined.append(MeetingJoinTarget(
                         provider: target.provider, sourceURL: target.sourceURL, nativeURL: target.nativeURL,
@@ -89,7 +92,7 @@ struct MeetingLinkResolver {
             }
             // A HTTPS target may precede its native partner in the invitation.
             if target.httpsURL != nil, let identifier = target.urlIdentifier,
-               targets.contains(where: { $0.nativeURL != nil && $0.provider == target.provider && $0.urlIdentifier == identifier }),
+               targets.filter({ $0.nativeURL != nil && $0.provider == target.provider && $0.urlIdentifier == identifier }).count == 1,
                targets.filter({ $0.httpsURL != nil && $0.provider == target.provider && $0.urlIdentifier == identifier }).count == 1 {
                 continue
             }
@@ -141,6 +144,11 @@ struct MeetingLinkResolver {
                     if !result.contains(candidate) { result.append(candidate) }
                 }
             }
+        }
+        // A model's omissions are not a user's choice. URL evidence preserves every
+        // deterministic open candidate; code-only evidence remains a copy-only result.
+        if result.contains(where: \.canOpen) {
+            return original.filter(\.canOpen) + result.filter { !$0.canOpen }
         }
         return result
     }
