@@ -1679,16 +1679,16 @@ struct TodoHomeTodayList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !eventEntries.isEmpty {
-                groupHeader("calendar.quickAdd.kindEvent", count: eventEntries.count)
+            if let events = groupPlan.first(where: { $0.key == TodoText.kindEventKey }) {
+                groupHeader(events)
                 ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
                         eventRow(event).id(event.id)
                     }
                 }
             }
-            if !todoEntries.isEmpty {
-                groupHeader("calendar.quickAdd.kindReminder", count: todoEntries.count)
+            if let todos = groupPlan.first(where: { $0.key == TodoText.kindReminderKey }) {
+                groupHeader(todos)
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
                         todoRow(item).id(item.id)
@@ -1701,18 +1701,14 @@ struct TodoHomeTodayList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 分组标题：字号/留白口径不变，只在已本地化的组名后拼上本组**过滤后**的条目数（`日程 · 2`）。
-    /// 计数**不是** `LocalizedStringKey` 查表走的那份文案——先拼 String 再给 `Text` 的 verbatim 重载。
-    private func groupHeader(_ key: String, count: Int) -> some View {
-        Text(Self.groupHeaderTitle(key, count: count)).font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)
-    }
+    /// 该画哪些分组、各带几条：与单测同一份纯函数（`TodoText.groupHeaders`），
+    /// 「条目为空就不渲染该组」的判定因此也在被测面内。
+    private var groupPlan: [TodoText.Group] { TodoText.groupHeaders(for: entries) }
 
-    /// 分组标题文案（**不是 private**：单测直接钉住分隔符与计数口径）。
-    /// 默认出口与 `TodoText.localized` 同款（`Bundle.main`）；`bundle` 传某一语言的 `.lproj`
-    /// 子 bundle 就能钉死译文而不用改进程语言。
-    static func groupHeaderTitle(_ key: String, count: Int, bundle: Bundle = .main) -> String {
-        "\(bundle.localizedString(forKey: key, value: nil, table: nil)) · \(count)"
+    /// 分组标题：字号 / 颜色 / 留白逐字不变，只在已本地化的组名后拼上本组**过滤后**的条数（`日程 · 2`）。
+    private func groupHeader(_ group: TodoText.Group) -> some View {
+        Text(TodoText.groupHeaderTitle(group.key, count: group.count)).font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)
     }
 }
 
@@ -2269,6 +2265,45 @@ enum TodoDueLabel: Equatable {
 enum TodoText {
     /// 计数徽标 / 看板标题上的数字（verbatim：`3` 不该去查本地化表）。
     static func countText(_ count: Int) -> String { "\(count)" }
+
+    /// 今日块两个分组的键（与快速添加条的 `calendar.quickAdd.kind*` 同一批文案）。
+    static let kindEventKey = "calendar.quickAdd.kindEvent"
+    static let kindReminderKey = "calendar.quickAdd.kindReminder"
+
+    /// 今日块一个分组的标题形态：**分组键 + 该组过滤后剩下的条数**。
+    struct Group: Equatable {
+        let key: String
+        let count: Int
+    }
+
+    /// 今日块该画哪些分组、各带几条（纯函数，单测直接钉住）。
+    ///
+    /// **两个数字口径不同，别读成同一份计数**：这里的 `待办 · N` 是**过滤后剩余**条数
+    /// （`listedEntries` 已按默认开启的「隐藏已完成提醒」把已完成的提醒剔掉，未授权时待办侧本就为空），
+    /// 回答的是「还剩几条要显示」；表头 `TodoHomeHeader` 的 `1/3` 是 `TodoBucketing.BucketResult`
+    /// 的 `完成数/总数`，回答的是「办了几条 / 共几条」。两者虽同源于同一批条目，数字**不保证相等**。
+    ///
+    /// 顺序固定为日程在前、待办在后；**条目为空的分组不出现**（沿用视图里既有的「为空就不渲染该组」
+    /// 判定，故只有待办时不会有空的「日程 · 0」）。
+    static func groupHeaders(for entries: [TodosHomeBlockLayout.ScheduleEntry]) -> [Group] {
+        let eventCount = entries.filter { if case .event = $0 { return true }; return false }.count
+        let todoCount = entries.filter { if case .todo = $0 { return true }; return false }.count
+        var groups: [Group] = []
+        if eventCount > 0 { groups.append(Group(key: kindEventKey, count: eventCount)) }
+        if todoCount > 0 { groups.append(Group(key: kindReminderKey, count: todoCount)) }
+        return groups
+    }
+
+    /// 分组标题文案：已本地化组名 + ` · ` + 计数（`日程 · 2`）。
+    ///
+    /// 计数是**先拼成 String 再给 `Text`**——走 `Text(_: String)` 的 verbatim 重载，不去查本地化表。
+    /// 组名走 `Bundle.main.localizedString`（与 `localized(_:)` 同一个出口），**不是** SwiftUI 的
+    /// `Text(LocalizedStringKey)`：两者解析口径一致的前提是全仓没有运行时覆盖 `\.locale`
+    /// （`Gourd` 的界面语言只随进程 / App 语言走，仓内无 `environment(\.locale)` 覆写）。
+    /// `bundle` 是留给单测的缝：传某一语言的 `.lproj` 子 bundle 就能钉死译文，不必改进程语言。
+    static func groupHeaderTitle(_ key: String, count: Int, bundle: Bundle = .main) -> String {
+        "\(bundle.localizedString(forKey: key, value: nil, table: nil)) · \(count)"
+    }
 
     /// 模块内动态文案的本地化出口（查不到时 `Bundle` 原样返回 key，与 `NotificationText.localized` 同款）。
     static func localized(_ key: String) -> String {

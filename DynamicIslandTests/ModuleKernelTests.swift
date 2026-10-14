@@ -14568,32 +14568,47 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     }
 
     /// T5：今日块分组标题带**本组过滤后**的条目数（`日程 · 2` / `待办 · 2`），
-    /// 表头 `TodoHomeHeader` 的 `0/2 · 2 项日程` 口径不经过这里；只有待办时也不新造空的「日程 · 0」。
+    /// 且「条目为空的分组不渲染」（只有待办时不会画出空的「日程 · 0」）。
+    /// 断言全部落在返回值上（`TodoText.groupHeaders` 是视图与单测共用的纯函数）。
     func testTodayBlockGroupHeadersCarryPerGroupCountsWithoutEmptyGroups() throws {
         let zh = try languageBundle("zh-Hans"), en = try languageBundle("en")
-        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindEvent", count: 2, bundle: zh), "日程 · 2")
-        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindReminder", count: 2, bundle: zh), "待办 · 2")
-        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindEvent", count: 1, bundle: en), "Event · 1")
-        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindReminder", count: 3, bundle: en), "To-do · 3")
+        XCTAssertEqual(TodoText.groupHeaderTitle(TodoText.kindEventKey, count: 2, bundle: zh), "日程 · 2")
+        XCTAssertEqual(TodoText.groupHeaderTitle(TodoText.kindReminderKey, count: 2, bundle: zh), "待办 · 2")
+        XCTAssertEqual(TodoText.groupHeaderTitle(TodoText.kindEventKey, count: 1, bundle: en), "Event · 1")
+        XCTAssertEqual(TodoText.groupHeaderTitle(TodoText.kindReminderKey, count: 3, bundle: en), "To-do · 3")
 
-        let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
-        // 两个调用点分别传各自**过滤后**集合的条目数，而不是未过滤的 entries
-        XCTAssertTrue(todos.contains(#"groupHeader("calendar.quickAdd.kindEvent", count: eventEntries.count)"#))
-        XCTAssertTrue(todos.contains(#"groupHeader("calendar.quickAdd.kindReminder", count: todoEntries.count)"#))
-        XCTAssertFalse(todos.contains("count: entries.count"), "分组计数不许直接取未过滤集合")
-        // 字号、颜色、留白逐字不变，只有 Text 的入参换成了带计数的标题
-        XCTAssertTrue(todos.contains(#"Text(Self.groupHeaderTitle(key, count: count)).font(.system(size: 10, weight: .semibold))"#))
-        XCTAssertTrue(todos.contains(#".foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)"#))
-        // 沿用现有「条目为空就不渲染该组」的守卫：只有待办时不会画出空的「日程 · 0」
-        let flat = todos.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\n", with: "")
-        XCTAssertTrue(flat.contains(#"if!eventEntries.isEmpty{groupHeader("calendar.quickAdd.kindEvent",count:eventEntries.count)"#))
-        XCTAssertTrue(flat.contains(#"if!todoEntries.isEmpty{groupHeader("calendar.quickAdd.kindReminder",count:todoEntries.count)"#))
-        // 表头一字不改：仍是 0/2 与「N 项日程」，且不认识分组标题
-        let headerBlock = todos.components(separatedBy: "private struct ").first { $0.hasPrefix("TodoHomeHeader: View") } ?? ""
-        XCTAssertFalse(headerBlock.isEmpty, "找不到 TodoHomeHeader")
-        XCTAssertTrue(headerBlock.contains("result.counterText"))
-        XCTAssertTrue(headerBlock.contains(#"Text(String(format: TodoText.localized("module.todos.homeEventCount"), eventCount))"#))
-        XCTAssertFalse(headerBlock.contains("groupHeader"), "表头口径不许被改成带分组计数的形态")
+        let eventKey = TodoText.kindEventKey, reminderKey = TodoText.kindReminderKey
+        // 2 日程 + 2 待办 → 两组，各带**本组**的条数（不是总数、也不是未过滤集合）
+        XCTAssertEqual(todayBlockGroups(events: 2, todos: 2),
+                       [TodoText.Group(key: eventKey, count: 2), TodoText.Group(key: reminderKey, count: 2)])
+        // 只有待办 → 不出现空的「日程 · 0」
+        XCTAssertEqual(todayBlockGroups(events: 0, todos: 2), [TodoText.Group(key: reminderKey, count: 2)])
+        // 只有日程 → 同理不出现「待办 · 0」
+        XCTAssertEqual(todayBlockGroups(events: 3, todos: 0), [TodoText.Group(key: eventKey, count: 3)])
+        XCTAssertEqual(todayBlockGroups(events: 0, todos: 0), [])
+        // 计数是过滤后的剩余条数：3 条待办里 1 条已完成（默认隐藏已完成）→ 「待办 · 2」
+        XCTAssertEqual(todayBlockGroups(events: 0, todos: 3, completed: 1), [TodoText.Group(key: reminderKey, count: 2)])
+        // 未授权时待办侧不给条目（`listedEntries` 口径）→ 只剩日程组
+        XCTAssertEqual(todayBlockGroups(events: 2, todos: 2, hasFullAccess: false), [TodoText.Group(key: eventKey, count: 2)])
+    }
+
+    /// 用生产口径造今日块条目（`TodoHomeBlockLayout.listedEntries`：日程按时间在前、待办去重接后、
+    /// 已完成的提醒按默认开启的「隐藏已完成」剔掉），再取分组标题方案。
+    private func todayBlockGroups(events: Int, todos: Int, completed: Int = 0,
+                                  hasFullAccess: Bool = true) -> [TodoText.Group] {
+        let template = CalendarInteractionFixtures.makeBackend(count: 1, on: reference).event(withID: "fixture-event-01")!
+        let eventList = (0..<events).map { index in
+            EventModel(id: "today-event-\(index)", start: reference, end: reference.addingTimeInterval(3_600),
+                       title: "日程 \(index)", location: nil, notes: nil, url: nil, isAllDay: false,
+                       type: template.type, calendar: template.calendar, participants: [], timeZone: template.timeZone,
+                       hasRecurrenceRules: false, priority: nil, conferenceURL: nil, isDetached: false)
+        }
+        let todoList = (0..<todos).map { index in
+            TodoBucketing.Item(id: "today-todo-\(index)", title: "待办 \(index)", dueDate: reference,
+                               isCompleted: index < completed, completionDate: nil, listName: "Fixture")
+        }
+        return TodoText.groupHeaders(for: TodosHomeBlockLayout.listedEntries(
+            events: eventList, todos: todoList, hasFullAccess: hasFullAccess, hideCompletedReminders: true))
     }
 
     func testSourceAwareHomeEntryIncludesAmbiguousLongCodeAndInvitationButHidesOrdinaryItems() throws {
