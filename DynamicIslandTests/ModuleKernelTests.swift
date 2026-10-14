@@ -13412,7 +13412,7 @@ final class CalendarNativeTextSystemTests: XCTestCase {
         XCTAssertEqual(view.textContainer?.lineFragmentPadding, 0)
         XCTAssertEqual(view.textContainer?.widthTracksTextView, true)
         XCTAssertFalse(view.isHorizontallyResizable)
-        XCTAssertTrue(view.isVerticallyResizable)
+        XCTAssertFalse(view.isVerticallyResizable, "SwiftUI owns height; native text must not grow across neighboring controls")
     }
 
     func testReadOnlyConfigureProducesTitleGlyphsAndMeasuredMultilineHeight() throws {
@@ -13421,6 +13421,7 @@ final class CalendarNativeTextSystemTests: XCTestCase {
         let title = "项目评审会议\n第二行议题\n第三行备注"
         let font = NSFont.systemFont(ofSize: 14)
         view.configure(text: title, font: font, color: .white, maximumLines: 0, strikethrough: true)
+        view.setFrameSize(NSSize(width: 220, height: view.measuredSize(width: 220).height))
         let size = view.measuredSize(width: 220)
         try assertTextSystem(view)
         XCTAssertEqual(view.string, title)
@@ -13503,7 +13504,7 @@ final class CalendarNativeTextSystemTests: XCTestCase {
         XCTAssertFalse(view.isRichText)
         XCTAssertTrue(view.allowsUndo)
         XCTAssertFalse(view.isHorizontallyResizable)
-        XCTAssertTrue(view.isVerticallyResizable)
+        XCTAssertFalse(view.isVerticallyResizable, "SwiftUI owns height; native text must not grow across neighboring controls")
         XCTAssertEqual(view.textContainerInset, NSSize(width: 4, height: 4))
         XCTAssertEqual(view.textContainer?.lineFragmentPadding, 0)
         XCTAssertEqual(view.textContainer?.widthTracksTextView, true)
@@ -14298,4 +14299,87 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(opener.urls.isEmpty)
     }
 
+}
+
+
+// Proposal probes run after allocation: measuring must not mutate displayed or editable state.
+@MainActor
+final class CalendarPageLayoutTests: XCTestCase {
+    func testReadOnlyMinimumIdealAndNormalMeasurementsPreserveLiveTextKit() throws {
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        view.configure(text: "项目评审完整标题\n第二行\n第三行", font: .systemFont(ofSize: 14),
+                       color: .white, maximumLines: 0, strikethrough: false)
+        view.setFrameSize(NSSize(width: 374, height: view.measuredSize(width: 374).height))
+        view.setSelectedRange(NSRange(location: 2, length: 4))
+        let frame = view.frame, ranges = view.selectedRanges
+        let storage = NSAttributedString(attributedString: try XCTUnwrap(view.textStorage))
+        let container = try XCTUnwrap(view.textContainer)
+        for width: CGFloat in [0, 1, 200, 374, 80, .infinity, .nan, 374, 0] {
+            let size = view.measuredSize(width: width)
+            XCTAssertTrue(size.width.isFinite && size.height.isFinite)
+            XCTAssertEqual(view.frame, frame)
+            XCTAssertEqual(container.containerSize.width, view.bounds.width, accuracy: 0.5)
+            XCTAssertEqual(view.selectedRanges, ranges)
+            XCTAssertTrue(try XCTUnwrap(view.textStorage).isEqual(to: storage))
+        }
+        view.setFrameSize(NSSize(width: 180, height: view.measuredSize(width: 180).height))
+        XCTAssertEqual(container.containerSize.width, 180, accuracy: 0.5)
+        XCTAssertEqual(view.selectedRanges, ranges)
+    }
+
+    func testTwoLinePreviewAndFullTitleHaveSeparateNaturalHeightsWithoutNativeGrowth() throws {
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        let text = (1...6).map { "第\($0)行完整标题" }.joined(separator: "\n")
+        view.configure(text: text, font: .systemFont(ofSize: 14), color: .white,
+                       maximumLines: 2, strikethrough: false)
+        let preview = view.measuredSize(width: 220)
+        view.setFrameSize(preview)
+        try XCTUnwrap(view.layoutManager).ensureLayout(for: try XCTUnwrap(view.textContainer))
+        XCTAssertLessThanOrEqual(try XCTUnwrap(view.layoutManager).usedRect(for: try XCTUnwrap(view.textContainer)).height,
+                                 preview.height)
+        view.configure(text: text, font: .systemFont(ofSize: 14), color: .white,
+                       maximumLines: 0, strikethrough: false)
+        let full = view.measuredSize(width: 220)
+        XCTAssertGreaterThan(full.height, preview.height * 2)
+        XCTAssertEqual(view.frame.size, preview, "AppKit must not grow outside the SwiftUI allocation")
+        view.setFrameSize(full)
+        XCTAssertEqual(view.string, text)
+        XCTAssertEqual(view.frame.size, full)
+    }
+
+    func testEditorMeasurementsKeepInsetWidthSelectionAndActualBindingInput() throws {
+        let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        var bound = ""
+        let editor = CalendarGrowingTextEditor(text: Binding(get: { bound }, set: { bound = $0 }),
+                                               label: "fixture", onFocus: { _ in })
+        let coordinator = editor.makeCoordinator()
+        view.delegate = coordinator
+        view.insertText("原文\n用户备注", replacementRange: NSRange(location: 0, length: 0))
+        view.setFrameSize(NSSize(width: 374, height: view.measuredSize(width: 374).height))
+        view.setSelectedRange(NSRange(location: 0, length: 2))
+        let frame = view.frame, ranges = view.selectedRanges, string = view.string
+        for width: CGFloat in [0, 1, 200, 374, 80, .infinity, .nan, 0] {
+            let size = view.measuredSize(width: width)
+            XCTAssertTrue(size.width.isFinite && size.height.isFinite)
+            XCTAssertEqual(view.frame, frame)
+            XCTAssertEqual(view.textContainer?.containerSize.width ?? 0, view.bounds.width - 8, accuracy: 0.5)
+            XCTAssertEqual(view.selectedRanges, ranges)
+            XCTAssertEqual(view.string, string)
+            XCTAssertEqual(bound, string)
+        }
+        view.insertText("实际替换", replacementRange: view.selectedRange())
+        XCTAssertEqual(bound, "实际替换\n用户备注")
+        let before = view.measuredSize(width: 374).height
+        view.insertText(String(repeating: "\n新增完整内容", count: 20),
+                        replacementRange: NSRange(location: (view.string as NSString).length, length: 0))
+        let after = view.measuredSize(width: 374).height
+        XCTAssertGreaterThan(after, before, "Multiline growth is preserved through SwiftUI sizing")
+        XCTAssertEqual(view.frame, frame, "Native insertion cannot grow across adjacent controls")
+        view.setFrameSize(NSSize(width: 220, height: after))
+        XCTAssertEqual(view.textContainer?.containerSize.width ?? 0, 212, accuracy: 0.5)
+        XCTAssertEqual(bound, view.string)
+    }
 }

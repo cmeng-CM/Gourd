@@ -134,6 +134,34 @@ final class CalendarTextInteraction {
     }
 }
 
+/// Measurements own a TextKit snapshot. SwiftUI proposals must never resize live text.
+@MainActor
+enum CalendarTextMeasurement {
+    static func size(of view: NSTextView, width proposedWidth: CGFloat, minimumHeight: CGFloat) -> CGSize {
+        let width = proposedWidth.isFinite ? max(1, proposedWidth) : 200
+        let storage = NSTextStorage(attributedString: view.textStorage.map {
+            NSAttributedString(attributedString: $0)
+        } ?? NSAttributedString(string: view.string))
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(containerSize: CGSize(
+            width: max(1, width - 2 * view.textContainerInset.width), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = view.textContainer?.lineFragmentPadding ?? 0
+        container.maximumNumberOfLines = view.textContainer?.maximumNumberOfLines ?? 0
+        container.lineBreakMode = view.textContainer?.lineBreakMode ?? .byWordWrapping
+        storage.addLayoutManager(manager)
+        manager.addTextContainer(container)
+        manager.ensureLayout(for: container)
+        let height = ceil(manager.usedRect(for: container).height) + 2 * view.textContainerInset.height
+        return CGSize(width: width, height: max(minimumHeight, height.isFinite ? height : minimumHeight))
+    }
+
+    static func synchronize(_ view: NSTextView) {
+        let width = max(1, view.bounds.width - 2 * view.textContainerInset.width)
+        let size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        if view.textContainer?.containerSize != size { view.textContainer?.containerSize = size }
+    }
+}
+
 /// A real read-only NSTextView: AppKit owns dragging, Cmd-C and contextual menu tracking.
 struct CalendarSelectableText: NSViewRepresentable {
     @EnvironmentObject private var vm: DynamicIslandViewModel
@@ -194,7 +222,9 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
         textContainerInset = .zero
         textContainer?.lineFragmentPadding = 0
         isHorizontallyResizable = false
-        isVerticallyResizable = true
+        isVerticallyResizable = false
+        wantsLayer = true
+        layer?.masksToBounds = true
         textContainer?.widthTracksTextView = true
         setContentHuggingPriority(.defaultLow, for: .horizontal)
     }
@@ -231,11 +261,25 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
     }
 
     func measuredSize(width: CGFloat) -> CGSize {
-        let width = max(1, width)
-        textContainer?.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
-        guard let container = textContainer, let manager = layoutManager else { return CGSize(width: width, height: 16) }
-        manager.ensureLayout(for: container)
-        return CGSize(width: width, height: max(ceil(manager.usedRect(for: container).height), ceil(font?.boundingRectForFont.height ?? 16)))
+        CalendarTextMeasurement.size(of: self, width: width,
+                                     minimumHeight: ceil(font?.boundingRectForFont.height ?? 16))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        CalendarTextMeasurement.synchronize(self)
+    }
+
+    override func layout() {
+        super.layout()
+        CalendarTextMeasurement.synchronize(self)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        bounds.clip()
+        super.draw(dirtyRect.intersection(bounds))
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     override func mouseDown(with event: NSEvent) {

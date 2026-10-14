@@ -335,11 +335,7 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         view.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: CalendarEditableTextView, context: Context) -> CGSize? {
-        let width = max(1, proposal.width ?? 200)
-        nsView.textContainer?.containerSize = CGSize(width: max(1, width - 8), height: .greatestFiniteMagnitude)
-        guard let container = nsView.textContainer, let manager = nsView.layoutManager else { return CGSize(width: width, height: 60) }
-        manager.ensureLayout(for: container)
-        return CGSize(width: width, height: max(60, ceil(manager.usedRect(for: container).height) + 8))
+        nsView.measuredSize(width: proposal.width ?? 200)
     }
     static func dismantleNSView(_ view: CalendarEditableTextView, coordinator: Coordinator) { view.stop() }
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
@@ -375,7 +371,9 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         isEditable = true
         isSelectable = true
         isHorizontallyResizable = false
-        isVerticallyResizable = true
+        isVerticallyResizable = false
+        wantsLayer = true
+        layer?.masksToBounds = true
         drawsBackground = true
         backgroundColor = NSColor.white.withAlphaComponent(0.06)
         textColor = .white
@@ -391,6 +389,23 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func measuredSize(width: CGFloat) -> CGSize {
+        CalendarTextMeasurement.size(of: self, width: width, minimumHeight: 60)
+    }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        CalendarTextMeasurement.synchronize(self)
+    }
+    override func layout() {
+        super.layout()
+        CalendarTextMeasurement.synchronize(self)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        bounds.clip()
+        super.draw(dirtyRect.intersection(bounds))
+        NSGraphicsContext.restoreGraphicsState()
+    }
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { onFocus(true) }
