@@ -45,6 +45,10 @@ enum MeetingJoinURLBuilder {
     }
 
     /// 按平台分派；只有华为与腾讯有两种客户端深链，其余平台一律 nil（交给复制号码）。
+    ///
+    /// `provider` 是**调用方的断言**，builder 不复核号码属于哪个平台：华为的 `conf_id` 与腾讯的
+    /// `meeting_code` 共用同一条 9–12 位数字空间，仅凭号码在这里原理上分不出来。未判定平台时
+    /// 不得凭猜选一个 —— 猜错等于把用户送进另一个客户端。
     static func url(provider: MeetingProvider, number: String,
                     displayName: String, passcode: String?) -> URL? {
         switch provider {
@@ -55,9 +59,11 @@ enum MeetingJoinURLBuilder {
     }
 
     /// 只保留 RFC 3986 unreserved（`A-Za-z0-9-._~`），其余按 UTF-8 百分号编码。
+    /// 逐字写出 ASCII unreserved —— **不能**用 `.alphanumerics`：它含 `蔡`、`９` 等非 ASCII 字母数字，
+    /// 只因 `addingPercentEncoding` 对非 ASCII 一律编码才碰巧等价，注释与实现必须同构。
     /// 这是最保守的编码集合：显示名里的 `&` / `=` / `#` / `+` 不可能再去改写参数结构。
-    private static let percentEncodingAllowed = CharacterSet.alphanumerics
-        .union(CharacterSet(charactersIn: "-._~"))
+    private static let percentEncodingAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-")
 
     private static func percentEncoded(_ raw: String) -> String? {
         raw.addingPercentEncoding(withAllowedCharacters: percentEncodingAllowed)

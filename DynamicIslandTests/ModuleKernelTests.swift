@@ -12603,7 +12603,7 @@ final class MeetingLinkResolverTests: XCTestCase {
             "wemeet://page/inmeeting?meeting_code=939130533&meeting_code=123456789"
         ] {
             XCTAssertTrue(resolver.resolve(text: source).isEmpty, source)
-            if let url = URL(string: source) { XCTAssertNil(MeetingLinkResolver.provider(for: url), source) }
+            XCTAssertNil(URL(string: source).flatMap { MeetingLinkResolver.provider(for: $0) }, source)
         }
     }
 
@@ -12770,6 +12770,25 @@ final class MeetingJoinURLBuilderTests: XCTestCase {
         }
     }
 
+    func testPercentEncodingKeepsInjectedQueryDelimitersInsideOneValue() throws {
+        // 判平台不足以证明编码集合安全：编码集合若放宽到 `.urlQueryAllowed`，`&` / `=` 会退出转义，
+        // 于是被注入的串自己长成新的 query 项，而 `provider(for:)` 依旧判 `.huawei`。所以这里必须
+        // 断言参数个数与解码值本身。
+        let injectedName = try XCTUnwrap(MeetingJoinURLBuilder.huawei(
+            confID: "939130533", displayName: "A&enter_code=1", passcode: nil))
+        XCTAssertEqual(MeetingLinkResolver.provider(for: injectedName), .huawei)
+        let nameItems = try XCTUnwrap(URLComponents(url: injectedName, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(nameItems.map(\.name), ["page", "conf_id", "name"])
+        XCTAssertEqual(nameItems.first { $0.name == "name" }?.value, "A&enter_code=1")
+
+        let injectedPasscode = try XCTUnwrap(MeetingJoinURLBuilder.huawei(
+            confID: "939130533", displayName: "蔡锰", passcode: "a&b=c"))
+        XCTAssertEqual(MeetingLinkResolver.provider(for: injectedPasscode), .huawei)
+        let passcodeItems = try XCTUnwrap(URLComponents(url: injectedPasscode, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(passcodeItems.map(\.name), ["page", "conf_id", "name", "enter_code"])
+        XCTAssertEqual(passcodeItems.first { $0.name == "enter_code" }?.value, "a&b=c")
+    }
+
     func testTencentDeepLinkIsExactShapeAndNeverGainsExtraParametersOrForeignHosts() throws {
         let url = try XCTUnwrap(MeetingJoinURLBuilder.tencent(meetingCode: "817-450-376", passcode: "696294"))
         XCTAssertEqual(url.absoluteString, "wemeet://page/inmeeting?meeting_code=817450376")
@@ -12789,7 +12808,7 @@ final class MeetingJoinURLBuilderTests: XCTestCase {
         for source in ["wemeet://page/inmeeting?meeting_code=939130533&x=1",
                        "wemeet://evil.com/page/inmeeting?meeting_code=939130533"] {
             XCTAssertTrue(MeetingLinkResolver().resolve(text: source).isEmpty, source)
-            if let rejected = URL(string: source) { XCTAssertNil(MeetingLinkResolver.provider(for: rejected), source) }
+            XCTAssertNil(URL(string: source).flatMap { MeetingLinkResolver.provider(for: $0) }, source)
         }
     }
 }
