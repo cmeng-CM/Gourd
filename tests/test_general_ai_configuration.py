@@ -100,32 +100,17 @@ LOCALE_KEYS = (
     'calendar.generation.state.parsing',
     'calendar.generation.state.ready',
     'calendar.generation.unconfigured',
-    'calendar.meeting.accepted',
     'calendar.meeting.actions',
-    'calendar.meeting.cancelled',
-    'calendar.meeting.choose',
-    'calendar.meeting.configure',
     'calendar.meeting.copyCodeFormat',
-    'calendar.meeting.copyLink',
     'calendar.meeting.copySource',
-    'calendar.meeting.fallback',
-    'calendar.meeting.menuHelp',
     'calendar.meeting.noEvidence',
     'calendar.meeting.open',
     'calendar.meeting.openIn.huawei',
     'calendar.meeting.openIn.tencent',
-    'calendar.meeting.opening',
     'calendar.meeting.provider.huawei',
     'calendar.meeting.provider.tencent',
-    'calendar.meeting.recognitionFailed',
-    'calendar.meeting.recognize',
-    'calendar.meeting.recognizing',
-    'calendar.meeting.refused',
     'calendar.meeting.row.copy',
     'calendar.meeting.row.open',
-    'calendar.meeting.sendingScope',
-    'calendar.meeting.sourceTooLarge',
-    'calendar.meeting.tooEarly',
     'calendar.meeting.tooltip.copy',
     'calendar.meeting.tooltip.more',
     'calendar.meeting.tooltip.open',
@@ -133,26 +118,11 @@ LOCALE_KEYS = (
     'calendar.panel.url',
 )
 
-# docs/45 → docs/47 的会议入口返工（T1–T4）删掉了「用 AI 识别会议」、行内状态文字、时间闸门
-# 与「逐候选」二级菜单，这批键因此在源码里已无消费者；它们仍在 catalog 里，等 T6 删键时一并移出
-# 本清单。方向反过来断言：**这批键必须没有消费者** —— 谁把它接回代码，就要先把它从这份名单里删掉。
-CONSUMERS_REMOVED_BY_MEETING_ENTRY_REWORK = {
-    'calendar.meeting.accepted',
-    'calendar.meeting.cancelled',
-    'calendar.meeting.choose',
-    'calendar.meeting.configure',
-    'calendar.meeting.copyLink',
-    'calendar.meeting.fallback',
-    'calendar.meeting.menuHelp',
-    'calendar.meeting.opening',
-    'calendar.meeting.recognitionFailed',
-    'calendar.meeting.recognize',
-    'calendar.meeting.recognizing',
-    'calendar.meeting.refused',
-    'calendar.meeting.sendingScope',
-    'calendar.meeting.sourceTooLarge',
-    'calendar.meeting.tooEarly',
-}
+# docs/45 → docs/47 的会议入口返工（T1–T6）删掉了「用 AI 识别会议」、行内状态文字、时间闸门
+# 与「逐候选」二级菜单。那批已无消费者的会议键（recognize / choose / copyLink / menuHelp /
+# tooEarly / sendingScope / opening / accepted / fallback / refused / cancelled / configure /
+# recognizing / recognitionFailed / sourceTooLarge）在本轮已随 catalog 一并移出，不再出现在
+# LOCALE_KEYS 里；因此下面的「必须有消费者」断言对余下的键仍然成立。
 
 
 def legacy_settings(text):
@@ -185,10 +155,7 @@ class GeneralAIConfigurationTests(unittest.TestCase):
                     consumed |= '"calendar.generation.state.\\(self)"' in sources
                 if key.startswith("calendar.generation.confirm."):
                     consumed |= '"calendar.generation.confirm.\\(rawValue)"' in sources
-                if key in CONSUMERS_REMOVED_BY_MEETING_ENTRY_REWORK:
-                    self.assertFalse(consumed, "这批键已随 docs/45→47 下线，不该再有消费者")
-                else:
-                    self.assertTrue(consumed, "changed localization has no source consumer")
+                self.assertTrue(consumed, "changed localization has no source consumer")
 
     def test_manifest_covers_actual_diff_when_history_is_available(self):
         result = subprocess.run(["git", "show", BASELINE + ":DynamicIsland/Localizable.xcstrings"],
