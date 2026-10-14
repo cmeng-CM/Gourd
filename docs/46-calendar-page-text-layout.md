@@ -46,7 +46,7 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 
 `tools/calendar-page-layout-probe.py --help` 提供明确的 `--debug-products` 与 `--output` 参数；可用 `--baseline-ref 417a7ee7` 生成旧源反事实失败对照。探针原样编译两个native控件、页面、会议入口与抽取的真实 `CalendarEventCard`、`StandaloneCalendarView`，链接指定Debug dylib的真实日期/模型/月历/service/session实现。隔离VM/Coordinator、editor生命周期/window reader；注入memory backend，四个偏好使用独立fixture suite并恢复，初始月固定为2026-10-14。卡片背景GeometryReader仅观测bounds，不参与尺寸分配。bare隐藏窗口从未orderFront/激活；原产物中文lproj、zh-Hans/AsiaShanghai环境用于呈现。
 
-研究冻结材料证明实际fitting查询的live变化；T1旧源反事实四组均exit1，min提案注入后的纯度/有效宽等断言失败，而这组矩阵的natural fitting前后检查未失败，不能混为自然末次零宽复现。新源四组包含两行/全文、黑/灰、640/800/1000宽、list/detail/tail/back和原文/备注实际输入。native有效宽、真实card/title/meeting范围、两行/全文高度、全文保留、scroll可见字符范围与PNG可见墨迹均为必过断言；图像墨迹检查不依赖sandbox不可用的Vision服务。清单绑定源码、generated/tool/executable、实际Debug app/dylib/resources和PNG/geometry散列。T1使用本日研究Debug支撑依赖，完整宿主门、基于新Debug的最终图、独立验收及安装仍由后续验证完成。
+研究冻结材料证明实际fitting查询的live变化；T1旧源反事实四组均exit1，min提案注入后的纯度/有效宽等断言失败，而这组矩阵的natural fitting前后检查未失败，不能混为自然末次零宽复现。新源四组包含两行/全文、黑/灰、640/800/1000宽、list/detail/detail-mid/tail/back和原文/备注实际输入。native有效宽、真实card/title/meeting范围、两行/全文高度、全文保留、scroll可见字符范围与PNG可见墨迹均为必过断言；图像墨迹检查不依赖sandbox不可用的Vision服务。清单绑定源码、generated/tool/executable、实际Debug app/dylib/resources和PNG/geometry散列。T1使用本日研究Debug支撑依赖，完整宿主门、基于新Debug的最终图、独立验收及安装仍由后续验证完成。
 
 ## 已知限制
 
@@ -74,6 +74,10 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 | D-04 | 图像与几何都验收，依赖替身与故障注入如实标注 | 前轮控件通过但页面仍坏的覆盖缺口 |
 | D-05 | 新完整自动证据与整体审查后安装，不把旧827当本轮通过 | 用户确认测试/重新安装边界 |
 | D-06 | 允许单任务七路径原子贯通控件、页面、真实探针、回归和记录 | 同一文字布局链；避免先改组件后遗漏页面覆盖 |
+
+### T1 独立审查补验
+
+独立审查 `T1-review.md` 的 I-01 指出：原56图只证明详情地点挂载，没有地点可见截图，不能由初始详情与尾部截图推断中段已验收。探针补齐每种宽度/标题/背景的 `detail-mid`，按真实地点native几何滚至中段；地点全文与备注第1、2行分别要求完整字符范围在所属scroll的 `visibleRect` 与截图范围内，且对应PNG墨迹必须通过。现四组各17场景，共68图、1888断言通过；这项补验没有更改生产源码、页面高度或既有断言。最终新Debug重跑与独立复审仍由后续验证完成。
 
 ## T1 机制裁定
 

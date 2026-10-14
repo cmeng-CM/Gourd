@@ -155,7 +155,7 @@ MAIN = r'''
                 view.selectedRanges = originalSelection
             }
         }
-        func capture(_ name: String, tail: Bool = false) throws {
+        func capture(_ name: String, tail: Bool = false, required: [(text: String, token: String)] = []) throws {
             check(!window.isVisible, name + " window stays hidden")
             let native = textViews()
             var geometry: [[String: Any]] = []
@@ -246,6 +246,32 @@ MAIN = r'''
                 visibleInk.append(["text": String(view.string.prefix(20)), "visible": rectJSON(visible), "brightPixels": pixels.0, "inkColumns": pixels.1])
             }
             check(!visibleInk.isEmpty, name + " has visible native text ink")
+            for field in required {
+                let matches = native.filter { $0.string == field.text }
+                check(matches.count == 1, name + " unique required field " + field.token)
+                guard let view = matches.first, let manager = view.layoutManager, let container = view.textContainer else {
+                    check(false, name + " required field complete TextKit " + field.token); continue
+                }
+                let characters = (view.string as NSString).range(of: field.token)
+                check(characters.location != NSNotFound, name + " required complete character range " + field.token)
+                guard characters.location != NSNotFound else { continue }
+                let glyphs = manager.glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+                var fieldRect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+                fieldRect.origin.x += view.textContainerOrigin.x
+                fieldRect.origin.y += view.textContainerOrigin.y
+                let visible = view.visibleRect.intersection(fieldRect)
+                check(!visible.isNull && visible.width >= fieldRect.width - 0.5 && visible.height >= fieldRect.height - 0.5,
+                      name + " required entire character range in owning scroll viewport " + field.token)
+                let hostField = view.convert(fieldRect, to: host)
+                let visibleHost = host.bounds.intersection(hostField)
+                check(!visibleHost.isNull && visibleHost.width >= hostField.width - 0.5 && visibleHost.height >= hostField.height - 0.5,
+                      name + " required entire character range inside captured page " + field.token)
+                let pixels = ink(hostField)
+                check(pixels.0 > 30 && pixels.1 > 30, name + " required actual raster ink " + field.token)
+                visibleInk.append(["required": field.token, "characters": [characters.location, characters.length],
+                                   "nativeCharacterFrame": rectJSON(fieldRect), "owningScrollVisible": rectJSON(view.visibleRect),
+                                   "frame": rectJSON(hostField), "brightPixels": pixels.0, "inkColumns": pixels.1])
+            }
             if tail {
                 let noteViews = native.filter { $0.string.contains("TAIL45") }
                 check(noteViews.count == 1, name + " unique long notes text")
@@ -286,6 +312,20 @@ MAIN = r'''
             let scrolls = descendants(host).compactMap { $0 as? NSScrollView }.filter { ($0.documentView?.frame.height ?? 0) > $0.contentView.bounds.height }
             check(scrolls.count == 1, "detail-\(Int(width)) one owning long content scroll")
             if let scroll = scrolls.first, let document = scroll.documentView {
+                let locations = textViews().filter { $0.string == "宽度测量夹具地址" }
+                check(locations.count == 1, "detail-mid-\(Int(width)) actual location field found")
+                if let location = locations.first {
+                    let rect = document.convert(location.bounds, from: location)
+                    let y = max(0, min(rect.minY - 24, document.frame.height - scroll.contentView.bounds.height))
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    await pump(host)
+                    try capture("detail-mid-\(Int(width))", required: [
+                        (text: "宽度测量夹具地址", token: "宽度测量夹具地址"),
+                        (text: notes, token: "1. 日程备注完整滚动验收。"),
+                        (text: notes, token: "2. 日程备注完整滚动验收。")
+                    ])
+                }
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: document.frame.height - scroll.contentView.bounds.height))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 await pump(host)
