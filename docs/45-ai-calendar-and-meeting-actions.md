@@ -298,8 +298,10 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 
 华为原生参数契约：[Mac Scheme 参考](https://support.huaweicloud.com/scheme-meeting/meeting_22_1219.html)、[旧业务开发示例](https://support.huaweicloud.com/intl/zh-cn/scheme-meeting/meeting_22_1216.html)；腾讯：[链接入会](https://meeting.tencent.com/support-doc-detail/70/index.html)；飞书：[浏览器入会](https://www.feishu.cn/hc/en-US/articles/360049067679-join-a-video-meeting-through-your-web-browser)。这些官方契约支持保留原邀请入口；未核实的客户端参数不作为生成依据。2026-10-13 核对华为 Mac 参考：标准 page 为 joinConfByLink，必填 page/conf_id/name，服务地址、端口、密码和音视频开关为可选；验证现有参数，不补造选填值。
 
-### 11. 2026-10-14 日历页面布局补验（安装前）
+### 11. 2026-10-14 日历页面布局补验与安装
 
 前轮827项完整门确认原生TextKit初始化和UTF-16精确选区，但没有覆盖完整页面尺寸协商。后续全页研究证明live容器被测量修改；零宽竖线为明确故障注入，生产最后零宽顺序与原列表越界没有自然复现。详见docs/46：独立快照测量与实际bounds同步、SwiftUI独占文字高度、绘制边界保护已实现，保留全文滚动、两行/完整标题与实际编辑绑定。
 
-T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全文、备注首段与末尾及原文/备注实际输入；它使用本日研究Debug支撑依赖，隔离VM/生命周期，不能当作实际ContentView完整验收。T2新完整门attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750` 已succeeded：830个XCTest实际执行且0失败/0跳过、Python11例、十阶段均0，原生8例与布局3例各方法实际通过一次。本次宿主前后Pear均false。新Debug最终68图需新的根控制器代表28图摘要绑定和独立全部68图复审，整体终审与本轮重新安装尚未宣称完成。原四类别安装后人工确认、真实入会/模型/系统写入项仍未完成，安装事实不替代它们。
+T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全文、备注首段与末尾及原文/备注实际输入；它使用本日研究Debug支撑依赖，隔离VM/生命周期，不能当作实际ContentView完整验收。T2新完整门attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750` 已succeeded：830个XCTest实际执行且0失败/0跳过、Python11例、十阶段均0，原生8例与布局3例各方法实际通过一次。本次宿主前后Pear均false。新Debug最终68图已有根控制器代表28图摘要绑定；独立复审核实全部68图SHA与已实看图一致，并核新Debug产品、本地化与几何。安装前整体终审对 `417a7ee7..ea332b64` 给出Ready=Yes且0/0/0，随后本轮重新安装已完成。原四类别安装后人工确认、真实入会/模型/系统写入项仍未完成，安装事实不替代它们。
+
+安装与实际启动：控制器证据绑定同一成功attempt，七个安装checks严格true、六命令退出0；源产物前后与proof一致，安装包deep/strict和Gourd Local签名通过，Info仅Name更名、资源/链接/模式与临时去签名执行文件相同。installed snapshot digest为 `c80c17e6797efe280079497bd0a1e85567daad39c1a0c51ba3aed359f70c0c98`。kernel ps核旧PID57700退出，新PID6883于2026-10-14 11:20:35启动，实际路径 `/Applications/壶中天.app/Contents/MacOS/Gourd`。本次只回写文档，仍待同一整体审查者核安装/文档差量并重绑最终JSON，以及最终engine verify/close；没有因文档变化重跑宿主或页面图，人工四项仍未完成。

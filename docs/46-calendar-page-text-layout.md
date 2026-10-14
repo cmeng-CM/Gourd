@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 草稿 |
+| 状态 | 已实现并安装；后置证据待最终核验 |
 | 最后更新 | 2026-10-14 |
 | 来源 | docs/45、docs/39；用户再次报告详情竖线与列表标题越界，并确认全页复现、截图验证和重新安装 |
 
@@ -46,7 +46,7 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 
 `tools/calendar-page-layout-probe.py --help` 提供明确的 `--debug-products` 与 `--output` 参数；可用 `--baseline-ref 417a7ee7` 生成旧源反事实失败对照。探针原样编译两个native控件、页面、会议入口与抽取的真实 `CalendarEventCard`、`StandaloneCalendarView`，链接指定Debug dylib的真实日期/模型/月历/service/session实现。隔离VM/Coordinator、editor生命周期/window reader；注入memory backend，四个偏好使用独立fixture suite并恢复，初始月固定为2026-10-14。卡片背景GeometryReader仅观测bounds，不参与尺寸分配。bare隐藏窗口从未orderFront/激活；原产物中文lproj、zh-Hans/AsiaShanghai环境用于呈现。
 
-研究冻结材料证明实际fitting查询的live变化；T1旧源反事实四组均exit1，min提案注入后的纯度/有效宽等断言失败，而这组矩阵的natural fitting前后检查未失败，不能混为自然末次零宽复现。新源四组包含两行/全文、黑/灰、640/800/1000宽、list/detail/detail-mid/tail/back和原文/备注实际输入。native有效宽、真实card/title/meeting范围、两行/全文高度、全文保留、scroll可见字符范围与PNG可见墨迹均为必过断言；图像墨迹检查不依赖sandbox不可用的Vision服务。清单绑定源码、generated/tool/executable、实际Debug app/dylib/resources和PNG/geometry散列。T1使用本日研究Debug支撑依赖，完整宿主门、基于新Debug的最终图、独立验收及安装仍由后续验证完成。
+研究冻结材料证明实际fitting查询的live变化；T1旧源反事实四组均exit1，min提案注入后的纯度/有效宽等断言失败，而这组矩阵的natural fitting前后检查未失败，不能混为自然末次零宽复现。新源四组包含两行/全文、黑/灰、640/800/1000宽、list/detail/detail-mid/tail/back和原文/备注实际输入。native有效宽、真实card/title/meeting范围、两行/全文高度、全文保留、scroll可见字符范围与PNG可见墨迹均为必过断言；图像墨迹检查不依赖sandbox不可用的Vision服务。清单绑定源码、generated/tool/executable、实际Debug app/dylib/resources和PNG/geometry散列。T1阶段使用本日研究Debug支撑依赖；后续新完整宿主门、新Debug最终图、独立审查与安装事实见T2记录，不以研究Debug替代最终产物。
 
 ## 已知限制
 
@@ -77,7 +77,7 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 
 ### T1 独立审查补验
 
-独立审查 `T1-review.md` 的 I-01 指出：原56图只证明详情地点挂载，没有地点可见截图，不能由初始详情与尾部截图推断中段已验收。探针补齐每种宽度/标题/背景的 `detail-mid`，按真实地点native几何滚至中段；地点全文与备注第1、2行分别要求完整字符范围在所属scroll的 `visibleRect` 与截图范围内，且对应PNG墨迹必须通过。现四组各17场景，共68图、1888断言通过；这项补验没有更改生产源码、页面高度或既有断言。最终新Debug重跑与独立复审仍由后续验证完成。
+独立审查 `T1-review.md` 的 I-01 指出：原56图只证明详情地点挂载，没有地点可见截图，不能由初始详情与尾部截图推断中段已验收。探针补齐每种宽度/标题/背景的 `detail-mid`，按真实地点native几何滚至中段；地点全文与备注第1、2行分别要求完整字符范围在所属scroll的 `visibleRect` 与截图范围内，且对应PNG墨迹必须通过。现四组各17场景，共68图、1888断言通过；这项补验没有更改生产源码、页面高度或既有断言。这项T1复审随后通过0/0/0；最终新Debug矩阵及独立审查另见T2记录。
 
 ## T1 机制裁定
 
@@ -86,11 +86,11 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 | 测量接口 | 两个native控件共用内部 `CalendarTextMeasurement.size(of:width:minimumHeight:)`；外部用户接口保持 | 每次查询分配独立TextKit快照，避免恢复live状态的交错风险 |
 | 原生高度 | SwiftUI独占承载高度，AppKit不垂直resize；新增实际多行增长、Binding与边界断言承接原行为 | 离屏图不能证明用户全部键盘/选区交互 |
 | 卡片/页面 | 保留现有布局、两行/全文偏好和单外层ScrollView；无需修改这两个生产文件 | 原列表越界的自然触发顺序仍未知 |
-| 图像证据 | 实际页PNG、card/native几何、可见墨迹和尾字符可滚达均检查；独立controller实看 | 使用隔离支撑依赖且灰色backing不是系统玻璃；最终必须用新Debug重跑 |
+| 图像证据 | 实际页PNG、card/native几何、可见墨迹和尾字符可滚达均检查；独立controller实看 | 使用隔离支撑依赖且灰色backing不是系统玻璃；T2已按新成功attempt的Debug重跑 |
 
-## T2 安装前证据状态与核验契约
+## T2 证据状态与核验契约
 
-T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新增中段地点与备注首段截图、完整68图和散列。当前本日研究Debug矩阵只属于T1证据；T2新完整宿主门现已取得成功attempt；新Debug最终页图的审阅摘要绑定、整体终审、安装与真实新进程仍按实际证据后置记录。
+T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新增中段地点与备注首段截图、完整68图和散列。当前本日研究Debug矩阵只属于T1证据；T2新完整宿主门现已取得成功attempt；新Debug最终页图的审阅摘要绑定、安装前整体终审、安装与真实新进程事实已记录；安装后文档差量的同一审查者复核与最终engine仍待完成。
 
 交付核验器 `.workflow/calendar-page-layout/verify_delivery.py` 采用只读检查：先运行ai-calendar wrapper的证据复核，要求新attempt实际执行至少830个XCTest，8个原生与3个布局测试各方法在实际日志中恰好通过一次；独立T1/T2规格与质量JSON、整体ready JSON及报告摘要严格绑定baseline/HEAD。最终page-evidence必须包含四设置×17场景、全部源码/工具/generated/probe/新Debug app/dylib/resources/PNG摘要、严格True几何检查和根控制器28张代表原图的实看记录（四设置各7路由、合计覆盖三种宽度）；独立复审另须实看全部68张最终图。
 
@@ -100,6 +100,14 @@ T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新�
 
 安装前新完整门：attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750` 最终succeeded；XCTest实际830执行/0失败/0跳过，8个原生测试与3个布局测试各方法在实际日志中恰好通过一次，Python11例，十个阶段均退出0（包含Release与Debug/Release签名核验）。控制器在本次宿主启动前后精确查询Pear均false，未启动Pear。生产与探针源码仍冻结于T1，后续仅文档回写无需再运行宿主。
 
-最终页证据位于 `.workflow/calendar-page-layout/reports/page-evidence/manifest.json`，使用上述成功attempt的实际Debug产品，并由调用环境将 `LLVM_PROFILE_FILE` 定向至页输出目录，根 `default.profraw` 保持稳定。当前干净重生成矩阵四组各17场景，共68 PNG/1888断言无失败；新的根控制器代表图记录与独立全部图复审仍须匹配最终manifest摘要，不能套用旧图审阅记录。整体审查与本轮安装尚未完成，不把这些页级检查宣称为完整产品人工验收。
+最终页证据位于 `.workflow/calendar-page-layout/reports/page-evidence/manifest.json`，使用上述成功attempt的实际Debug产品，并由调用环境将 `LLVM_PROFILE_FILE` 定向至页输出目录，根 `default.profraw` 保持稳定。当前干净重生成矩阵四组各17场景，共68 PNG/1888断言无失败；根控制器28张代表图记录已重绑最终manifest摘要，独立复审也核实全部68图与已实看图SHA一致，并验证新Debug/本地化/几何；没有套用旧manifest绑定。安装前整体终审已通过，安装事实另列如下；这些页级检查仍不等于完整产品人工验收。
 
 页探针运行约束：output应为fresh目录，或至少不存在旧 `manifest.json`。producer收集输出文件时会把已有manifest本身纳入files，造成自摘要不一致；控制器的调用guard先保存旧manifest到输出目录之外，再删除自有ignored旧manifest后干净重生成。这是证据输出管理，不改变生产布局、冻结探针或产品行为；重跑页面不等于重跑宿主完整门。
+
+### T2 安装与实际启动记录（后置文档复核待完成）
+
+安装前整体独立审查覆盖 `417a7ee7..ea332b64`，Ready=Yes，Critical/Important/Minor=0/0/0。控制器随后按已验证成功attempt的Release执行 `tools/build.sh --install`；`local-install.json` status=succeeded，七个命名checks均严格true、六个命令均退出0。源产物安装前后匹配proof，安装包通过deep/strict与Gourd Local签名；Info仅 `CFBundleName` 改为“壶中天”，非签名资源/链接/模式及临时移除签名后的执行文件与已验证源产物相同。
+
+`installed-snapshot.json` 绑定attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750`，digest=`c80c17e6797efe280079497bd0a1e85567daad39c1a0c51ba3aed359f70c0c98`。`new-launch.json` 与日志记录kernel ps事实：旧PID57700已退出，新PID6883于2026-10-14 11:20:35启动，实际可执行路径为 `/Applications/壶中天.app/Contents/MacOS/Gourd`，不以NSWorkspace缓存证明重启。
+
+本次回写仅docs/45与docs/46，不改冻结生产源、探针或交付核验器；安装证据保留实际安装head `ea332b64`，通过纯文档祖先链允许后置回写，不伪改为新head。同一整体审查者将复核文档/安装差量后重绑最终JSON；最终engine verify/close尚未在此宣称通过。原四类别安装后人工确认、真实模型/会议/系统写入验证仍未完成，安装和kernel新进程不替代这些人工项。
