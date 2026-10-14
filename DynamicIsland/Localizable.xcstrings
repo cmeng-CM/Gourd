@@ -102,23 +102,22 @@
       }
     }
 ,
-    "calendar.meeting.tooltip.copy": {
+    "calendar.meeting.tooltip.copyValue": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Copy code %@"
+            "value": "Copy %@"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "复制会议号 %@"
+            "value": "复制 %@"
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.tooltip.more": {
       "localizations": {
         "en": {

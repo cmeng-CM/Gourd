@@ -111,7 +111,7 @@ LOCALE_KEYS = (
     'calendar.meeting.row.choose',
     'calendar.meeting.row.copy',
     'calendar.meeting.row.open',
-    'calendar.meeting.tooltip.copy',
+    'calendar.meeting.tooltip.copyValue',
     'calendar.meeting.tooltip.more',
     'calendar.meeting.tooltip.multiple',
     'calendar.meeting.tooltip.open',

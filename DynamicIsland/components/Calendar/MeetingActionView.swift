@@ -180,6 +180,9 @@ final class MeetingActionModel: ObservableObject {
     }
 
     /// 打开的入口二：只有会议号时按平台拼深链，并**记住**这个客户端（D-09）供下次主动作直接用。
+    ///
+    /// 先写 `Defaults` 再尝试打开是**有意**的（D-09：「点了就记住用户的选择」）——即使这次因为号码位数
+    /// 不合法（builder 只认 9–12 位）而打不开、退回复制，用户的平台选择照样留下来（终审 M-6）。
     func openByNumber(provider: MeetingProvider) {
         guard !isBusy, let target = targets.first(where: { !$0.meetingCodes.isEmpty }) else { return }
         Defaults[.meetingCodeOpener] = provider.rawValue
@@ -356,16 +359,17 @@ enum MeetingActionPresentation {
         }
     }
 
-    /// tooltip 由主动作决定（docs/47 D-10）：打开 → 「打开腾讯会议」；复制 → 「复制会议号 <号>」；
-    /// 多个可打开候选（不猜）→ 「多个会议入口 · 右键选择」；平台判不出来时补「· 右键更多」。
-    static func tooltip(primary: MeetingPrimaryAction, provider: MeetingProvider?) -> String {
+    /// tooltip 由主动作决定（docs/47 D-10）：打开 → 「打开腾讯会议」；
+    /// 只有会议号（复制）→ 「复制会议号 <号> · 右键更多」；多个可打开候选（不猜）→ 「多个会议入口 · 右键选择」。
+    ///
+    /// `.copyCode` 只在**没有任何可打开候选、也没记住客户端**时产生（终审 M-1）：此时本条必然判不出平台，
+    /// 所以统一走 `tooltip.more`，原「记住的客户端」分支是死代码，已删。
+    static func tooltip(primary: MeetingPrimaryAction) -> String {
         switch primary {
         case let .open(_, provider):
             return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), providerName(provider))
         case let .copyCode(number):
-            return provider == nil
-                ? String(format: NSLocalizedString("calendar.meeting.tooltip.more", comment: ""), number)
-                : String(format: NSLocalizedString("calendar.meeting.tooltip.copy", comment: ""), number)
+            return String(format: NSLocalizedString("calendar.meeting.tooltip.more", comment: ""), number)
         case .choose:
             return NSLocalizedString("calendar.meeting.tooltip.multiple", comment: "")
         case .none:
@@ -375,7 +379,15 @@ enum MeetingActionPresentation {
 
     @MainActor
     static func tooltip(for model: MeetingActionModel) -> String {
-        tooltip(primary: model.primary, provider: model.determinedProvider)
+        tooltip(primary: model.primary)
+    }
+
+    /// `.row`「复制」键的 help（终审 M-2）：说清复制的是号码还是入口链接，不再借用主动作的「打开…」。
+    @MainActor
+    static func copyHelp(for model: MeetingActionModel) -> String {
+        guard let value = model.codeValue ?? model.targets.first(where: \.canOpen)?.sourceURL?.absoluteString,
+              !value.isEmpty else { return NSLocalizedString("calendar.meeting.row.copy", comment: "") }
+        return String(format: NSLocalizedString("calendar.meeting.tooltip.copyValue", comment: ""), value)
     }
 
     /// 菜单里「在 … 中打开」两项的标题。
@@ -387,16 +399,11 @@ enum MeetingActionPresentation {
         }
     }
 
-    /// 逐候选列出时的标题（审查 I-2）：判定出平台就用「在 <平台> 中打开」，否则退回主机名 / 号码。
+    /// 逐候选列出时的标题（审查 I-2）：判定出平台就用「在 <平台> 中打开」，否则退回主机名（可打开候选一定有链接）。
     static func openTargetTitle(_ target: MeetingJoinTarget) -> String {
         if let provider = target.provider { return openInTitle(provider) }
-        if let host = target.sourceURL?.host, !host.isEmpty {
-            return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), host)
-        }
-        if let number = target.meetingCodes.first?.value {
-            return String(format: NSLocalizedString("calendar.meeting.tooltip.copy", comment: ""), number)
-        }
-        return NSLocalizedString("calendar.meeting.noEvidence", comment: "")
+        let host = target.sourceURL?.host ?? target.meetingCodes.first?.value ?? ""
+        return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), host)
     }
 
     /// 平台显示名：两家能按号打开的平台用新增的中文键（设计图 ④ 的 provider 名），
@@ -420,10 +427,14 @@ enum MeetingActionPresentation {
         }
     }
 
-    /// `.row` 左侧的 provider 名：优先用户记住的客户端（D-09），否则用证据判定的平台；判不出来就不显示。
+    /// `.row` 左侧的 provider 名：**与本条证据同源**（`primary` / tooltip 都用本条链接的平台），
+    /// 只有本条判不出平台时才回落到记住的客户端（D-09）。
+    ///
+    /// 终审 I-1：`meetingCodeOpener` 是全局记忆，若在这里先取 `rememberedProvider`，一条带华为链接的邀请
+    /// 会被贴成「腾讯会议」的行标，而 tooltip 与点开走的却是华为 —— 三者必须同源。
     @MainActor
     static func rowProviderName(for model: MeetingActionModel) -> String? {
-        let name = providerName(model.rememberedProvider ?? model.determinedProvider)
+        let name = providerName(model.determinedProvider ?? model.rememberedProvider)
         return name.isEmpty ? nil : name
     }
 
@@ -542,15 +553,18 @@ private struct MeetingActionRow: View {
                 Spacer(minLength: 4)
                 let keys = MeetingActionPresentation.rowKeys(for: model)
                 if keys.contains(.open) {
-                    key("calendar.meeting.row.open") { model.performPrimary() }
+                    key("calendar.meeting.row.open", help: MeetingActionPresentation.tooltip(for: model)) {
+                        model.performPrimary()
+                    }
                 }
                 if keys.contains(.copy) {
-                    key("calendar.meeting.row.copy") {
+                    // 每个键各自的 help（终审 M-2）：复制键不许再显示主动作的「打开…」。
+                    key("calendar.meeting.row.copy", help: MeetingActionPresentation.copyHelp(for: model)) {
                         if let value = MeetingActionPresentation.rowValue(for: model) { model.copy(value) }
                     }
                 }
                 if keys.contains(.choose) {
-                    key("calendar.meeting.row.choose") { presentMenu() }
+                    key("calendar.meeting.row.choose", help: MeetingActionPresentation.tooltip(for: model)) { presentMenu() }
                 }
             }
         }
@@ -566,7 +580,7 @@ private struct MeetingActionRow: View {
         presenter.present(for: model, anchoredTo: nil)
     }
 
-    private func key(_ titleKey: String, action: @escaping () -> Void) -> some View {
+    private func key(_ titleKey: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(LocalizedStringKey(titleKey))
                 .font(.system(size: 10, weight: .medium))
@@ -577,7 +591,7 @@ private struct MeetingActionRow: View {
         .buttonStyle(.plain)
         .fixedSize()
         .disabled(model.isBusy)
-        .help(MeetingActionPresentation.tooltip(for: model))
+        .help(help)
     }
 }
 

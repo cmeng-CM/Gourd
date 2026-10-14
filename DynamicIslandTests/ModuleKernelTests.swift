@@ -14246,13 +14246,14 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
 
     // MARK: - T4 视图与调用点：图标 chip / 一行两键 / 右键 4 项 / tooltip
 
-    /// 本任务新增的 9 条文案 key 在 **en 与 zh-Hans 两份**里都解析得出（都 `translated`），
+    /// 会议入口新增的文案 key 在 **en 与 zh-Hans 两份**里都解析得出（都 `translated`），
     /// 且 tooltip 的拼接结果逐字等于设计图 ②。
     func testMeetingEntryLocalisationKeysResolveInBothLanguages() throws {
         let keys = ["calendar.meeting.openIn.tencent", "calendar.meeting.openIn.huawei",
                     "calendar.meeting.provider.tencent", "calendar.meeting.provider.huawei",
-                    "calendar.meeting.tooltip.open", "calendar.meeting.tooltip.copy",
-                    "calendar.meeting.tooltip.more", "calendar.meeting.row.open", "calendar.meeting.row.copy"]
+                    "calendar.meeting.tooltip.open", "calendar.meeting.tooltip.more",
+                    "calendar.meeting.tooltip.multiple", "calendar.meeting.tooltip.copyValue",
+                    "calendar.meeting.row.open", "calendar.meeting.row.copy", "calendar.meeting.row.choose"]
         for language in ["en", "zh-Hans"] {
             let bundle = try languageBundle(language)
             for key in keys {
@@ -14265,11 +14266,13 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         func text(_ key: String) -> String { zh.localizedString(forKey: key, value: nil, table: nil) }
         XCTAssertEqual(String(format: text("calendar.meeting.tooltip.open"), text("calendar.meeting.provider.tencent")),
                        "打开腾讯会议")
-        XCTAssertEqual(String(format: text("calendar.meeting.tooltip.copy"), "939130533"), "复制会议号 939130533")
         XCTAssertEqual(String(format: text("calendar.meeting.tooltip.more"), "939130533"),
                        "复制会议号 939130533 · 右键更多")
+        XCTAssertEqual(text("calendar.meeting.tooltip.multiple"), "多个会议入口 · 右键选择")
+        XCTAssertEqual(String(format: text("calendar.meeting.tooltip.copyValue"), "939130533"), "复制 939130533")
         XCTAssertEqual(text("calendar.meeting.row.open"), "打开")
         XCTAssertEqual(text("calendar.meeting.row.copy"), "复制")
+        XCTAssertEqual(text("calendar.meeting.row.choose"), "选择入口")
         XCTAssertEqual(text("calendar.meeting.openIn.huawei"), "在华为云会议中打开")
         // 编辑页仍在用的两条键不许被本任务顺手删掉（失败信号：编辑页用例变红）。
         XCTAssertNotEqual(text("calendar.generation.model"), "calendar.generation.model")
@@ -14339,20 +14342,21 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(copied.first?.contains(MeetingInvitationFixtures.huaweiHTTPS) == true)
     }
 
-    /// tooltip 由主动作决定（D-10）：打开 → 「打开<平台>」；复制 → 「复制会议号 <号>」；
-    /// 平台判不出来（只有会议号、没记忆）→ 补「· 右键更多」。
+    /// tooltip 由主动作决定（D-10）：打开 → 「打开<平台>」；只有会议号（复制）→ 「复制会议号 <号> · 右键更多」；
+    /// 多个可打开候选 → 「多个会议入口 · 右键选择」；没有入口 → 无证据说明。
     func testMeetingTooltipFollowsThePrimaryAction() throws {
         let session = makeSession()
         let localized = { (key: String) in Bundle.main.localizedString(forKey: key, value: nil, table: nil) }
         let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: MeetingInvitationFixtures.huawei))
-        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .open(target, .huawei), provider: .huawei),
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .open(target, .huawei)),
                        String(format: localized("calendar.meeting.tooltip.open"),
                               localized("calendar.meeting.provider.huawei")))
-        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .copyCode("939130533"), provider: .tencent),
-                       String(format: localized("calendar.meeting.tooltip.copy"), "939130533"))
-        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .copyCode("939130533"), provider: nil),
+        // `.copyCode` 只会在没有任何可打开候选、也没记住客户端时产生 —— 一律「右键更多」（终审 M-1）。
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .copyCode("939130533")),
                        String(format: localized("calendar.meeting.tooltip.more"), "939130533"))
-        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .none, provider: nil),
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .choose),
+                       localized("calendar.meeting.tooltip.multiple"))
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .none),
                        localized("calendar.meeting.noEvidence"))
 
         let linked = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
@@ -14364,6 +14368,31 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                                           opener: MeetingFakeOpener([]), copyText: { _ in })
         XCTAssertEqual(MeetingActionPresentation.tooltip(for: codeOnly),
                        String(format: localized("calendar.meeting.tooltip.more"), "939130533"))
+    }
+
+    /// 终审 I-1：`meetingCodeOpener` 是**全局**记忆，但本条链接的平台优先 —— 行标 / tooltip / 实际打开
+    /// 三者必须都用**本条链接**的平台，不能被记住的另一家客户端带偏。
+    func testRowBrandTooltipAndOpenStayOnTheLinksOwnProviderOverRememberedClient() async throws {
+        let session = makeSession()
+        let opener = MeetingFakeOpener([true])
+        let localized = { (key: String) in Bundle.main.localizedString(forKey: key, value: nil, table: nil) }
+        Defaults[.meetingCodeOpener] = MeetingProvider.tencent.rawValue   // 全局记忆 = 腾讯
+        defer { Defaults.reset(Defaults.Keys.meetingCodeOpener.name) }
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                       opener: opener, copyText: { _ in })
+        XCTAssertEqual(model.rememberedProvider, .tencent)
+        XCTAssertEqual(model.determinedProvider, .huawei, "本条证据判出的是华为")
+        XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: model),
+                       localized("calendar.meeting.provider.huawei"), "行标用本条链接的平台，不是记住的腾讯")
+        XCTAssertEqual(MeetingActionPresentation.tooltip(for: model),
+                       String(format: localized("calendar.meeting.tooltip.open"),
+                              localized("calendar.meeting.provider.huawei")))
+        guard case let .open(_, provider) = model.primary else { return XCTFail("带链接的邀请应直接打开") }
+        XCTAssertEqual(provider, .huawei)
+        model.performPrimary()
+        await drain { !model.isOpening }
+        XCTAssertEqual(try XCTUnwrap(opener.urls.first).absoluteString, MeetingInvitationFixtures.huaweiHTTPS,
+                       "实际打开的仍是本条链接（华为 HTTPS），不是记住的腾讯")
     }
 
     /// `.row`（设计图 ④）：provider 名 + 号码；没有会议号时退回入口链接。
