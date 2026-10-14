@@ -360,7 +360,17 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
     private var resignObserver: NSObjectProtocol?
 
     override init(frame: NSRect, textContainer: NSTextContainer?) {
-        super.init(frame: frame, textContainer: textContainer)
+        if let textContainer {
+            super.init(frame: frame, textContainer: textContainer)
+        } else {
+            // Match the read-only bridge: nil needs an owned, complete TextKit chain.
+            let storage = NSTextStorage()
+            let manager = NSLayoutManager()
+            let container = NSTextContainer(containerSize: NSSize(width: frame.width, height: .greatestFiniteMagnitude))
+            storage.addLayoutManager(manager)
+            manager.addTextContainer(container)
+            super.init(frame: frame, textContainer: container)
+        }
         isRichText = false
         isEditable = true
         isSelectable = true

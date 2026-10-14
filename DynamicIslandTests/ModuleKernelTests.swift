@@ -13385,6 +13385,207 @@ final class ScheduleGenerationTests: XCTestCase {
     }
 }
 
+// Native text regressions create production controls without a window or system input.
+@MainActor
+final class CalendarNativeTextSystemTests: XCTestCase {
+    private func assertTextSystem(_ view: NSTextView, file: StaticString = #filePath, line: UInt = #line) throws {
+        let storage = try XCTUnwrap(view.textStorage, file: file, line: line)
+        let manager = try XCTUnwrap(view.layoutManager, file: file, line: line)
+        let container = try XCTUnwrap(view.textContainer, file: file, line: line)
+        XCTAssertTrue(manager.textStorage === storage, file: file, line: line)
+        XCTAssertTrue(container.layoutManager === manager, file: file, line: line)
+        XCTAssertTrue(manager.textContainers.contains { $0 === container }, file: file, line: line)
+        XCTAssertTrue(container.textView === view, file: file, line: line)
+        XCTAssertNil(view.window, file: file, line: line)
+    }
+
+    func testReadOnlyMakeNSViewArgumentsCreateCompleteTextSystem() throws {
+        // Keep the production makeNSView's frame/container arguments, including .zero and nil.
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        try assertTextSystem(view)
+        XCTAssertFalse(view.isEditable)
+        XCTAssertTrue(view.isSelectable)
+        XCTAssertFalse(view.isRichText)
+        XCTAssertFalse(view.drawsBackground)
+        XCTAssertEqual(view.textContainerInset, .zero)
+        XCTAssertEqual(view.textContainer?.lineFragmentPadding, 0)
+        XCTAssertEqual(view.textContainer?.widthTracksTextView, true)
+        XCTAssertFalse(view.isHorizontallyResizable)
+        XCTAssertTrue(view.isVerticallyResizable)
+    }
+
+    func testReadOnlyConfigureProducesTitleGlyphsAndMeasuredMultilineHeight() throws {
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        let title = "项目评审会议\n第二行议题\n第三行备注"
+        let font = NSFont.systemFont(ofSize: 14)
+        view.configure(text: title, font: font, color: .white, maximumLines: 0, strikethrough: true)
+        let size = view.measuredSize(width: 220)
+        try assertTextSystem(view)
+        XCTAssertEqual(view.string, title)
+        let manager = try XCTUnwrap(view.layoutManager)
+        let container = try XCTUnwrap(view.textContainer)
+        XCTAssertGreaterThan(manager.numberOfGlyphs, 0)
+        let used = manager.usedRect(for: container)
+        XCTAssertGreaterThan(used.width, 0)
+        XCTAssertGreaterThan(used.height, font.boundingRectForFont.height)
+        XCTAssertGreaterThanOrEqual(size.height, ceil(used.height))
+        XCTAssertEqual(size.width, 220)
+        let storage = try XCTUnwrap(view.textStorage)
+        // AppKit can substitute a CJK fallback face; the configured size must survive layout.
+        let renderedFont = try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(renderedFont.pointSize, font.pointSize)
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .white)
+        XCTAssertEqual(storage.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int,
+                       NSUnderlineStyle.single.rawValue)
+        XCTAssertEqual(container.lineBreakMode, .byWordWrapping)
+    }
+
+    func testReadOnlyRepeatedConfigureKeepsSelectionAndChangedTextUpdatesLayout() throws {
+        let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        let title = "评审会议完整标题"
+        view.configure(text: title, font: .systemFont(ofSize: 14), color: .white,
+                       maximumLines: 2, strikethrough: false)
+        _ = view.measuredSize(width: 80)
+        let selection = NSRange(location: 2, length: 4)
+        view.setSelectedRange(selection)
+        let ranges = view.selectedRanges
+        view.configure(text: title, font: .systemFont(ofSize: 14), color: .white,
+                       maximumLines: 2, strikethrough: false)
+        XCTAssertEqual(view.selectedRange(), selection)
+        XCTAssertEqual(view.selectedRanges, ranges)
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "会议完整")
+        view.configure(text: title, font: .systemFont(ofSize: 16), color: .white,
+                       maximumLines: 2, strikethrough: true)
+        XCTAssertEqual(view.selectedRanges, ranges, "Same-text styling updates also preserve the native selection")
+        XCTAssertEqual(view.textContainer?.maximumNumberOfLines, 2)
+        XCTAssertEqual(view.textContainer?.lineBreakMode, .byTruncatingTail)
+        view.configure(text: "更新标题\n附加说明", font: .systemFont(ofSize: 14), color: .white,
+                       maximumLines: 0, strikethrough: false)
+        _ = view.measuredSize(width: 220)
+        XCTAssertEqual(view.string, "更新标题\n附加说明")
+        XCTAssertGreaterThan(try XCTUnwrap(view.layoutManager).numberOfGlyphs, 0)
+    }
+
+    func testEditableMakeNSViewArgumentsSupportActualMultilineInsertionAndBinding() throws {
+        let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        try assertTextSystem(view)
+        XCTAssertTrue(view.isEditable)
+        XCTAssertTrue(view.isSelectable)
+        XCTAssertFalse(view.isRichText)
+        XCTAssertTrue(view.allowsUndo)
+        XCTAssertFalse(view.isHorizontallyResizable)
+        XCTAssertTrue(view.isVerticallyResizable)
+        XCTAssertEqual(view.textContainerInset, NSSize(width: 4, height: 4))
+        XCTAssertEqual(view.textContainer?.lineFragmentPadding, 0)
+        XCTAssertEqual(view.textContainer?.widthTracksTextView, true)
+        var bound = ""
+        let editor = CalendarGrowingTextEditor(text: Binding(get: { bound }, set: { bound = $0 }),
+                                               label: "calendar.editor.source", onFocus: { _ in })
+        let coordinator = editor.makeCoordinator()
+        view.delegate = coordinator
+        let input = "明天上午评审\n讨论架构与计划"
+        view.insertText(input, replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(view.string, input)
+        XCTAssertEqual(bound, input, "Actual insertText must notify the production Coordinator, not a manual callback")
+        let container = try XCTUnwrap(view.textContainer)
+        container.containerSize = NSSize(width: 220, height: CGFloat.greatestFiniteMagnitude)
+        let manager = try XCTUnwrap(view.layoutManager)
+        manager.ensureLayout(for: container)
+        XCTAssertGreaterThan(manager.numberOfGlyphs, 0)
+        XCTAssertGreaterThan(manager.usedRect(for: container).height,
+                             try XCTUnwrap(view.font).boundingRectForFont.height)
+    }
+
+    func testEditableCoordinatorWritesActualInputToSourceAndNotesDraftBindings() throws {
+        let reference = Date(timeIntervalSince1970: 1_792_000_000)
+        let session = CalendarPanelSession(selectedDate: reference, now: { reference },
+                                          saveEvent: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                                          createReminder: { _ in throw CalendarMutationError.readOnlyCalendar },
+                                          deleteEvent: { _ in },
+                                          completeReminder: { _, _ in throw CalendarMutationError.readOnlyCalendar },
+                                          event: { _ in nil })
+        session.beginCreate(kind: .event, on: reference, calendarID: "fixture-events")
+        let source = "明天上午评审\n讨论架构"
+        let notes = "用户备注\n第二行说明"
+        let bindings = [
+            Binding<String>(get: { session.draft?.sourceText ?? "" }, set: { session.updateSourceText($0) }),
+            Binding<String>(get: { session.draft?.notes ?? "" }, set: { session.draft?.notes = $0 })
+        ]
+        for (binding, input) in zip(bindings, [source, notes]) {
+            let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
+            defer { view.stop() }
+            try assertTextSystem(view)
+            let editor = CalendarGrowingTextEditor(text: binding, label: "fixture", onFocus: { _ in })
+            let coordinator = editor.makeCoordinator()
+            view.delegate = coordinator
+            view.insertText(input, replacementRange: NSRange(location: 0, length: 0))
+            XCTAssertEqual(view.string, input)
+            XCTAssertEqual(binding.wrappedValue, input)
+        }
+        XCTAssertEqual(session.draft?.sourceText, source)
+        XCTAssertEqual(session.draft?.notes, notes)
+        XCTAssertTrue(session.hasDirtyDraft)
+        XCTAssertEqual(session.draft?.generationMode, .required)
+        XCTAssertEqual(session.route, .editor)
+    }
+
+    func testEditableRebindingAndSelectionReplacementUseCurrentCoordinatorParent() throws {
+        let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
+        defer { view.stop() }
+        try assertTextSystem(view)
+        var first = "", second = ""
+        let editor = CalendarGrowingTextEditor(text: Binding(get: { first }, set: { first = $0 }),
+                                               label: "fixture", onFocus: { _ in })
+        let coordinator = editor.makeCoordinator()
+        view.delegate = coordinator
+        view.insertText("第一行\n第二行", replacementRange: NSRange(location: 0, length: 0))
+        let selection = NSRange(location: 4, length: 3)
+        view.setSelectedRange(selection)
+        // updateNSView refreshes this parent before accepting subsequent native edits.
+        coordinator.parent = CalendarGrowingTextEditor(text: Binding(get: { second }, set: { second = $0 }),
+                                                       label: "fixture", onFocus: { _ in })
+        XCTAssertEqual(view.selectedRange(), selection)
+        view.insertText("修订行", replacementRange: view.selectedRange())
+        XCTAssertEqual(first, "第一行\n第二行")
+        XCTAssertEqual(view.string, "第一行\n修订行")
+        XCTAssertEqual(second, view.string)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 7, length: 0))
+    }
+
+    func testValidSuppliedTextContainersAndTheirExistingStorageAreRetained() throws {
+        for editable in [false, true] {
+            let storage = NSTextStorage(string: "已有文字")
+            let manager = NSLayoutManager()
+            let container = NSTextContainer(containerSize: NSSize(width: 180, height: CGFloat.greatestFiniteMagnitude))
+            storage.addLayoutManager(manager)
+            manager.addTextContainer(container)
+            let view: NSTextView = editable
+                ? CalendarEditableTextView(frame: .zero, textContainer: container)
+                : CalendarReadOnlyTextView(frame: .zero, textContainer: container)
+            defer {
+                (view as? CalendarEditableTextView)?.stop()
+                (view as? CalendarReadOnlyTextView)?.stop()
+            }
+            try assertTextSystem(view)
+            XCTAssertTrue(view.textStorage === storage)
+            XCTAssertTrue(view.layoutManager === manager)
+            XCTAssertTrue(view.textContainer === container)
+            XCTAssertEqual(view.string, "已有文字")
+            manager.ensureLayout(for: container)
+            XCTAssertGreaterThan(manager.numberOfGlyphs, 0)
+            XCTAssertGreaterThan(manager.usedRect(for: container).width, 0)
+            if editable {
+                view.insertText("追加", replacementRange: NSRange(location: storage.length, length: 0))
+                XCTAssertEqual(storage.string, "已有文字追加")
+            }
+        }
+    }
+}
+
 // T6 callbacks are offline: no NSTextView/NSWindow construction, clipboard or system data.
 @MainActor
 final class CalendarCopyInteractionTests: XCTestCase {

@@ -176,7 +176,17 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
     private var ownedMenus: [NSMenu] = []
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: container)
+        if let container {
+            super.init(frame: frameRect, textContainer: container)
+        } else {
+            // The designated NSTextView initializer does not create TextKit for nil.
+            let storage = NSTextStorage()
+            let manager = NSLayoutManager()
+            let container = NSTextContainer(containerSize: NSSize(width: frameRect.width, height: .greatestFiniteMagnitude))
+            storage.addLayoutManager(manager)
+            manager.addTextContainer(container)
+            super.init(frame: frameRect, textContainer: container)
+        }
         isEditable = false
         isSelectable = true
         isRichText = false
@@ -209,8 +219,13 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
         let value = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: color, .strikethroughStyle: strikethrough ? NSUnderlineStyle.single.rawValue : 0
         ])
-        // Repeated SwiftUI updates must not erase a user's selection.
-        if textStorage?.isEqual(to: value) == false { textStorage?.setAttributedString(value) }
+        // AppKit may replace system font runs with a CJK fallback during layout.
+        // Refreshing those attributes for the same text must keep the user's selection.
+        if textStorage?.isEqual(to: value) == false {
+            let ranges = string == text ? selectedRanges : nil
+            textStorage?.setAttributedString(value)
+            if let ranges { selectedRanges = ranges }
+        }
         textContainer?.maximumNumberOfLines = maximumLines
         textContainer?.lineBreakMode = maximumLines > 0 ? .byTruncatingTail : .byWordWrapping
     }
