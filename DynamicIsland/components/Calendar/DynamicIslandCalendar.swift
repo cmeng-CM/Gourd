@@ -1257,10 +1257,12 @@ struct MonthGridView: View {
 
 /// **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
 ///
-/// - **只读摘要**：选中日的日程与待办（`CalendarPanelSession.selectedDate` 那一天）——数据与卡片沿用
-///   既有只读口径（`CalendarEventFilters.filtered` + `CalendarEventCardList.ordered`，数据源 =
-///   `manager.events`，与右栏列表页**同一份**），**不新造取数路径**；`ReminderCard` 的勾选圈是只读的
-///   （`onToggle` 空实现：这一栏不写回）。
+/// - **当日清单（只读展示 + 提醒勾选）**：条目来自 `manager.events`——那是既有
+///   `updateCurrentDate(session.selectedDate)` 的产物（`StandaloneCalendarView` 的 `.onAppear` /
+///   `.onChange(of: session.selectedDate)` 维护，本栏**不新增刷新调用**），与右栏列表页**同一份**。
+///   取数与卡片沿用既有口径（`CalendarEventFilters.filtered` + `CalendarEventCardList.ordered`），
+///   **不新造取数路径**；日程卡只读（`detailEnabled: false`），提醒卡的勾选走**既有写回链路**
+///   （`manager.setReminderCompleted`，与 `CalendarEventCardList.cardBody` 同款）。
 /// - **定高 + 内滚**：高度由宿主钉成 `editorPaneHeight`（400）+ `.clipped()` 兜底，清单条目再多也在
 ///   **栏内**滚动，绝不顶高整页理想高（那是「面板跟着内容长」的反馈环）。
 /// - **回到月历**：顶部的按钮走 `session.showList(on:)` 把路由切回列表档（面板高随之回落到当月自然高）。
@@ -1271,8 +1273,9 @@ struct CalendarEditorSidebar: View {
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.showFullEventTitles) private var showFullEventTitles
 
-    /// 选中日的日程与待办（只读口径：`CalendarEventFilters` 过滤 + `CalendarEventCardList.ordered` 排序，
-    /// 与右栏列表页同一份数据源 `manager.events`）。
+    /// 当前日期（= `manager` 的 `updateCurrentDate` 口径，由宿主的 `.onAppear` /
+    /// `.onChange(of: session.selectedDate)` 维护）的日程与待办：`CalendarEventFilters` 过滤 +
+    /// `CalendarEventCardList.ordered` 排序，与右栏列表页同一份数据源 `manager.events`。
     private var dayEvents: [EventModel] {
         CalendarEventCardList.ordered(
             CalendarEventFilters.filtered(
@@ -1307,11 +1310,20 @@ struct CalendarEditorSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// 只读卡片分派：日程 → `CalendarEventCard`；提醒 → `ReminderCard`（勾选圈空实现，本栏不写回）。
+    /// 卡片分派：日程 → `CalendarEventCard`（只读）；提醒 → `ReminderCard`，勾选走**既有写回链路**
+    /// （`manager.setReminderCompleted`，与 `CalendarEventCardList.cardBody` 逐字同款——不新造写回路径）。
     @ViewBuilder
     private func card(for event: EventModel) -> some View {
         if event.type.isReminder {
-            ReminderCard(event: event, showFullEventTitles: showFullEventTitles, onToggle: { _ in })
+            ReminderCard(
+                event: event,
+                showFullEventTitles: showFullEventTitles,
+                onToggle: { completed in
+                    Task {
+                        await manager.setReminderCompleted(reminderID: event.id, completed: completed)
+                    }
+                }
+            )
         } else {
             CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles, detailEnabled: false)
         }
@@ -1357,7 +1369,9 @@ struct StandaloneCalendarView: View {
 
     /// **编辑档两栏的高度**（T3 / docs/48 D-07）：由**内容**声明、不由备注字数算（那是「打字时面板
     /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它 → 这一页的自然高即 400；账本口径 =
-    /// 400 + 表头 28 − 16 = 412（探针走 `PanelAutoHeight.measuredContentHeight`）→ 面板 474 档。
+    /// 400 + 表头 − 16（探针走 `PanelAutoHeight.measuredContentHeight`；测试桩表头 28 → 412），
+    /// 面板高 = 账本值 + `homeVerticalPadding`(40)。「474 档」是设计图 ⑤ 在**真机表头**下的同一算式
+    /// （表头 = `max(24, effectiveClosedNotchHeight)`，随屏变）。
     static let editorPaneHeight: CGFloat = 400
 
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：

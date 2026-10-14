@@ -15238,7 +15238,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(panel.contains("CalendarAISettingsNavigation.open()"), "齿轮仍接 AI 设置页的入口")
     }
 
-    /// T3 / V5（D-07·D-09）：日历页**按档报自然高**——编辑档 400（→ 面板 474 档）、列表档仍是
+    /// T3 / V5（D-07·D-09）：日历页**按档报自然高**——编辑档列高 400（账本 = 400 + 表头 − 16）、列表档仍是
     /// `monthGridHeight`（2026-10 = 278）；编辑档左栏宽 260、两栏高 400、编辑区宽 = 宿主内容宽 −
     /// 260 − 栏间距 12 − 该栏自身内边距（**关系式，不写死 615**）。三层判据照
     /// `PanelAutoHeightTests.testCalendarIsAMeasuredTab`：① 键字面量 ② 名单含它 ③ 账本行为。
@@ -15277,7 +15277,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
             PanelAutoHeight.panelHeight(contentHeight: 412, mode: PanelAutoHeight.modeAuto,
                                         manualHeight: 682, screenVisibleHeight: nil),
             452, accuracy: 1e-9,
-            "auto 档：面板高 = 412 + 40（设计图 ⑤ 的 474 档是窗口高 = 本值 + 顶出血/阴影 22）"
+            "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 412 = 400 + 表头(测试桩 28) − 16"
+                + "（设计图 ⑤ 的 474 是同一算式在真机表头下：400 + 表头 − 16 + 40）"
         )
 
         // 切回列表档：读缓存一步回落（不是停在编辑档的 412）——失败信号「切回列表档后高度没回落」的反证。
@@ -15285,23 +15286,34 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
                        "切回列表档 → 回落当月自然高（编辑档的 412 不留在列表档）")
 
-        // 几何：编辑档挂进 `NSHostingView`——编辑区宽 = 宿主内容宽 − 260 − 12 − 该栏内边距（关系式）。
+        // 几何：编辑档挂进 `NSHostingView`——编辑区内容宽随宿主宽**线性**变化（左栏 260 与栏间距 12
+        // 在两次里都固定）。**两个不同宿主宽**各挂一次，断言两次读数的差 = 宿主宽之差：
+        // 「把编辑区宽写死 615」这种改法必红（写死时两次读数相同、差为 0）。
         let (session, manager) = editorSession(kind: .event, editing: false)
         XCTAssertEqual(session.route, .editor)
-        let hostWidth: CGFloat = 887
-        let host = mountStandaloneCalendar(session: session, manager: manager, width: hostWidth)
-        settle(host)
-        let editorWidth = notesEditors(in: host).first?.bounds.width ?? -1
-        XCTAssertGreaterThan(editorWidth, 0, "编辑档右栏应渲染出备注编辑器")
-        // 「该栏自己的内边距」不写死：把同一份 `CalendarPanelPages` 单独挂在「右栏应得的宽」上，
-        // 读到的备注编辑器宽就是「右栏宽 → 该栏内容宽」的换算——两者的差即内边距。
-        let rightPaneWidth = hostWidth - StandaloneCalendarView.editorSidebarWidth
+        func editorPaneContentWidth(hostWidth: CGFloat) -> CGFloat {
+            let host = mountStandaloneCalendar(session: session, manager: manager, width: hostWidth)
+            settle(host)
+            return notesEditors(in: host).first?.bounds.width ?? -1
+        }
+        let narrowHostWidth: CGFloat = 700
+        let wideHostWidth: CGFloat = 887
+        let narrowEditorWidth = editorPaneContentWidth(hostWidth: narrowHostWidth)
+        let wideEditorWidth = editorPaneContentWidth(hostWidth: wideHostWidth)
+        XCTAssertGreaterThan(narrowEditorWidth, 0, "编辑档右栏应渲染出备注编辑器（窄宿主）")
+        XCTAssertGreaterThan(wideEditorWidth, 0, "编辑档右栏应渲染出备注编辑器（宽宿主）")
+        XCTAssertEqual(wideEditorWidth - narrowEditorWidth, wideHostWidth - narrowHostWidth, accuracy: 0.5,
+                       "编辑区内容宽随宿主宽线性变化：Δ读数 = Δ宿主宽（左栏 260 与栏间距 12 固定）")
+        // 关系式（单点校核）：编辑区内容宽 = 宿主内容宽 − 左栏 260 − 栏间距 12 − 该栏自身内边距。
+        // 内边距不写死：把同一份 `CalendarPanelPages` 单独挂在「右栏应得宽」上，读到的备注编辑器宽即
+        // 「右栏宽 → 该栏内容宽」的换算结果。
+        let rightPaneWidth = wideHostWidth - StandaloneCalendarView.editorSidebarWidth
             - StandaloneCalendarView.paneSpacing
         let alone = mountPanelPages(session: session, manager: manager, width: rightPaneWidth)
         settle(alone)
         let aloneWidth = notesEditors(in: alone).first?.bounds.width ?? -1
         XCTAssertGreaterThan(aloneWidth, 0)
-        XCTAssertEqual(editorWidth, aloneWidth, accuracy: 0.5,
+        XCTAssertEqual(wideEditorWidth, aloneWidth, accuracy: 0.5,
                        "编辑区内容宽 = 宿主内容宽 − 左栏 260 − 栏间距 12 − 该栏内边距（关系式，不写死 615）")
         // 左栏 260 / 两栏 400 是 SwiftUI 原生视图（不是 NSView），按源码取证（派发片段裁决 7 允许的降级）。
         let source = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
@@ -15309,6 +15321,48 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 400"), "两栏高 400")
         XCTAssertTrue(source.contains(".frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight"),
                       "编辑档左栏钉宽 260 + 钉高 400")
+    }
+
+    /// T3 / 失败信号反证：「选中日记录很多时编辑档自然高 > 400（左栏没钉高）」。
+    ///
+    /// 编辑档 + 选中日塞 **8+ 条**记录，量这一页的**理想高**（只钉宽、不钉高，读
+    /// `NSHostingView.fittingSize.height`——与账本探针 `PanelNaturalHeightLayout` 的「宽给定、高留空」
+    /// 同一口径）。左栏若被去掉钉高，ScrollView 的理想高会随卡片数长到 8 × 卡片高（数百 pt）→ 本断言红。
+    /// 公差 1pt：吸收 `NSHostingView` 的量化与 AppKit 取整。
+    func testEditorModeKeepsThePinnedPaneHeightWithManyDayRecords() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 8, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                           saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                           createReminder: { try await backend.createReminderRecord(input: $0) },
+                                           deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                           completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                           event: { backend.event(withID: $0) })
+        let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+        session.beginCreate(kind: .event, on: reference, calendarID: "fixture-events")
+        XCTAssertEqual(session.route, .editor)
+        await manager.updateCurrentDate(reference)
+        XCTAssertGreaterThanOrEqual(manager.events.count, 8, "前提：选中日有 8 条记录（左栏清单很长）")
+
+        let host = NSHostingView(rootView: StandaloneCalendarView(session: session, manager: manager)
+            .environmentObject(DynamicIslandViewModel())
+            .frame(width: 887))
+        host.frame = CGRect(x: 0, y: 0, width: 887, height: 400)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(host.fittingSize.height, StandaloneCalendarView.editorPaneHeight, accuracy: 1,
+                       "编辑档左栏钉高 400：当日清单再长也顶不高整页理想高")
+
+        // 对照（反证上面的 400 不是「量什么都是 400」）：同一份左栏**不钉高**时，8 条记录的清单
+        // 理想高远大于 400。钉高一旦被去掉，上面那条断言就会读到这个更大的数而红。
+        let looseSidebar = NSHostingView(rootView: CalendarEditorSidebar(session: session, manager: manager)
+            .environmentObject(DynamicIslandViewModel()))
+        looseSidebar.frame = CGRect(x: 0, y: 0, width: 260, height: 400)
+        looseSidebar.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        looseSidebar.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(looseSidebar.fittingSize.height, StandaloneCalendarView.editorPaneHeight,
+                             "对照：左栏不钉高时理想高 > 400（清单条目多）——证 400 是钉出来的")
     }
 
 }

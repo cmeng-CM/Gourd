@@ -311,7 +311,7 @@ func notesPanelTabKey(for layoutState: NotesLayoutState) -> String {
 /// - **列表档 / 详情档**（左栏整月网格 `MonthGridView` + 右栏清单，高 = 当月周数 `43N + 63`）有自然高
 ///   → 走 `CalendarModule.moduleID`（**现键不变**），探针在 `ContentView` 的 `.module` 分支用它上报；
 /// - **编辑档**（左栏 260 当日清单 + 右栏表单，两栏都钉 400）另有自然高 → 走
-///   `PanelContentHeight.calendarEditorTab`（**在名单里** → 面板贴到 474 档）。
+///   `PanelContentHeight.calendarEditorTab`（**在名单里** → 账本 = 400 + 表头 − 16，面板贴内容）。
 ///
 /// 判据只认 `CalendarPanelSession.route`（会话的**唯一**路由真源）——**不**在这里重判视图局部状态
 /// （重判就是第二份口径）。不写字面量、不新造第二个键常量。
@@ -1636,7 +1636,7 @@ struct ContentView: View {
             return homePanelTabKey()
         case .module:
             // 日历页**按档两键**（T3 / docs/48 D-07）：列表 / 详情档走模块 id（现键不变），编辑档走
-            // `calendarEditorTab`（有自然高 400 → 面板 474 档）。其它模块页照旧 = 模块 id。判据在
+            // `calendarEditorTab`（有自然高 400 → 账本 = 400 + 表头 − 16）。其它模块页照旧 = 模块 id。判据在
             // `calendarPanelTabKey(route:)`（与 `notesPanelTabKey(for:)` 同形）。
             if coordinator.selectedModuleID == CalendarModule.moduleID {
                 return calendarPanelTabKey(route: calendarSession.route)
