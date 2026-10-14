@@ -115,7 +115,6 @@ struct CalendarPanelPages: View {
     @State private var authorizationRevision = 0
     @State private var nativeEditorFocused = false
     @State private var hoveredID: String?
-    @StateObject private var sourceDebouncer = CalendarSourceDebouncer()
 
     init(session: CalendarPanelSession, manager: CalendarManager,
          onReturnSource: @escaping (CalendarPanelSource) -> Void) {
@@ -421,12 +420,7 @@ struct CalendarPanelPages: View {
         }
         .accessibilityIdentifier("calendar-editor-scroll")
         .onHover { lifecycle.setScrolling($0) }
-        .onAppear {
-            focusedField = session.draft?.sourceText.isEmpty == true ? .title : nil
-            sourceDebouncer.schedule(session: session)
-        }
-        .onChange(of: session.draft?.sourceText) { _, _ in sourceDebouncer.schedule(session: session) }
-        .onDisappear { sourceDebouncer.cancel() }
+        .onAppear { focusedField = session.draft?.sourceText.isEmpty == true ? .title : nil }
     }
 
     private func setNativeEditorFocus(_ focused: Bool) {
@@ -441,44 +435,8 @@ struct CalendarPanelPages: View {
     }
 
     private func generationControls(_ draft: CalendarDraft) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("calendar.generation.source").font(.caption).foregroundStyle(.secondary)
-            CalendarGrowingTextEditor(text: Binding(get: { session.draft?.sourceText ?? "" },
-                                                    set: { session.updateSourceText($0) }),
-                                      label: "calendar.generation.source", onFocus: setNativeEditorFocus)
-                .accessibilityIdentifier("calendar-generation-source")
-            Text("calendar.generation.sendingScope").font(.caption2).foregroundStyle(.secondary)
-            Text("calendar.generation.model").font(.caption2).foregroundStyle(.secondary)
-            Button("calendar.generation.settings") { CalendarAISettingsNavigation.open() }
-                .font(.caption).accessibilityIdentifier("calendar-generation-settings")
-            if session.configuredAI == nil {
-                Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 8) {
-                if session.generationState == .parsing { ProgressView().controlSize(.mini) }
-                Text(LocalizedStringKey(session.generationState.labelKey)).font(.caption)
-                    .accessibilityIdentifier("calendar-generation-state")
-                Spacer(minLength: 0)
-                if session.generationState == .parsing || session.generationState == .debouncing {
-                    Button("Cancel") { sourceDebouncer.cancel(); session.cancelSourceParsing() }
-                        .accessibilityIdentifier("calendar-generation-cancel")
-                } else if !draft.sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button("calendar.generation.retry") {
-                        sourceDebouncer.cancel()
-                        Task { await session.retrySourceParsing() }
-                    }.accessibilityIdentifier("calendar-generation-retry")
-                }
-            }
-            if let error = session.generationError {
-                Text(error).font(.caption2).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("calendar-generation-error")
-            }
-            if draft.generationMode == .required || session.generationState == .failed || session.generationState == .cancelled {
-                Button("calendar.generation.manual") { sourceDebouncer.cancel(); session.useManualEntry() }
-                    .font(.caption).accessibilityIdentifier("calendar-generation-manual")
-            }
-        }
+        CalendarSourceGeneration(session: session, initialText: draft.sourceText, onFocus: setNativeEditorFocus)
+            .id(session.draftIdentity)
     }
 
     @ViewBuilder
@@ -727,6 +685,71 @@ struct CalendarPanelPages: View {
         else if deleteConfirmation { deleteConfirmation = false }
         else if session.route != .list { goBack() }
         else { vm.close() }
+    }
+}
+
+/// 显式生成：原文先落在本视图的本地 state，点「生成」（或 ⌘↩）才写回草稿并触发一次解析。
+/// 调用方按 `session.draftIdentity` 定 `.id`：换稿就重建本视图，输入框随新稿的原文重新起头。
+private struct CalendarSourceGeneration: View {
+    @ObservedObject var session: CalendarPanelSession
+    let initialText: String
+    let onFocus: (Bool) -> Void
+    @State private var sourceDraft: String
+
+    init(session: CalendarPanelSession, initialText: String, onFocus: @escaping (Bool) -> Void) {
+        self.session = session
+        self.initialText = initialText
+        self.onFocus = onFocus
+        _sourceDraft = State(initialValue: initialText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("calendar.generation.source").font(.caption).foregroundStyle(.secondary)
+            CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
+                .accessibilityIdentifier("calendar-generation-source")
+            Text("calendar.generation.sendingScope").font(.caption2).foregroundStyle(.secondary)
+            Text("calendar.generation.model").font(.caption2).foregroundStyle(.secondary)
+            Button("calendar.generation.settings") { CalendarAISettingsNavigation.open() }
+                .font(.caption).accessibilityIdentifier("calendar-generation-settings")
+            if session.configuredAI == nil {
+                Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                if session.generationState == .parsing { ProgressView().controlSize(.mini) }
+                Text(LocalizedStringKey(session.generationState.labelKey)).font(.caption)
+                    .accessibilityIdentifier("calendar-generation-state")
+                Spacer(minLength: 0)
+                if session.generationState == .parsing || session.generationState == .debouncing {
+                    Button("Cancel") { session.cancelSourceParsing() }
+                        .accessibilityIdentifier("calendar-generation-cancel")
+                } else if hasSource {
+                    Button("calendar.generation.retry") { generate() }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .accessibilityIdentifier("calendar-generation-retry")
+                }
+            }
+            if let error = session.generationError {
+                Text(error).font(.caption2).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("calendar-generation-error")
+            }
+            if session.draft?.generationMode == .required
+                || session.generationState == .failed || session.generationState == .cancelled {
+                Button("calendar.generation.manual") { session.useManualEntry() }
+                    .font(.caption).accessibilityIdentifier("calendar-generation-manual")
+            }
+        }
+    }
+
+    private var hasSource: Bool {
+        !sourceDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 点「生成」/⌘↩ 的两步：先写回原文（唯一写回点），再请求一次解析；没有自动调度。
+    private func generate() {
+        session.updateSourceText(sourceDraft)
+        Task { await session.generateDraft() }
     }
 }
 

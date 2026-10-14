@@ -108,6 +108,9 @@ final class CalendarPanelSession: ObservableObject {
     @Published private(set) var datePopoverPresented = false
 
     var hasDirtyDraft: Bool { draft != nil && draft != baseline }
+    /// 当前稿的身份：视图只用它给「用文字生成」的输入框定 `.id`。
+    /// 同 route 换稿（放弃并新建 / 恢复草稿）也靠它复位本地输入，不能按 route 判断。
+    var draftIdentity: UUID? { draftID }
     var shouldProtectAutoClose: Bool {
         isSubmitting || (route == .editor && (editorHasFocus || ownedMenuCount > 0 || datePopoverPresented))
     }
@@ -165,6 +168,10 @@ final class CalendarPanelSession: ObservableObject {
     var configuredAI: (any AIHandle)? { ai }
 
     func updateSourceText(_ text: String) { draft?.sourceText = text }
+
+    /// 显式「生成」：视图已把本地输入经 `updateSourceText` 写回草稿，这里只触发这一次解析。
+    /// 过期防护仍由 `parseSource` 的 `sourceRevision` / `parsingID` 与草稿合并口径负责，本方法不做任何调度。
+    func generateDraft() async { await parseSource() }
 
     private func sourceDidChange() {
         sourceRevision += 1
