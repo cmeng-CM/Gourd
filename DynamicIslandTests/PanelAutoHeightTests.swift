@@ -858,7 +858,8 @@ final class PanelAutoHeightTests: XCTestCase {
                 CalendarModule.moduleID,
                 // T3 / docs/48 D-07：日历页**编辑档**（左栏 260 当日清单 + 右栏表单两栏都钉 400）——
                 // 高是**内容**的函数。与 `notesFixedTab` 的差别正在这里：那一档**没有**自然高
-                // （`TextEditor` 填满 + 内滚 → 回落手动值），本档**有**自然高 400（账本 = 400 + 表头 − 16）。
+                // （`TextEditor` 填满 + 内滚 → 回落手动值），本档**有**自然高 400（auto 档：账本 = 400
+                // + 表头 − 16；manual 档面板高由 `openNotchHeight` 决定）。
                 // 同一页两档两键，判据在 `ContentView.calendarPanelTabKey(route:)`。
                 PanelContentHeight.calendarEditorTab,
                 // 2026-10-08 p8b-notes-height：笔记页**列表档**的卡片网格 —— 高是卡片行数的函数。

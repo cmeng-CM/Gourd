@@ -142,10 +142,12 @@ final class PanelContentHeight: ObservableObject {
     /// 没人上报 → `current` = nil → 尺寸层回落手动值）；**编辑档有自然高 400**——T3 起左栏从整月网格
     /// 让位成 260pt 的「回到月历 + 当日清单」、两栏都钉 400（视图侧 `StandaloneCalendarView.editorPaneHeight`），
     /// 这一页的高是**内容**的函数（与面板当前多高无关），因此它**进** `measuredTabs`（探针在
-    /// `ContentView` 的 `.module` 分支用本键上报）。账本口径 = 列高 400 + 表头 − 16
-    /// （`PanelAutoHeight.measuredContentHeight`；测试桩表头 28 → 412）。「面板 474 档」是设计图 ⑤ 在
-    /// **真机表头**下的同一个算式（`400 + 表头 − 16 + 40`，表头 = `max(24, effectiveClosedNotchHeight)`，
-    /// 本机实测 ≈50），与测试桩的 452 只差表头这一项——不是任何阴影 / 顶出血常量。
+    /// `ContentView` 的 `.module` 分支用本键上报）。**auto 档**口径：账本值 = 列高 + 表头 − 16
+    /// （`PanelAutoHeight.measuredContentHeight`），面板高 = 账本值 + `homeVerticalPadding`(40)；
+    /// 表头 = `panelHeaderHeight(effectiveClosedNotchHeight)` = `max(24, effectiveClosedNotchHeight)`
+    /// （测试桩 28 → 452；真机 32 → 456 = 400 + 32 − 16 + 40）。设计图 ⑤ 的 **474** = 真机面板 456
+    /// + `notchShadowPaddingStandard`(18)（窗口高 = 可见黑框 + 阴影带，与 docs/29 D-43 同一条）。
+    /// **manual 档**：面板高由 `openNotchHeight` 说了算（本键量出来的值不参与换算）。
     static let calendarEditorTab = "calendarEditor"
 
     /// **剪贴板页**的键（2026-10-08 p8b-notes-height，与笔记列表同一批）。这一页 = 头部 + 卡片网格

@@ -1368,10 +1368,11 @@ struct StandaloneCalendarView: View {
     static let editorSidebarWidth: CGFloat = 260
 
     /// **编辑档两栏的高度**（T3 / docs/48 D-07）：由**内容**声明、不由备注字数算（那是「打字时面板
-    /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它 → 这一页的自然高即 400；账本口径 =
-    /// 400 + 表头 − 16（探针走 `PanelAutoHeight.measuredContentHeight`；测试桩表头 28 → 412），
-    /// 面板高 = 账本值 + `homeVerticalPadding`(40)。「474 档」是设计图 ⑤ 在**真机表头**下的同一算式
-    /// （表头 = `max(24, effectiveClosedNotchHeight)`，随屏变）。
+    /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它 → 这一页的自然高即 400。**auto 档**：
+    /// 账本值 = 400 + 表头 − 16，面板高 = 账本值 + `homeVerticalPadding`(40)；表头 =
+    /// `max(24, effectiveClosedNotchHeight)`（测试桩 28 → 452；真机 32 → 456 = 400 + 32 − 16 + 40），
+    /// 设计图 ⑤ 的 474 = 456 + `notchShadowPaddingStandard`(18)（窗口高 = 可见黑框 + 阴影带）。
+    /// **manual 档**：面板高由 `openNotchHeight` 决定。
     static let editorPaneHeight: CGFloat = 400
 
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：

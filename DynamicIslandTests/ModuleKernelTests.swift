@@ -15278,7 +15278,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                                         manualHeight: 682, screenVisibleHeight: nil),
             452, accuracy: 1e-9,
             "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 412 = 400 + 表头(测试桩 28) − 16"
-                + "（设计图 ⑤ 的 474 是同一算式在真机表头下：400 + 表头 − 16 + 40）"
+                + "；真机表头 32 → 真机面板 456（400 + 32 − 16 + 40），设计图 ⑤ 的 474 = 456 + 阴影带 18"
+                + "（manual 档面板高由 openNotchHeight 决定）"
         )
 
         // 切回列表档：读缓存一步回落（不是停在编辑档的 412）——失败信号「切回列表档后高度没回落」的反证。
