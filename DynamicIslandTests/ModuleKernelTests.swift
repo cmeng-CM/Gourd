@@ -15263,16 +15263,21 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         )
         XCTAssertEqual(listNatural, 278, accuracy: 1e-9, "前提：2026-10 = 5 周 → 43 × 5 + 63")
         ledger.selectTab(CalendarModule.moduleID)
-        ledger.report(listNatural + 28 - 16, for: CalendarModule.moduleID)
-        XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9, "列表档：当月自然高 278 → 账本 290")
+        // 账本口径不手抄算式：走唯一真源换算（`PanelAutoHeight.measuredContentHeight`，docs/29 D-38），表头取测试桩 28。
+        ledger.report(PanelAutoHeight.measuredContentHeight(naturalHeight: listNatural, headerHeight: 28),
+                      for: CalendarModule.moduleID)
+        XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
+                       "列表档：当月自然高 278 → 账本 290（表头取测试桩 28）")
 
-        // 编辑档：两栏都钉 400（视图声明的常量），账本口径 = 400 + 28 − 16 = 412。
+        // 编辑档：两栏都钉 400（视图声明的常量），账本口径走真实换算（表头取测试桩 28）→ 412。
         XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 400, "编辑档列高 = 400（视图声明）")
         ledger.selectTab(PanelContentHeight.calendarEditorTab)
         XCTAssertEqual(ledger.activeTab, PanelContentHeight.calendarEditorTab)
-        ledger.report(StandaloneCalendarView.editorPaneHeight + 28 - 16,
-                      for: PanelContentHeight.calendarEditorTab)
-        XCTAssertEqual(ledger.current ?? 0, 412, accuracy: 1e-9, "编辑档：400 + 28 − 16 = 412")
+        ledger.report(PanelAutoHeight.measuredContentHeight(
+            naturalHeight: StandaloneCalendarView.editorPaneHeight, headerHeight: 28
+        ), for: PanelContentHeight.calendarEditorTab)
+        XCTAssertEqual(ledger.current ?? 0, 412, accuracy: 1e-9,
+                       "编辑档：账本值 = measuredContentHeight(列高 400, 表头取测试桩 28) = 412")
         XCTAssertEqual(
             PanelAutoHeight.panelHeight(contentHeight: 412, mode: PanelAutoHeight.modeAuto,
                                         manualHeight: 682, screenVisibleHeight: nil),
