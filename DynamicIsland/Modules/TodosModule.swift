@@ -1680,7 +1680,7 @@ struct TodoHomeTodayList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !eventEntries.isEmpty {
-                groupHeader("calendar.quickAdd.kindEvent")
+                groupHeader("calendar.quickAdd.kindEvent", count: eventEntries.count)
                 ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
                         eventRow(event).id(event.id)
@@ -1688,7 +1688,7 @@ struct TodoHomeTodayList: View {
                 }
             }
             if !todoEntries.isEmpty {
-                groupHeader("calendar.quickAdd.kindReminder")
+                groupHeader("calendar.quickAdd.kindReminder", count: todoEntries.count)
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
                         todoRow(item).id(item.id)
@@ -1701,9 +1701,18 @@ struct TodoHomeTodayList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func groupHeader(_ key: String) -> some View {
-        Text(LocalizedStringKey(key)).font(.system(size: 10, weight: .semibold))
+    /// 分组标题：字号/留白口径不变，只在已本地化的组名后拼上本组**过滤后**的条目数（`日程 · 2`）。
+    /// 计数**不是** `LocalizedStringKey` 查表走的那份文案——先拼 String 再给 `Text` 的 verbatim 重载。
+    private func groupHeader(_ key: String, count: Int) -> some View {
+        Text(Self.groupHeaderTitle(key, count: count)).font(.system(size: 10, weight: .semibold))
             .foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)
+    }
+
+    /// 分组标题文案（**不是 private**：单测直接钉住分隔符与计数口径）。
+    /// 默认出口与 `TodoText.localized` 同款（`Bundle.main`）；`bundle` 传某一语言的 `.lproj`
+    /// 子 bundle 就能钉死译文而不用改进程语言。
+    static func groupHeaderTitle(_ key: String, count: Int, bundle: Bundle = .main) -> String {
+        "\(bundle.localizedString(forKey: key, value: nil, table: nil)) · \(count)"
     }
 }
 

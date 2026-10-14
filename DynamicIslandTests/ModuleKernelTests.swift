@@ -14567,6 +14567,35 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         await module.deactivate()
     }
 
+    /// T5：今日块分组标题带**本组过滤后**的条目数（`日程 · 2` / `待办 · 2`），
+    /// 表头 `TodoHomeHeader` 的 `0/2 · 2 项日程` 口径不经过这里；只有待办时也不新造空的「日程 · 0」。
+    func testTodayBlockGroupHeadersCarryPerGroupCountsWithoutEmptyGroups() throws {
+        let zh = try languageBundle("zh-Hans"), en = try languageBundle("en")
+        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindEvent", count: 2, bundle: zh), "日程 · 2")
+        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindReminder", count: 2, bundle: zh), "待办 · 2")
+        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindEvent", count: 1, bundle: en), "Event · 1")
+        XCTAssertEqual(TodoHomeTodayList.groupHeaderTitle("calendar.quickAdd.kindReminder", count: 3, bundle: en), "To-do · 3")
+
+        let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
+        // 两个调用点分别传各自**过滤后**集合的条目数，而不是未过滤的 entries
+        XCTAssertTrue(todos.contains(#"groupHeader("calendar.quickAdd.kindEvent", count: eventEntries.count)"#))
+        XCTAssertTrue(todos.contains(#"groupHeader("calendar.quickAdd.kindReminder", count: todoEntries.count)"#))
+        XCTAssertFalse(todos.contains("count: entries.count"), "分组计数不许直接取未过滤集合")
+        // 字号、颜色、留白逐字不变，只有 Text 的入参换成了带计数的标题
+        XCTAssertTrue(todos.contains(#"Text(Self.groupHeaderTitle(key, count: count)).font(.system(size: 10, weight: .semibold))"#))
+        XCTAssertTrue(todos.contains(#".foregroundStyle(.white.opacity(0.55)).padding(.vertical, 4)"#))
+        // 沿用现有「条目为空就不渲染该组」的守卫：只有待办时不会画出空的「日程 · 0」
+        let flat = todos.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\n", with: "")
+        XCTAssertTrue(flat.contains(#"if!eventEntries.isEmpty{groupHeader("calendar.quickAdd.kindEvent",count:eventEntries.count)"#))
+        XCTAssertTrue(flat.contains(#"if!todoEntries.isEmpty{groupHeader("calendar.quickAdd.kindReminder",count:todoEntries.count)"#))
+        // 表头一字不改：仍是 0/2 与「N 项日程」，且不认识分组标题
+        let headerBlock = todos.components(separatedBy: "private struct ").first { $0.hasPrefix("TodoHomeHeader: View") } ?? ""
+        XCTAssertFalse(headerBlock.isEmpty, "找不到 TodoHomeHeader")
+        XCTAssertTrue(headerBlock.contains("result.counterText"))
+        XCTAssertTrue(headerBlock.contains(#"Text(String(format: TodoText.localized("module.todos.homeEventCount"), eventCount))"#))
+        XCTAssertFalse(headerBlock.contains("groupHeader"), "表头口径不许被改成带分组计数的形态")
+    }
+
     func testSourceAwareHomeEntryIncludesAmbiguousLongCodeAndInvitationButHidesOrdinaryItems() throws {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
