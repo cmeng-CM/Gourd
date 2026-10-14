@@ -90,10 +90,16 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 
 ## T2 安装前证据状态与核验契约
 
-T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新增中段地点与备注首段截图、完整68图和散列。当前本日研究Debug矩阵只属于T1证据；T2的新完整宿主门、新Debug最终页图、整体终审、安装与真实新进程尚未在本节宣称通过。
+T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新增中段地点与备注首段截图、完整68图和散列。当前本日研究Debug矩阵只属于T1证据；T2新完整宿主门现已取得成功attempt；新Debug最终页图的审阅摘要绑定、整体终审、安装与真实新进程仍按实际证据后置记录。
 
-交付核验器 `.workflow/calendar-page-layout/verify_delivery.py` 采用只读检查：先运行ai-calendar wrapper的证据复核，要求新attempt实际执行至少830个XCTest，8个原生与3个布局测试各方法在实际日志中恰好通过一次；独立T1/T2规格与质量JSON、整体ready JSON及报告摘要严格绑定baseline/HEAD。最终page-evidence必须包含四设置×17场景、全部源码/工具/generated/probe/新Debug app/dylib/resources/PNG摘要、严格True几何检查和根控制器逐图实看记录；独立复审另核全部68图。
+交付核验器 `.workflow/calendar-page-layout/verify_delivery.py` 采用只读检查：先运行ai-calendar wrapper的证据复核，要求新attempt实际执行至少830个XCTest，8个原生与3个布局测试各方法在实际日志中恰好通过一次；独立T1/T2规格与质量JSON、整体ready JSON及报告摘要严格绑定baseline/HEAD。最终page-evidence必须包含四设置×17场景、全部源码/工具/generated/probe/新Debug app/dylib/resources/PNG摘要、严格True几何检查和根控制器28张代表原图的实看记录（四设置各7路由、合计覆盖三种宽度）；独立复审另须实看全部68张最终图。
 
 安装沿现有七个命名checks、六个实际命令与日志摘要，以及installed snapshot/实时签名；新增进程证明必须来自精确PID的kernel ps（pid/start/comm），核旧进程不再运行和新PID的实际安装路径，不能用NSWorkspace缓存替代。后置仅允许docs/45与docs/46的祖先提交，逐提交检查禁止隐藏中间源码变化；纯文档回写不触发新的宿主循环。Ignored控制核验器本身的SHA写入T2与整体独立审查报告，核验时也必须匹配。缺失/空数组/假布尔值/错hash/路径逃逸/旧Debug或绑定错均拒绝，尚缺证据时不会宣称交付完成。
 
 安装前执行记录：attempt `20261014T105658-28731d1e7f81437b89ec341b1fadb2df` 的XCTest实际830执行/0失败/0跳过，Python、Release与签名各阶段退出0，但完整wrapper末端因根目录 `default.profraw` 摘要变化而判定failed，不能用于交付。控制器定位为并行Debug页探针退出时的默认LLVM覆盖率输出；保持冻结生产源/探针，后续执行将由调用环境把 `LLVM_PROFILE_FILE` 定向至各页证据目录，并重新获取成功attempt及其实际Debug最终图。旧attempt和旧68图只保留为失败运行记录，不重标success或混入新最终证据。
+
+安装前新完整门：attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750` 最终succeeded；XCTest实际830执行/0失败/0跳过，8个原生测试与3个布局测试各方法在实际日志中恰好通过一次，Python11例，十个阶段均退出0（包含Release与Debug/Release签名核验）。控制器在本次宿主启动前后精确查询Pear均false，未启动Pear。生产与探针源码仍冻结于T1，后续仅文档回写无需再运行宿主。
+
+最终页证据位于 `.workflow/calendar-page-layout/reports/page-evidence/manifest.json`，使用上述成功attempt的实际Debug产品，并由调用环境将 `LLVM_PROFILE_FILE` 定向至页输出目录，根 `default.profraw` 保持稳定。当前干净重生成矩阵四组各17场景，共68 PNG/1888断言无失败；新的根控制器代表图记录与独立全部图复审仍须匹配最终manifest摘要，不能套用旧图审阅记录。整体审查与本轮安装尚未完成，不把这些页级检查宣称为完整产品人工验收。
+
+页探针运行约束：output应为fresh目录，或至少不存在旧 `manifest.json`。producer收集输出文件时会把已有manifest本身纳入files，造成自摘要不一致；控制器的调用guard先保存旧manifest到输出目录之外，再删除自有ignored旧manifest后干净重生成。这是证据输出管理，不改变生产布局、冻结探针或产品行为；重跑页面不等于重跑宿主完整门。
