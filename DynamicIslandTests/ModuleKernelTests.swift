@@ -12579,6 +12579,8 @@ final class MeetingLinkResolverTests: XCTestCase {
         XCTAssertEqual(resolver.passcode(in: "化小易会议号：939130533\n入会密码：696294"), "696294")
         XCTAssertEqual(resolver.passcode(in: "会议密码：Ab12"), "Ab12")
         XCTAssertEqual(resolver.passcode(in: "PASSWORD: 9988"), "9988")
+        XCTAssertNil(resolver.passcode(in: "mypassword：1234"))
+        XCTAssertNil(resolver.passcode(in: "入会密码：696 294"))
         XCTAssertNil(resolver.passcode(in: "会议号：939130533"))
         XCTAssertNil(resolver.passcode(in: "联系电话：13800138000"))
         XCTAssertNil(resolver.passcode(in: "入会密码：13800138000"))

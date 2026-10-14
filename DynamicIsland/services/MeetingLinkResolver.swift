@@ -107,14 +107,13 @@ struct MeetingLinkResolver {
     }
 
     /// 入会密码（仅用于华为深链的 `enter_code`）：标签限定 `入会密码|会议密码|password`，
-    /// 冒号后 4–8 位字母数字，返回去掉非字母数字的串；无标签、超长或纯中文一律 nil。
+    /// 返回冒号后 4–8 位字母数字；无标签、超长或纯中文一律 nil。
     func passcode(in text: String) -> String? {
-        let pattern = #"(?i)(?:入会密码|会议密码|password)\s*[:：]\s*([A-Za-z0-9]{4,8})(?![A-Za-z0-9])"#
+        let pattern = #"(?i)(?:入会密码|会议密码|(?<![A-Za-z])password)\s*[:：]\s*([A-Za-z0-9]{4,8})(?![A-Za-z0-9])"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let range = Range(match.range(at: 1), in: text) else { return nil }
-        let value = String(text[range].filter { $0.isLetter || $0.isNumber })
-        return value.isEmpty ? nil : value
+        return String(text[range])
     }
 
     static func provider(for url: URL) -> MeetingProvider? { validated(url)?.provider }
