@@ -12,7 +12,7 @@ BASELINE = "cd825466"
 LEGACY_HASHES = {
     "DynamicIsland/managers/ScreenAssistantManager.swift": "dee7398b38c91c5586fa0e2af8544bace061e2dedd5cdda2415237788242ec76",
     "DynamicIsland/components/ScreenAssistant/ModelSelectionPanel.swift": "99ba81899ddf434ec0e969502d30bf413a1bafa96cdc199a9b9c32a7b60fec4e",
-    "DynamicIsland/models/Constants.swift": "dd7df6c8640d2c186eabaef9749684099a657113791e8a89ead4ee64248164eb",
+    "DynamicIsland/models/Constants.swift": "f34ab41091721456cd2aa52a7349f4443ede77b9a246f463ff07c4d5f2be65c9",
 }
 LEGACY_SETTINGS_HASH = "9ab4b78e456086b3813897b71349da3a8a99c8aed87cabb8e9f286153210502f"
 # All added/changed main-app catalog entries in cd825466..9bed9efc, not prefix filtering.
@@ -112,6 +112,38 @@ LOCALE_KEYS = (
     'calendar.meeting.menuHelp',
     'calendar.meeting.noEvidence',
     'calendar.meeting.open',
+    'calendar.meeting.openIn.huawei',
+    'calendar.meeting.openIn.tencent',
+    'calendar.meeting.opening',
+    'calendar.meeting.provider.huawei',
+    'calendar.meeting.provider.tencent',
+    'calendar.meeting.recognitionFailed',
+    'calendar.meeting.recognize',
+    'calendar.meeting.recognizing',
+    'calendar.meeting.refused',
+    'calendar.meeting.row.copy',
+    'calendar.meeting.row.open',
+    'calendar.meeting.sendingScope',
+    'calendar.meeting.sourceTooLarge',
+    'calendar.meeting.tooEarly',
+    'calendar.meeting.tooltip.copy',
+    'calendar.meeting.tooltip.more',
+    'calendar.meeting.tooltip.open',
+    'calendar.panel.sourceTimeZoneFormat',
+    'calendar.panel.url',
+)
+
+# docs/45 → docs/47 的会议入口返工（T1–T4）删掉了「用 AI 识别会议」、行内状态文字、时间闸门
+# 与「逐候选」二级菜单，这批键因此在源码里已无消费者；它们仍在 catalog 里，等 T6 删键时一并移出
+# 本清单。方向反过来断言：**这批键必须没有消费者** —— 谁把它接回代码，就要先把它从这份名单里删掉。
+CONSUMERS_REMOVED_BY_MEETING_ENTRY_REWORK = {
+    'calendar.meeting.accepted',
+    'calendar.meeting.cancelled',
+    'calendar.meeting.choose',
+    'calendar.meeting.configure',
+    'calendar.meeting.copyLink',
+    'calendar.meeting.fallback',
+    'calendar.meeting.menuHelp',
     'calendar.meeting.opening',
     'calendar.meeting.recognitionFailed',
     'calendar.meeting.recognize',
@@ -120,9 +152,7 @@ LOCALE_KEYS = (
     'calendar.meeting.sendingScope',
     'calendar.meeting.sourceTooLarge',
     'calendar.meeting.tooEarly',
-    'calendar.panel.sourceTimeZoneFormat',
-    'calendar.panel.url',
-)
+}
 
 
 def legacy_settings(text):
@@ -155,7 +185,10 @@ class GeneralAIConfigurationTests(unittest.TestCase):
                     consumed |= '"calendar.generation.state.\\(self)"' in sources
                 if key.startswith("calendar.generation.confirm."):
                     consumed |= '"calendar.generation.confirm.\\(rawValue)"' in sources
-                self.assertTrue(consumed, "changed localization has no source consumer")
+                if key in CONSUMERS_REMOVED_BY_MEETING_ENTRY_REWORK:
+                    self.assertFalse(consumed, "这批键已随 docs/45→47 下线，不该再有消费者")
+                else:
+                    self.assertTrue(consumed, "changed localization has no source consumer")
 
     def test_manifest_covers_actual_diff_when_history_is_available(self):
         result = subprocess.run(["git", "show", BASELINE + ":DynamicIsland/Localizable.xcstrings"],

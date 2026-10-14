@@ -14282,7 +14282,11 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let model = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
                                        opener: MeetingFakeOpener([]), copyText: { _ in })
         XCTAssertEqual(MeetingActionPresentation.menuEntries(for: model),
-                       [.copyCode("会议ID：939130533"), .openIn(.tencent), .openIn(.huawei), .copySource])
+                       [.copyCode("939130533"), .openIn(.tencent), .openIn(.huawei), .copySource])
+        XCTAssertEqual(MeetingActionPresentation.title(for: .copyCode("939130533")),
+                       String(format: Bundle.main.localizedString(forKey: "calendar.meeting.copyCodeFormat",
+                                                                  value: nil, table: nil), "939130533"),
+                       "标题复用既有键，插进去的是号码本身（审查 C-1）")
     }
 
     /// 平台能判定时（带链接的邀请）两条「打开」合并成对应那一条。
@@ -14292,23 +14296,23 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                                         opener: MeetingFakeOpener([]), copyText: { _ in })
         XCTAssertEqual(huawei.determinedProvider, .huawei)
         XCTAssertEqual(MeetingActionPresentation.menuEntries(for: huawei),
-                       [.copyCode(try XCTUnwrap(huawei.code).sourceText), .openIn(.huawei), .copySource])
+                       [.copyCode("940948346"), .openIn(.huawei), .copySource])
         let tencent = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.tencent), session: session,
                                          opener: MeetingFakeOpener([]), copyText: { _ in })
         XCTAssertEqual(tencent.determinedProvider, .tencent)
         XCTAssertEqual(MeetingActionPresentation.menuEntries(for: tencent),
-                       [.copyCode(try XCTUnwrap(tencent.code).sourceText), .openIn(.tencent), .copySource])
+                       [.copyCode("817450376"), .openIn(.tencent), .copySource])
     }
 
-    /// 菜单每一项都真的接上了动作：复制会议号（证据原文）/ 按号打开并记住客户端 / 复制邀请原文。
+    /// 菜单每一项都真的接上了动作：复制会议号（**号码本身**）/ 按号打开并记住客户端 / 复制邀请原文。
     func testMeetingIconMenuEntriesDispatchThroughTheInjectedSeams() async throws {
         let session = makeSession()
         let tencent = MeetingFakeOpener([true])
         var copied: [String] = []
         let codeOnly = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
                                           opener: tencent, copyText: { copied.append($0) })
-        MeetingActionPresentation.perform(.copyCode("会议ID：939130533"), on: codeOnly)
-        XCTAssertEqual(copied, ["会议ID：939130533"], "菜单这一项沿用证据原文（M-6：与主动作的纯数字口径并存，不统一）")
+        MeetingActionPresentation.perform(.copyCode("939130533"), on: codeOnly)
+        XCTAssertEqual(copied, ["939130533"], "菜单这一项与主动作同口径：进剪贴板的是纯号码（审查 C-1）")
         MeetingActionPresentation.perform(.openIn(.tencent), on: codeOnly)
         await drain { !codeOnly.isOpening }
         XCTAssertEqual(try XCTUnwrap(tencent.urls.first).absoluteString,
@@ -14382,6 +14386,39 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        "没有会议号时显示入口链接")
     }
 
+    /// `.row` 的退化态（审查 I-1）：键名必须与行为一致 —— 判不出平台（主动作是复制）时只有「复制」；
+    /// 只有邀请提示词、没有任何入口（`.none`）时两个键都不画（也不会有反馈出口）。
+    func testMeetingRowHidesKeysThatCannotAct() throws {
+        let session = makeSession()
+        let model = MeetingActionModel(event: event(notes: "请参加会议并做好准备"), session: session,
+                                       opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(model.primary, .none)
+        XCTAssertTrue(MeetingActionPresentation.rowKeys(for: model).isEmpty, "没有任何入口时不许画键")
+        XCTAssertNil(MeetingActionPresentation.rowProviderName(for: model))
+        XCTAssertNil(MeetingActionPresentation.rowValue(for: model))
+
+        let codeOnly = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                          opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(codeOnly.primary, .copyCode("939130533"))
+        XCTAssertEqual(MeetingActionPresentation.rowKeys(for: codeOnly), [.copy],
+                       "主动作是复制时不许出现「打开」（键名与行为不符）")
+
+        Defaults[.meetingCodeOpener] = MeetingProvider.tencent.rawValue
+        XCTAssertEqual(codeOnly.primary, .open(try XCTUnwrap(codeOnly.targets.first), .tencent))
+        XCTAssertEqual(MeetingActionPresentation.rowKeys(for: codeOnly), [.open, .copy], "能打开时两个键都在")
+    }
+
+    /// `.row` 的反馈出口（审查 I-4）：`.idle` 不占位，其余四态复用图标口径（D-10）。
+    func testMeetingRowStatusSymbolMirrorsTheIconFeedback() {
+        XCTAssertNil(MeetingActionPresentation.rowStatusSymbol(for: .idle))
+        for feedback in [MeetingActionFeedback.opening, .opened, .copied, .failed] {
+            XCTAssertEqual(MeetingActionPresentation.rowStatusSymbol(for: feedback),
+                           MeetingActionGlyph.symbol(for: feedback), "\(feedback) 必须复用图标口径")
+        }
+        XCTAssertEqual(MeetingActionPresentation.rowStatusSymbol(for: .copied), "checkmark")
+        XCTAssertEqual(MeetingActionPresentation.rowStatusSymbol(for: .opening), "arrow.triangle.2.circlepath")
+    }
+
     /// 首页那两处调用点的入口几何宽高都是 **22**（不是 187），且旧形态在视图文件里彻底消失。
     func testHomeMeetingIconKeepsAFixed22PointGeometry() throws {
         XCTAssertEqual(MeetingActionPresentation.iconSide, 22)
@@ -14389,7 +14426,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(button.intrinsicContentSize, NSSize(width: 22, height: 22), "固有尺寸必须钉在 22，别被 SwiftUI 拉伸")
         let source = try repositorySource("DynamicIsland/components/Calendar/MeetingActionView.swift")
         XCTAssertTrue(source.contains("width: MeetingActionPresentation.iconSide, height: MeetingActionPresentation.iconSide"))
-        XCTAssertTrue(source.contains(".fixedSize()"))
+        // 自绘 NSView 默认不是无障碍元素，必须显式声明 + 角色（审查 I-3）
+        XCTAssertTrue(source.contains("setAccessibilityElement(true)"))
+        XCTAssertTrue(source.contains("setAccessibilityRole(.button)"))
         XCTAssertTrue(source.contains(#"NSLocalizedString("calendar.meeting.actions""#),
                       "图标按钮的无障碍标签仍复用 calendar.meeting.actions")
         // 旧形态：整栏宽的文字按钮 + 最多 15 项的系统菜单 + AI 兜底 + 时间闸门/发送范围说明

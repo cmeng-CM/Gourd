@@ -274,8 +274,7 @@ enum MeetingActionStyle { case icon, row }
 
 /// 右键菜单的一项（docs/47 D-03）。纯数据，便于在无 UI 的用例里断言「恰好 4 项、没有 AI 项」。
 enum MeetingActionMenuEntry: Equatable {
-    /// 复制会议号：携带证据原文（`MeetingCode.sourceText`）。主动作复制的是**纯数字**，
-    /// 两者口径不同是 T3 审查 M-6 的已知项 —— 本任务保持现状，不统一。
+    /// 复制会议号：载荷是**号码本身**（`MeetingCode.value`，与主动作复制的东西一致）。
     case copyCode(String)
     /// 用指定客户端按会议号打开（证据里本条能直接打开时，视图改走 `open(_:)`）。
     case openIn(MeetingProvider)
@@ -293,7 +292,8 @@ enum MeetingActionPresentation {
     @MainActor
     static func menuEntries(for model: MeetingActionModel) -> [MeetingActionMenuEntry] {
         var entries: [MeetingActionMenuEntry] = []
-        if let code = model.code { entries.append(.copyCode(code.sourceText)) }
+        // 载荷是号码本身（设计图 ③ 的「复制会议号：939130533」），不是带标签的证据原文。
+        if let code = model.code { entries.append(.copyCode(code.value)) }
         switch model.determinedProvider {
         case .tencent: entries.append(.openIn(.tencent))
         case .huawei: entries.append(.openIn(.huawei))
@@ -303,11 +303,11 @@ enum MeetingActionPresentation {
         return entries
     }
 
-    /// 菜单项标题。`复制会议号：<原文>` 复用既有键 `calendar.meeting.copyCodeFormat`（不新增同义键）。
+    /// 菜单项标题。`复制会议号：<号码>` 复用既有键 `calendar.meeting.copyCodeFormat`（不新增同义键）。
     static func title(for entry: MeetingActionMenuEntry) -> String {
         switch entry {
-        case let .copyCode(sourceText):
-            return String(format: NSLocalizedString("calendar.meeting.copyCodeFormat", comment: ""), sourceText)
+        case let .copyCode(number):
+            return String(format: NSLocalizedString("calendar.meeting.copyCodeFormat", comment: ""), number)
         case let .openIn(provider):
             return openInTitle(provider)
         case .copySource:
@@ -319,8 +319,8 @@ enum MeetingActionPresentation {
     @MainActor
     static func perform(_ entry: MeetingActionMenuEntry, on model: MeetingActionModel) {
         switch entry {
-        case let .copyCode(sourceText):
-            model.copy(sourceText)
+        case let .copyCode(number):
+            model.copy(number)
         case let .openIn(provider):
             if let target = model.targets.first(where: { $0.canOpen && $0.provider == provider }) {
                 model.open(target)
@@ -394,7 +394,27 @@ enum MeetingActionPresentation {
     static func rowValue(for model: MeetingActionModel) -> String? {
         model.codeValue ?? model.targets.first(where: \.canOpen)?.sourceURL?.absoluteString
     }
+
+    /// `.row` 的状态位：`.idle` 不占位，其余复用 `MeetingActionGlyph.symbol(for:)`（D-10 ——
+    /// 「转圈 / 对勾」在面板侧也要看得见，不能只有首页图标有反馈）。
+    static func rowStatusSymbol(for feedback: MeetingActionFeedback) -> String? {
+        feedback == .idle ? nil : MeetingActionGlyph.symbol(for: feedback)
+    }
+
+    /// `.row` 右端画哪些键（审查 I-1）：键名必须与行为一致 ——
+    /// 判不出平台时主动作就是复制，不画「打开」；连入口都没有（`.none`）时一个键都不画。
+    @MainActor
+    static func rowKeys(for model: MeetingActionModel) -> [MeetingActionRowKey] {
+        switch model.primary {
+        case .open: return [.open, .copy]
+        case .copyCode: return [.copy]
+        case .none: return []
+        }
+    }
 }
+
+/// `.row` 右端的两个小键（设计图 ④）。
+enum MeetingActionRowKey: Equatable { case open, copy }
 
 /// 会议入口：证据层认出会议就显示，点一下就是结果（docs/47 D-01 / D-02 —— 已无「开始前 15 分钟」闸门）。
 struct MeetingActionView: View {
@@ -448,25 +468,46 @@ private struct MeetingActionContent: View {
 }
 
 /// `.row`：设计图 ④ 的面板形态 —— 一行 `<provider 名> <号码或链接>` + 右端「打开 / 复制」两个小键。
+///
+/// 退化态（审查 I-1）：判不出平台时主动作就是复制，此时**不画「打开」**（键名与行为必须一致）；
+/// 连入口都没有（`.none`）时两个键都不画，只留一句说明。
 private struct MeetingActionRow: View {
     @ObservedObject var model: MeetingActionModel
 
     var body: some View {
         HStack(spacing: 6) {
-            if let provider = MeetingActionPresentation.rowProviderName(for: model) {
-                Text(provider)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.75)).lineLimit(1).fixedSize()
-            }
-            if let value = MeetingActionPresentation.rowValue(for: model) {
-                Text(value)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9)).lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            key("calendar.meeting.row.open") { model.performPrimary() }
-            key("calendar.meeting.row.copy") {
-                if let value = MeetingActionPresentation.rowValue(for: model) { model.copy(value) }
+            if model.primary == .none {
+                Text(LocalizedStringKey("calendar.meeting.noEvidence"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55)).lineLimit(2)
+                Spacer(minLength: 0)
+            } else {
+                if let provider = MeetingActionPresentation.rowProviderName(for: model) {
+                    Text(provider)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75)).lineLimit(1).fixedSize()
+                }
+                if let value = MeetingActionPresentation.rowValue(for: model) {
+                    Text(value)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9)).lineLimit(1).truncationMode(.middle)
+                }
+                // 状态位只在有反馈时占位，复用图标口径（D-10 / 审查 I-4）。
+                if let status = MeetingActionPresentation.rowStatusSymbol(for: model.feedback) {
+                    Image(systemName: status)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85)).fixedSize()
+                }
+                Spacer(minLength: 4)
+                let keys = MeetingActionPresentation.rowKeys(for: model)
+                if keys.contains(.open) {
+                    key("calendar.meeting.row.open") { model.performPrimary() }
+                }
+                if keys.contains(.copy) {
+                    key("calendar.meeting.row.copy") {
+                        if let value = MeetingActionPresentation.rowValue(for: model) { model.copy(value) }
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -483,6 +524,7 @@ private struct MeetingActionRow: View {
         .buttonStyle(.plain)
         .fixedSize()
         .disabled(model.isBusy)
+        .help(MeetingActionPresentation.tooltip(for: model))
     }
 }
 
@@ -521,6 +563,13 @@ final class MeetingActionIconButton: NSView {
     }
     override func rightMouseDown(with event: NSEvent) { rightClick?(self) }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    /// 自绘 `NSView` 默认**不是**无障碍元素：必须显式声明，否则读屏看不到这个入口（审查 I-3）。
+    func configureAccessibility() {
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(NSLocalizedString("calendar.meeting.actions", comment: ""))
+    }
 }
 
 /// Real NSMenu lifecycle, no popover pin. 保留 `CalendarTextInteraction` 的自动收回抑制与
@@ -532,7 +581,7 @@ private struct MeetingActionIcon: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> MeetingActionIconButton {
         let button = MeetingActionIconButton()
-        button.setAccessibilityLabel(NSLocalizedString("calendar.meeting.actions", comment: ""))
+        button.configureAccessibility()
         context.coordinator.connect(button)
         return button
     }
@@ -576,6 +625,8 @@ private struct MeetingActionIcon: NSViewRepresentable {
             actions.removeAll()
             let model = parent.model
             for entry in MeetingActionPresentation.menuEntries(for: model) {
+                // 设计图 ③：两个「打开」在上、两个「复制」在下，中间一条分隔线（旧实现也有）。
+                if entry == .copySource { menu.addItem(.separator()) }
                 add(MeetingActionPresentation.title(for: entry), to: menu) {
                     MeetingActionPresentation.perform(entry, on: model)
                 }
