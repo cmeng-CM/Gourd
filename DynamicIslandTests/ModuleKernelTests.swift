@@ -13335,7 +13335,7 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.draft?.start, expectedStart)
         XCTAssertEqual(session.draft?.timeZoneIdentifier, "America/New_York")
         clockNow = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-14T16:30:00Z"))
-        await session.retrySourceParsing()
+        await session.parseSource()
         XCTAssertEqual(session.draft?.start, expectedStart)
         XCTAssertEqual(session.draft?.confirmations, [])
         XCTAssertEqual(session.generationState, .ready)
@@ -13344,7 +13344,7 @@ final class ScheduleGenerationTests: XCTestCase {
         for request in ai.requests { XCTAssertTrue(request.messages[0].text.contains(frozenContext)) }
         XCTAssertEqual(try XCTUnwrap(session.draft).eventInput(calendar: calendar).timeZoneIdentifier, "America/New_York")
         session.cancelSourceParsing()
-        await session.retrySourceParsing()
+        await session.parseSource()
         XCTAssertTrue(ai.requests[2].messages[0].text.contains(frozenContext))
         XCTAssertEqual(session.draft?.start, expectedStart)
         // A new revision takes both parts again from the current draft/reference clock.
@@ -13447,9 +13447,10 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.draft?.generationMode, .manual)
         XCTAssertTrue(ai.requests.isEmpty)
         session.draft?.title = "手写标题"
-        // 点「生成」的第一步是唯一写回点；解析由显式调用推进，不留在 .debouncing。
-        session.updateSourceText(localInput)
-        XCTAssertEqual(session.generationState, .debouncing)
+        // 点「生成」的第一步是唯一写回点：同步进 `.parsing`（不经过 `.debouncing`），再由显式入口解析一次。
+        session.commitSourceForGeneration(localInput)
+        XCTAssertEqual(session.draft?.sourceText, localInput)
+        XCTAssertEqual(session.generationState, .parsing)
         XCTAssertEqual(session.draft?.generationMode, .required)
         await session.generateDraft()
         XCTAssertEqual(ai.requests.count, 1, "显式生成只触发一次解析")
@@ -13465,48 +13466,46 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.generationState, .ready)
     }
 
-    /// 冲突页「放弃并新建」：换稿换身份（视图 `.id` 变），输入框按新稿重建、不带旧原文。
+    /// 冲突页「放弃并新建」：换稿换身份；草稿**真的带过原文**，新稿仍不带上一份原文。
     func testDiscardAndStartRebindsSourceInputIdentityAndDropsLocalInput() async {
         let backend = backend(), session = session(backend)
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         let firstIdentity = session.draftIdentity
         XCTAssertNotNil(firstIdentity)
-        // 输入框里只有本地输入且没点「生成」，所以会话里既没有原文也没有待确认的稿。
-        XCTAssertEqual(session.draft?.sourceText, "")
-        XCTAssertEqual(session.generationState, .idle)
+        // 第一份稿先真的带上原文（同一个写回口径）：否则「新稿为空」是恒真的。
+        session.updateSourceText("旧原文")
+        XCTAssertEqual(session.draft?.sourceText, "旧原文")
         session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
         XCTAssertEqual(session.pendingConfirmation, .draftConflict)
         session.resolveDraftConflict(.discardAndStart)
         XCTAssertEqual(session.route, .editor)
         XCTAssertNotNil(session.draftIdentity)
-        XCTAssertNotEqual(session.draftIdentity, firstIdentity, "换稿必须换身份，输入框才会重建")
+        XCTAssertNotEqual(session.draftIdentity, firstIdentity, "换稿必须换身份")
         XCTAssertEqual(session.draft?.kind, .reminder)
-        XCTAssertEqual(session.draft?.sourceText, "", "新稿初值不带上一份原文")
+        XCTAssertEqual(session.draft?.sourceText, "", "新稿不带上一份原文")
+        XCTAssertEqual(session.draft?.generationMode, .manual, "新稿也不需要重新生成")
     }
 
-    /// 冲突页「继续草稿」是同 route 同稿：身份不变，输入框按草稿原文（而非本地未提交输入）重新起头。
+    /// 冲突页「继续草稿」是同 route 同稿：身份不变；输入框按 `draft.sourceText`（="旧原文"）重新起头。
     func testConflictResumeKeepsIdentityAndRebuildsInputFromCommittedDraftOnly() async {
         let backend = backend(), session = session(backend)
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         let identity = session.draftIdentity
-        let localInput = "半句话还没生成"
-        XCTAssertEqual(session.draft?.sourceText, "")
         session.draft?.title = "保留标题"
+        // 先真的生成一份原文：去掉这行，下面「按旧原文起头」的断言就是恒真的。
+        session.updateSourceText("旧原文")
         session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
         XCTAssertEqual(session.pendingConfirmation, .draftConflict)
         session.resolveDraftConflict(.resume)
         XCTAssertEqual(session.route, .editor)
-        XCTAssertEqual(session.draftIdentity, identity, "继续草稿仍是同一份稿")
+        XCTAssertEqual(session.draftIdentity, identity, "继续草稿仍是同一份稿、同一身份")
         XCTAssertEqual(session.draft?.title, "保留标题")
-        XCTAssertEqual(session.draft?.sourceText, "")
-        XCTAssertFalse(session.draft?.sourceText.contains(localInput) ?? true, "本地未提交的输入不进草稿")
-        // 已经生成过的原文属于草稿本身，重新进编辑页时输入框按它重新起头。
-        session.updateSourceText("已生成原文")
+        XCTAssertEqual(session.draft?.sourceText, "旧原文", "输入框按草稿原文（而非空）重新起头")
         session.suspend()
         session.resumeDraft()
         XCTAssertEqual(session.route, .editor)
         XCTAssertEqual(session.draftIdentity, identity)
-        XCTAssertEqual(session.draft?.sourceText, "已生成原文")
+        XCTAssertEqual(session.draft?.sourceText, "旧原文")
     }
 
     /// 切档/取消后再进编辑页：重建的输入框是空的，而不是上一份本地原文。
@@ -13514,6 +13513,7 @@ final class ScheduleGenerationTests: XCTestCase {
         let backend = backend(), session = session(backend)
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         let identity = session.draftIdentity
+        // 本地打过字但没点「生成」：会话里没有原文，所以重新进编辑页的初值仍是空。
         XCTAssertEqual(session.draft?.sourceText, "")
         session.suspend()
         XCTAssertEqual(session.route, .list)
@@ -13530,6 +13530,143 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertNotNil(session.draftIdentity)
         XCTAssertNotEqual(session.draftIdentity, identity, "新建的编辑页拿到全新身份")
         XCTAssertEqual(session.draft?.sourceText, "")
+    }
+
+    /// I3：换稿时真正复位输入框的是**编辑页子树被卸载**，不是 `.id(session.draftIdentity)`。
+    /// 今天不存在「不卸载编辑页的同 route 换稿」路径——两条换稿路径都先经过编辑页不渲染的状态
+    /// （冲突页占位 / `suspend()` 把 route 切走），所以 `.id` 只是二次保险、未被独立验证。
+    func testDraftSwapsNeverChangeIdentityWhileTheEditorSubtreeStaysMounted() async {
+        let backend = backend(), session = session(backend)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        let identity = session.draftIdentity
+        session.updateSourceText("旧原文")
+        // 路径一：冲突页占位（`pendingConfirmation != nil` 时 body 走别的分支，编辑页不渲染）。
+        session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
+        XCTAssertEqual(session.pendingConfirmation, .draftConflict)
+        XCTAssertEqual(session.route, .editor)
+        session.resolveDraftConflict(.discardAndStart)
+        XCTAssertNotEqual(session.draftIdentity, identity, "换稿路径一：身份在编辑页不渲染期间才变")
+        // 路径二：route 切走再回来（`suspend()` → `.list`），身份不变，靠卸载复位。
+        let secondIdentity = session.draftIdentity
+        session.suspend()
+        XCTAssertEqual(session.route, .list, "切档期间编辑页不渲染")
+        session.resumeDraft()
+        XCTAssertEqual(session.draftIdentity, secondIdentity)
+        // 清稿 → 身份为空；只有再新建才有新身份，而它必然伴随一次 route 切走。
+        session.discardDraft()
+        XCTAssertNil(session.draftIdentity)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        XCTAssertNotEqual(session.draftIdentity, secondIdentity)
+        XCTAssertNil(session.pendingConfirmation)
+    }
+
+    // MARK: - T1 显式「生成」：把生产编辑页挂进 `NSHostingView`（先例 PanelAutoHeightTests.mountPanelPage）
+
+    /// 生产编辑页（`route = .editor`）挂进 `NSHostingView`：真布局、真 `NSViewRepresentable`。
+    private func mountEditorPage(session: CalendarPanelSession, manager: CalendarManager) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: CalendarPanelPages(session: session, manager: manager, onReturnSource: { _ in })
+            .environmentObject(DynamicIslandViewModel())
+            .frame(width: 437, height: 278))
+        host.frame = CGRect(x: 0, y: 0, width: 437, height: 278)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// SwiftUI 的失效是异步的：放一轮 runloop 再布局，宿主才会把 `session` 的新状态渲染出来。
+    private func settleEditorPage(_ host: NSView) {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        host.layoutSubtreeIfNeeded()
+    }
+
+    /// 编辑页上「用文字生成」的原生输入框。判据是 `CalendarGrowingTextEditor` 给 NSView 设的
+    /// 无障碍标签（就是本地化后的 `calendar.generation.source`），不猜视图树顺序。
+    private func sourceTextViews(in host: NSView) -> [CalendarEditableTextView] {
+        let label = NSLocalizedString("calendar.generation.source", comment: "")
+        var found: [CalendarEditableTextView] = []
+        func walk(_ view: NSView) {
+            if let text = view as? CalendarEditableTextView, text.accessibilityLabel() == label { found.append(text) }
+            view.subviews.forEach(walk)
+        }
+        walk(host)
+        return found
+    }
+
+    /// I1：真页面 + 真输入框——打字只落视图本地 state，草稿原文与生成状态一个都不动、没有解析请求。
+    /// 这条对旧实现（输入框绑 `session.draft?.sourceText` + 视图里排解析）必红。
+    func testHostedEditorPageKeepsTypingInLocalStateAndParsesOnlyOnExplicitGenerate() async throws {
+        let backend = backend(), session = session(backend)
+        let ai = ScheduleAIStub(output())
+        session.configureAI(ai)
+        let manager = CalendarManager(service: backend, now: { self.date(12, hour: 12) },
+                                      calendar: calendar, startMonitoring: false)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        let host = mountEditorPage(session: session, manager: manager)
+        let field = try XCTUnwrap(sourceTextViews(in: host).first, "编辑页必须渲染出生成用输入框")
+        let typed = "明天下午五点进行周会"
+        field.insertText(typed, replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(field.string, typed, "输入确实进了生产控件")
+        XCTAssertEqual(session.draft?.sourceText, "", "打字不得写草稿原文")
+        XCTAssertEqual(session.generationState, .idle, "打字不得进入任何生成状态")
+        XCTAssertEqual(session.draft?.generationMode, .manual)
+        XCTAssertTrue(ai.requests.isEmpty, "打字不得排任何解析任务")
+        // 显式入口（按钮动作的两步）仍然只解析一次。
+        session.commitSourceForGeneration(field.string)
+        XCTAssertEqual(session.generationState, .parsing, "同步进解析态，中间不闪 .debouncing")
+        await session.generateDraft()
+        XCTAssertEqual(ai.requests.count, 1, "显式生成只触发一次解析")
+        XCTAssertEqual(session.draft?.sourceText, typed)
+        XCTAssertEqual(session.generationState, .ready)
+    }
+
+    /// I1/I2 的端到端复核：挂载页面后打进去的原文，在两条换稿路径之后都不会留在输入框里。
+    func testHostedEditorPageRebuildsSourceInputAfterDraftSwapAndReentry() async throws {
+        let backend = backend(), session = session(backend)
+        let manager = CalendarManager(service: backend, now: { self.date(12, hour: 12) },
+                                      calendar: calendar, startMonitoring: false)
+        session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
+        let host = mountEditorPage(session: session, manager: manager)
+        let typed = "只打进去没点生成"
+        try XCTUnwrap(sourceTextViews(in: host).first).insertText(typed, replacementRange: NSRange(location: 0, length: 0))
+
+        // 路径一：冲突页 → 放弃并新建。新稿的输入框必须是空的。
+        session.beginCreate(kind: .reminder, on: date(14), calendarID: "fixture-reminders")
+        settleEditorPage(host)
+        session.resolveDraftConflict(.discardAndStart)
+        settleEditorPage(host)
+        let rebuilt = try XCTUnwrap(sourceTextViews(in: host).first, "放弃并新建后编辑页仍要有输入框")
+        XCTAssertEqual(rebuilt.string, "", "新稿的输入框不得带上旧原文")
+        XCTAssertTrue(sourceTextViews(in: host).allSatisfy { $0.string != typed })
+
+        // 路径二：切档（suspend）后回来。本地未提交的输入同样不留下。
+        rebuilt.insertText(typed, replacementRange: NSRange(location: 0, length: 0))
+        session.suspend()
+        settleEditorPage(host)
+        XCTAssertEqual(session.route, .list)
+        session.resumeDraft()
+        settleEditorPage(host)
+        let resumed = try XCTUnwrap(sourceTextViews(in: host).first, "恢复草稿后编辑页仍要有输入框")
+        XCTAssertEqual(resumed.string, "", "切档回来看不到上一份本地原文")
+        XCTAssertEqual(session.draft?.sourceText, "")
+    }
+
+    /// I1 的源码证据（与挂载用例互补）：编辑页里没有任何自动调度，输入的写回只走显式入口。
+    func testEditorPageSourceSchedulesNothingAndCommitsOnlyThroughTheExplicitEntry() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertFalse(source.contains("CalendarSourceDebouncer"), "编辑页不得再持有调度器")
+        XCTAssertFalse(source.contains("sourceDebouncer"))
+        XCTAssertFalse(source.contains("retrySourceParsing"))
+        XCTAssertFalse(source.contains("updateSourceText"), "输入的写回只走显式入口")
+        XCTAssertTrue(source.contains("text: $sourceDraft"), "输入框绑视图本地 state")
+        XCTAssertTrue(source.contains("session.commitSourceForGeneration(sourceDraft)"))
+        XCTAssertTrue(source.contains("await session.generateDraft()"))
+        XCTAssertTrue(source.contains(".keyboardShortcut(.return, modifiers: .command)"))
     }
 }
 

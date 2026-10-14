@@ -108,8 +108,12 @@ final class CalendarPanelSession: ObservableObject {
     @Published private(set) var datePopoverPresented = false
 
     var hasDirtyDraft: Bool { draft != nil && draft != baseline }
-    /// 当前稿的身份：视图只用它给「用文字生成」的输入框定 `.id`。
-    /// 同 route 换稿（放弃并新建 / 恢复草稿）也靠它复位本地输入，不能按 route 判断。
+    /// 当前稿的身份（`draftID` 的只读映射）。
+    ///
+    /// 编辑页把它用在不换稿时会失效的路径上做**二次保险**：真正的权威机制是「编辑页子树被卸载」
+    /// ——`pendingConfirmation != nil` 时 body 走别的分支、`suspend()` 把 route 切走，两者都会
+    /// 丢掉输入框的本地 `@State`。今天不存在「不卸载编辑页的同 route 换稿」路径（见
+    /// `testDraftSwapsNeverChangeIdentityWhileTheEditorSubtreeStaysMounted`），所以 `.id` 尚未被独立验证。
     var draftIdentity: UUID? { draftID }
     var shouldProtectAutoClose: Bool {
         isSubmitting || (route == .editor && (editorHasFocus || ownedMenuCount > 0 || datePopoverPresented))
@@ -169,7 +173,16 @@ final class CalendarPanelSession: ObservableObject {
 
     func updateSourceText(_ text: String) { draft?.sourceText = text }
 
-    /// 显式「生成」：视图已把本地输入经 `updateSourceText` 写回草稿，这里只触发这一次解析。
+    /// 显式「生成」的同步前半段：写回视图本地原文并**立刻**进入 `.parsing`。
+    /// 中间不经过 `.debouncing`，否则状态词会闪一帧「等待生成」、按钮会短暂渲染成「取消」。
+    /// 解析本身仍由随后的 `generateDraft()`（内部走 `parseSource`）完成。
+    func commitSourceForGeneration(_ text: String) {
+        guard draft != nil else { return }
+        updateSourceText(text)
+        generationState = .parsing
+    }
+
+    /// 显式「生成」：视图已把本地输入写回草稿，这里只触发这一次解析。
     /// 过期防护仍由 `parseSource` 的 `sourceRevision` / `parsingID` 与草稿合并口径负责，本方法不做任何调度。
     func generateDraft() async { await parseSource() }
 
@@ -267,8 +280,6 @@ final class CalendarPanelSession: ObservableObject {
         }
         if parsingID == requestID { parsingTask = nil; parsingID = nil }
     }
-
-    func retrySourceParsing() async { await parseSource() }
 
     func cancelSourceParsing() {
         parsingTask?.cancel()

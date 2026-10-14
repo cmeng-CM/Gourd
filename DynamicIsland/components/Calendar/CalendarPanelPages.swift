@@ -689,16 +689,18 @@ struct CalendarPanelPages: View {
 }
 
 /// 显式生成：原文先落在本视图的本地 state，点「生成」（或 ⌘↩）才写回草稿并触发一次解析。
-/// 调用方按 `session.draftIdentity` 定 `.id`：换稿就重建本视图，输入框随新稿的原文重新起头。
+///
+/// 输入框的复位：权威机制是**本视图被卸载**（`pendingConfirmation != nil` 时 body 走别的分支、
+/// `suspend()` 把 route 切走），卸载即丢掉 `@State`，重新出现时用 `initialText`（当前草稿原文）起头。
+/// 调用方另按 `session.draftIdentity` 定了 `.id`，那是**二次保险**：今天不存在「不卸载本视图的同
+/// route 换稿」路径，所以它未被独立验证（见 `DynamicIslandTests` 的换稿用例与报告 I3）。
 private struct CalendarSourceGeneration: View {
     @ObservedObject var session: CalendarPanelSession
-    let initialText: String
     let onFocus: (Bool) -> Void
     @State private var sourceDraft: String
 
     init(session: CalendarPanelSession, initialText: String, onFocus: @escaping (Bool) -> Void) {
         self.session = session
-        self.initialText = initialText
         self.onFocus = onFocus
         _sourceDraft = State(initialValue: initialText)
     }
@@ -746,9 +748,10 @@ private struct CalendarSourceGeneration: View {
         !sourceDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 点「生成」/⌘↩ 的两步：先写回原文（唯一写回点），再请求一次解析；没有自动调度。
+    /// 点「生成」/⌘↩：先同步写回原文并进入 `.parsing`（不闪 `.debouncing`），再请求这一次解析。
+    /// 两步之间没有自动调度，也无第二次解析。
     private func generate() {
-        session.updateSourceText(sourceDraft)
+        session.commitSourceForGeneration(sourceDraft)
         Task { await session.generateDraft() }
     }
 }
