@@ -14097,7 +14097,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let opener = MeetingFakeOpener([true])
         var copied: [String] = []
         let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei, start: reference.addingTimeInterval(3_600)),
-                                      session: session, opener: opener, now: { self.reference }, copyText: { copied.append($0) })
+                                      session: session, opener: opener, copyText: { copied.append($0) })
         let target = try XCTUnwrap(model.targets.first(where: \.canOpen))
         XCTAssertEqual(model.primary, .open(target, .huawei),
                        "docs/47 D-02：开始前 15 分钟的时间闸门已删，未来日程的主动作仍是打开")
@@ -14115,7 +14115,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let session = makeSession(), opener = MeetingFakeOpener([false, true])
         var copied: [String] = []
         let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.tencent, start: reference),
-                                      session: session, opener: opener, now: { self.reference }, copyText: { copied.append($0) })
+                                      session: session, opener: opener, copyText: { copied.append($0) })
         let target = try XCTUnwrap(model.targets.first(where: \.canOpen))
         model.open(target)
         await drain { !model.isOpening }
@@ -14190,6 +14190,42 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // 腾讯分支没有可查依据写密码（docs/47 D-07）——只带会议号。
         XCTAssertEqual(try XCTUnwrap(tencent.urls.first).absoluteString,
                        "wemeet://page/inmeeting?meeting_code=939130533")
+    }
+
+    /// 记住的客户端只保证「换个客户端打开」，不保证号码一定拼得出深链：位数不合法时仍退回复制。
+    func testRememberedOpenerFallsBackToCopyingWhenTheNumberIsTooShortForADeepLink() async throws {
+        let session = makeSession()
+        var copied: [String] = []
+        let opener = MeetingFakeOpener([true])
+        let model = MeetingActionModel(event: event(notes: "会议ID：93913053"), session: session,
+                                      opener: opener, copyText: { copied.append($0) })
+        XCTAssertEqual(model.primary, .copyCode("93913053"), "8 位号码仍在证据层（6–12 位），但还没有记忆")
+        model.openByNumber(provider: .huawei)
+        await drain { !model.isOpening }
+        XCTAssertEqual(model.primary, .open(try XCTUnwrap(model.targets.first), .huawei))
+        model.performPrimary()
+        await drain { !model.isOpening }
+        // builder 只认 9–12 位 → `.unavailable` → 退回复制，且一次 URL 都没派发过。
+        XCTAssertEqual(model.feedback, .copied)
+        XCTAssertEqual(copied, ["93913053", "93913053"])
+        XCTAssertTrue(opener.urls.isEmpty)
+    }
+
+    /// 记住的客户端只认有深链依据的华为 / 腾讯（审查 M-3）：盘上写成别的值等于没记住。
+    func testRememberedProviderIgnoresProvidersWithoutADocumentedDeepLink() throws {
+        let session = makeSession()
+        let model = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                      opener: MeetingFakeOpener([]), copyText: { _ in })
+        for raw in ["feishu", "zoom", "nonsense"] {
+            Defaults[.meetingCodeOpener] = raw
+            XCTAssertNil(model.rememberedProvider, raw)
+            XCTAssertEqual(model.primary, .copyCode("939130533"), raw)
+        }
+        for provider in [MeetingProvider.huawei, .tencent] {
+            Defaults[.meetingCodeOpener] = provider.rawValue
+            XCTAssertEqual(model.rememberedProvider, provider)
+            XCTAssertEqual(model.primary, .open(try XCTUnwrap(model.targets.first), provider))
+        }
     }
 
     func testDisplayNameFallsBackToGourdForBlankUserNames() {
@@ -14363,7 +14399,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         }
         let opener = MeetingFakeOpener([])
         let emptyInvitation = MeetingActionModel(event: event(notes: "请参加会议并做好准备"), session: owned,
-                                                 opener: opener, now: { self.reference }, copyText: { _ in })
+                                                 opener: opener, copyText: { _ in })
         let unrelatedTarget = MeetingLinkResolver().resolve(text: MeetingInvitationFixtures.huaweiHTTPS)[0]
         XCTAssertEqual(emptyInvitation.primary, .none, "邀请意图本身不带会议号，主动作不臆造")
         XCTAssertTrue(unrelatedTarget.canOpen)

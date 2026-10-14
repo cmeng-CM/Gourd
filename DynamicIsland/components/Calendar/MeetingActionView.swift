@@ -80,18 +80,16 @@ enum MeetingActionGlyph {
     }
 }
 
-/// An injected, offline-testable action controller. Recognition never opens a candidate.
+/// An injected, offline-testable action controller. 派发只发生在用户点一下之后，模型自身不扫描也不自动打开。
 @MainActor
 final class MeetingActionModel: ObservableObject {
     @Published private(set) var targets: [MeetingJoinTarget]
     @Published private(set) var isOpening = false
     @Published private(set) var feedback: MeetingActionFeedback = .idle
     private let source: String
-    /// 记录的开始时间与时钟：时间闸门已按 docs/47 D-02 删除，二者仅作为模型输入保留（对外签名不变）。
-    private let start: Date?
+    /// 面板/首页共用的会话：由 `MeetingActionContent` 的构造路径传入，供后续的视图级接线使用。
     private let session: CalendarPanelSession
     private let opening: MeetingOpening
-    private let now: () -> Date
     private let copyText: (String) -> Void
     private var task: Task<Void, Never>?
     private var revision = 0
@@ -100,24 +98,22 @@ final class MeetingActionModel: ObservableObject {
     static let feedbackDwell: Duration = .seconds(1.5)
 
     convenience init(event: EventModel, url: URL? = nil, session: CalendarPanelSession,
-                     opener: (any MeetingURLOpening)? = nil, now: @escaping () -> Date = Date.init,
+                     opener: (any MeetingURLOpening)? = nil,
                      copyText: @escaping (String) -> Void = {
                          NSPasteboard.general.clearContents()
                          NSPasteboard.general.setString($0, forType: .string)
                      }) {
         self.init(source: CalendarMeetingSource(event: event, url: url), session: session,
-                  opener: opener, now: now, copyText: copyText)
+                  opener: opener, copyText: copyText)
     }
 
     init(source: CalendarMeetingSource, session: CalendarPanelSession,
-         opener: (any MeetingURLOpening)? = nil, now: @escaping () -> Date = Date.init,
+         opener: (any MeetingURLOpening)? = nil,
          copyText: @escaping (String) -> Void = {
              NSPasteboard.general.clearContents()
              NSPasteboard.general.setString($0, forType: .string)
          }) {
         self.session = session
-        self.start = source.start
-        self.now = now
         self.copyText = copyText
         opening = MeetingOpening(opener: opener)
         self.source = source.text
@@ -128,8 +124,11 @@ final class MeetingActionModel: ObservableObject {
     var isBusy: Bool { isOpening }
 
     /// 用户为「只有会议号」的邀请选过的客户端（D-09），存 `Defaults[.meetingCodeOpener]`。
+    /// 只认有深链依据的两个平台；盘上若有其它值（或将来加了新平台）一律当作没记住。
     var rememberedProvider: MeetingProvider? {
-        Defaults[.meetingCodeOpener].flatMap(MeetingProvider.init(rawValue:))
+        guard let provider = Defaults[.meetingCodeOpener].flatMap(MeetingProvider.init(rawValue:)),
+              provider == .huawei || provider == .tencent else { return nil }
+        return provider
     }
 
     /// 点击一下要执行的动作（D-01）。
@@ -257,7 +256,7 @@ final class MeetingActionModel: ObservableObject {
     deinit { task?.cancel() }
 }
 
-/// The entry is available before start−15m; only actual URL dispatch keeps the old time gate.
+/// 会议入口：证据层认出会议就显示，点一下就是结果（docs/47 D-01 / D-02 —— 已无「开始前 15 分钟」闸门）。
 struct MeetingActionView: View {
     let source: CalendarMeetingSource
     let session: CalendarPanelSession
