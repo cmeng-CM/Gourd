@@ -87,3 +87,11 @@ T1 已实现独立 `NSTextStorage → NSLayoutManager → NSTextContainer` 快�
 | 原生高度 | SwiftUI独占承载高度，AppKit不垂直resize；新增实际多行增长、Binding与边界断言承接原行为 | 离屏图不能证明用户全部键盘/选区交互 |
 | 卡片/页面 | 保留现有布局、两行/全文偏好和单外层ScrollView；无需修改这两个生产文件 | 原列表越界的自然触发顺序仍未知 |
 | 图像证据 | 实际页PNG、card/native几何、可见墨迹和尾字符可滚达均检查；独立controller实看 | 使用隔离支撑依赖且灰色backing不是系统玻璃；最终必须用新Debug重跑 |
+
+## T2 安装前证据状态与核验契约
+
+T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新增中段地点与备注首段截图、完整68图和散列。当前本日研究Debug矩阵只属于T1证据；T2的新完整宿主门、新Debug最终页图、整体终审、安装与真实新进程尚未在本节宣称通过。
+
+交付核验器 `.workflow/calendar-page-layout/verify_delivery.py` 采用只读检查：先运行ai-calendar wrapper的证据复核，要求新attempt实际执行至少830个XCTest，8个原生与3个布局测试各方法在实际日志中恰好通过一次；独立T1/T2规格与质量JSON、整体ready JSON及报告摘要严格绑定baseline/HEAD。最终page-evidence必须包含四设置×17场景、全部源码/工具/generated/probe/新Debug app/dylib/resources/PNG摘要、严格True几何检查和根控制器逐图实看记录；独立复审另核全部68图。
+
+安装沿现有七个命名checks、六个实际命令与日志摘要，以及installed snapshot/实时签名；新增进程证明必须来自精确PID的kernel ps（pid/start/comm），核旧进程不再运行和新PID的实际安装路径，不能用NSWorkspace缓存替代。后置仅允许docs/45与docs/46的祖先提交，逐提交检查禁止隐藏中间源码变化；纯文档回写不触发新的宿主循环。Ignored控制核验器本身的SHA写入T2与整体独立审查报告，核验时也必须匹配。缺失/空数组/假布尔值/错hash/路径逃逸/旧Debug或绑定错均拒绝，尚缺证据时不会宣称交付完成。

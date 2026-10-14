@@ -297,3 +297,9 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 ### 10. 参考
 
 华为原生参数契约：[Mac Scheme 参考](https://support.huaweicloud.com/scheme-meeting/meeting_22_1219.html)、[旧业务开发示例](https://support.huaweicloud.com/intl/zh-cn/scheme-meeting/meeting_22_1216.html)；腾讯：[链接入会](https://meeting.tencent.com/support-doc-detail/70/index.html)；飞书：[浏览器入会](https://www.feishu.cn/hc/en-US/articles/360049067679-join-a-video-meeting-through-your-web-browser)。这些官方契约支持保留原邀请入口；未核实的客户端参数不作为生成依据。2026-10-13 核对华为 Mac 参考：标准 page 为 joinConfByLink，必填 page/conf_id/name，服务地址、端口、密码和音视频开关为可选；验证现有参数，不补造选填值。
+
+### 11. 2026-10-14 日历页面布局补验（安装前）
+
+前轮827项完整门确认原生TextKit初始化和UTF-16精确选区，但没有覆盖完整页面尺寸协商。后续全页研究证明live容器被测量修改；零宽竖线为明确故障注入，生产最后零宽顺序与原列表越界没有自然复现。详见docs/46：独立快照测量与实际bounds同步、SwiftUI独占文字高度、绘制边界保护已实现，保留全文滚动、两行/完整标题与实际编辑绑定。
+
+T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全文、备注首段与末尾及原文/备注实际输入；它使用本日研究Debug支撑依赖，隔离VM/生命周期，不能当作实际ContentView完整验收。T2要求新完整门、新Debug最终矩阵、独立整体终审后才重新安装；当前尚未宣称这些交付门通过。原四类别安装后人工确认、真实入会/模型/系统写入项仍未完成，安装事实不替代它们。
