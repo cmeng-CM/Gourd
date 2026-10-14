@@ -92,12 +92,7 @@ LOCALE_KEYS = (
     'calendar.generation.retry',
     'calendar.generation.settings',
     'calendar.generation.source',
-    'calendar.generation.state.cancelled',
-    'calendar.generation.state.debouncing',
     'calendar.generation.state.failed',
-    'calendar.generation.state.idle',
-    'calendar.generation.state.parsing',
-    'calendar.generation.state.ready',
     'calendar.generation.unconfigured',
     'calendar.meeting.actions',
     'calendar.meeting.copyCodeFormat',
@@ -124,6 +119,8 @@ LOCALE_KEYS = (
 # tooEarly / sendingScope / opening / accepted / fallback / refused / cancelled / configure /
 # recognizing / recognitionFailed / sourceTooLarge）在本轮已随 catalog 一并移出，不再出现在
 # LOCALE_KEYS 里；因此下面的「必须有消费者」断言对余下的键仍然成立。
+# T4（docs/48）再移出 5 条已无视图读者的生成状态键（idle / debouncing / parsing / ready /
+# cancelled）及其唯一凭据 `CalendarGenerationState.labelKey`；`state.failed` 仍由失败行渲染，保留。
 
 
 def legacy_settings(text):
@@ -153,8 +150,6 @@ class GeneralAIConfigurationTests(unittest.TestCase):
                 consumed = ('"%s"' % key) in sources
                 if key.startswith("ai.settings.protocol."):
                     consumed |= '"ai.settings.protocol.\\(protocolKind.rawValue)"' in sources
-                if key.startswith("calendar.generation.state."):
-                    consumed |= '"calendar.generation.state.\\(self)"' in sources
                 if key.startswith("calendar.generation.confirm."):
                     consumed |= '"calendar.generation.confirm.\\(rawValue)"' in sources
                 self.assertTrue(consumed, "changed localization has no source consumer")

@@ -19,7 +19,6 @@ enum CalendarGenerationMode: Equatable { case manual, required, ready }
 
 enum CalendarGenerationState: Equatable {
     case idle, debouncing, parsing, ready, failed, cancelled
-    var labelKey: String { "calendar.generation.state.\(self)" }
 }
 
 struct CalendarDraft: Equatable {
