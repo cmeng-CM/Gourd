@@ -173,7 +173,9 @@ final class CalendarPanelSession: ObservableObject {
     func updateSourceText(_ text: String) { draft?.sourceText = text }
 
     /// 显式「生成」的同步前半段：写回视图本地原文并**立刻**进入 `.parsing`。
-    /// 中间不经过 `.debouncing`，否则状态词会闪一帧「等待生成」、按钮会短暂渲染成「取消」。
+    /// 写回原文本身会经草稿 didSet 触发 `sourceDidChange()` 把状态打到 `.debouncing`——那是
+    /// 「输入已失效、等待重新生成」的中间档；这里随即覆盖成 `.parsing`，本次生成不留这一帧，
+    /// 生成按钮因此只从「生成」切到取消态一次。
     /// 解析本身仍由随后的 `generateDraft()`（内部走 `parseSource`）完成。
     func commitSourceForGeneration(_ text: String) {
         guard draft != nil else { return }
