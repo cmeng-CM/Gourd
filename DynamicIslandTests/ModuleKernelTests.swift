@@ -14518,8 +14518,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(text("calendar.meeting.row.choose"), "选择入口")
         XCTAssertEqual(text("calendar.meeting.openIn.huawei"), "在华为云会议中打开")
         // 编辑页仍在用的两条键不许被本任务顺手删掉（失败信号：编辑页用例变红）。
-        XCTAssertNotEqual(text("calendar.generation.model"), "calendar.generation.model")
+        XCTAssertNotEqual(text("calendar.generation.generate"), "calendar.generation.generate")
         XCTAssertNotEqual(text("calendar.generation.settings"), "calendar.generation.settings")
+        XCTAssertEqual(text("calendar.generation.generate"), "生成", "「生成」按钮的文案（T2 修掉「重新生成」错位）")
     }
 
     /// 右键菜单：只有会议号的邀请**恰好 4 项**（D-03），且没有任何 AI 兜底项。
@@ -14787,10 +14788,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
         XCTAssertTrue(todos.contains("MeetingActionView(source: source, session: session)"))
         XCTAssertFalse(todos.contains("style: .row"), "首页不许被改成 .row")
-        // 编辑页三段不许被本任务碰到
+        // 编辑页本体仍在（T2 只重排两列网格与清理文案：模型说明行已删、设置按钮降级为齿轮）
         XCTAssertTrue(panel.contains("private var editorPage: some View"))
-        XCTAssertTrue(panel.contains(#"Text("calendar.generation.model")"#))
-        XCTAssertTrue(panel.contains(#"Button("calendar.generation.settings")"#))
+        XCTAssertTrue(panel.contains(#".help(Text("calendar.generation.settings"))"#))
+        XCTAssertTrue(panel.contains(#"label: { Image(systemName: "gearshape") }"#))
     }
 
     private func languageBundle(_ language: String) throws -> Bundle {
@@ -15012,6 +15013,192 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         emptyInvitation.open(unrelatedTarget)
         XCTAssertFalse(emptyInvitation.isOpening, "Invitation intent must not authorize another source's URL")
         XCTAssertTrue(opener.urls.isEmpty)
+    }
+
+    // MARK: - T2 统一表单：两列网格 + 文案清理（挂载取证，先例 PanelAutoHeightTests.mountPanelPage）
+
+    /// 编辑页四个入口的会话：新建日程 / 新建待办 / 编辑日程（真 `beginEdit`）/ 编辑待办
+    /// （当前代码里 `beginEdit` 硬编码 `.event`，这条只能按注入草稿覆盖，且它不可保存）。
+    private func editorSession(kind: CalendarDraft.Kind, editing: Bool) -> (CalendarPanelSession, CalendarManager) {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 1, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                           saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                           createReminder: { try await backend.createReminderRecord(input: $0) },
+                                           deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                           completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                           event: { backend.event(withID: $0) })
+        let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+        let calendarID = kind == .event ? "fixture-events" : "fixture-reminders"
+        if editing, kind == .event, let event = backend.event(withID: "fixture-event-01") {
+            session.beginEdit(event)
+        } else if editing {
+            session.beginCreate(kind: kind, on: reference, calendarID: calendarID)
+            session.draft?.eventID = "fixture-reminder-01"
+        } else {
+            session.beginCreate(kind: kind, on: reference, calendarID: calendarID)
+        }
+        return (session, manager)
+    }
+
+    /// 生产编辑页挂进 `NSHostingView`（真布局、真 `NSViewRepresentable`）。
+    private func mountEditor(_ session: CalendarPanelSession, manager: CalendarManager) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: CalendarPanelPages(session: session, manager: manager, onReturnSource: { _ in })
+            .environmentObject(DynamicIslandViewModel())
+            .frame(width: 437, height: 400))
+        host.frame = CGRect(x: 0, y: 0, width: 437, height: 400)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    private func settle(_ host: NSView) {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+    }
+
+    private func collectViews(_ host: NSView, where match: (NSView) -> Bool) -> [NSView] {
+        var found: [NSView] = []
+        func walk(_ view: NSView) {
+            if match(view) { found.append(view) }
+            view.subviews.forEach(walk)
+        }
+        walk(host)
+        return found
+    }
+
+    private func sourceEditors(in host: NSView) -> [CalendarEditableTextView] {
+        let label = NSLocalizedString("calendar.generation.source", comment: "")
+        return collectViews(host) { ($0 as? CalendarEditableTextView)?.accessibilityLabel() == label }
+            .compactMap { $0 as? CalendarEditableTextView }
+    }
+
+    private func notesEditors(in host: NSView) -> [CalendarEditableTextView] {
+        let label = NSLocalizedString("calendar.panel.notes", comment: "")
+        return collectViews(host) { ($0 as? CalendarEditableTextView)?.accessibilityLabel() == label }
+            .compactMap { $0 as? CalendarEditableTextView }
+    }
+
+    /// 挂载后能直接观察到的字段签名：`NSViewRepresentable` 撑起的本地控件 + SwiftUI `TextField`
+    /// 背后的 `NSTextField` / `DatePicker` 背后的 `NSDatePicker`。
+    private struct EditorFieldSignature: Equatable {
+        var sourceEditors: Int
+        var notesEditors: Int
+        var notesWidth: CGFloat
+        var popups: Int
+        var targetWidth: CGFloat
+        var targetTitles: [String]
+        var textFields: Int
+        var datePickers: Int
+    }
+
+    private func editorSignature(_ session: CalendarPanelSession, manager: CalendarManager) -> EditorFieldSignature {
+        let host = mountEditor(session, manager: manager)
+        settle(host)
+        let notes = notesEditors(in: host)
+        let popups = collectViews(host) { $0 is NSPopUpButton }.compactMap { $0 as? NSPopUpButton }
+        return EditorFieldSignature(
+            sourceEditors: sourceEditors(in: host).count,
+            notesEditors: notes.count,
+            notesWidth: notes.first?.bounds.width ?? -1,
+            popups: popups.count,
+            targetWidth: popups.first?.bounds.width ?? -1,
+            targetTitles: popups.first?.itemTitles ?? [],
+            textFields: collectViews(host) { $0 is NSTextField }.count,
+            datePickers: collectViews(host) { $0 is NSDatePicker }.count
+        )
+    }
+
+    /// T2 / D-01·D-02·D-05：四种入口渲染出**同一套字段**，差异只有三处 —— 类型控件可点 / 锁定、
+    /// 生成行有无、时间块两格 / 一格 + 地点有无。取证分两半：
+    /// ① 挂载：能观察到的本地控件给出**数量与几何**（备注整宽、目标占半格、生成行只在新建、
+    ///    日程比待办多一个时刻控件与一个地点输入框）；
+    /// ② 源码检索：SwiftUI 原生 `HStack`/`Text` 在宿主里不是 `NSView`，因此「目标｜全天」「地点｜链接」
+    ///    的并排关系与类型控件的 `disabled` 只能按源码取证。
+    func testUnifiedEditorFormPairsFieldsAndHidesBoilerplate() throws {
+        for (name, kind, editing) in [("newEvent", CalendarDraft.Kind.event, false),
+                                      ("newReminder", CalendarDraft.Kind.reminder, false),
+                                      ("editEvent", CalendarDraft.Kind.event, true),
+                                      ("editReminder", CalendarDraft.Kind.reminder, true)] {
+            let (session, manager) = editorSession(kind: kind, editing: editing)
+            XCTAssertEqual(session.route, .editor, name)
+            XCTAssertEqual(session.draft?.eventID == nil, !editing, name)
+            // 待办默认全天：关掉它，才能观察「截止」那一格的时刻控件（时间块一格）。
+            if kind == .reminder { session.draft?.isAllDay = false }
+            let signature = editorSignature(session, manager: manager)
+            let isEvent = kind == .event
+
+            // 备注整宽：它的原生编辑器宽度就是页面内容宽。
+            XCTAssertEqual(signature.notesEditors, 1, name)
+            XCTAssertEqual(signature.notesWidth, 433, accuracy: 0.5, "\(name)：备注占满整宽")
+            // 目标占左半格：宽度 = (内容宽 − 8) / 2 —— 右格就是同一行的「全天」。
+            XCTAssertEqual(signature.popups, 1, name)
+            XCTAssertEqual(signature.targetTitles.count, 1, name)
+            XCTAssertEqual(signature.targetWidth, (signature.notesWidth - 8) / 2, accuracy: 1,
+                           "\(name)：目标与「全天」并排各占半宽")
+            // 生成行只有新建有。
+            XCTAssertEqual(signature.sourceEditors, editing ? 0 : 1, name)
+            // 时间两格 / 一格：日程多一个时刻控件（开始 + 结束，待办只有「截止」）。
+            XCTAssertEqual(signature.datePickers, isEvent ? 2 : 1, "\(name)：时间块 \(isEvent ? "两格" : "一格")")
+            // 地点有无：日程多一个输入框（标题 + 地点 + 链接 / 标题 + 链接）。
+            XCTAssertEqual(signature.textFields, isEvent ? 3 : 2, "\(name)：\(isEvent ? "有地点" : "无地点")")
+        }
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        // 抽出的「一格」helper：标签在上、控件在下。
+        XCTAssertTrue(panel.contains(
+            "private func fieldRow(_ label: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View"))
+        XCTAssertEqual(panel.components(separatedBy: "fieldRow(").count - 1, 6,
+                       "1 处声明 + 5 处调用（标题 / 全天 / 地点 / 链接 / 备注）")
+        // 三组并排：目标｜全天、开始｜结束（待办一格）、地点｜链接（待办无地点）。
+        XCTAssertTrue(panel.contains("targetPicker(draft).frame(maxWidth: .infinity, alignment: .leading)"))
+        XCTAssertTrue(panel.contains(#"fieldRow("All-day")"#))
+        XCTAssertTrue(panel.contains(#"dateRow("calendar.panel.start""#))
+        XCTAssertTrue(panel.contains(#"dateRow("calendar.panel.end""#))
+        XCTAssertTrue(panel.contains(#"dateRow("calendar.panel.dueDate""#))
+        XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.location")"#))
+        XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.url")"#))
+        XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.notes")"#))
+        // 类型控件新建可点、编辑锁定（`disabled` 而不是整段不渲染）。
+        XCTAssertTrue(panel.contains(#".accessibilityIdentifier("calendar-kind")"#))
+        XCTAssertTrue(panel.contains(".disabled(draft.eventID != nil)"))
+        // 常驻文案已删（失败信号：页面上还能看到任一句）。
+        for gone in [#"Text("calendar.generation.sendingScope")"#, #"Text("calendar.generation.model")"#,
+                     #"Text("calendar.panel.additional")"#, #"Button("calendar.generation.settings")"#] {
+            XCTAssertFalse(panel.contains(gone), "\(gone) 不应再出现在编辑页")
+        }
+        XCTAssertTrue(panel.contains(#"Button("calendar.generation.generate")"#), "「生成」按钮用新键")
+    }
+
+    /// T2 / D-03·D-04：AI 模型设置只以齿轮出现；失败时只留一行「生成失败：<原因>」+ 重试。
+    func testEditorFailureShowsASingleLineAndGearOpensAISettings() async throws {
+        let (session, manager) = editorSession(kind: .event, editing: false)
+        let host = mountEditor(session, manager: manager)
+        settle(host)
+        XCTAssertNil(session.configuredAI, "这条用例走「没有 AI 句柄」的失败路径")
+        // 点「生成」＝ commitSourceForGeneration + generateDraft（没有 AI 就同步进失败态）。
+        session.commitSourceForGeneration("明天下午五点周会")
+        await session.generateDraft()
+        settle(host)
+        XCTAssertEqual(session.generationState, .failed)
+        XCTAssertNotNil(session.generationError, "那一行红字取的就是 generationError")
+        XCTAssertEqual(sourceEditors(in: host).count, 1, "失败后编辑页仍在，生成行的输入框不消失")
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        // 失败只保留一行：状态词 + 错误原因 + 重试（旧的状态词一行 + 独立红字一行已合并）。
+        XCTAssertTrue(panel.contains(#"Text("calendar.generation.state.failed")"#))
+        XCTAssertTrue(panel.contains(#"Button("calendar.generation.retry")"#))
+        XCTAssertFalse(panel.contains(#".accessibilityIdentifier("calendar-generation-state")"#),
+                       "状态词不再单独占一行")
+        XCTAssertFalse(panel.contains("generationState.labelKey"), "成功 / 等待不占行")
+        XCTAssertFalse(panel.contains(#".accessibilityIdentifier("calendar-generation-error")"#),
+                       "失败红字已并进那一行")
+        // AI 模型设置：按钮降级为生成行右端的齿轮，文案仍走既有键（`.help` 与无障碍标签）。
+        XCTAssertTrue(panel.contains(#"label: { Image(systemName: "gearshape") }"#))
+        XCTAssertTrue(panel.contains(#".help(Text("calendar.generation.settings"))"#))
+        XCTAssertTrue(panel.contains(#".accessibilityLabel(Text("calendar.generation.settings"))"#))
+        XCTAssertTrue(panel.contains("CalendarAISettingsNavigation.open()"), "齿轮仍接 AI 设置页的入口")
     }
 
 }

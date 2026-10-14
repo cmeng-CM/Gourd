@@ -217,6 +217,22 @@
         }
       }
     },
+    "calendar.generation.generate": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generate"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "生成"
+          }
+        }
+      }
+    },
     "calendar.generation.retry": {
       "localizations": {
         "en": {
@@ -266,38 +282,6 @@
       }
     }
 ,
-    "calendar.generation.sendingScope": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Only this source text and its reference date/time zone are sent. AI fills a draft; review before saving."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仅发送此原文及参考日期/时区。AI 只填写草稿，请检查后保存。"
-          }
-        }
-      }
-    },
-    "calendar.generation.model": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uses the default text model from AI Models settings."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "使用「AI 模型」设置中的默认文字模型。"
-          }
-        }
-      }
-    },
     "calendar.generation.unconfigured": {
       "localizations": {
         "en": {
@@ -1367,22 +1351,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "标题"
-          }
-        }
-      }
-    },
-    "calendar.panel.additional": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Additional information"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "补充信息"
           }
         }
       }

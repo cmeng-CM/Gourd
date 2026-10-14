@@ -369,47 +369,67 @@ struct CalendarPanelPages: View {
         ScrollView(.vertical) {
             if let draft = session.draft {
                 VStack(alignment: .leading, spacing: 10) {
-                    if draft.eventID == nil {
-                        Picker("calendar.panel.kind", selection: kindBinding) {
-                            Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
-                            Text("calendar.quickAdd.kindEvent").tag(CalendarDraft.Kind.event)
-                        }
-                        .pickerStyle(.segmented).controlSize(.small)
-                        .accessibilityIdentifier("calendar-kind")
+                    // 新建可点、编辑锁定（而不是不渲染）：四种入口的版式不再跳。
+                    Picker("calendar.panel.kind", selection: kindBinding) {
+                        Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
+                        Text("calendar.quickAdd.kindEvent").tag(CalendarDraft.Kind.event)
                     }
+                    .pickerStyle(.segmented).controlSize(.small)
+                    .disabled(draft.eventID != nil)
+                    .accessibilityIdentifier("calendar-kind")
                     if draft.eventID == nil { generationControls(draft) }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("calendar.panel.title").font(.caption).foregroundStyle(.secondary)
+                    fieldRow("calendar.panel.title") {
                         TextField("calendar.quickAdd.title", text: stringBinding(\.title), axis: .vertical)
                             .textFieldStyle(.roundedBorder).focused($focusedField, equals: .title)
                             .accessibilityIdentifier("calendar-title")
                     }
-                    targetPicker(draft)
+                    // 目标｜全天
+                    HStack(spacing: 8) {
+                        targetPicker(draft).frame(maxWidth: .infinity, alignment: .leading)
+                        fieldRow("All-day") {
+                            Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox).labelsHidden()
+                                .accessibilityIdentifier("calendar-all-day")
+                        }
+                    }
                     if let identifier = draft.timeZoneIdentifier, identifier != TimeZone.current.identifier {
                         Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if draft.kind == .event {
-                        Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox)
-                            .accessibilityIdentifier("calendar-all-day")
-                        dateRow("calendar.panel.start", field: .start, date: draft.start, allDay: draft.isAllDay)
-                        dateRow("calendar.panel.end", field: .end, date: CalendarPanelDates.includedEnd(of: draft), allDay: draft.isAllDay)
-                        Text("calendar.panel.additional").font(.caption).foregroundStyle(.secondary)
-                        TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
-                            .textFieldStyle(.roundedBorder).focused($focusedField, equals: .location)
-                            .accessibilityIdentifier("calendar-location")
-                    } else {
-                        Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox)
-                            .accessibilityIdentifier("calendar-all-day")
-                        dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
+                    // 开始｜结束（待办时只有「截止」一格）
+                    HStack(spacing: 8) {
+                        if draft.kind == .event {
+                            dateRow("calendar.panel.start", field: .start, date: draft.start, allDay: draft.isAllDay)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            dateRow("calendar.panel.end", field: .end, date: CalendarPanelDates.includedEnd(of: draft), allDay: draft.isAllDay)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Color.clear.frame(maxWidth: .infinity)
+                        }
                     }
-                    Text("calendar.panel.notes").font(.caption).foregroundStyle(.secondary)
-                    CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
-                                              onFocus: setNativeEditorFocus)
-                        .accessibilityIdentifier("calendar-notes")
-                    TextField("calendar.panel.url", text: urlBinding)
-                        .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
-                        .accessibilityIdentifier("calendar-url")
+                    // 地点｜链接（待办没有地点，链接占半宽）
+                    HStack(spacing: 8) {
+                        if draft.kind == .event {
+                            fieldRow("calendar.panel.location") {
+                                TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
+                                    .textFieldStyle(.roundedBorder).focused($focusedField, equals: .location)
+                                    .accessibilityIdentifier("calendar-location")
+                            }
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity)
+                        }
+                        fieldRow("calendar.panel.url") {
+                            TextField("calendar.panel.url", text: urlBinding)
+                                .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
+                                .accessibilityIdentifier("calendar-url")
+                        }
+                    }
+                    fieldRow("calendar.panel.notes") {
+                        CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
+                                                  onFocus: setNativeEditorFocus)
+                            .accessibilityIdentifier("calendar-notes")
+                    }
                     confirmationControls(draft)
                     if !hasAccess { Text("Calendar access is required.").font(.caption).foregroundStyle(.secondary) }
                 }
@@ -421,6 +441,15 @@ struct CalendarPanelPages: View {
         .accessibilityIdentifier("calendar-editor-scroll")
         .onHover { lifecycle.setScrolling($0) }
         .onAppear { focusedField = session.draft?.sourceText.isEmpty == true ? .title : nil }
+    }
+
+    /// 表单里的一格：沿用「标签在上、控件在下」的既有风格，并占满所在列宽（两列网格的一半）。
+    private func fieldRow(_ label: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func setNativeEditorFocus(_ focused: Bool) {
@@ -708,36 +737,41 @@ private struct CalendarSourceGeneration: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("calendar.generation.source").font(.caption).foregroundStyle(.secondary)
-            CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
-                .accessibilityIdentifier("calendar-generation-source")
-            Text("calendar.generation.sendingScope").font(.caption2).foregroundStyle(.secondary)
-            Text("calendar.generation.model").font(.caption2).foregroundStyle(.secondary)
-            Button("calendar.generation.settings") { CalendarAISettingsNavigation.open() }
-                .font(.caption).accessibilityIdentifier("calendar-generation-settings")
+            HStack(alignment: .bottom, spacing: 8) {
+                CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
+                    .accessibilityIdentifier("calendar-generation-source")
+                if session.generationState == .parsing || session.generationState == .debouncing {
+                    ProgressView().controlSize(.mini)
+                    Button("Cancel") { session.cancelSourceParsing() }
+                        .accessibilityIdentifier("calendar-generation-cancel")
+                } else if session.generationState != .failed, hasSource {
+                    Button("calendar.generation.generate") { generate() }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .accessibilityIdentifier("calendar-generation-generate")
+                }
+                // AI 模型设置：从按钮降级为生成行右端的齿轮，文案复用既有键。
+                Button { CalendarAISettingsNavigation.open() } label: { Image(systemName: "gearshape") }
+                    .help(Text("calendar.generation.settings"))
+                    .accessibilityLabel(Text("calendar.generation.settings"))
+                    .accessibilityIdentifier("calendar-generation-settings")
+            }
             if session.configuredAI == nil {
                 Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
             }
-            HStack(spacing: 8) {
-                if session.generationState == .parsing { ProgressView().controlSize(.mini) }
-                Text(LocalizedStringKey(session.generationState.labelKey)).font(.caption)
-                    .accessibilityIdentifier("calendar-generation-state")
-                Spacer(minLength: 0)
-                if session.generationState == .parsing || session.generationState == .debouncing {
-                    Button("Cancel") { session.cancelSourceParsing() }
-                        .accessibilityIdentifier("calendar-generation-cancel")
-                } else if hasSource {
+            // 状态词不再单独占行：只有失败时留一行「生成失败：<原因>」+ 重试。
+            if session.generationState == .failed {
+                HStack(spacing: 8) {
+                    (Text("calendar.generation.state.failed") + Text(session.generationError.map { "：" + $0 } ?? ""))
+                        .font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("calendar-generation-failed")
                     Button("calendar.generation.retry") { generate() }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .accessibilityIdentifier("calendar-generation-retry")
+                        .font(.caption).accessibilityIdentifier("calendar-generation-retry")
+                    Button("calendar.generation.manual") { session.useManualEntry() }
+                        .font(.caption).accessibilityIdentifier("calendar-generation-manual")
                 }
-            }
-            if let error = session.generationError {
-                Text(error).font(.caption2).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("calendar-generation-error")
-            }
-            if session.draft?.generationMode == .required
-                || session.generationState == .failed || session.generationState == .cancelled {
+            } else if session.draft?.generationMode == .required || session.generationState == .cancelled {
                 Button("calendar.generation.manual") { session.useManualEntry() }
                     .font(.caption).accessibilityIdentifier("calendar-generation-manual")
             }
