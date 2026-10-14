@@ -1494,7 +1494,7 @@ struct ConferenceJoinButton: View {
     @Environment(\.calendarMeetingSession) private var environmentSession
 
     var body: some View {
-        MeetingActionView(event: event, url: url, session: session ?? environmentSession ?? .shared)
+        MeetingActionView(event: event, url: url, session: session ?? environmentSession ?? .shared, style: .row)
     }
 }
 

@@ -350,7 +350,7 @@ struct CalendarPanelPages: View {
     }
 
     func meetingAction(_ event: EventModel) -> MeetingActionView {
-        MeetingActionView(event: event, session: session)
+        MeetingActionView(event: event, session: session, style: .row)
     }
 
     private func displayDate(_ date: Date, allDay: Bool, calendar: Calendar) -> String {

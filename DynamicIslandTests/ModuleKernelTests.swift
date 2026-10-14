@@ -14244,6 +14244,196 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(MeetingActionGlyph.symbol(for: .failed), "exclamationmark.triangle")
     }
 
+    // MARK: - T4 视图与调用点：图标 chip / 一行两键 / 右键 4 项 / tooltip
+
+    /// 本任务新增的 9 条文案 key 在 **en 与 zh-Hans 两份**里都解析得出（都 `translated`），
+    /// 且 tooltip 的拼接结果逐字等于设计图 ②。
+    func testMeetingEntryLocalisationKeysResolveInBothLanguages() throws {
+        let keys = ["calendar.meeting.openIn.tencent", "calendar.meeting.openIn.huawei",
+                    "calendar.meeting.provider.tencent", "calendar.meeting.provider.huawei",
+                    "calendar.meeting.tooltip.open", "calendar.meeting.tooltip.copy",
+                    "calendar.meeting.tooltip.more", "calendar.meeting.row.open", "calendar.meeting.row.copy"]
+        for language in ["en", "zh-Hans"] {
+            let bundle = try languageBundle(language)
+            for key in keys {
+                let localized = bundle.localizedString(forKey: key, value: nil, table: nil)
+                XCTAssertNotEqual(localized, key, "\(key) 在 \(language) 里没解析出文案（catalog 未编进宿主 bundle？）")
+                XCTAssertFalse(localized.isEmpty, "\(key) 在 \(language) 里解析为空串")
+            }
+        }
+        let zh = try languageBundle("zh-Hans")
+        func text(_ key: String) -> String { zh.localizedString(forKey: key, value: nil, table: nil) }
+        XCTAssertEqual(String(format: text("calendar.meeting.tooltip.open"), text("calendar.meeting.provider.tencent")),
+                       "打开腾讯会议")
+        XCTAssertEqual(String(format: text("calendar.meeting.tooltip.copy"), "939130533"), "复制会议号 939130533")
+        XCTAssertEqual(String(format: text("calendar.meeting.tooltip.more"), "939130533"),
+                       "复制会议号 939130533 · 右键更多")
+        XCTAssertEqual(text("calendar.meeting.row.open"), "打开")
+        XCTAssertEqual(text("calendar.meeting.row.copy"), "复制")
+        XCTAssertEqual(text("calendar.meeting.openIn.huawei"), "在华为云会议中打开")
+        // 编辑页仍在用的两条键不许被本任务顺手删掉（失败信号：编辑页用例变红）。
+        XCTAssertNotEqual(text("calendar.generation.model"), "calendar.generation.model")
+        XCTAssertNotEqual(text("calendar.generation.settings"), "calendar.generation.settings")
+    }
+
+    /// 右键菜单：只有会议号的邀请**恰好 4 项**（D-03），且没有任何 AI 兜底项。
+    func testMeetingIconMenuKeepsExactlyFourEntriesWithoutAIRecognition() throws {
+        let session = makeSession()
+        let model = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                       opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(MeetingActionPresentation.menuEntries(for: model),
+                       [.copyCode("会议ID：939130533"), .openIn(.tencent), .openIn(.huawei), .copySource])
+    }
+
+    /// 平台能判定时（带链接的邀请）两条「打开」合并成对应那一条。
+    func testMeetingIconMenuCollapsesToTheDeterminedProvider() throws {
+        let session = makeSession()
+        let huawei = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                        opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(huawei.determinedProvider, .huawei)
+        XCTAssertEqual(MeetingActionPresentation.menuEntries(for: huawei),
+                       [.copyCode(try XCTUnwrap(huawei.code).sourceText), .openIn(.huawei), .copySource])
+        let tencent = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.tencent), session: session,
+                                         opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(tencent.determinedProvider, .tencent)
+        XCTAssertEqual(MeetingActionPresentation.menuEntries(for: tencent),
+                       [.copyCode(try XCTUnwrap(tencent.code).sourceText), .openIn(.tencent), .copySource])
+    }
+
+    /// 菜单每一项都真的接上了动作：复制会议号（证据原文）/ 按号打开并记住客户端 / 复制邀请原文。
+    func testMeetingIconMenuEntriesDispatchThroughTheInjectedSeams() async throws {
+        let session = makeSession()
+        let tencent = MeetingFakeOpener([true])
+        var copied: [String] = []
+        let codeOnly = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                          opener: tencent, copyText: { copied.append($0) })
+        MeetingActionPresentation.perform(.copyCode("会议ID：939130533"), on: codeOnly)
+        XCTAssertEqual(copied, ["会议ID：939130533"], "菜单这一项沿用证据原文（M-6：与主动作的纯数字口径并存，不统一）")
+        MeetingActionPresentation.perform(.openIn(.tencent), on: codeOnly)
+        await drain { !codeOnly.isOpening }
+        XCTAssertEqual(try XCTUnwrap(tencent.urls.first).absoluteString,
+                       "wemeet://page/inmeeting?meeting_code=939130533")
+        XCTAssertEqual(Defaults[.meetingCodeOpener], MeetingProvider.tencent.rawValue, "从菜单选客户端同样要记住（D-09）")
+
+        let huawei = MeetingFakeOpener([true])
+        let linked = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                        opener: huawei, copyText: { _ in })
+        MeetingActionPresentation.perform(.openIn(.huawei), on: linked)
+        await drain { !linked.isOpening }
+        XCTAssertEqual(try XCTUnwrap(huawei.urls.first).absoluteString, MeetingInvitationFixtures.huaweiHTTPS,
+                       "证据里本条能直接打开时优先 open(target)，不是按号码拼深链")
+    }
+
+    /// 复制邀请原文（第 4 项）：整段来源进剪贴板。
+    func testMeetingIconMenuCopySourceCopiesTheWholeInvitation() throws {
+        let session = makeSession()
+        var copied: [String] = []
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                       opener: MeetingFakeOpener([]), copyText: { copied.append($0) })
+        MeetingActionPresentation.perform(.copySource, on: model)
+        XCTAssertEqual(copied.count, 1)
+        XCTAssertTrue(copied.first?.contains(MeetingInvitationFixtures.huaweiHTTPS) == true)
+    }
+
+    /// tooltip 由主动作决定（D-10）：打开 → 「打开<平台>」；复制 → 「复制会议号 <号>」；
+    /// 平台判不出来（只有会议号、没记忆）→ 补「· 右键更多」。
+    func testMeetingTooltipFollowsThePrimaryAction() throws {
+        let session = makeSession()
+        let localized = { (key: String) in Bundle.main.localizedString(forKey: key, value: nil, table: nil) }
+        let target = try XCTUnwrap(MeetingLinkResolver().uniqueOpenTarget(text: MeetingInvitationFixtures.huawei))
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .open(target, .huawei), provider: .huawei),
+                       String(format: localized("calendar.meeting.tooltip.open"),
+                              localized("calendar.meeting.provider.huawei")))
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .copyCode("939130533"), provider: .tencent),
+                       String(format: localized("calendar.meeting.tooltip.copy"), "939130533"))
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .copyCode("939130533"), provider: nil),
+                       String(format: localized("calendar.meeting.tooltip.more"), "939130533"))
+        XCTAssertEqual(MeetingActionPresentation.tooltip(primary: .none, provider: nil),
+                       localized("calendar.meeting.noEvidence"))
+
+        let linked = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                        opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(MeetingActionPresentation.tooltip(for: linked),
+                       String(format: localized("calendar.meeting.tooltip.open"),
+                              localized("calendar.meeting.provider.huawei")))
+        let codeOnly = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                          opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(MeetingActionPresentation.tooltip(for: codeOnly),
+                       String(format: localized("calendar.meeting.tooltip.more"), "939130533"))
+    }
+
+    /// `.row`（设计图 ④）：provider 名 + 号码；没有会议号时退回入口链接。
+    func testMeetingRowPresentationShowsProviderAndNumber() throws {
+        let session = makeSession()
+        let localized = { (key: String) in Bundle.main.localizedString(forKey: key, value: nil, table: nil) }
+        let codeOnly = MeetingActionModel(event: event(notes: "会议ID：939130533"), session: session,
+                                          opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertNil(MeetingActionPresentation.rowProviderName(for: codeOnly), "判不出平台就不显示 provider 名")
+        XCTAssertEqual(MeetingActionPresentation.rowValue(for: codeOnly), "939130533", ".row 显示纯数字")
+        Defaults[.meetingCodeOpener] = MeetingProvider.tencent.rawValue
+        XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: codeOnly),
+                       localized("calendar.meeting.provider.tencent"), "记住的客户端进 provider 名（D-09）")
+
+        Defaults.reset(Defaults.Keys.meetingCodeOpener.name)
+        let linked = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.feishu), session: session,
+                                        opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: linked), "Feishu", "没有记忆时 provider 名回到证据平台")
+        XCTAssertEqual(MeetingActionPresentation.rowValue(for: linked), "https://vc.feishu.cn/j/384462190",
+                       "没有会议号时显示入口链接")
+    }
+
+    /// 首页那两处调用点的入口几何宽高都是 **22**（不是 187），且旧形态在视图文件里彻底消失。
+    func testHomeMeetingIconKeepsAFixed22PointGeometry() throws {
+        XCTAssertEqual(MeetingActionPresentation.iconSide, 22)
+        let button = MeetingActionIconButton()
+        XCTAssertEqual(button.intrinsicContentSize, NSSize(width: 22, height: 22), "固有尺寸必须钉在 22，别被 SwiftUI 拉伸")
+        let source = try repositorySource("DynamicIsland/components/Calendar/MeetingActionView.swift")
+        XCTAssertTrue(source.contains("width: MeetingActionPresentation.iconSide, height: MeetingActionPresentation.iconSide"))
+        XCTAssertTrue(source.contains(".fixedSize()"))
+        XCTAssertTrue(source.contains(#"NSLocalizedString("calendar.meeting.actions""#),
+                      "图标按钮的无障碍标签仍复用 calendar.meeting.actions")
+        // 旧形态：整栏宽的文字按钮 + 最多 15 项的系统菜单 + AI 兜底 + 时间闸门/发送范围说明
+        for gone in ["NSButton(title:", "candidate.submenu", "calendar.meeting.recognize", "calendar.meeting.choose",
+                               "calendar.meeting.copyLink", "calendar.meeting.tooEarly", "calendar.meeting.menuHelp",
+                               "calendar.meeting.sendingScope", "calendar.generation.settings", "isJoinable"] {
+            XCTAssertFalse(source.contains(gone), "\(gone) 不应再出现在会议入口视图里")
+        }
+    }
+
+    /// 形态分派：首页两处走默认 `.icon`，面板与详情显式要 `.row`（设计图 ④）。
+    func testMeetingActionStylesDispatchIconOnHomeAndRowInThePanel() throws {
+        let session = makeSession()
+        let source = CalendarMeetingSource(event: event(notes: MeetingInvitationFixtures.huawei))
+        XCTAssertEqual(MeetingActionView(source: source, session: session).style, .icon)
+        XCTAssertEqual(MeetingActionView(event: event(notes: MeetingInvitationFixtures.huawei), session: session).style, .icon)
+        XCTAssertEqual(MeetingActionView(source: source, session: session, style: .row).style, .row)
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(panel.contains("MeetingActionView(event: event, session: session, style: .row)"))
+        let detail = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
+        XCTAssertTrue(detail.contains("style: .row"))
+        let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
+        XCTAssertTrue(todos.contains("MeetingActionView(source: source, session: session)"))
+        XCTAssertFalse(todos.contains("style: .row"), "首页不许被改成 .row")
+        // 编辑页三段不许被本任务碰到
+        XCTAssertTrue(panel.contains("private var editorPage: some View"))
+        XCTAssertTrue(panel.contains(#"Text("calendar.generation.model")"#))
+        XCTAssertTrue(panel.contains(#"Button("calendar.generation.settings")"#))
+    }
+
+    private func languageBundle(_ language: String) throws -> Bundle {
+        let path = try XCTUnwrap(Bundle.main.path(forResource: language, ofType: "lproj"),
+                                 "宿主 bundle 里找不到 \(language).lproj")
+        return try XCTUnwrap(Bundle(path: path))
+    }
+
+    private func repositorySource(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(relativePath)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     func testCodeOnlyMeetingCopiesExactEvidenceWithoutConstructingURL() async throws {
         let session = makeSession(), opener = MeetingFakeOpener([true])
         var copied: [String] = []

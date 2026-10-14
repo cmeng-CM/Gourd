@@ -147,6 +147,18 @@ final class MeetingActionModel: ObservableObject {
         return .copyCode(number)
     }
 
+    /// 证据里第一个带标签的会议号（`nil` 表示这份邀请只有链接或只有邀请意图）。
+    var code: MeetingCode? { targets.first(where: { !$0.meetingCodes.isEmpty })?.meetingCodes.first }
+
+    /// 证据里第一个会议号的纯数字值（`MeetingCode.value` 已剥掉空格与连字符）。
+    var codeValue: String? { code?.value }
+
+    /// 证据能判定的平台（**不含**「记住的客户端」）：带链接的候选优先，其次是有会议号候选的平台。
+    /// 用于 `.row` 的 provider 名与 tooltip 的「平台判不出来 → 右键更多」分支。
+    var determinedProvider: MeetingProvider? {
+        targets.first(where: \.canOpen)?.provider ?? targets.first(where: { !$0.meetingCodes.isEmpty })?.provider
+    }
+
     /// 按号码打开时使用的入会显示名（D-08）：macOS 用户名，空或全空白（含 U+00A0）回落 `Gourd`。
     static func resolvedDisplayName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -256,22 +268,153 @@ final class MeetingActionModel: ObservableObject {
     deinit { task?.cancel() }
 }
 
+/// 会议入口的呈现形态（docs/47 §接口与数据形状）：首页是 22pt 图标（`.icon`），
+/// 日历卡片与详情是一行两键（`.row`：provider + 号码 + 打开 / 复制）。
+enum MeetingActionStyle { case icon, row }
+
+/// 右键菜单的一项（docs/47 D-03）。纯数据，便于在无 UI 的用例里断言「恰好 4 项、没有 AI 项」。
+enum MeetingActionMenuEntry: Equatable {
+    /// 复制会议号：携带证据原文（`MeetingCode.sourceText`）。主动作复制的是**纯数字**，
+    /// 两者口径不同是 T3 审查 M-6 的已知项 —— 本任务保持现状，不统一。
+    case copyCode(String)
+    /// 用指定客户端按会议号打开（证据里本条能直接打开时，视图改走 `open(_:)`）。
+    case openIn(MeetingProvider)
+    /// 复制整段邀请原文。
+    case copySource
+}
+
+/// 呈现层的纯计算（菜单项、标题、tooltip、平台显示名）：视图只负责画，判据都在这里。
+enum MeetingActionPresentation {
+    /// 图标边长（docs/47 §背景与目标）：上一版 NSButton 没给宽度、被 SwiftUI 拉伸到约 187pt。
+    static let iconSide: CGFloat = 22
+
+    /// 右键菜单的项（D-03）：复制会议号 / 在腾讯会议中打开 / 在华为云会议中打开 / 复制邀请原文。
+    /// 平台能判定时两条「打开」合并成对应那一条（`docs/47 §做法 3`语意：只留能用的那条）。
+    @MainActor
+    static func menuEntries(for model: MeetingActionModel) -> [MeetingActionMenuEntry] {
+        var entries: [MeetingActionMenuEntry] = []
+        if let code = model.code { entries.append(.copyCode(code.sourceText)) }
+        switch model.determinedProvider {
+        case .tencent: entries.append(.openIn(.tencent))
+        case .huawei: entries.append(.openIn(.huawei))
+        default: entries.append(contentsOf: [.openIn(.tencent), .openIn(.huawei)])
+        }
+        entries.append(.copySource)
+        return entries
+    }
+
+    /// 菜单项标题。`复制会议号：<原文>` 复用既有键 `calendar.meeting.copyCodeFormat`（不新增同义键）。
+    static func title(for entry: MeetingActionMenuEntry) -> String {
+        switch entry {
+        case let .copyCode(sourceText):
+            return String(format: NSLocalizedString("calendar.meeting.copyCodeFormat", comment: ""), sourceText)
+        case let .openIn(provider):
+            return openInTitle(provider)
+        case .copySource:
+            return NSLocalizedString("calendar.meeting.copySource", comment: "")
+        }
+    }
+
+    /// 执行一个菜单项：能直接打开本条证据时优先 `open(_:)`，否则按号码拼深链（D-06 / D-09）。
+    @MainActor
+    static func perform(_ entry: MeetingActionMenuEntry, on model: MeetingActionModel) {
+        switch entry {
+        case let .copyCode(sourceText):
+            model.copy(sourceText)
+        case let .openIn(provider):
+            if let target = model.targets.first(where: { $0.canOpen && $0.provider == provider }) {
+                model.open(target)
+            } else {
+                model.openByNumber(provider: provider)
+            }
+        case .copySource:
+            model.copySource()
+        }
+    }
+
+    /// tooltip 由主动作决定（docs/47 D-10）：打开 → 「打开腾讯会议」；复制 → 「复制会议号 <号>」；
+    /// 平台判不出来时补「· 右键更多」，提示可以右键挑一个客户端（设计图 ②）。
+    static func tooltip(primary: MeetingPrimaryAction, provider: MeetingProvider?) -> String {
+        switch primary {
+        case let .open(_, provider):
+            return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), providerName(provider))
+        case let .copyCode(number):
+            return provider == nil
+                ? String(format: NSLocalizedString("calendar.meeting.tooltip.more", comment: ""), number)
+                : String(format: NSLocalizedString("calendar.meeting.tooltip.copy", comment: ""), number)
+        case .none:
+            return NSLocalizedString("calendar.meeting.noEvidence", comment: "")
+        }
+    }
+
+    @MainActor
+    static func tooltip(for model: MeetingActionModel) -> String {
+        tooltip(primary: model.primary, provider: model.determinedProvider)
+    }
+
+    /// 菜单里「在 … 中打开」两项的标题。
+    static func openInTitle(_ provider: MeetingProvider) -> String {
+        switch provider {
+        case .huawei: return NSLocalizedString("calendar.meeting.openIn.huawei", comment: "")
+        case .tencent: return NSLocalizedString("calendar.meeting.openIn.tencent", comment: "")
+        default: return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), providerName(provider))
+        }
+    }
+
+    /// 平台显示名：两家能按号打开的平台用新增的中文键（设计图 ④ 的 provider 名），
+    /// 其余沿用既有 `ConferenceProvider` 的品牌名口径（专有名词，两种语言一致）。
+    static func providerName(_ provider: MeetingProvider?) -> String {
+        switch provider {
+        case .huawei: return NSLocalizedString("calendar.meeting.provider.huawei", comment: "")
+        case .tencent: return NSLocalizedString("calendar.meeting.provider.tencent", comment: "")
+        case .feishu: return "Feishu"
+        case .zoom: return "Zoom"
+        case .teams: return "Teams"
+        case .meet: return "Meet"
+        case .webex: return "Webex"
+        case .facetime: return "FaceTime"
+        case .gotomeeting: return "GoToMeeting"
+        case .bluejeans: return "BlueJeans"
+        case .whereby: return "Whereby"
+        case .jitsi: return "Jitsi"
+        case .discord: return "Discord"
+        case .none: return ""
+        }
+    }
+
+    /// `.row` 左侧的 provider 名：优先用户记住的客户端（D-09），否则用证据判定的平台；判不出来就不显示。
+    @MainActor
+    static func rowProviderName(for model: MeetingActionModel) -> String? {
+        let name = providerName(model.rememberedProvider ?? model.determinedProvider)
+        return name.isEmpty ? nil : name
+    }
+
+    /// `.row` 中间的「号码或链接」：优先会议号（设计图 ④ 显示 `939130533`），没有号码时退回入口链接。
+    @MainActor
+    static func rowValue(for model: MeetingActionModel) -> String? {
+        model.codeValue ?? model.targets.first(where: \.canOpen)?.sourceURL?.absoluteString
+    }
+}
+
 /// 会议入口：证据层认出会议就显示，点一下就是结果（docs/47 D-01 / D-02 —— 已无「开始前 15 分钟」闸门）。
 struct MeetingActionView: View {
     let source: CalendarMeetingSource
     let session: CalendarPanelSession
+    let style: MeetingActionStyle
 
-    init(event: EventModel, url: URL? = nil, session: CalendarPanelSession) {
+    init(event: EventModel, url: URL? = nil, session: CalendarPanelSession, style: MeetingActionStyle = .icon) {
         source = CalendarMeetingSource(event: event, url: url)
         self.session = session
+        self.style = style
     }
-    init(source: CalendarMeetingSource, session: CalendarPanelSession) {
+    init(source: CalendarMeetingSource, session: CalendarPanelSession, style: MeetingActionStyle = .icon) {
         self.source = source
         self.session = session
+        self.style = style
     }
     var body: some View {
         if source.hasMeetingInformation {
-            MeetingActionContent(source: source, session: session)
+            MeetingActionContent(source: source, session: session, style: style)
                 .id(source.identity)
         }
     }
@@ -280,51 +423,140 @@ struct MeetingActionView: View {
 private struct MeetingActionContent: View {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @StateObject private var model: MeetingActionModel
+    private let style: MeetingActionStyle
 
-    init(source: CalendarMeetingSource, session: CalendarPanelSession) {
+    init(source: CalendarMeetingSource, session: CalendarPanelSession, style: MeetingActionStyle) {
         _model = StateObject(wrappedValue: MeetingActionModel(source: source, session: session))
+        self.style = style
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            MeetingActionMenu(model: model, vm: vm)
-                .frame(height: 24)
-                .accessibilityIdentifier("calendar-meeting-actions")
+        Group {
+            switch style {
+            case .icon:
+                // 22×22 固定尺寸：不给宽度的 NSButton 会被 SwiftUI 拉伸（docs/47 §背景与目标）。
+                MeetingActionIcon(model: model, vm: vm)
+                    .frame(width: MeetingActionPresentation.iconSide, height: MeetingActionPresentation.iconSide)
+                    .fixedSize()
+            case .row:
+                MeetingActionRow(model: model)
+            }
         }
+        .accessibilityIdentifier("calendar-meeting-actions")
         .onDisappear { model.cancel() }
     }
 }
 
-/// Real NSMenu lifecycle, no popover pin. Explicit candidates remain distinct menu choices.
-private struct MeetingActionMenu: NSViewRepresentable {
+/// `.row`：设计图 ④ 的面板形态 —— 一行 `<provider 名> <号码或链接>` + 右端「打开 / 复制」两个小键。
+private struct MeetingActionRow: View {
+    @ObservedObject var model: MeetingActionModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let provider = MeetingActionPresentation.rowProviderName(for: model) {
+                Text(provider)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75)).lineLimit(1).fixedSize()
+            }
+            if let value = MeetingActionPresentation.rowValue(for: model) {
+                Text(value)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9)).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            key("calendar.meeting.row.open") { model.performPrimary() }
+            key("calendar.meeting.row.copy") {
+                if let value = MeetingActionPresentation.rowValue(for: model) { model.copy(value) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func key(_ titleKey: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(LocalizedStringKey(titleKey))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(.white.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(model.isBusy)
+    }
+}
+
+/// 22×22 图标按钮（docs/47 §背景与目标）：AppKit 直接画并给出固定固有尺寸，绝不被 SwiftUI 拉伸；
+/// 左键执行主动作（D-01），右键弹菜单（D-03）。control-click 与右键同义，跟系统按钮一致。
+@MainActor
+final class MeetingActionIconButton: NSView {
+    /// 圆角 6、`rgba(255,255,255,.14)` 底（设计图 ②）。
+    static let cornerRadius: CGFloat = 6
+    static let fillAlpha: CGFloat = 0.14
+    static let symbolPointSize: CGFloat = 11
+
+    var symbolName: String = MeetingActionGlyph.symbol(for: .idle)
+    var leftClick: (@MainActor () -> Void)?
+    var rightClick: (@MainActor (NSView) -> Void)?
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: MeetingActionPresentation.iconSide, height: MeetingActionPresentation.iconSide)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.withAlphaComponent(Self.fillAlpha).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius).fill()
+        let configuration = NSImage.SymbolConfiguration(pointSize: Self.symbolPointSize, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.white.withAlphaComponent(0.9)]))
+        guard let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else { return }
+        let size = symbol.size
+        symbol.draw(in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                               width: size.width, height: size.height),
+                    from: .zero, operation: .sourceOver, fraction: 1)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) { rightClick?(self) } else { leftClick?() }
+    }
+    override func rightMouseDown(with event: NSEvent) { rightClick?(self) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+/// Real NSMenu lifecycle, no popover pin. 保留 `CalendarTextInteraction` 的自动收回抑制与
+/// `NSApplication.didResignActive` 观察者（docs/47 §做法 3、本任务 ⑤）。
+private struct MeetingActionIcon: NSViewRepresentable {
     @ObservedObject var model: MeetingActionModel
     var vm: DynamicIslandViewModel
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(title: "", target: context.coordinator, action: #selector(Coordinator.show(_:)))
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        context.coordinator.connect()
+    func makeNSView(context: Context) -> MeetingActionIconButton {
+        let button = MeetingActionIconButton()
+        button.setAccessibilityLabel(NSLocalizedString("calendar.meeting.actions", comment: ""))
+        context.coordinator.connect(button)
         return button
     }
-    func updateNSView(_ button: NSButton, context: Context) {
+    func updateNSView(_ button: MeetingActionIconButton, context: Context) {
         context.coordinator.parent = self
-        button.title = String(localized: "calendar.meeting.actions")
-        button.toolTip = String(localized: "calendar.meeting.menuHelp")
-        button.setAccessibilityLabel(button.title)
+        button.symbolName = MeetingActionGlyph.symbol(for: model.feedback)
+        button.toolTip = MeetingActionPresentation.tooltip(for: model)
+        button.needsDisplay = true
     }
-    static func dismantleNSView(_ button: NSButton, coordinator: Coordinator) { coordinator.stop() }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MeetingActionIconButton, context: Context) -> CGSize? {
+        CGSize(width: MeetingActionPresentation.iconSide, height: MeetingActionPresentation.iconSide)
+    }
+    static func dismantleNSView(_ button: MeetingActionIconButton, coordinator: Coordinator) { coordinator.stop() }
 
     @MainActor final class Coordinator: NSObject, NSMenuDelegate {
-        var parent: MeetingActionMenu
+        var parent: MeetingActionIcon
         private var interaction: CalendarTextInteraction?
         private var menu: NSMenu?
         private var actions: [() -> Void] = []
         private var observers: [NSObjectProtocol] = []
-        init(_ parent: MeetingActionMenu) { self.parent = parent }
-        func connect() {
+        init(_ parent: MeetingActionIcon) { self.parent = parent }
+        func connect(_ button: MeetingActionIconButton) {
             let vm = parent.vm
+            let model = parent.model
             interaction = CalendarTextInteraction(
                 setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
                 recheckHover: { [weak vm] in vm?.shouldRecheckHover.toggle() })
@@ -332,8 +564,10 @@ private struct MeetingActionMenu: NSViewRepresentable {
                                                                      object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.depart() }
             })
+            button.leftClick = { model.performPrimary() }
+            button.rightClick = { [weak self] view in self?.show(view) }
         }
-        @objc func show(_ button: NSButton) {
+        private func show(_ button: NSView) {
             depart()
             let menu = NSMenu()
             menu.autoenablesItems = false
@@ -341,38 +575,16 @@ private struct MeetingActionMenu: NSViewRepresentable {
             menu.delegate = self
             actions.removeAll()
             let model = parent.model
-            if model.targets.isEmpty { add("calendar.meeting.noEvidence", to: menu, enabled: false) {} }
-            if model.targets.filter(\.canOpen).count > 1 { add("calendar.meeting.choose", to: menu, enabled: false) {} }
-            for target in model.targets {
-                let candidate = NSMenuItem(title: target.sourceURL?.absoluteString ?? target.sourceText, action: nil, keyEquivalent: "")
-                let submenu = NSMenu()
-                submenu.autoenablesItems = false
-                if target.canOpen {
-                    add("calendar.meeting.open", to: submenu, enabled: !model.isBusy) { model.open(target) }
+            for entry in MeetingActionPresentation.menuEntries(for: model) {
+                add(MeetingActionPresentation.title(for: entry), to: menu) {
+                    MeetingActionPresentation.perform(entry, on: model)
                 }
-                for link in [target.sourceURL, target.httpsURL].compactMap({ $0 }).reduce(into: [URL](), { if !$0.contains($1) { $0.append($1) } }) {
-                    add("calendar.meeting.copyLink", to: submenu) { model.copy(link.absoluteString) }
-                }
-                for code in target.meetingCodes {
-                    add(String(format: String(localized: "calendar.meeting.copyCodeFormat"), code.sourceText), to: submenu, localized: false) { model.copy(code.sourceText) }
-                }
-                candidate.submenu = submenu
-                submenu.delegate = self
-                menu.addItem(candidate)
             }
-            menu.addItem(.separator())
-            add("calendar.meeting.sendingScope", to: menu, enabled: false) {}
-            add("calendar.generation.model", to: menu, enabled: false) {}
-            add("calendar.generation.settings", to: menu) { CalendarAISettingsNavigation.open() }
-            add("calendar.meeting.copySource", to: menu, enabled: model.hasSource) { model.copySource() }
-            if model.isBusy { add("Cancel", to: menu) { model.cancel() } }
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY), in: button)
         }
-        private func add(_ title: String, to menu: NSMenu, enabled: Bool = true, localized: Bool = true, action: @escaping () -> Void) {
-            let item = NSMenuItem(title: localized ? NSLocalizedString(title, comment: "") : title,
-                                  action: #selector(choose(_:)), keyEquivalent: "")
+        private func add(_ title: String, to menu: NSMenu, action: @escaping () -> Void) {
+            let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
             item.target = self
-            item.isEnabled = enabled
             item.tag = actions.count
             actions.append(action)
             menu.addItem(item)
