@@ -12562,148 +12562,59 @@ final class MeetingLinkResolverTests: XCTestCase {
         event.location = "https://vc.feishu.cn/j/384462190"
         XCTAssertNil(event.extractConferenceURL())
     }
-}
 
-@MainActor
-private final class MeetingEvidenceAI: AIHandle {
-    let response: String
-    var beforeResponse: (() async -> Void)?
-    var requests: [AIRequest] = []
-    init(_ fragments: [String]) {
-        response = String(data: try! JSONSerialization.data(withJSONObject: ["evidence": fragments]), encoding: .utf8)!
-    }
-    func complete(_ request: AIRequest) async throws -> AIResponse {
-        requests.append(request)
-        await beforeResponse?()
-        return AIResponse(text: response)
-    }
-}
-
-@MainActor
-final class MeetingEvidenceTests: XCTestCase {
-    func testAIOnlyReturnsVerifiedSourceURLsAndMultipleCandidates() async throws {
-        let fragments = ["https://meeting.tencent.com/dm/VUYtCU0Ssrfz", "https://vc.feishu.cn/j/384462190"]
-        let ai = MeetingEvidenceAI(fragments)
-        let result = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.tencent + "\n" + MeetingInvitationFixtures.feishu, using: ai)
-        XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, fragments)
-        XCTAssertEqual(ai.requests.count, 1)
+    func testUnhashedTencentLabelIsRecognizedInBothRegularExpressionCopies() {
+        // 两处同义正则（resolver 与 CalendarMeetingEvidence）都必须认不带井号的「腾讯会议：」。
+        let resolution = CalendarMeetingEvidence.resolve(textFields: ["腾讯会议：939130533"])
+        XCTAssertEqual(resolution.count, 1)
+        XCTAssertEqual(resolution.first?.meetingCodes.map(\.value), ["939130533"])
+        XCTAssertEqual(CalendarMeetingEvidence.resolve(textFields: ["联系电话：13800138000"]).count, 0)
+        let direct = resolver.resolve(text: "腾讯会议：939130533")
+        XCTAssertEqual(direct.first?.meetingCodes.map(\.value), ["939130533"])
+        XCTAssertFalse(direct.first?.canOpen ?? true)
+        XCTAssertTrue(resolver.resolve(text: "联系电话：13800138000").isEmpty)
     }
 
-    func testAIOmittingFeishuCannotHideOriginalTencentAndFeishuAmbiguity() async throws {
-        let tencent = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"
-        let feishu = "https://vc.feishu.cn/j/384462190"
-        let result = try await MeetingLinkResolver().recognize(
-            text: tencent + "\n" + feishu, using: MeetingEvidenceAI([tencent])
-        )
-        XCTAssertEqual(result.filter(\.canOpen).count, 2)
-        XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, [tencent, feishu])
+    func testPasscodeAcceptsOnlySupportedLabelsAndRejectsPhoneAndOverlongValues() {
+        XCTAssertEqual(resolver.passcode(in: "化小易会议号：939130533\n入会密码：696294"), "696294")
+        XCTAssertEqual(resolver.passcode(in: "会议密码：Ab12"), "Ab12")
+        XCTAssertEqual(resolver.passcode(in: "PASSWORD: 9988"), "9988")
+        XCTAssertNil(resolver.passcode(in: "会议号：939130533"))
+        XCTAssertNil(resolver.passcode(in: "联系电话：13800138000"))
+        XCTAssertNil(resolver.passcode(in: "入会密码：13800138000"))
+        XCTAssertNil(resolver.passcode(in: "入会密码：请输入密码"))
+        XCTAssertNil(resolver.passcode(in: "入会密码：abcdefghi"))
     }
 
-    func testAIOmittingNativeOrHTTPSCandidatesCannotHideSourceAmbiguity() async throws {
-        let native = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=A"
-        let https = "https://meeting.huaweicloud.com/#/j/940948346"
-        for sources in [[native, https], [https, native]] {
-            for returned in [native, https] {
-                let result = try await MeetingLinkResolver().recognize(
-                    text: sources.joined(separator: "\n"), using: MeetingEvidenceAI([returned])
-                )
-                XCTAssertEqual(result.filter(\.canOpen).count, 2)
-                XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, sources)
-            }
+    func testWemeetNativeDeepLinkValidatesExactShapeAndRejectsExtrasOrForeignHosts() throws {
+        let official = try XCTUnwrap(URL(string: "wemeet://page/inmeeting?meeting_code=939130533"))
+        XCTAssertEqual(MeetingLinkResolver.provider(for: official), .tencent)
+        let target = try XCTUnwrap(resolver.uniqueOpenTarget(text: official.absoluteString))
+        XCTAssertEqual(target.provider, .tencent)
+        XCTAssertEqual(target.nativeURL?.absoluteString, official.absoluteString)
+        XCTAssertNil(target.httpsURL)
+        for source in [
+            "wemeet://page/inmeeting?meeting_code=939130533&x=1",
+            "wemeet://evil.example/page/inmeeting?meeting_code=939130533",
+            "wemeet://page/other?meeting_code=939130533",
+            "wemeet://page/inmeeting?meeting_code=12345",
+            "wemeet://page/inmeeting?meeting_code=939130533&meeting_code=123456789"
+        ] {
+            XCTAssertTrue(resolver.resolve(text: source).isEmpty, source)
+            if let url = URL(string: source) { XCTAssertNil(MeetingLinkResolver.provider(for: url), source) }
         }
     }
 
-    func testAIKeepsAllThreeUnpairedSourcesWhenTwoNativeCandidatesShareOneHTTPSIdentity() async throws {
-        let nativeA = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=A"
-        let nativeB = "cloudlink://welinksoftclient/h5page?page=joinConfByLink&conf_id=960724861&name=B"
-        let https = "https://meeting.huaweicloud.com/#/j/960724861"
-        for sources in [[nativeA, nativeB, https], [https, nativeA, nativeB]] {
-            let result = try await MeetingLinkResolver().recognize(
-                text: sources.joined(separator: "\n"), using: MeetingEvidenceAI([nativeA])
-            )
-            XCTAssertEqual(result.filter(\.canOpen).count, 3)
-            XCTAssertEqual(result.compactMap { $0.sourceURL?.absoluteString }, sources)
-            XCTAssertTrue(result.filter { $0.nativeURL != nil }.allSatisfy { $0.httpsURL == nil })
-        }
-    }
-
-    func testAICodeOnlyEvidenceDoesNotPromoteAnyOfMultipleOriginalURLs() async throws {
-        let source = """
-        https://meeting.tencent.com/dm/VUYtCU0Ssrfz
-        https://vc.feishu.cn/j/384462190
-        #腾讯会议：817-450-376
-        """
-        let result = try await MeetingLinkResolver().recognize(
-            text: source, using: MeetingEvidenceAI(["#腾讯会议：817-450-376"])
-        )
-        XCTAssertEqual(result.count, 1)
-        XCTAssertTrue(result.allSatisfy { !$0.canOpen && $0.sourceURL == nil })
-        XCTAssertEqual(result[0].meetingCodes.map(\.value), ["817450376"])
-    }
-
-    func testPartialValidAIEvidenceStillRejectsASecondFabricatedFragment() async {
-        let source = "https://meeting.tencent.com/dm/VUYtCU0Ssrfz\nhttps://vc.feishu.cn/j/384462190"
-        do {
-            _ = try await MeetingLinkResolver().recognize(text: source, using: MeetingEvidenceAI([
-                "https://meeting.tencent.com/dm/VUYtCU0Ssrfz", "https://vc.feishu.cn/j/999999999"
-            ]))
-            XCTFail("Expected fabricated fragment rejection")
-        } catch { XCTAssertEqual(error as? MeetingRecognitionError, .invalidEvidence) }
-    }
-
-    func testAIFabricatedOrUnsafeEvidenceRejectsEntireResponse() async {
-        for fragment in ["https://meeting.tencent.com/dm/invented", "https://meeting.tencent.com.evil/dm/fixture", "817450376"] {
-            let source = MeetingInvitationFixtures.tencent + "\nhttps://meeting.tencent.com.evil/dm/fixture"
-            do {
-                _ = try await MeetingLinkResolver().recognize(text: source, using: MeetingEvidenceAI([fragment]))
-                XCTFail("Expected invalid evidence")
-            } catch { XCTAssertEqual(error as? MeetingRecognitionError, .invalidEvidence) }
-        }
-    }
-
-    func testAICodeEvidenceStaysCopyOnlyEvenWhenOriginalAlsoHasURL() async throws {
-        let result = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.tencent, using: MeetingEvidenceAI(["#腾讯会议：817-450-376"]))
-        XCTAssertEqual(result.count, 1)
-        XCTAssertFalse(result[0].canOpen)
-        XCTAssertEqual(result[0].meetingCodes.map(\.value), ["817450376"])
-    }
-
-    func testCancellationBeforeAndAfterAIResponseNeverDispatches() async {
-        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        let opener = MeetingFakeOpener([true])
-        let task = Task {
-            let targets = try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.huawei, using: ai)
-            for target in targets { _ = await MeetingOpening(opener: opener).open(target) }
-        }
-        task.cancel()
-        do { try await task.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
-        XCTAssertTrue(opener.urls.isEmpty)
-        XCTAssertTrue(ai.requests.isEmpty)
-
-        let gate = MeetingResponseGate()
-        ai.beforeResponse = { await gate.wait() }
-        let inFlight = Task { try await MeetingLinkResolver().recognize(text: MeetingInvitationFixtures.huawei, using: ai) }
-        while ai.requests.isEmpty { await Task.yield() }
-        inFlight.cancel()
-        gate.resume()
-        do { _ = try await inFlight.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
-        XCTAssertTrue(opener.urls.isEmpty)
-    }
-}
-
-@MainActor
-private final class MeetingResponseGate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var released = false
-    func wait() async {
-        if released { return }
-        await withCheckedContinuation { continuation = $0 }
-    }
-    func resume() {
-        released = true
-        continuation?.resume()
-        continuation = nil
+    func testResolverNoLongerDeclaresAIRecognitionSymbolsOrDependsOnAIHandle() throws {
+        // V6：删除「用 AI 识别会议」的解析侧后，resolver 源码里不得再有 recognize / MeetingRecognitionError / AIHandle。
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("DynamicIsland/services/MeetingLinkResolver.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertFalse(source.contains("func recognize("))
+        XCTAssertFalse(source.contains("MeetingRecognitionError"))
+        XCTAssertFalse(source.contains("AIHandle"))
     }
 }
 
@@ -14033,26 +13944,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(session.draft?.confirmations, Set(ScheduleConfirmation.allCases))
     }
 
-    func testMeetingAIUsesExactConfiguredHandleNeverAutomaticallyOpensAndPreservesChoices() async {
+    func testEarlierMeetingAllowsCopyButBlocksDispatch() async throws {
         let session = makeSession()
-        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        session.configureAI(ai)
-        XCTAssertTrue((session.configuredAI as AnyObject?) === ai)
-        let opener = MeetingFakeOpener([true])
-        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei + "\n" + MeetingInvitationFixtures.tencent),
-                                      session: session, opener: opener, now: { self.reference })
-        model.recognize()
-        await drain { !model.isRecognizing }
-        XCTAssertEqual(ai.requests.count, 1)
-        XCTAssertEqual(ai.requests[0].purpose, "meeting-evidence")
-        XCTAssertEqual(model.targets.filter(\.canOpen).count, 2)
-        XCTAssertTrue(opener.urls.isEmpty)
-        XCTAssertEqual(session.route, .editor)
-    }
-
-    func testEarlierMeetingAllowsAIAndCopyButBlocksDispatch() async throws {
-        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        session.configureAI(ai)
         let opener = MeetingFakeOpener([true])
         var copied: [String] = []
         let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei, start: reference.addingTimeInterval(3_600)),
@@ -14062,9 +13955,6 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         model.copy(target.sourceURL!.absoluteString)
         model.copySource()
         model.open(target)
-        model.recognize()
-        await drain { !model.isRecognizing }
-        XCTAssertEqual(ai.requests.count, 1)
         XCTAssertEqual(copied.count, 2)
         XCTAssertTrue(copied[1].contains(MeetingInvitationFixtures.huaweiHTTPS))
         XCTAssertTrue(opener.urls.isEmpty)
@@ -14082,40 +13972,6 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         await drain { !model.isOpening }
         XCTAssertEqual(model.statusKey, "calendar.meeting.accepted")
         XCTAssertEqual(opener.urls.count, 2)
-    }
-
-    func testCancellationInvalidatesLateMeetingRecognitionAndNeverOpens() async {
-        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        let gate = MeetingResponseGate()
-        ai.beforeResponse = { await gate.wait() }
-        session.configureAI(ai)
-        let opener = MeetingFakeOpener([true])
-        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
-                                      opener: opener, copyText: { _ in })
-        let original = model.targets
-        model.recognize()
-        await drain { ai.requests.count == 1 }
-        model.cancel()
-        gate.resume()
-        for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(model.targets, original)
-        XCTAssertEqual(model.statusKey, "calendar.meeting.cancelled")
-        XCTAssertFalse(model.isBusy)
-        XCTAssertTrue(opener.urls.isEmpty)
-    }
-
-    func testLongExistingNotesKeepVerifiedURLAndAIFailureDoesNotEraseIt() async {
-        let session = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        session.configureAI(ai)
-        let notes = String(repeating: "long note\n", count: 3_000) + MeetingInvitationFixtures.huawei
-        let model = MeetingActionModel(event: event(notes: notes), session: session,
-                                      opener: MeetingFakeOpener([]), copyText: { _ in })
-        XCTAssertEqual(model.targets.filter(\.canOpen).count, 1)
-        model.recognize()
-        await drain { !model.isRecognizing }
-        XCTAssertEqual(model.statusKey, "calendar.meeting.sourceTooLarge")
-        XCTAssertTrue(ai.requests.isEmpty)
-        XCTAssertEqual(model.targets.filter(\.canOpen).count, 1)
     }
 
     func testCodeOnlyMeetingCopiesExactEvidenceWithoutConstructingURL() async throws {
@@ -14155,14 +14011,11 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(search, "keep without request")
     }
 
-    func testCalendarActualContentSurfaceKeepsOwnedSessionThroughPanelAndMeetingAI() async throws {
-        let owned = makeSession(), other = makeSession()
-        let ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
-        let unrelatedAI = MeetingEvidenceAI([])
-        other.configureAI(unrelatedAI)
+    func testCalendarActualContentSurfaceKeepsOwnedSessionThroughPanelMeetingAction() async throws {
+        let owned = makeSession()
         let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
         let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
-        let context = ModuleContextFactory.make(manifest: CalendarModule.manifest, redraw: {}, ai: ai)
+        let context = ModuleContextFactory.make(manifest: CalendarModule.manifest, redraw: {})
         let module = CalendarModule(context: context, session: owned, manager: manager)
         try await module.activate()
         let request = ContentRequest(surface: .expanded, phase: .expanded, reason: .initial)
@@ -14176,19 +14029,16 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(action.session === owned)
         let opener = MeetingFakeOpener([])
         let model = MeetingActionModel(source: action.source, session: action.session, opener: opener, copyText: { _ in })
-        model.recognize()
-        await drain { !model.isRecognizing }
-        XCTAssertEqual(ai.requests.count, 1)
-        XCTAssertTrue(unrelatedAI.requests.isEmpty)
+        XCTAssertFalse(model.targets.isEmpty)
         XCTAssertTrue(opener.urls.isEmpty)
         await module.deactivate()
     }
 
     func testTodosActualHomeSurfaceRowsKeepOwnedSessionWithoutCalendarNavigation() async throws {
-        let owned = makeSession(), ai = MeetingEvidenceAI([MeetingInvitationFixtures.huaweiHTTPS])
+        let owned = makeSession()
         let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
         let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
-        let context = ModuleContextFactory.make(manifest: TodosModule.manifest, redraw: {}, ai: ai)
+        let context = ModuleContextFactory.make(manifest: TodosModule.manifest, redraw: {})
         let store = TodoStore(logger: context.logger, fixtureBackend: backend)
         let module = TodosModule(context: context, session: owned, manager: manager, store: store)
         try await module.activate()
@@ -14212,9 +14062,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(action.session === owned)
         let opener = MeetingFakeOpener([])
         let model = MeetingActionModel(source: action.source, session: action.session, opener: opener, copyText: { _ in })
-        model.recognize()
-        await drain { !model.isRecognizing }
-        XCTAssertEqual(ai.requests.count, 1)
+        XCTAssertFalse(model.targets.isEmpty)
         XCTAssertTrue(opener.urls.isEmpty)
         XCTAssertFalse(store.hasInitializedEventStore)
         await module.deactivate()
@@ -14287,15 +14135,6 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(unrelatedTarget.canOpen)
         emptyInvitation.open(unrelatedTarget)
         XCTAssertFalse(emptyInvitation.isOpening, "Invitation intent must not authorize another source's URL")
-        XCTAssertTrue(opener.urls.isEmpty)
-        owned.configureAI(MeetingEvidenceAI(["https://meeting.tencent.com/dm/fabricated"]))
-        let verified = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huaweiHTTPS), session: owned,
-                                          opener: opener, now: { self.reference }, copyText: { _ in })
-        let originalTargets = verified.targets
-        verified.recognize()
-        await drain { !verified.isRecognizing }
-        XCTAssertEqual(verified.statusKey, "calendar.meeting.recognitionFailed")
-        XCTAssertEqual(verified.targets, originalTargets)
         XCTAssertTrue(opener.urls.isEmpty)
     }
 

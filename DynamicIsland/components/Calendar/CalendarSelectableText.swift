@@ -13,7 +13,7 @@ enum CalendarMeetingEvidence {
         let resolver = MeetingLinkResolver()
         let patterns = [
             #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"“”]+"#,
-            #"(?i)(?:#腾讯会议|会议\s*(?:ID|号)|meeting\s*(?:ID|code))\s*[:：]\s*([0-9](?:[0-9 -]{3,18})[0-9])(?![0-9])"#
+            #"(?i)(?:#腾讯会议|腾讯会议|会议\s*(?:ID|号)|meeting\s*(?:ID|code))\s*[:：]\s*([0-9](?:[0-9 -]{3,18})[0-9])(?![0-9])"#
         ]
         var fragments: [String] = []
         var independentTargets: [MeetingJoinTarget] = []

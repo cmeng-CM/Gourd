@@ -97,30 +97,6 @@ final class MeetingActionModel: ObservableObject {
     var hasSource: Bool { !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var isBusy: Bool { isRecognizing || isOpening }
 
-    func recognize() {
-        guard !isBusy else { return }
-        guard let ai = session.configuredAI else { statusKey = "calendar.meeting.configure"; return }
-        revision += 1
-        let current = revision
-        isRecognizing = true
-        statusKey = "calendar.meeting.recognizing"
-        task = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let recognized = try await MeetingLinkResolver().recognize(text: self.source, using: ai)
-                guard !Task.isCancelled, self.revision == current else { return }
-                // Preserve every deterministic opening choice even if AI only returns a code.
-                for target in recognized where !self.targets.contains(target) { self.targets.append(target) }
-                self.statusKey = self.targets.isEmpty ? "calendar.meeting.noEvidence" : "calendar.meeting.choose"
-            } catch {
-                guard !Task.isCancelled, self.revision == current else { return }
-                self.statusKey = (error as? MeetingRecognitionError) == .sourceTooLarge
-                    ? "calendar.meeting.sourceTooLarge" : "calendar.meeting.recognitionFailed"
-            }
-            if self.revision == current { self.isRecognizing = false; self.task = nil }
-        }
-    }
-
     func open(_ target: MeetingJoinTarget) {
         guard !isBusy, isJoinable, target.canOpen, targets.contains(target) else { return }
         revision += 1
@@ -269,7 +245,6 @@ private struct MeetingActionMenu: NSViewRepresentable {
                 menu.addItem(candidate)
             }
             menu.addItem(.separator())
-            add("calendar.meeting.recognize", to: menu, enabled: model.hasSource && !model.isBusy) { model.recognize() }
             add("calendar.meeting.sendingScope", to: menu, enabled: false) {}
             add("calendar.generation.model", to: menu, enabled: false) {}
             add("calendar.generation.settings", to: menu) { CalendarAISettingsNavigation.open() }
