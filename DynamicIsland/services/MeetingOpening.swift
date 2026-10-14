@@ -53,4 +53,19 @@ struct MeetingOpening {
         }
         return attempted.isEmpty ? .unavailable : .refused(attempted)
     }
+
+    /// 只有会议号时的入口：先按平台拼深链，拼不出来（位数不符、平台没有文档依据）即 `.unavailable`。
+    /// 这里没有可退的 HTTPS 兜底 —— 号码本身不是地址，打不开的结果交回调用方去复制。
+    func openByNumber(provider: MeetingProvider, number: String,
+                      displayName: String, passcode: String?) async -> MeetingOpenResult {
+        guard !Task.isCancelled else { return .cancelled }
+        guard let url = MeetingJoinURLBuilder.url(provider: provider, number: number,
+                                                 displayName: displayName, passcode: passcode) else {
+            return .unavailable
+        }
+        guard !Task.isCancelled else { return .cancelled }
+        let accepted = await opener.open(url)
+        guard !Task.isCancelled else { return .cancelled }
+        return accepted ? .accepted(url) : .refused([url])
+    }
 }

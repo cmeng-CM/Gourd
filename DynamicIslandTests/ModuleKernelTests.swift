@@ -12677,6 +12677,121 @@ final class MeetingOpeningTests: XCTestCase {
         XCTAssertEqual(result, .cancelled)
         XCTAssertEqual(fake.urls, [try XCTUnwrap(target.nativeURL)])
     }
+
+    func testOpenByNumberBuildsDispatchesAndReportsUnavailableForNumbersWithoutADeepLink() async throws {
+        let expectedHuawei = try XCTUnwrap(MeetingJoinURLBuilder.huawei(confID: "939130533", displayName: "蔡锰", passcode: "696294"))
+        let accepted = MeetingFakeOpener([true])
+        let opened = await MeetingOpening(opener: accepted).openByNumber(
+            provider: .huawei, number: "939 130-533", displayName: "蔡锰", passcode: "696294")
+        XCTAssertEqual(opened, .accepted(expectedHuawei))
+        XCTAssertEqual(accepted.urls, [expectedHuawei])
+        XCTAssertEqual(MeetingLinkResolver.provider(for: expectedHuawei), .huawei)
+
+        let expectedTencent = try XCTUnwrap(MeetingJoinURLBuilder.tencent(meetingCode: "817450376", passcode: nil))
+        let refused = MeetingFakeOpener([false])
+        let rejected = await MeetingOpening(opener: refused).openByNumber(
+            provider: .tencent, number: "817-450-376", displayName: "", passcode: "696294")
+        XCTAssertEqual(rejected, .refused([expectedTencent]))
+        XCTAssertEqual(refused.urls, [expectedTencent])
+
+        let unsupported: [(MeetingProvider, String)] = [
+            (.tencent, "12345"), (.huawei, "1234567890123"), (.feishu, "939130533"), (.zoom, "939130533")
+        ]
+        for (provider, number) in unsupported {
+            let fake = MeetingFakeOpener([true])
+            let result = await MeetingOpening(opener: fake).openByNumber(
+                provider: provider, number: number, displayName: "蔡锰", passcode: nil)
+            XCTAssertEqual(result, .unavailable, "\(provider) \(number)")
+            XCTAssertTrue(fake.urls.isEmpty, number)
+        }
+
+        let cancellable = MeetingFakeOpener([true])
+        let cancelledByNumber = Task {
+            await MeetingOpening(opener: cancellable).openByNumber(
+                provider: .huawei, number: "939130533", displayName: "蔡锰", passcode: nil)
+        }
+        cancelledByNumber.cancel()
+        let cancelledResult = await cancelledByNumber.value
+        XCTAssertEqual(cancelledResult, .cancelled)
+        XCTAssertTrue(cancellable.urls.isEmpty)
+    }
+}
+
+final class MeetingJoinURLBuilderTests: XCTestCase {
+    func testDigitsAcceptsOnlyNineToTwelveAsciiDigitsAfterStrippingSpacesAndHyphens() {
+        XCTAssertEqual(MeetingJoinURLBuilder.digits("939130533"), "939130533")
+        XCTAssertEqual(MeetingJoinURLBuilder.digits("1234567890"), "1234567890")
+        XCTAssertEqual(MeetingJoinURLBuilder.digits("123456789012"), "123456789012")
+        XCTAssertEqual(MeetingJoinURLBuilder.digits("940 948 346"), "940948346")
+        XCTAssertEqual(MeetingJoinURLBuilder.digits("817-450-376"), "817450376")
+        XCTAssertNil(MeetingJoinURLBuilder.digits("12345678"))
+        XCTAssertNil(MeetingJoinURLBuilder.digits("12345"))
+        XCTAssertNil(MeetingJoinURLBuilder.digits("1234567890123"))
+        XCTAssertNil(MeetingJoinURLBuilder.digits("93913053a"))
+        XCTAssertNil(MeetingJoinURLBuilder.digits(""))
+        XCTAssertNil(MeetingJoinURLBuilder.digits("９３９１３０５３３"))
+        XCTAssertNil(MeetingJoinURLBuilder.digits("会议号：939130533"))
+    }
+
+    func testHuaweiDeepLinkPassesResolverValidationWithExactParameterSetAndFallbackName() throws {
+        let url = try XCTUnwrap(MeetingJoinURLBuilder.huawei(confID: "939 130-533", displayName: "蔡锰", passcode: "696294"))
+        XCTAssertEqual(MeetingLinkResolver.provider(for: url), .huawei)
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(items.map(\.name), ["page", "conf_id", "name", "enter_code"])
+        XCTAssertEqual(items.first { $0.name == "page" }?.value, "joinConfByLink")
+        XCTAssertEqual(items.first { $0.name == "conf_id" }?.value, "939130533")
+        XCTAssertEqual(items.first { $0.name == "name" }?.value, "蔡锰")
+        XCTAssertEqual(items.first { $0.name == "enter_code" }?.value, "696294")
+        for forbidden in ["server_url", "port", "open_mic", "open_camera"] {
+            XCTAssertFalse(items.contains { $0.name == forbidden }, forbidden)
+        }
+        // 号码为空缺凭据时只写三件套，且这条 URL 回到证据层仍是一个可打开的原生候选。
+        let minimal = try XCTUnwrap(MeetingJoinURLBuilder.huawei(confID: "960724861", displayName: "Gourd", passcode: nil))
+        XCTAssertEqual(MeetingLinkResolver.provider(for: minimal), .huawei)
+        XCTAssertEqual(URLComponents(url: minimal, resolvingAgainstBaseURL: false)?.queryItems?.map(\.name),
+                       ["page", "conf_id", "name"])
+        XCTAssertTrue(MeetingLinkResolver().resolve(text: minimal.absoluteString).contains { $0.nativeURL == minimal })
+
+        for blank in ["", "   ", "\n"] {
+            let fallback = try XCTUnwrap(MeetingJoinURLBuilder.huawei(confID: "939130533", displayName: blank, passcode: nil), blank)
+            XCTAssertEqual(MeetingLinkResolver.provider(for: fallback), .huawei, blank)
+            XCTAssertEqual(URLComponents(url: fallback, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "name" }?.value, MeetingJoinURLBuilder.fallbackDisplayName, blank)
+        }
+
+        for invalid in [
+            (confID: "12345", name: "蔡锰", passcode: Optional("696294")),
+            (confID: "1234567890123", name: "蔡锰", passcode: nil),
+            (confID: "939130533", name: "蔡锰\r\nInjected", passcode: nil),
+            (confID: "939130533", name: "蔡锰", passcode: Optional("696\u{0007}294"))
+        ] {
+            XCTAssertNil(MeetingJoinURLBuilder.huawei(confID: invalid.confID, displayName: invalid.name, passcode: invalid.passcode),
+                         "\(invalid.confID) \(invalid.name)")
+        }
+    }
+
+    func testTencentDeepLinkIsExactShapeAndNeverGainsExtraParametersOrForeignHosts() throws {
+        let url = try XCTUnwrap(MeetingJoinURLBuilder.tencent(meetingCode: "817-450-376", passcode: "696294"))
+        XCTAssertEqual(url.absoluteString, "wemeet://page/inmeeting?meeting_code=817450376")
+        XCTAssertEqual(MeetingLinkResolver.provider(for: url), .tencent)
+        // 腾讯密码没有依据可写：带密码与不带密码产出同一条 URL。
+        XCTAssertEqual(MeetingJoinURLBuilder.tencent(meetingCode: "939130533", passcode: nil)?.absoluteString,
+                       MeetingJoinURLBuilder.tencent(meetingCode: "939130533", passcode: "1234")?.absoluteString)
+        XCTAssertNil(MeetingJoinURLBuilder.tencent(meetingCode: "12345", passcode: nil))
+        XCTAssertNil(MeetingJoinURLBuilder.tencent(meetingCode: "1234567890123", passcode: nil))
+        XCTAssertNil(MeetingJoinURLBuilder.tencent(meetingCode: "93913053a", passcode: nil))
+        // 只有华为与腾讯有两处可查依据，其余平台一律不拼。
+        XCTAssertEqual(MeetingJoinURLBuilder.url(provider: .huawei, number: "939130533", displayName: "蔡锰", passcode: nil)?.scheme, "cloudlink")
+        XCTAssertEqual(MeetingJoinURLBuilder.url(provider: .tencent, number: "939130533", displayName: "蔡锰", passcode: nil)?.scheme, "wemeet")
+        for provider in [MeetingProvider.zoom, .teams, .meet, .webex, .feishu, .facetime, .gotomeeting, .bluejeans, .whereby, .jitsi, .discord] {
+            XCTAssertNil(MeetingJoinURLBuilder.url(provider: provider, number: "939130533", displayName: "蔡锰", passcode: nil), provider.rawValue)
+        }
+        for source in ["wemeet://page/inmeeting?meeting_code=939130533&x=1",
+                       "wemeet://evil.com/page/inmeeting?meeting_code=939130533"] {
+            XCTAssertTrue(MeetingLinkResolver().resolve(text: source).isEmpty, source)
+            if let rejected = URL(string: source) { XCTAssertNil(MeetingLinkResolver.provider(for: rejected), source) }
+        }
+    }
 }
 
 // MARK: - AI schedule candidates and revision-isolated generation
