@@ -95,3 +95,5 @@ T1 独立复审已通过（Critical/Important/Minor=0/0/0），复审覆盖新�
 交付核验器 `.workflow/calendar-page-layout/verify_delivery.py` 采用只读检查：先运行ai-calendar wrapper的证据复核，要求新attempt实际执行至少830个XCTest，8个原生与3个布局测试各方法在实际日志中恰好通过一次；独立T1/T2规格与质量JSON、整体ready JSON及报告摘要严格绑定baseline/HEAD。最终page-evidence必须包含四设置×17场景、全部源码/工具/generated/probe/新Debug app/dylib/resources/PNG摘要、严格True几何检查和根控制器逐图实看记录；独立复审另核全部68图。
 
 安装沿现有七个命名checks、六个实际命令与日志摘要，以及installed snapshot/实时签名；新增进程证明必须来自精确PID的kernel ps（pid/start/comm），核旧进程不再运行和新PID的实际安装路径，不能用NSWorkspace缓存替代。后置仅允许docs/45与docs/46的祖先提交，逐提交检查禁止隐藏中间源码变化；纯文档回写不触发新的宿主循环。Ignored控制核验器本身的SHA写入T2与整体独立审查报告，核验时也必须匹配。缺失/空数组/假布尔值/错hash/路径逃逸/旧Debug或绑定错均拒绝，尚缺证据时不会宣称交付完成。
+
+安装前执行记录：attempt `20261014T105658-28731d1e7f81437b89ec341b1fadb2df` 的XCTest实际830执行/0失败/0跳过，Python、Release与签名各阶段退出0，但完整wrapper末端因根目录 `default.profraw` 摘要变化而判定failed，不能用于交付。控制器定位为并行Debug页探针退出时的默认LLVM覆盖率输出；保持冻结生产源/探针，后续执行将由调用环境把 `LLVM_PROFILE_FILE` 定向至各页证据目录，并重新获取成功attempt及其实际Debug最终图。旧attempt和旧68图只保留为失败运行记录，不重标success或混入新最终证据。
