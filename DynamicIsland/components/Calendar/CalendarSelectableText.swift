@@ -220,9 +220,9 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
             .font: font, .foregroundColor: color, .strikethroughStyle: strikethrough ? NSUnderlineStyle.single.rawValue : 0
         ])
         // AppKit may replace system font runs with a CJK fallback during layout.
-        // Refreshing those attributes for the same text must keep the user's selection.
+        // Refreshing attributes must keep selection only when its UTF-16 coordinates are unchanged.
         if textStorage?.isEqual(to: value) == false {
-            let ranges = string == text ? selectedRanges : nil
+            let ranges = string.utf16.elementsEqual(text.utf16) ? selectedRanges : nil
             textStorage?.setAttributedString(value)
             if let ranges { selectedRanges = ranges }
         }

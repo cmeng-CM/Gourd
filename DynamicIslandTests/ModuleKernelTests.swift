@@ -13469,6 +13469,31 @@ final class CalendarNativeTextSystemTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(view.layoutManager).numberOfGlyphs, 0)
     }
 
+    func testReadOnlyCanonicalEquivalentUTF16ChangesDoNotRestoreOldSelectionCoordinates() throws {
+        let decomposed = "e\u{0301}XYZ"
+        let composed = "\u{00e9}XYZ"
+        XCTAssertEqual(decomposed, composed, "Swift equality includes canonical equivalence")
+        XCTAssertFalse(decomposed.utf16.elementsEqual(composed.utf16))
+        for (old, new) in [(decomposed, composed), (composed, decomposed)] {
+            let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
+            defer { view.stop() }
+            try assertTextSystem(view)
+            view.configure(text: old, font: .systemFont(ofSize: 14), color: .white,
+                           maximumLines: 0, strikethrough: false)
+            let oldSelection = (old as NSString).range(of: "X")
+            view.setSelectedRange(oldSelection)
+            XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "X")
+            view.configure(text: new, font: .systemFont(ofSize: 14), color: .white,
+                           maximumLines: 0, strikethrough: false)
+            XCTAssertTrue(view.string.utf16.elementsEqual(new.utf16))
+            XCTAssertFalse(view.selectedRange() == oldSelection,
+                           "Different UTF-16 coordinates must use AppKit's content-replacement selection")
+            XCTAssertTrue(NSMaxRange(view.selectedRange()) <= (new as NSString).length)
+            // A stale old offset would now select Y or a standalone combining mark.
+            XCTAssertEqual(view.selectedRange().length, 0)
+        }
+    }
+
     func testEditableMakeNSViewArgumentsSupportActualMultilineInsertionAndBinding() throws {
         let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
         defer { view.stop() }

@@ -135,7 +135,7 @@ stateDiagram-v2
 
 `sourceText/generationMode/confirmations` 属于草稿 dirty 状态。会话同步失效与保存守卫独立于 T7 的 800ms 调度；`generationState` 为 idle/debouncing/parsing/ready/failed/cancelled。首次提交解析用 `SourceReferenceContext` 成对冻结该修订的 reference instant 与 reference time zone，重试和取消后重试均复用。参考区用于解释相对年月日；候选来源区继续用于显示、日期控件和保存，不得回流改写同修订的参考区。原文变化、载入新稿与清稿统一清除此上下文；新修订重新取当前时刻及当时草稿区（未指定则用会话区）。备注一旦手改便持续由用户持有，重解析不再自动追加原文，独立原文仍可恢复。
 
-文字桥接按建议宽度测量行高，不嵌套 NSScrollView，保留页面外层全量滚动。 两个原生初始化器在 nil 容器时显式建立完整 TextKit 链；有效传入容器原样保留。只读 configure 的同文字属性刷新保持 selectedRanges，覆盖中文字体回退后的重复更新。实际拖选开始和菜单打开各占局部 owner；AppKit 的 mouseDown 跟踪返回、mouseUp、菜单关闭、离开应用/窗口及拆毁释放并复检 hover。快捷收回观察当前选屏，保护开始取消旧 deadline，释放不恢复旧三秒计时。观察安装以 binding ID 防止同步 publisher 回调中的停止或替换被返回的旧订阅覆盖。
+文字桥接按建议宽度测量行高，不嵌套 NSScrollView，保留页面外层全量滚动。 两个原生初始化器在 nil 容器时显式建立完整 TextKit 链；有效传入容器原样保留。只读 configure 仅在 UTF-16 序列完全相同的属性刷新中保持 selectedRanges，覆盖中文字体回退后的重复更新；规范等价但 UTF-16 内容不同的更新不恢复旧坐标。实际拖选开始和菜单打开各占局部 owner；AppKit 的 mouseDown 跟踪返回、mouseUp、菜单关闭、离开应用/窗口及拆毁释放并复检 hover。快捷收回观察当前选屏，保护开始取消旧 deadline，释放不恢复旧三秒计时。观察安装以 binding ID 防止同步 publisher 回调中的停止或替换被返回的旧订阅覆盖。
 
 自动原文调度由 CalendarSourceDebouncer 持有：延迟中切页取消本地 delay，恢复 debouncing 时重新调度；已开始的自动解析取消则保留 cancelled 与保存阻断，不在恢复时无改动重发。显式手动重试目前由独立 Task 持有，离开编辑页后仍可能在同草稿/同修订下完成或失败；明确取消、原文改变及弃稿依然使其结果失效。两种路径均不以模型等待长期保护收回。
 
@@ -149,9 +149,11 @@ stateDiagram-v2
 
 两个原生视图原先直接把 `nil` 传给 `NSTextView` 指定初始化器，该路径没有创建 `NSTextStorage → NSLayoutManager → NSTextContainer`；只读 configure 的可选写入没有落到 storage，新增原文/备注也无法实际输入。此前 T6 的回调测试与历史完整自动门没有构造这两个真实控件，因而未捕获这个缺陷。旧生产源码的无窗口 AppKit 探针实测六例、40 断言、11 失败，两个 nil 构造都没有 storage；完整传入容器用例通过。
 
-此次只在两个 nil 初始化分支建立完整 TextKit 链并传给 super；有效传入 container、manager、storage 保持原对象。配置、布局属性和生命周期沿用现有实现。补齐链后中文系统字体排版会回退为 PingFang，重复 configure 的 attributed-string 比较会再次写入属性并清掉选区；仅 nil 修复的中间探针实测原 {2,4} 选区变成 {8,0}。configure 现仅在 string 未变时保存并恢复完整 `selectedRanges`，字体/划线更新同样保留选择；内容变化仍由 AppKit 处理选区，不改变复制、导航或收回契约。
+此次只在两个 nil 初始化分支建立完整 TextKit 链并传给 super；有效传入 container、manager、storage 保持原对象。配置、布局属性和生命周期沿用现有实现。补齐链后中文系统字体排版会回退为 PingFang，重复 configure 的 attributed-string 比较会再次写入属性并清掉选区；仅 nil 修复的中间探针实测原 {2,4} 选区变成 {8,0}。configure 现仅在 UTF-16 序列完全相同时保存并恢复完整 `selectedRanges`，字体/划线更新同样保留选择；UTF-16 内容变化仍由 AppKit 处理选区，不改变复制、导航或收回契约。
 
-新增 `CalendarNativeTextSystemTests` 七例，以 makeNSView 原有 `.zero/nil` 参数构造真实生产控件，检查完整链及布局属性、中文标题非空/glyph/usedRect、重复配置与样式更新后的原生选区、实际多行 `insertText` 经生产 Coordinator 写回 Binding 与真实草稿原文/备注、当前绑定替换、完整传入容器保留。最终源码无窗口探针逐字抽取生产控件与 Coordinator，并执行其中六个原生方法（独立断言适配，VM/payload 仅未调用的外部类型壳），114 断言零失败、退出 0；实际草稿会话的第七例待本次完整 XCTest 运行。最终源码增量 build-for-testing 已退出 0（七个新增 XCTest 编译通过），不启动宿主、不代表这些 XCTest 已实际运行。
+新增 `CalendarNativeTextSystemTests` 八例，以 makeNSView 原有 `.zero/nil` 参数构造真实生产控件，检查完整链及布局属性、中文标题非空/glyph/usedRect、重复配置与样式更新后的原生选区、实际多行 `insertText` 经生产 Coordinator 写回 Binding 与真实草稿原文/备注、当前绑定替换、完整传入容器保留，以及规范等价但 UTF-16 序列不同的双向更新。当前源码无窗口探针逐字抽取生产控件与 Coordinator，并执行其中七个原生方法（独立断言适配，VM/payload 仅未调用的外部类型壳），142 断言零失败、退出 0；实际草稿会话的一例及全部八例的最新编译/运行由控制器的新完整 XCTest 门继续执行。前轮 `a86484e8` 的六例/114 断言绿探针、七个新增 XCTest 的 build-for-testing 退出 0 仅适用前轮输入，不能替代本次 Unicode 修复后的完整验证。
+
+独立任务审查 I-01 发现：Swift String 相等允许 Unicode 规范等价，但原生选区采用 UTF-16 坐标。`e\u{0301}XYZ` 与 `\u{00e9}XYZ` 在 Swift 中相等，UTF-16 长度分别为 5 和 4；恢复旧 {2,1} 选区会把原先的 X 变成 Y。此次改为 `string.utf16.elementsEqual(text.utf16)` 才恢复范围，规范等价但序列不同的更新沿 AppKit 的内容替换行为。新增双向真实控件回归在修前七例/142 断言中实测 3 失败，修后七例/142 断言全部通过；原中文 fallback、普通同字串及样式刷新选区断言保持。新红绿证据保留在 `.workflow/calendar-native-text-repair/reports/i01/`，不恢复不同 UTF-16 内容的旧坐标。
 
 本次红证据及仅 nil 修复的中文失败记录保留在 `.workflow/calendar-native-text/reports/`，最终绿证据与任务报告在 `.workflow/calendar-native-text-repair/reports/`。新完整 XCTest/Python/Release/签名自动门、独立终审及本次重新安装均 pending，由控制器继续执行并绑定本轮源码的新 attempt；下述 819 用例成功和 2026-10-13 安装只为历史证据。探针未显示窗口、操作系统鼠标/设置、读取密钥、请求 AI/会议或写真实 EventKit；它不能证明实际 SwiftUI 页面全量布局、焦点、滚动和桌面复制，原四类别人工验收仍未关闭。
 
