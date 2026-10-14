@@ -69,6 +69,22 @@
       }
     }
 ,
+    "calendar.meeting.tooltip.multiple": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Multiple meeting entries · right-click to choose"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "多个会议入口 · 右键选择"
+          }
+        }
+      }
+    },
     "calendar.meeting.tooltip.open": {
       "localizations": {
         "en": {
@@ -120,6 +136,22 @@
       }
     }
 ,
+    "calendar.meeting.row.choose": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose entry"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择入口"
+          }
+        }
+      }
+    },
     "calendar.meeting.row.open": {
       "localizations": {
         "en": {
@@ -327,22 +359,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "未找到已验证的会议链接或带标签的会议号。"
-          }
-        }
-      }
-    },
-    "calendar.meeting.open": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open this entry"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开此入口"
           }
         }
       }

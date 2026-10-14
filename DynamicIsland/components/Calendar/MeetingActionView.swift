@@ -61,9 +61,11 @@ enum MeetingActionFeedback: Equatable { case idle, opening, opened, copied, fail
 ///
 /// `open` 的 `MeetingJoinTarget` 既可能是带链接的候选，也可能是「只有会议号」的兜底候选
 /// （`provider == nil`、`canOpen == false`）——后者的打开由 `MeetingJoinURLBuilder` 按号码拼深链。
+/// `choose` 表示有**多个**可打开候选：不许猜，左键直接弹出菜单让用户选（审查 I-2）。
 enum MeetingPrimaryAction: Equatable {
     case open(MeetingJoinTarget, MeetingProvider)
     case copyCode(String)
+    case choose
     case none
 }
 
@@ -131,13 +133,16 @@ final class MeetingActionModel: ObservableObject {
         return provider
     }
 
-    /// 点击一下要执行的动作（D-01）。
+    /// 点击一下要执行的动作（D-01 / 审查 I-2）。
     ///
-    /// 有可打开候选就打开；只有会议号时，记住过客户端就按号码打开、否则复制号码；都没有则不臆造动作。
+    /// 有**恰好一个**可打开候选就打开；**两个及以上**可打开候选不猜（`.choose`，左键弹菜单让用户选）；
+    /// 没有可打开候选时，只有会议号就「记住过客户端按号码打开、否则复制号码」；都没有则不臆造动作。
     /// 未判定平台时不得凭猜选客户端（`MeetingJoinURLBuilder.url(provider:...)` 不复核号码归属），
     /// 这类候选退到纯号码分支。
     var primary: MeetingPrimaryAction {
-        if let target = targets.first(where: \.canOpen),
+        let openable = targets.filter(\.canOpen)
+        if openable.count >= 2 { return .choose }
+        if let target = openable.first,
            let provider = target.provider ?? rememberedProvider {
             return .open(target, provider)
         }
@@ -146,6 +151,9 @@ final class MeetingActionModel: ObservableObject {
         if let provider = rememberedProvider { return .open(target, provider) }
         return .copyCode(number)
     }
+
+    /// 可打开候选（≥2 时主动作是 `.choose`，菜单逐条列出）。
+    var openTargets: [MeetingJoinTarget] { targets.filter(\.canOpen) }
 
     /// 证据里第一个带标签的会议号（`nil` 表示这份邀请只有链接或只有邀请意图）。
     var code: MeetingCode? { targets.first(where: { !$0.meetingCodes.isEmpty })?.meetingCodes.first }
@@ -179,6 +187,8 @@ final class MeetingActionModel: ObservableObject {
     }
 
     /// 一级动作（D-01）：点一下就是结果。
+    ///
+    /// `.choose`（≥2 可打开候选）不在这里执行——视图侧左键改成弹菜单（审查 I-2），此处保持 no-op。
     func performPrimary() {
         guard !isBusy else { return }
         switch primary {
@@ -188,6 +198,8 @@ final class MeetingActionModel: ObservableObject {
             revision += 1
             copy(number)
             settle(with: .copied)
+        case .choose:
+            break
         case .none:
             feedback = .failed
         }
@@ -272,12 +284,14 @@ final class MeetingActionModel: ObservableObject {
 /// 日历卡片与详情是一行两键（`.row`：provider + 号码 + 打开 / 复制）。
 enum MeetingActionStyle { case icon, row }
 
-/// 右键菜单的一项（docs/47 D-03）。纯数据，便于在无 UI 的用例里断言「恰好 4 项、没有 AI 项」。
+/// 右键菜单的一项（docs/47 D-03）。纯数据，便于在无 UI 的用例里断言「最多 4 项、没有 AI 项」。
 enum MeetingActionMenuEntry: Equatable {
     /// 复制会议号：载荷是**号码本身**（`MeetingCode.value`，与主动作复制的东西一致）。
     case copyCode(String)
     /// 用指定客户端按会议号打开（证据里本条能直接打开时，视图改走 `open(_:)`）。
     case openIn(MeetingProvider)
+    /// 打开一个**具体候选**（≥2 可打开候选时逐条列出，不再折叠 —— 审查 I-2）。
+    case openTarget(MeetingJoinTarget)
     /// 复制整段邀请原文。
     case copySource
 }
@@ -287,17 +301,23 @@ enum MeetingActionPresentation {
     /// 图标边长（docs/47 §背景与目标）：上一版 NSButton 没给宽度、被 SwiftUI 拉伸到约 187pt。
     static let iconSide: CGFloat = 22
 
-    /// 右键菜单的项（D-03）：复制会议号 / 在腾讯会议中打开 / 在华为云会议中打开 / 复制邀请原文。
-    /// 平台能判定时两条「打开」合并成对应那一条（`docs/47 §做法 3`语意：只留能用的那条）。
+    /// 右键菜单的项（D-03 / 审查 I-2）：复制会议号 / 「打开」/ 复制邀请原文。
+    /// **恰好一个**可打开候选时两条「打开」合并成能用的那条；**两个及以上**可打开候选时逐条列出
+    /// （不折叠，让用户自己选）；只抽得出一条「打开」的其它情况沿用平台判定（判不出时列两家）。
     @MainActor
     static func menuEntries(for model: MeetingActionModel) -> [MeetingActionMenuEntry] {
         var entries: [MeetingActionMenuEntry] = []
         // 载荷是号码本身（设计图 ③ 的「复制会议号：939130533」），不是带标签的证据原文。
         if let code = model.code { entries.append(.copyCode(code.value)) }
-        switch model.determinedProvider {
-        case .tencent: entries.append(.openIn(.tencent))
-        case .huawei: entries.append(.openIn(.huawei))
-        default: entries.append(contentsOf: [.openIn(.tencent), .openIn(.huawei)])
+        let openable = model.openTargets
+        if openable.count >= 2 {
+            entries.append(contentsOf: openable.map { .openTarget($0) })
+        } else {
+            switch model.determinedProvider {
+            case .tencent: entries.append(.openIn(.tencent))
+            case .huawei: entries.append(.openIn(.huawei))
+            default: entries.append(contentsOf: [.openIn(.tencent), .openIn(.huawei)])
+            }
         }
         entries.append(.copySource)
         return entries
@@ -310,6 +330,8 @@ enum MeetingActionPresentation {
             return String(format: NSLocalizedString("calendar.meeting.copyCodeFormat", comment: ""), number)
         case let .openIn(provider):
             return openInTitle(provider)
+        case let .openTarget(target):
+            return openTargetTitle(target)
         case .copySource:
             return NSLocalizedString("calendar.meeting.copySource", comment: "")
         }
@@ -327,13 +349,15 @@ enum MeetingActionPresentation {
             } else {
                 model.openByNumber(provider: provider)
             }
+        case let .openTarget(target):
+            model.open(target)
         case .copySource:
             model.copySource()
         }
     }
 
     /// tooltip 由主动作决定（docs/47 D-10）：打开 → 「打开腾讯会议」；复制 → 「复制会议号 <号>」；
-    /// 平台判不出来时补「· 右键更多」，提示可以右键挑一个客户端（设计图 ②）。
+    /// 多个可打开候选（不猜）→ 「多个会议入口 · 右键选择」；平台判不出来时补「· 右键更多」。
     static func tooltip(primary: MeetingPrimaryAction, provider: MeetingProvider?) -> String {
         switch primary {
         case let .open(_, provider):
@@ -342,6 +366,8 @@ enum MeetingActionPresentation {
             return provider == nil
                 ? String(format: NSLocalizedString("calendar.meeting.tooltip.more", comment: ""), number)
                 : String(format: NSLocalizedString("calendar.meeting.tooltip.copy", comment: ""), number)
+        case .choose:
+            return NSLocalizedString("calendar.meeting.tooltip.multiple", comment: "")
         case .none:
             return NSLocalizedString("calendar.meeting.noEvidence", comment: "")
         }
@@ -359,6 +385,18 @@ enum MeetingActionPresentation {
         case .tencent: return NSLocalizedString("calendar.meeting.openIn.tencent", comment: "")
         default: return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), providerName(provider))
         }
+    }
+
+    /// 逐候选列出时的标题（审查 I-2）：判定出平台就用「在 <平台> 中打开」，否则退回主机名 / 号码。
+    static func openTargetTitle(_ target: MeetingJoinTarget) -> String {
+        if let provider = target.provider { return openInTitle(provider) }
+        if let host = target.sourceURL?.host, !host.isEmpty {
+            return String(format: NSLocalizedString("calendar.meeting.tooltip.open", comment: ""), host)
+        }
+        if let number = target.meetingCodes.first?.value {
+            return String(format: NSLocalizedString("calendar.meeting.tooltip.copy", comment: ""), number)
+        }
+        return NSLocalizedString("calendar.meeting.noEvidence", comment: "")
     }
 
     /// 平台显示名：两家能按号打开的平台用新增的中文键（设计图 ④ 的 provider 名），
@@ -401,20 +439,22 @@ enum MeetingActionPresentation {
         feedback == .idle ? nil : MeetingActionGlyph.symbol(for: feedback)
     }
 
-    /// `.row` 右端画哪些键（审查 I-1）：键名必须与行为一致 ——
-    /// 判不出平台时主动作就是复制，不画「打开」；连入口都没有（`.none`）时一个键都不画。
+    /// `.row` 右端画哪些键（审查 I-1 / I-2）：键名必须与行为一致 ——
+    /// 判不出平台时主动作就是复制，不画「打开」；连入口都没有（`.none`）时一个键都不画；
+    /// **多个**可打开候选（`.choose`，不猜）时只留一个「选择入口」键，点了弹出菜单让用户选。
     @MainActor
     static func rowKeys(for model: MeetingActionModel) -> [MeetingActionRowKey] {
         switch model.primary {
         case .open: return [.open, .copy]
         case .copyCode: return [.copy]
+        case .choose: return [.choose]
         case .none: return []
         }
     }
 }
 
-/// `.row` 右端的两个小键（设计图 ④）。
-enum MeetingActionRowKey: Equatable { case open, copy }
+/// `.row` 右端的小键（设计图 ④ / 审查 I-2）。
+enum MeetingActionRowKey: Equatable { case open, copy, choose }
 
 /// 会议入口：证据层认出会议就显示，点一下就是结果（docs/47 D-01 / D-02 —— 已无「开始前 15 分钟」闸门）。
 struct MeetingActionView: View {
@@ -472,6 +512,7 @@ private struct MeetingActionContent: View {
 /// 退化态（审查 I-1）：判不出平台时主动作就是复制，此时**不画「打开」**（键名与行为必须一致）；
 /// 连入口都没有（`.none`）时两个键都不画，只留一句说明。
 private struct MeetingActionRow: View {
+    @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var model: MeetingActionModel
 
     var body: some View {
@@ -492,7 +533,7 @@ private struct MeetingActionRow: View {
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.9)).lineLimit(1).truncationMode(.middle)
                 }
-                // 状态位只在有反馈时占位，复用图标口径（D-10 / 审查 I-4）。
+                // 状态位只在有反馈时占位，复用图标口径（D-10 / 审查 I-4）：面板里点了也看得见转圈/对勾。
                 if let status = MeetingActionPresentation.rowStatusSymbol(for: model.feedback) {
                     Image(systemName: status)
                         .font(.system(size: 10, weight: .medium))
@@ -508,9 +549,21 @@ private struct MeetingActionRow: View {
                         if let value = MeetingActionPresentation.rowValue(for: model) { model.copy(value) }
                     }
                 }
+                if keys.contains(.choose) {
+                    key("calendar.meeting.row.choose") { presentMenu() }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// ≥2 可打开候选（不猜）：面板里那一行同样弹出同一个「会议操作」菜单让用户选（审查 I-2）。
+    private func presentMenu() {
+        let presenter = MeetingActionMenuPresenter()
+        presenter.configureSuppression(
+            setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
+            recheckHover: { [weak vm] in vm?.shouldRecheckHover.toggle() })
+        presenter.present(for: model, anchoredTo: nil)
     }
 
     private func key(_ titleKey: String, action: @escaping () -> Void) -> some View {
@@ -528,8 +581,72 @@ private struct MeetingActionRow: View {
     }
 }
 
+/// 「会议操作」菜单的构建、弹出与自动收回抑制：首页图标与面板 `.row` 的「选择入口」键共用同一套
+/// （审查 I-2 —— 多个可打开候选时两处都要能让用户选，不再各写一份）。
+@MainActor
+final class MeetingActionMenuPresenter: NSObject, NSMenuDelegate {
+    private var interaction: CalendarTextInteraction?
+    private var menu: NSMenu?
+    private var actions: [() -> Void] = []
+
+    /// 接上自动收回抑制（与文本选区同一套 token 机制）。
+    func configureSuppression(setProtection: @escaping (Bool, UUID) -> Void,
+                              recheckHover: @escaping () -> Void) {
+        interaction = CalendarTextInteraction(setProtection: setProtection, recheckHover: recheckHover)
+    }
+
+    /// 在 `view` 的左上角弹出菜单；`view` 为 nil 时按当前鼠标位置弹出（`.row` 里没有可锚定的 NSView）。
+    func present(for model: MeetingActionModel, anchoredTo view: NSView?) {
+        depart()
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        self.menu = menu
+        menu.delegate = self
+        actions.removeAll()
+        for entry in MeetingActionPresentation.menuEntries(for: model) {
+            // 设计图 ③：两条「打开」在上、两条「复制」在下，中间一条分隔线（旧实现也有）。
+            if entry == .copySource { menu.addItem(.separator()) }
+            add(MeetingActionPresentation.title(for: entry), to: menu) {
+                MeetingActionPresentation.perform(entry, on: model)
+            }
+        }
+        if let view {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.maxY), in: view)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+
+    private func add(_ title: String, to menu: NSMenu, action: @escaping () -> Void) {
+        let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = actions.count
+        actions.append(action)
+        menu.addItem(item)
+    }
+    @objc private func choose(_ item: NSMenuItem) { if actions.indices.contains(item.tag) { actions[item.tag]() } }
+    func menuWillOpen(_ menu: NSMenu) { interaction?.menuWillOpen(menu) }
+    func menuDidClose(_ menu: NSMenu) { interaction?.menuDidClose(menu) }
+    func depart() {
+        interaction?.depart()
+        clearDelegate(menu)
+        menu?.cancelTracking()
+        menu = nil
+    }
+    private func clearDelegate(_ menu: NSMenu?) {
+        menu?.delegate = nil
+        for item in menu?.items ?? [] { clearDelegate(item.submenu) }
+    }
+    func stop() {
+        depart()
+        interaction?.stop()
+        interaction = nil
+        actions.removeAll()
+    }
+}
+
 /// 22×22 图标按钮（docs/47 §背景与目标）：AppKit 直接画并给出固定固有尺寸，绝不被 SwiftUI 拉伸；
-/// 左键执行主动作（D-01），右键弹菜单（D-03）。control-click 与右键同义，跟系统按钮一致。
+/// 左键执行主动作（D-01；`.choose` 时改弹菜单），右键弹菜单（D-03）。control-click 与右键同义。
 @MainActor
 final class MeetingActionIconButton: NSView {
     /// 圆角 6、`rgba(255,255,255,.14)` 底（设计图 ②）。
@@ -596,68 +713,34 @@ private struct MeetingActionIcon: NSViewRepresentable {
     }
     static func dismantleNSView(_ button: MeetingActionIconButton, coordinator: Coordinator) { coordinator.stop() }
 
-    @MainActor final class Coordinator: NSObject, NSMenuDelegate {
+    @MainActor final class Coordinator: NSObject {
         var parent: MeetingActionIcon
-        private var interaction: CalendarTextInteraction?
-        private var menu: NSMenu?
-        private var actions: [() -> Void] = []
+        private let presenter = MeetingActionMenuPresenter()
         private var observers: [NSObjectProtocol] = []
         init(_ parent: MeetingActionIcon) { self.parent = parent }
         func connect(_ button: MeetingActionIconButton) {
             let vm = parent.vm
             let model = parent.model
-            interaction = CalendarTextInteraction(
+            presenter.configureSuppression(
                 setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
                 recheckHover: { [weak vm] in vm?.shouldRecheckHover.toggle() })
             observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
                                                                      object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.depart() }
+                MainActor.assumeIsolated { self?.presenter.depart() }
             })
-            button.leftClick = { model.performPrimary() }
-            button.rightClick = { [weak self] view in self?.show(view) }
-        }
-        private func show(_ button: NSView) {
-            depart()
-            let menu = NSMenu()
-            menu.autoenablesItems = false
-            self.menu = menu
-            menu.delegate = self
-            actions.removeAll()
-            let model = parent.model
-            for entry in MeetingActionPresentation.menuEntries(for: model) {
-                // 设计图 ③：两个「打开」在上、两个「复制」在下，中间一条分隔线（旧实现也有）。
-                if entry == .copySource { menu.addItem(.separator()) }
-                add(MeetingActionPresentation.title(for: entry), to: menu) {
-                    MeetingActionPresentation.perform(entry, on: model)
+            button.leftClick = { [weak self] in
+                guard let self else { return }
+                // ≥2 可打开候选（不猜）：左键直接弹出菜单让用户选（审查 I-2）。
+                if model.primary == .choose {
+                    self.presenter.present(for: model, anchoredTo: button)
+                } else {
+                    model.performPrimary()
                 }
             }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY), in: button)
-        }
-        private func add(_ title: String, to menu: NSMenu, action: @escaping () -> Void) {
-            let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = actions.count
-            actions.append(action)
-            menu.addItem(item)
-        }
-        @objc private func choose(_ item: NSMenuItem) { if actions.indices.contains(item.tag) { actions[item.tag]() } }
-        func menuWillOpen(_ menu: NSMenu) { interaction?.menuWillOpen(menu) }
-        func menuDidClose(_ menu: NSMenu) { interaction?.menuDidClose(menu) }
-        private func depart() {
-            interaction?.depart()
-            clearDelegate(menu)
-            menu?.cancelTracking()
-            menu = nil
-        }
-        private func clearDelegate(_ menu: NSMenu?) {
-            menu?.delegate = nil
-            for item in menu?.items ?? [] { clearDelegate(item.submenu) }
+            button.rightClick = { [weak self] view in self?.presenter.present(for: model, anchoredTo: view) }
         }
         func stop() {
-            depart()
-            interaction?.stop()
-            interaction = nil
-            actions.removeAll()
+            presenter.stop()
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
             observers.removeAll()
         }

@@ -14419,6 +14419,67 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(MeetingActionPresentation.rowStatusSymbol(for: .opening), "arrow.triangle.2.circlepath")
     }
 
+    // MARK: - 审查 I-2：多个可打开候选必须让用户选，不许静默取第一个
+
+    /// **两个**可打开候选不猜：主动作既不直接打开、也不复制，而是交给菜单；tooltip 提示右键选择。
+    func testMultipleOpenableCandidatesAskForAChoiceInsteadOfOpeningTheFirst() throws {
+        let session = makeSession()
+        let opener = MeetingFakeOpener([true, true])
+        var copied: [String] = []
+        let model = MeetingActionModel(
+            event: event(notes: MeetingInvitationFixtures.huawei + "\n" + MeetingInvitationFixtures.tencent),
+            session: session, opener: opener, copyText: { copied.append($0) })
+        XCTAssertEqual(model.openTargets.count, 2, "华为链接与腾讯链接都该是可打开候选")
+        XCTAssertEqual(model.primary, .choose, "≥2 可打开候选：主动作不许直接打开（不猜）")
+        // 主动作点一下什么都不做：再交给菜单，一次 URL 都不派发、也不复制。
+        model.performPrimary()
+        XCTAssertTrue(opener.urls.isEmpty, "主动作不许静默打开第一个候选")
+        XCTAssertTrue(copied.isEmpty, "有可打开候选时不该退化成复制")
+        XCTAssertEqual(MeetingActionPresentation.tooltip(for: model),
+                       Bundle.main.localizedString(forKey: "calendar.meeting.tooltip.multiple", value: nil, table: nil))
+
+        // 菜单逐条列出每个候选（不折叠），加上复制会议号与复制原文。
+        let entries = MeetingActionPresentation.menuEntries(for: model)
+        let candidateEntries = entries.compactMap { entry -> MeetingJoinTarget? in
+            if case let .openTarget(target) = entry { return target }
+            return nil
+        }
+        XCTAssertEqual(candidateEntries, model.openTargets, "菜单必须逐个候选列一条，不再折叠")
+        XCTAssertEqual(entries.count, 4, "复制会议号 + 2 个候选 + 复制原文")
+        XCTAssertEqual(entries.first, .copyCode("940948346"))
+        XCTAssertEqual(entries.last, .copySource)
+        XCTAssertEqual(MeetingActionPresentation.rowKeys(for: model), [.choose],
+                       ".row 在 ≥2 候选时只留一个「选择入口」键，点了弹菜单")
+    }
+
+    /// 菜单里那条候选真的打开它自己（不是按号码拼深链）。
+    func testMultipleCandidateMenuEntriesDispatchToTheirOwnTarget() async throws {
+        let session = makeSession()
+        let opener = MeetingFakeOpener([true])
+        let model = MeetingActionModel(
+            event: event(notes: MeetingInvitationFixtures.huawei + "\n" + MeetingInvitationFixtures.tencent),
+            session: session, opener: opener, copyText: { _ in })
+        let candidate = try XCTUnwrap(model.openTargets.first { $0.provider == .huawei })
+        MeetingActionPresentation.perform(.openTarget(candidate), on: model)
+        await drain { !model.isOpening }
+        XCTAssertEqual(try XCTUnwrap(opener.urls.first).absoluteString, MeetingInvitationFixtures.huaweiHTTPS,
+                       "逐条候选项打开的是它自己的 URL")
+    }
+
+    /// **恰好一个**可打开候选仍然直接打开（防止「≥2 才不猜」把单候选改坏）。
+    func testSingleOpenableCandidateStillOpensDirectly() throws {
+        let session = makeSession()
+        let model = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.huawei), session: session,
+                                       opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(model.openTargets.count, 1)
+        guard case let .open(target, provider) = model.primary else {
+            return XCTFail("1 个可打开候选必须直接打开，主动作是 \(model.primary)")
+        }
+        XCTAssertEqual(provider, .huawei)
+        XCTAssertEqual(target.sourceURL?.absoluteString, MeetingInvitationFixtures.huaweiHTTPS)
+        XCTAssertEqual(MeetingActionPresentation.rowKeys(for: model), [.open, .copy])
+    }
+
     /// 首页那两处调用点的入口几何宽高都是 **22**（不是 187），且旧形态在视图文件里彻底消失。
     func testHomeMeetingIconKeepsAFixed22PointGeometry() throws {
         XCTAssertEqual(MeetingActionPresentation.iconSide, 22)

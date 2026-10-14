@@ -104,15 +104,16 @@ LOCALE_KEYS = (
     'calendar.meeting.copyCodeFormat',
     'calendar.meeting.copySource',
     'calendar.meeting.noEvidence',
-    'calendar.meeting.open',
     'calendar.meeting.openIn.huawei',
     'calendar.meeting.openIn.tencent',
     'calendar.meeting.provider.huawei',
     'calendar.meeting.provider.tencent',
+    'calendar.meeting.row.choose',
     'calendar.meeting.row.copy',
     'calendar.meeting.row.open',
     'calendar.meeting.tooltip.copy',
     'calendar.meeting.tooltip.more',
+    'calendar.meeting.tooltip.multiple',
     'calendar.meeting.tooltip.open',
     'calendar.panel.sourceTimeZoneFormat',
     'calendar.panel.url',
@@ -147,8 +148,9 @@ class GeneralAIConfigurationTests(unittest.TestCase):
                     unit = catalog[key]["localizations"][language]["stringUnit"]
                     self.assertEqual(unit["state"], "translated")
                     self.assertTrue(unit["value"].strip())
-                # Static strings plus the finite enum projections used by production.
-                consumed = key in sources
+                # Exact literal key only: a substring match would let e.g. `calendar.meeting.open`
+                # ride on `calendar.meeting.openIn.huawei` and slip through (审查 I-1).
+                consumed = ('"%s"' % key) in sources
                 if key.startswith("ai.settings.protocol."):
                     consumed |= '"ai.settings.protocol.\\(protocolKind.rawValue)"' in sources
                 if key.startswith("calendar.generation.state."):
