@@ -1168,6 +1168,11 @@ extension Defaults.Keys {
     static let calendarSelectionState = Key<CalendarSelectionState>("calendarSelectionState", default: .all)
         static let showFullEventTitles = Key<Bool>("showFullEventTitles", default: false)
         static let autoScrollToNextEvent = Key<Bool>("autoScrollToNextEvent", default: true)
+    /// 「只有会议号」的邀请上用户选过的客户端（docs/47 D-09）：值 `"huawei"` / `"tencent"`，无则 nil。
+    ///
+    /// 存裸字符串而不是 `MeetingProvider`：那个枚举不实现 `Codable`，也不该只为一个偏好去实现
+    /// （同 `panelHeightMode` 的裸字符串口径）。消费点唯一：`MeetingActionModel.rememberedProvider`。
+    static let meetingCodeOpener = Key<String?>("meetingCodeOpener", default: nil)
     
         // MARK: Fullscreen Media Detection
     static let alwaysHideInFullscreen = Key<Bool>("alwaysHideInFullscreen", default: false)

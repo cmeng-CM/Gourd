@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import AppKit
+import Defaults
 import SwiftUI
 
 private struct CalendarMeetingSessionKey: EnvironmentKey {
@@ -51,14 +52,42 @@ struct CalendarMeetingSource: Equatable {
     }
 }
 
+/// 一次点击的结果状态（docs/47 §接口与数据形状）。
+///
+/// 只由图标自身表达（D-10）——面板与首页那一行高度固定，塞不下状态文字，原因留给 tooltip。
+enum MeetingActionFeedback: Equatable { case idle, opening, opened, copied, failed }
+
+/// 点击一下要执行的动作（D-01）：打开一个候选、复制会议号，或没有可信动作。
+///
+/// `open` 的 `MeetingJoinTarget` 既可能是带链接的候选，也可能是「只有会议号」的兜底候选
+/// （`provider == nil`、`canOpen == false`）——后者的打开由 `MeetingJoinURLBuilder` 按号码拼深链。
+enum MeetingPrimaryAction: Equatable {
+    case open(MeetingJoinTarget, MeetingProvider)
+    case copyCode(String)
+    case none
+}
+
+/// 状态到 SF Symbol 的纯映射（D-10）。
+enum MeetingActionGlyph {
+    static func symbol(for feedback: MeetingActionFeedback) -> String {
+        switch feedback {
+        case .idle: return "video.fill"
+        case .opening: return "arrow.triangle.2.circlepath"
+        case .opened: return "checkmark"
+        case .copied: return "checkmark"
+        case .failed: return "exclamationmark.triangle"
+        }
+    }
+}
+
 /// An injected, offline-testable action controller. Recognition never opens a candidate.
 @MainActor
 final class MeetingActionModel: ObservableObject {
     @Published private(set) var targets: [MeetingJoinTarget]
-    @Published private(set) var isRecognizing = false
     @Published private(set) var isOpening = false
-    @Published private(set) var statusKey: String?
+    @Published private(set) var feedback: MeetingActionFeedback = .idle
     private let source: String
+    /// 记录的开始时间与时钟：时间闸门已按 docs/47 D-02 删除，二者仅作为模型输入保留（对外签名不变）。
     private let start: Date?
     private let session: CalendarPanelSession
     private let opening: MeetingOpening
@@ -66,6 +95,9 @@ final class MeetingActionModel: ObservableObject {
     private let copyText: (String) -> Void
     private var task: Task<Void, Never>?
     private var revision = 0
+
+    /// 成功状态自动回 idle 的停留时长（docs/47 §做法 3「瞬时状态」）。
+    static let feedbackDwell: Duration = .seconds(1.5)
 
     convenience init(event: EventModel, url: URL? = nil, session: CalendarPanelSession,
                      opener: (any MeetingURLOpening)? = nil, now: @escaping () -> Date = Date.init,
@@ -92,30 +124,123 @@ final class MeetingActionModel: ObservableObject {
         targets = source.targets
     }
 
-    var isJoinable: Bool { start.map { $0.addingTimeInterval(-15 * 60) <= now() } ?? true }
-    var hasAI: Bool { session.configuredAI != nil }
     var hasSource: Bool { !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var isBusy: Bool { isRecognizing || isOpening }
+    var isBusy: Bool { isOpening }
 
+    /// 用户为「只有会议号」的邀请选过的客户端（D-09），存 `Defaults[.meetingCodeOpener]`。
+    var rememberedProvider: MeetingProvider? {
+        Defaults[.meetingCodeOpener].flatMap(MeetingProvider.init(rawValue:))
+    }
+
+    /// 点击一下要执行的动作（D-01）。
+    ///
+    /// 有可打开候选就打开；只有会议号时，记住过客户端就按号码打开、否则复制号码；都没有则不臆造动作。
+    /// 未判定平台时不得凭猜选客户端（`MeetingJoinURLBuilder.url(provider:...)` 不复核号码归属），
+    /// 这类候选退到纯号码分支。
+    var primary: MeetingPrimaryAction {
+        if let target = targets.first(where: \.canOpen),
+           let provider = target.provider ?? rememberedProvider {
+            return .open(target, provider)
+        }
+        guard let target = targets.first(where: { !$0.meetingCodes.isEmpty }),
+              let number = Self.number(in: target) else { return .none }
+        if let provider = rememberedProvider { return .open(target, provider) }
+        return .copyCode(number)
+    }
+
+    /// 按号码打开时使用的入会显示名（D-08）：macOS 用户名，空或全空白（含 U+00A0）回落 `Gourd`。
+    static func resolvedDisplayName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? MeetingJoinURLBuilder.fallbackDisplayName : trimmed
+    }
+
+    /// 打开的入口一：带链接的候选（保留）。
     func open(_ target: MeetingJoinTarget) {
-        guard !isBusy, isJoinable, target.canOpen, targets.contains(target) else { return }
+        guard !isBusy, target.canOpen, targets.contains(target) else { return }
+        performOpen(target: target, provider: target.provider ?? rememberedProvider)
+    }
+
+    /// 打开的入口二：只有会议号时按平台拼深链，并**记住**这个客户端（D-09）供下次主动作直接用。
+    func openByNumber(provider: MeetingProvider) {
+        guard !isBusy, let target = targets.first(where: { !$0.meetingCodes.isEmpty }) else { return }
+        Defaults[.meetingCodeOpener] = provider.rawValue
+        performOpen(target: target, provider: provider)
+    }
+
+    /// 一级动作（D-01）：点一下就是结果。
+    func performPrimary() {
+        guard !isBusy else { return }
+        switch primary {
+        case let .open(target, provider):
+            performOpen(target: target, provider: provider)
+        case let .copyCode(number):
+            revision += 1
+            copy(number)
+            settle(with: .copied)
+        case .none:
+            feedback = .failed
+        }
+    }
+
+    /// 两个入口共用的执行器：带链接的候选走 `MeetingOpening.open`，只有会议号时按号码拼深链。
+    private func performOpen(target: MeetingJoinTarget, provider: MeetingProvider?) {
         revision += 1
         let current = revision
         isOpening = true
-        statusKey = "calendar.meeting.opening"
+        feedback = .opening
         task = Task { [weak self] in
             guard let self else { return }
-            let result = await self.opening.open(target)
-            guard self.revision == current, !Task.isCancelled else { return }
-            switch result {
-            case .accepted: self.statusKey = "calendar.meeting.accepted"
-            case .fallback: self.statusKey = "calendar.meeting.fallback"
-            case .refused, .unavailable: self.statusKey = "calendar.meeting.refused"
-            case .cancelled: self.statusKey = "calendar.meeting.cancelled"
+            let result: MeetingOpenResult
+            if target.canOpen {
+                result = await self.opening.open(target)
+            } else if let provider, let number = Self.number(in: target) {
+                // 入会密码只喂华为深链（D-07）：腾讯分支没有可查依据可写。
+                result = await self.opening.openByNumber(
+                    provider: provider, number: number,
+                    displayName: Self.resolvedDisplayName(NSFullUserName()),
+                    passcode: provider == .huawei ? MeetingLinkResolver().passcode(in: self.source) : nil)
+            } else {
+                result = .unavailable
             }
-            self.isOpening = false
+            guard self.revision == current, !Task.isCancelled else { return }
             self.task = nil
+            self.apply(result, to: target)
+            self.isOpening = false
         }
+    }
+
+    /// 打开结果落到瞬时状态（D-10）。打不开就退回复制号码（docs/47 §做法 3），不谎称已加入。
+    private func apply(_ result: MeetingOpenResult, to target: MeetingJoinTarget) {
+        switch result {
+        case .accepted, .fallback:
+            settle(with: .opened)
+        case .refused, .unavailable:
+            guard let number = Self.number(in: target) else {
+                feedback = .failed
+                return
+            }
+            copy(number)
+            settle(with: .copied)
+        case .cancelled:
+            feedback = .idle
+        }
+    }
+
+    /// 置状态并在 1.5 秒后回到 `idle`（成功态是瞬时反馈，不是「已加入」的确认）。
+    private func settle(with value: MeetingActionFeedback) {
+        feedback = value
+        guard value == .opened || value == .copied else { return }
+        let current = revision
+        task = Task { [weak self] in
+            try? await Task.sleep(for: Self.feedbackDwell)
+            guard let self, !Task.isCancelled, self.revision == current else { return }
+            self.feedback = .idle
+        }
+    }
+
+    /// 号码取证据里第一个会议号的纯数字值（`MeetingCode.value` 已剥掉空格与连字符）。
+    private static func number(in target: MeetingJoinTarget) -> String? {
+        target.meetingCodes.first.map(\.value)
     }
 
     func copySource() { copy(source) }
@@ -125,9 +250,8 @@ final class MeetingActionModel: ObservableObject {
         revision += 1
         task?.cancel()
         task = nil
-        if isBusy { statusKey = "calendar.meeting.cancelled" }
-        isRecognizing = false
         isOpening = false
+        feedback = .idle
     }
 
     deinit { task?.cancel() }
@@ -167,11 +291,6 @@ private struct MeetingActionContent: View {
             MeetingActionMenu(model: model, vm: vm)
                 .frame(height: 24)
                 .accessibilityIdentifier("calendar-meeting-actions")
-            if let key = model.statusKey {
-                Text(LocalizedStringKey(key)).font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("calendar-meeting-status")
-            }
         }
         .onDisappear { model.cancel() }
     }
@@ -223,8 +342,6 @@ private struct MeetingActionMenu: NSViewRepresentable {
             menu.delegate = self
             actions.removeAll()
             let model = parent.model
-            if let status = model.statusKey { add(status, to: menu, enabled: false) {} }
-            if !model.isJoinable { add("calendar.meeting.tooEarly", to: menu, enabled: false) {} }
             if model.targets.isEmpty { add("calendar.meeting.noEvidence", to: menu, enabled: false) {} }
             if model.targets.filter(\.canOpen).count > 1 { add("calendar.meeting.choose", to: menu, enabled: false) {} }
             for target in model.targets {
@@ -232,7 +349,7 @@ private struct MeetingActionMenu: NSViewRepresentable {
                 let submenu = NSMenu()
                 submenu.autoenablesItems = false
                 if target.canOpen {
-                    add("calendar.meeting.open", to: submenu, enabled: model.isJoinable && !model.isBusy) { model.open(target) }
+                    add("calendar.meeting.open", to: submenu, enabled: !model.isBusy) { model.open(target) }
                 }
                 for link in [target.sourceURL, target.httpsURL].compactMap({ $0 }).reduce(into: [URL](), { if !$0.contains($1) { $0.append($1) } }) {
                     add("calendar.meeting.copyLink", to: submenu) { model.copy(link.absoluteString) }
