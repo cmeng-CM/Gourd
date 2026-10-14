@@ -838,10 +838,11 @@ final class PanelAutoHeightTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
-    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6、T8 + 2026-10-08 p8b）：内容随条数 /
+    /// **谁上报**的名单（派发片段裁决 6 + p6-ui-polish / T6、T8 + 2026-10-08 p8b + T3）：内容随条数 /
     /// 格子数 / 月周数 / 卡片行数变的那几页——四个模块页 + **架子**（宿主页，T6 进名单）+ **日历**
-    /// （模块页，T8 进名单）+ **笔记页列表档**（p8b 进名单）；另外几页刻意不在里面（`timer` / 终端 /
-    /// 笔记页的编辑与分栏档），逐条理由在 `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
+    /// （模块页，T8 进名单）+ **笔记页列表档**（p8b 进名单）+ **日历编辑档**（T3 / docs/48 D-07）；
+    /// 另外几页刻意不在里面（`timer` / 终端 / 笔记页的编辑与分栏档），逐条理由在
+    /// `PanelContentHeight.measuredTabs`（量它们 = 把面板高喂回自己）。
     func testMeasuredTabListIsTheCountDrivenPages() {
         XCTAssertEqual(
             PanelContentHeight.measuredTabs,
@@ -855,6 +856,11 @@ final class PanelAutoHeightTests: XCTestCase {
                 // p6-ui-polish / T8：左栏固定格高月网格（43N + 63）+ 右栏在其高内滚动 —— 高是当月周数
                 // 的函数（旧版面「自己的高是面板高的函数」已不成立，见名单里的注释）。
                 CalendarModule.moduleID,
+                // T3 / docs/48 D-07：日历页**编辑档**（左栏 260 当日清单 + 右栏表单两栏都钉 400）——
+                // 高是**内容**的函数。与 `notesFixedTab` 的差别正在这里：那一档**没有**自然高
+                // （`TextEditor` 填满 + 内滚 → 回落手动值），本档**有**自然高 400（→ 面板 474 档）。
+                // 同一页两档两键，判据在 `ContentView.calendarPanelTabKey(route:)`。
+                PanelContentHeight.calendarEditorTab,
                 // 2026-10-08 p8b-notes-height：笔记页**列表档**的卡片网格 —— 高是卡片行数的函数。
                 // 同一页的编辑 / 分栏档没有自然高（`TextEditor` 填满 + 内滚），走 `notesFixedTab`
                 // （**不在名单里**）回落手动值；两档的键由 `notesPanelTabKey(for:)` 分派。
@@ -949,6 +955,23 @@ final class PanelAutoHeightTests: XCTestCase {
     /// 固定月份的首日零点。
     private func makeFixedMonth(_ year: Int, _ month: Int) -> Date {
         fixedGridCalendar(firstWeekday: 1).date(from: DateComponents(year: year, month: month, day: 1))!
+    }
+
+    /// **日历页按档两键**（T3 / docs/48 D-07，判据同 `testCalendarIsAMeasuredTab` 的 ① 层）：
+    /// 同一页两种档各有一枚键——列表 / 详情档 = 模块 id（**现键不变**），编辑档 = **页键**
+    /// `calendarEditorTab`（与 `notesFixedTab` 同类的页键风格，不是点分模块 id 派生，也不写第二份字面量）。
+    /// 探针（`ContentView` 的 `.module` 分支）与 `selectedPanelTabKey` 两边都由 `calendarPanelTabKey(route:)`
+    /// 派生；两档不同键，否则编辑档会借列表档量出来的高（`heightCache` 串味）。
+    func testCalendarPageSplitsModeKeysByRoute() {
+        XCTAssertEqual(PanelContentHeight.calendarEditorTab, "calendarEditor",
+                       "编辑档键 = 页键风格（与 notesFixedTab = \"notesFixed\" 同类）")
+        XCTAssertEqual(calendarPanelTabKey(route: .editor), PanelContentHeight.calendarEditorTab)
+        XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID,
+                       "列表档 = 模块 id（现键不变）")
+        XCTAssertEqual(calendarPanelTabKey(route: .detail), CalendarModule.moduleID,
+                       "详情档同列表档（同一份两栏自然布局）")
+        XCTAssertNotEqual(calendarPanelTabKey(route: .editor), calendarPanelTabKey(route: .list),
+                          "两档不同键——编辑档不能借列表档量出来的高")
     }
 
     /// **架子进测量名单**（p6-ui-polish / T6，docs/30 §做法 机制三 / D-08）。

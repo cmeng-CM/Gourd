@@ -305,6 +305,21 @@ func notesPanelTabKey(for layoutState: NotesLayoutState) -> String {
     layoutState == .list ? PanelContentHeight.notesTab : PanelContentHeight.notesFixedTab
 }
 
+/// 日历页 tab 的**高度账本键**（T3 / docs/48 D-07）——与 `notesPanelTabKey(for:)` 同形、同一个坑的
+/// 第三例：**一个页面有两种档，账本只有一个槽**。
+///
+/// - **列表档 / 详情档**（左栏整月网格 `MonthGridView` + 右栏清单，高 = 当月周数 `43N + 63`）有自然高
+///   → 走 `CalendarModule.moduleID`（**现键不变**），探针在 `ContentView` 的 `.module` 分支用它上报；
+/// - **编辑档**（左栏 260 当日清单 + 右栏表单，两栏都钉 400）另有自然高 → 走
+///   `PanelContentHeight.calendarEditorTab`（**在名单里** → 面板贴到 474 档）。
+///
+/// 判据只认 `CalendarPanelSession.route`（会话的**唯一**路由真源）——**不**在这里重判视图局部状态
+/// （重判就是第二份口径）。不写字面量、不新造第二个键常量。
+@MainActor
+func calendarPanelTabKey(route: CalendarPanelRoute) -> String {
+    route == .editor ? PanelContentHeight.calendarEditorTab : CalendarModule.moduleID
+}
+
 @MainActor
 struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -1620,6 +1635,12 @@ struct ContentView: View {
             // （`HomeBandedHomeView`）把算出来的内容高写进那个槽。
             return homePanelTabKey()
         case .module:
+            // 日历页**按档两键**（T3 / docs/48 D-07）：列表 / 详情档走模块 id（现键不变），编辑档走
+            // `calendarEditorTab`（有自然高 400 → 面板 474 档）。其它模块页照旧 = 模块 id。判据在
+            // `calendarPanelTabKey(route:)`（与 `notesPanelTabKey(for:)` 同形）。
+            if coordinator.selectedModuleID == CalendarModule.moduleID {
+                return calendarPanelTabKey(route: calendarSession.route)
+            }
             return coordinator.selectedModuleID ?? ""
         case .shelf:
             return "shelf"
@@ -1945,16 +1966,30 @@ struct ContentView: View {
                                 // 表头高由 `vm` 算好传进去（内容高口径含表头，与首页那一份同源）；
                                 // `isCurrent` 挡住切 tab 那 0.3s 里还活着的旧页（它一量到新尺寸就会把
                                 // 账本抢回去，面板来回跳）。
+                                //
+                                // **日历页按档两键**（T3 / docs/48 D-07）：探针的 `tab` 与 `isCurrent`
+                                // 都由**同一枚** `calendarPanelTabKey(route:)` 派生（非日历模块逐字不变）。
+                                // 档位判据读的是**本帧**的 route：切档过渡里还活着的旧档探针据此被挡在
+                                // 账本外（少了这一条，旧档的上报会被条款 ③ 无条件收下、污染
+                                // `heightCache`），与 `NotchNotesView` 的 `isCurrent` 同形。
                                 let selectedModuleID = coordinator.selectedModuleID
+                                let isCalendarModule = selectedModuleID == CalendarModule.moduleID
+                                let calendarRoute = calendarSession.route
                                 ModuleHostView(moduleID: selectedModuleID)
                                     .panelContentHeightReport(
-                                        tab: selectedModuleID ?? "",
+                                        tab: isCalendarModule
+                                            ? calendarPanelTabKey(route: calendarRoute)
+                                            : (selectedModuleID ?? ""),
                                         headerHeight: PanelAutoHeight.panelHeaderHeight(
                                             effectiveClosedNotchHeight: vm.effectiveClosedNotchHeight
                                         ),
                                         isCurrent: {
-                                            coordinator.currentView == .module
-                                                && coordinator.selectedModuleID == selectedModuleID
+                                            guard coordinator.currentView == .module,
+                                                  coordinator.selectedModuleID == selectedModuleID
+                                            else { return false }
+                                            // 日历页还要「档位一致」：探测的档 = 本帧 route 派生的档。
+                                            if isCalendarModule { return calendarSession.route == calendarRoute }
+                                            return true
                                         }
                                     )
                           }

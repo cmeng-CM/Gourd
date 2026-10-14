@@ -15058,6 +15058,43 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
     }
 
+    /// 把真两栏的 `StandaloneCalendarView` 挂在给定宽度（T3 / D-09：编辑档宽度的**关系式**取证）。
+    private func mountStandaloneCalendar(session: CalendarPanelSession, manager: CalendarManager,
+                                         width: CGFloat, height: CGFloat = 400) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: StandaloneCalendarView(session: session, manager: manager)
+            .environmentObject(DynamicIslandViewModel())
+            .frame(width: width, height: height))
+        host.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// 把 `CalendarPanelPages` 单独挂在给定宽度（T3：借它量「右栏自身的内边距」，用来把编辑区宽度写成关系式）。
+    private func mountPanelPages(session: CalendarPanelSession, manager: CalendarManager,
+                                 width: CGFloat, height: CGFloat = 400) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: CalendarPanelPages(session: session, manager: manager, onReturnSource: { _ in })
+            .environmentObject(DynamicIslandViewModel())
+            .frame(width: width, height: height))
+        host.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// 固定日历（格里高利 + GMT + `en_US_POSIX` + `firstWeekday`，与 `MonthGridLayoutTests` 同式）。
+    private func fixedGridCalendar(firstWeekday: Int) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.firstWeekday = firstWeekday
+        calendar.minimumDaysInFirstWeek = 1
+        return calendar
+    }
+
+    /// 固定月份的首日零点。
+    private func fixedMonth(_ year: Int, _ month: Int) -> Date {
+        fixedGridCalendar(firstWeekday: 1).date(from: DateComponents(year: year, month: month, day: 1))!
+    }
+
     private func collectViews(_ host: NSView, where match: (NSView) -> Bool) -> [NSView] {
         var found: [NSView] = []
         func walk(_ view: NSView) {
@@ -15199,6 +15236,79 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(panel.contains(#".help(Text("calendar.generation.settings"))"#))
         XCTAssertTrue(panel.contains(#".accessibilityLabel(Text("calendar.generation.settings"))"#))
         XCTAssertTrue(panel.contains("CalendarAISettingsNavigation.open()"), "齿轮仍接 AI 设置页的入口")
+    }
+
+    /// T3 / V5（D-07·D-09）：日历页**按档报自然高**——编辑档 400（→ 面板 474 档）、列表档仍是
+    /// `monthGridHeight`（2026-10 = 278）；编辑档左栏宽 260、两栏高 400、编辑区宽 = 宿主内容宽 −
+    /// 260 − 栏间距 12 − 该栏自身内边距（**关系式，不写死 615**）。三层判据照
+    /// `PanelAutoHeightTests.testCalendarIsAMeasuredTab`：① 键字面量 ② 名单含它 ③ 账本行为。
+    func testCalendarPageReportsEditorModeNaturalHeight() throws {
+        // ① 键：编辑档 = 页键；列表 / 详情档 = 模块 id（**现键不变**）。
+        XCTAssertEqual(PanelContentHeight.calendarEditorTab, "calendarEditor")
+        XCTAssertEqual(calendarPanelTabKey(route: .editor), PanelContentHeight.calendarEditorTab)
+        XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID)
+        XCTAssertEqual(calendarPanelTabKey(route: .detail), CalendarModule.moduleID)
+
+        // ② 名单：编辑档有自然高 400，因此在名单里（探针据此进门）。
+        XCTAssertTrue(PanelContentHeight.measuredTabs.contains(PanelContentHeight.calendarEditorTab))
+        XCTAssertTrue(PanelContentHeight.isMeasuredTab(PanelContentHeight.calendarEditorTab))
+
+        // ③ 账本行为：编辑档自然高 400 → 400 + 表头 28 − 16 = 412；切回列表档**回落**当月自然高。
+        let ledger = PanelContentHeight.shared
+        ledger.reset()
+        defer { ledger.reset() }
+        // 先量列表档：2026-10 = 5 周 → 278（`43 × 5 + 63`）→ 账本口径 290。
+        let listNatural = MonthGridLayout.monthGridHeight(
+            forMonth: fixedMonth(2026, 10), calendar: fixedGridCalendar(firstWeekday: 1)
+        )
+        XCTAssertEqual(listNatural, 278, accuracy: 1e-9, "前提：2026-10 = 5 周 → 43 × 5 + 63")
+        ledger.selectTab(CalendarModule.moduleID)
+        ledger.report(listNatural + 28 - 16, for: CalendarModule.moduleID)
+        XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9, "列表档：当月自然高 278 → 账本 290")
+
+        // 编辑档：两栏都钉 400（视图声明的常量），账本口径 = 400 + 28 − 16 = 412。
+        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 400, "编辑档列高 = 400（视图声明）")
+        ledger.selectTab(PanelContentHeight.calendarEditorTab)
+        XCTAssertEqual(ledger.activeTab, PanelContentHeight.calendarEditorTab)
+        ledger.report(StandaloneCalendarView.editorPaneHeight + 28 - 16,
+                      for: PanelContentHeight.calendarEditorTab)
+        XCTAssertEqual(ledger.current ?? 0, 412, accuracy: 1e-9, "编辑档：400 + 28 − 16 = 412")
+        XCTAssertEqual(
+            PanelAutoHeight.panelHeight(contentHeight: 412, mode: PanelAutoHeight.modeAuto,
+                                        manualHeight: 682, screenVisibleHeight: nil),
+            452, accuracy: 1e-9,
+            "auto 档：面板高 = 412 + 40（设计图 ⑤ 的 474 档是窗口高 = 本值 + 顶出血/阴影 22）"
+        )
+
+        // 切回列表档：读缓存一步回落（不是停在编辑档的 412）——失败信号「切回列表档后高度没回落」的反证。
+        ledger.selectTab(CalendarModule.moduleID)
+        XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
+                       "切回列表档 → 回落当月自然高（编辑档的 412 不留在列表档）")
+
+        // 几何：编辑档挂进 `NSHostingView`——编辑区宽 = 宿主内容宽 − 260 − 12 − 该栏内边距（关系式）。
+        let (session, manager) = editorSession(kind: .event, editing: false)
+        XCTAssertEqual(session.route, .editor)
+        let hostWidth: CGFloat = 887
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: hostWidth)
+        settle(host)
+        let editorWidth = notesEditors(in: host).first?.bounds.width ?? -1
+        XCTAssertGreaterThan(editorWidth, 0, "编辑档右栏应渲染出备注编辑器")
+        // 「该栏自己的内边距」不写死：把同一份 `CalendarPanelPages` 单独挂在「右栏应得的宽」上，
+        // 读到的备注编辑器宽就是「右栏宽 → 该栏内容宽」的换算——两者的差即内边距。
+        let rightPaneWidth = hostWidth - StandaloneCalendarView.editorSidebarWidth
+            - StandaloneCalendarView.paneSpacing
+        let alone = mountPanelPages(session: session, manager: manager, width: rightPaneWidth)
+        settle(alone)
+        let aloneWidth = notesEditors(in: alone).first?.bounds.width ?? -1
+        XCTAssertGreaterThan(aloneWidth, 0)
+        XCTAssertEqual(editorWidth, aloneWidth, accuracy: 0.5,
+                       "编辑区内容宽 = 宿主内容宽 − 左栏 260 − 栏间距 12 − 该栏内边距（关系式，不写死 615）")
+        // 左栏 260 / 两栏 400 是 SwiftUI 原生视图（不是 NSView），按源码取证（派发片段裁决 7 允许的降级）。
+        let source = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
+        XCTAssertTrue(source.contains("static let editorSidebarWidth: CGFloat = 260"), "左栏宽 260")
+        XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 400"), "两栏高 400")
+        XCTAssertTrue(source.contains(".frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight"),
+                      "编辑档左栏钉宽 260 + 钉高 400")
     }
 
 }

@@ -114,6 +114,7 @@ LOCALE_KEYS = (
     'calendar.meeting.tooltip.more',
     'calendar.meeting.tooltip.multiple',
     'calendar.meeting.tooltip.open',
+    'calendar.panel.backToMonth',
     'calendar.panel.sourceTimeZoneFormat',
     'calendar.panel.url',
 )

@@ -59,7 +59,10 @@
 //  p6-ui-polish / T8 进名单）T8 起是两栏自然布局：左栏月网格按固定格高自然堆叠（`43N + 63`，
 //  2026-10-12 起日历页等比放大 ×1.2，改前 `36N + 52`）、
 //  右栏在其高内滚动——自然高 = 当月周数的函数，**不再是**旧版面那个「自己的高是面板高的函数」
-//  的形状（`GeometryReader + paneHeight`；旧判断同样见 `measuredTabs` 的注释）。
+//  的形状（`GeometryReader + paneHeight`；旧判断同样见 `measuredTabs` 的注释）。日历**编辑档**
+//  （`calendarEditorTab`，T3 / docs/48 D-07）是同一页的**第二档**：左栏 260 当日清单 + 右栏表单
+//  两栏都钉 400，高同样是**内容**的函数（不是面板的函数），因此也进名单；它与列表 / 详情档
+//  两档两键，判据在 `ContentView.calendarPanelTabKey(route:)`。
 //  **不上报的两页**：计时器（`.frame` 吃面板高 + 250 的 per-tab 下限）、终端（终端仿真块按屏高
 //  比例，本来就没有自然高）。
 //
@@ -130,6 +133,18 @@ final class PanelContentHeight: ObservableObject {
     /// 剩下的实例）。
     static let notesFixedTab = "notesFixed"
 
+    /// **日历页编辑档**的键（T3 / docs/48 D-07）：日历页**按档两键**——列表 / 详情档 = 模块 id
+    /// （`CalendarModule.moduleID`，左栏整月网格按固定格高自然堆叠，**现键不变**），编辑档 = 本键。
+    /// 两档的判据由 `ContentView.calendarPanelTabKey(route:)` 给（只认会话的 `route`，与
+    /// `notesPanelTabKey(for:)` 同形）。
+    ///
+    /// 与 `notesFixedTab` 的**关键差别**：`notesFixedTab` **没有自然高**（`TextEditor` 填满 + 内滚，
+    /// 没人上报 → `current` = nil → 尺寸层回落手动值）；**编辑档有自然高 400**——T3 起左栏从整月网格
+    /// 让位成 260pt 的「回到月历 + 当日清单」、两栏都钉 400（视图侧 `StandaloneCalendarView.editorPaneHeight`），
+    /// 这一页的高是**内容**的函数（与面板当前多高无关），因此它**进** `measuredTabs`（探针在
+    /// `ContentView` 的 `.module` 分支用本键上报）。账本口径 = 400 + 表头 28 − 16 = 412 → 面板 474 档。
+    static let calendarEditorTab = "calendarEditor"
+
     /// **剪贴板页**的键（2026-10-08 p8b-notes-height，与笔记列表同一批）。这一页 = 头部 + 卡片网格
     /// （`ClipboardGridCard`，宽按 `minCardWidth` 自适应、格高固定）——高是**卡片行数**的函数，
     /// 因此进 `measuredTabs`：复制了两三条时面板本来就该矮下来，不该按手动高度站着留半屏空玻璃。
@@ -159,6 +174,11 @@ final class PanelContentHeight: ObservableObject {
     ///   （`GeometryReader + paneHeight` 两栏填满面板高，探针按无高提案只会量到 10pt 级理想高、
     ///   面板落到手动回落值——682 空半屏）；改成自然布局后与上面几页同一口径
     ///   （docs/30 §做法 机制六）。
+    /// - `calendarEditorTab`（**日历页编辑档**，T3 / docs/48 D-07）：左栏 260 当日清单 + 右栏表单
+    ///   两栏都钉 400 —— 高是**内容**的函数（`StandaloneCalendarView.editorPaneHeight`），因此与
+    ///   列表档同一口径上报。**只覆盖编辑档**：列表 / 详情档走模块 id（同一页两档两键，判据在
+    ///   `ContentView.calendarPanelTabKey(route:)`）；探针的 `isCurrent` 把档位算进去（切档过渡里
+    ///   旧档探针还活着，少了这一条它的上报会被条款 ③ 无条件收下、污染 `heightCache`）。
     /// - `notesTab`（**笔记页的列表档**，2026-10-08 p8b-notes-height）：头部 + 卡片网格，高 =
     ///   卡片行数的函数——与启动台 / 架子同一类。**只覆盖列表档**：同一页的编辑 / 分栏档走
     ///   `notesFixedTab`（不在名单里、回落手动值），判据在 `ContentView.notesPanelTabKey(for:)`；
@@ -181,6 +201,10 @@ final class PanelContentHeight: ObservableObject {
         // 的函数。用模块 id 常量（不写第二份字面量）：`ContentView.selectedPanelTabKey` 的
         // `.module` 分支传的就是它。
         CalendarModule.moduleID,
+        // T3 / docs/48 D-07：日历页**编辑档**——左栏 260 当日清单 + 右栏表单两栏都钉 400，高是
+        // **内容**的函数（与 `notesFixedTab` 的差别：那一档没有自然高、回落手动值）。判据在
+        // `ContentView.calendarPanelTabKey(route:)`，探针在 `ContentView` 的 `.module` 分支用它上报。
+        calendarEditorTab,
         // 2026-10-08 p8b-notes-height：笔记页**列表档**（卡片网格）。键是页键（不是模块 id）。
         notesTab,
         // 2026-10-08 p8b-notes-height：剪贴板页（头部 + 卡片网格）——同一类。

@@ -1255,6 +1255,69 @@ struct MonthGridView: View {
     }
 }
 
+/// **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
+///
+/// - **只读摘要**：选中日的日程与待办（`CalendarPanelSession.selectedDate` 那一天）——数据与卡片沿用
+///   既有只读口径（`CalendarEventFilters.filtered` + `CalendarEventCardList.ordered`，数据源 =
+///   `manager.events`，与右栏列表页**同一份**），**不新造取数路径**；`ReminderCard` 的勾选圈是只读的
+///   （`onToggle` 空实现：这一栏不写回）。
+/// - **定高 + 内滚**：高度由宿主钉成 `editorPaneHeight`（400）+ `.clipped()` 兜底，清单条目再多也在
+///   **栏内**滚动，绝不顶高整页理想高（那是「面板跟着内容长」的反馈环）。
+/// - **回到月历**：顶部的按钮走 `session.showList(on:)` 把路由切回列表档（面板高随之回落到当月自然高）。
+struct CalendarEditorSidebar: View {
+    @ObservedObject var session: CalendarPanelSession
+    @ObservedObject var manager: CalendarManager
+    @Default(.hideAllDayEvents) private var hideAllDayEvents
+    @Default(.hideCompletedReminders) private var hideCompletedReminders
+    @Default(.showFullEventTitles) private var showFullEventTitles
+
+    /// 选中日的日程与待办（只读口径：`CalendarEventFilters` 过滤 + `CalendarEventCardList.ordered` 排序，
+    /// 与右栏列表页同一份数据源 `manager.events`）。
+    private var dayEvents: [EventModel] {
+        CalendarEventCardList.ordered(
+            CalendarEventFilters.filtered(
+                events: manager.events,
+                hideCompletedReminders: hideCompletedReminders,
+                hideAllDayEvents: hideAllDayEvents
+            )
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                session.showList(on: session.selectedDate)
+            } label: {
+                Label("calendar.panel.backToMonth", systemImage: "chevron.left")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityIdentifier("calendar-editor-back-to-month")
+
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(dayEvents) { event in
+                        card(for: event)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.never)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 只读卡片分派：日程 → `CalendarEventCard`；提醒 → `ReminderCard`（勾选圈空实现，本栏不写回）。
+    @ViewBuilder
+    private func card(for event: EventModel) -> some View {
+        if event.type.isReminder {
+            ReminderCard(event: event, showFullEventTitles: showFullEventTitles, onToggle: { _ in })
+        } else {
+            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles, detailEnabled: false)
+        }
+    }
+}
+
 struct StandaloneCalendarView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject var calendarManager: CalendarManager
@@ -1284,7 +1347,18 @@ struct StandaloneCalendarView: View {
     @State private var displayedMonth: Date = Date().startOfMonth
 
     /// 两栏之间的间距（旧 `body` 里的局部常量逐字搬上来：几何读数去掉后它得有个具名住处）。
-    private static let paneSpacing: CGFloat = 12
+    /// T3 起为 **internal**（原 `private`）：编辑档宽度的**关系式**（编辑区 = 宿主内容宽 − 左栏 − 本间距）
+    /// 要用例按同一个常量断言，不写第二份「12」。
+    static let paneSpacing: CGFloat = 12
+
+    /// **编辑档左栏宽**（T3 / docs/48 D-07）：固定 260——左栏从整月网格让位成「回到月历 + 当日清单」，
+    /// 右栏编辑区因此拿到「宿主内容宽 − 260 − `paneSpacing`」（关系式，见 D-09；**不**写死 615）。
+    static let editorSidebarWidth: CGFloat = 260
+
+    /// **编辑档两栏的高度**（T3 / docs/48 D-07）：由**内容**声明、不由备注字数算（那是「打字时面板
+    /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它 → 这一页的自然高即 400；账本口径 =
+    /// 400 + 表头 28 − 16 = 412（探针走 `PanelAutoHeight.measuredContentHeight`）→ 面板 474 档。
+    static let editorPaneHeight: CGFloat = 400
 
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
     /// 左栏高度（`monthGridHeight`）由它算；网格本体在 `MonthGridView` 里从同一枚取数。
@@ -1321,40 +1395,52 @@ struct StandaloneCalendarView: View {
         // 这一页**不再读任何几何高度**（宽度也不读：两栏 `.frame(maxWidth: .infinity)` 等分，
         // 结果与旧的 `paneWidth = (width − 间距) / 2` 逐字相同）。
         HStack(alignment: .top, spacing: Self.paneSpacing) {
-            // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
-            // 翻月把选中日一并挪到新月份首日）。
-            // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后的
-            // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
-            // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
-            MonthGridView(
-                selectedDate: selectedDate,
-                scrollTarget: $datePickerScrollTarget,
-                monthNavigationMovesSelection: true,
-                monthEvents: monthEventSnapshot,
-                onDisplayedMonthChange: { month in
-                    // 左栏高度按**这个月份**算（见 `monthGridHeight`）；顺手抓该月的标记数据。
-                    displayedMonth = month
-                    Task { await calendarManager.updateMonthEvents(for: month) }
-                },
-                // **日历面板也不画网格上下的那两条滚动提示渐变**（2026-09-30 用户第 5 条
-                // 「日历面板还存在两条线的遮罩」/ D-04）：首页日历行早就传了 `false`（上一批
-                // D-01），这是第二处、也是最后一处。理由是两条在纯黑面板上只是脏线，而它们盖住的
-                // 正是 T4 新加的那一行（农历 / 节假日）——网格可滚这件事由右侧清单的滚动与
-                // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
-                showsScrollFades: false
-            )
-                // 左栏宽度 = 两栏等分（`.frame(maxWidth: .infinity)` 的结果与旧 `paneWidth` 同值）
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .frame(height: monthGridHeight, alignment: .topLeading)
-                .layoutPriority(1)
+            if session.route == .editor {
+                // **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
+                // 左栏**钉宽 260 + 钉高 400**（`editorPaneHeight`，与右栏同高）——条目再多也顶不高整页
+                // 理想高（清单在栏内滚动，外面再 `.clipped()` 兜底：那是「面板跟着内容长」的反馈环）。
+                CalendarEditorSidebar(session: session, manager: calendarManager)
+                    .frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight,
+                           alignment: .topLeading)
+                    .clipped()
+            } else {
+                // 左栏 = 抽取后的整月网格（`monthNavigationMovesSelection: true` 保留本视图的既有行为：
+                // 翻月把选中日一并挪到新月份首日）。
+                // 有事件的日期给日格画小圆点：传**按月**快照（`calendarManager.monthEvents` 过滤后的
+                // 那一份，与右栏清单同一套偏好口径）——共用同一个 `MonthGridView` 时，两个宿主的标记
+                // 口径也必须一致（首页日历行同样传）；显示月份变化时回调去抓那个月。
+                MonthGridView(
+                    selectedDate: selectedDate,
+                    scrollTarget: $datePickerScrollTarget,
+                    monthNavigationMovesSelection: true,
+                    monthEvents: monthEventSnapshot,
+                    onDisplayedMonthChange: { month in
+                        // 左栏高度按**这个月份**算（见 `monthGridHeight`）；顺手抓该月的标记数据。
+                        displayedMonth = month
+                        Task { await calendarManager.updateMonthEvents(for: month) }
+                    },
+                    // **日历面板也不画网格上下的那两条滚动提示渐变**（2026-09-30 用户第 5 条
+                    // 「日历面板还存在两条线的遮罩」/ D-04）：首页日历行早就传了 `false`（上一批
+                    // D-01），这是第二处、也是最后一处。理由是两条在纯黑面板上只是脏线，而它们盖住的
+                    // 正是 T4 新加的那一行（农历 / 节假日）——网格可滚这件事由右侧清单的滚动与
+                    // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
+                    showsScrollFades: false
+                )
+                    // 左栏宽度 = 两栏等分（`.frame(maxWidth: .infinity)` 的结果与旧 `paneWidth` 同值）
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(height: monthGridHeight, alignment: .topLeading)
+                    .layoutPriority(1)
+            }
 
             panelPages { source in
                 if case .home = source { vm.coordinator.currentView = .home }
             }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                // 右栏拿**同一个高度**：事件列表在它里面滚动 / 裁剪（它不参与「这一页要多高」，
-                // 因此把它的大内容量进自然高是不可能的——旧结构正是靠 `paneHeight` 把它钉住的）。
-                .frame(height: monthGridHeight, alignment: .topLeading)
+                // 右栏拿**同一个高度**：列表 / 详情档 = `monthGridHeight`（事件列在它里面滚动 / 裁剪）；
+                // 编辑档 = `editorPaneHeight`（400，与左栏同高）——它不参与「这一页要多高」，两档都由左栏
+                // 那个数定（旧结构正是靠 `paneHeight` 把它钉住的，T3 换成按档的自然高）。
+                .frame(height: session.route == .editor ? Self.editorPaneHeight : monthGridHeight,
+                       alignment: .topLeading)
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
