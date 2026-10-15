@@ -424,7 +424,14 @@ struct CalendarPanelPages: View {
     }
 
     private func confirmDelete(_ event: EventModel) async {
-        if await session.delete(event) { deleteTargetID = nil }
+        guard await session.delete(event) else { return }
+        deleteTargetID = nil
+        // 删掉的那条如果正是滚动锚点，把它挪到邻近条目（旧 `deletionConfirmation` 里的同一语义：
+        // 锚点不能继续指向已消失的记录）。
+        if session.calendarScrollAnchor == event.id,
+           let index = events.firstIndex(where: { $0.id == event.id }) {
+            session.calendarScrollAnchor = events.dropFirst(index + 1).first?.id ?? events.prefix(index).last?.id
+        }
     }
 
     /// 浮层卡片的动作集（H2 设计图 / D-20）：按记录类型给；只读记录只给「打开系统日历」。

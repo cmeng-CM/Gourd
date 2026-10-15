@@ -119,7 +119,7 @@ struct CalendarEventDetailCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 // 完整标题：**不限行**（不写 `lineLimit` —— 详情浮层存在的理由就是读全文）。
                 Text(event.title)
-                    .font(.callout)
+                    .font(CalendarPanelTypography.cardTitle)
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
 
@@ -127,7 +127,7 @@ struct CalendarEventDetailCard: View {
 
                 if let location = event.location, !location.isEmpty {
                     Text(location)
-                        .font(.caption)
+                        .font(CalendarPanelTypography.cardSecondary)
                         // p18：改前固定中灰 `Color(white: 0.65)`——浅色 / 中间调玻璃上对比度归零。
                         .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                         .lineLimit(1)
@@ -137,7 +137,7 @@ struct CalendarEventDetailCard: View {
                     // 备注全部内容：**最多 6 行**、尾部截断（口径来自 docs/36 §接口与数据形状；
                     // 详情卡不做滚动——控制器裁决 1）。
                     Text(notes)
-                        .font(.caption)
+                        .font(CalendarPanelTypography.cardSecondary)
                         // p18：改前固定中灰 `Color(white: 0.75)`——备注是正文延伸，取卡片里更靠近主文字的一档。
                         .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryStrongOpacity))
                         .lineLimit(6)
@@ -187,7 +187,7 @@ struct CalendarEventDetailCard: View {
     private var timeRow: some View {
         if event.isAllDay {
             Text("All-day")
-                .font(.caption)
+                .font(CalendarPanelTypography.cardSecondary)
                 .fontWeight(.medium)
                 .foregroundColor(.white)
         } else {
@@ -200,7 +200,7 @@ struct CalendarEventDetailCard: View {
                 Text(event.end, style: .time)
                     .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
             }
-            .font(.caption)
+            .font(CalendarPanelTypography.cardSecondary)
         }
     }
 

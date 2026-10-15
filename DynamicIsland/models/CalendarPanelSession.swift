@@ -548,8 +548,7 @@ final class CalendarPanelSession: ObservableObject {
         draftError = nil
     }
 
-    func openInSystemApp(_ event: EventModel? = nil) {
-        guard let event else { return }
+    func openInSystemApp(_ event: EventModel) {
         openSystemEvent(event)
     }
 
@@ -612,8 +611,12 @@ final class CalendarPanelSession: ObservableObject {
 
     /// 岛内**可删**判据：可写日程走 `canModifyInIsland`；可写待办走 `canCompleteReminderInIsland`
     /// （`canModifyInIsland` 对提醒恒 false——它的语义是「岛内可编辑」）。两处行内按钮与会话层共用它。
+    ///
+    /// **重复记录一律不给删**（与日程那条「重复日程交给系统应用维护」同一条边界，docs/39 D-03）：
+    /// 提醒在 EventKit 里删的是**整串**（没有 `span` 可选），岛内不提供这种不可细分的破坏性动作。
     static func canDeleteInIsland(_ event: EventModel) -> Bool {
-        event.canModifyInIsland || event.canCompleteReminderInIsland
+        guard !event.hasRecurrenceRules else { return false }
+        return event.canModifyInIsland || event.canCompleteReminderInIsland
     }
 
     /// 删除记录（**列表档行内 🗑 与详情档共用这一条**）：唯一判据是 `CanDeleteInIsland`。

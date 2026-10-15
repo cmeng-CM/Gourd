@@ -122,6 +122,13 @@ enum CalendarPanelRoute { case list, editor }                       // .detail �
 
 **实现期补的一条能力**：首页浮窗的删除**先确认**（C2 硬规则①）在首页没有「行下方确认条」可用，于是给详情卡加了可选的 `actions.deleteConfirmation`（浮窗底部换成一行确认 + 删除 / 取消）；面板侧不变。
 
+**审查后收尾（第二轮独立审查的遗留项，已做完）**：
+- **UI 套件**：`DynamicIslandUITests` 里 11 条以「点箭头 → 右栏换详情页」为前提的用例现在 `XCTSkip`（场景已不存在），文件头写清新流程（点整行弹浮窗、`calendar-row-edit-<id>` 进编辑档）——按 D-26 该套件已移出验收门且本机跑不动，**没有**盲写新 UI 代码当覆盖。
+- **浮层卡片字号**跟上本轮档位（标题 15 / 正文与次要 13，走 `CalendarPanelTypography`）：H2 设计图写的是 12，取 13 是为了与同屏的列表行（C1 的 13）一致。
+- **重复记录一律不给岛内删**：`canDeleteInIsland` 增加 `!hasRecurrenceRules`（提醒在 EventKit 里删的是整串，没有 `span` 可选；与「重复日程交给系统应用维护」同一条边界）。
+- **删除后把滚动锚点挪到邻近条目**（旧 `deletionConfirmation` 里的同一语义，T6 删页面时一并丢了，现已补回）。
+- `openInSystemApp` 去掉「无参即 no-op」的缺省参数。
+
 ## 已知限制
 
 （起草：终审回写时按实际实现补齐，至少覆盖以下几条）

@@ -15730,6 +15730,13 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertNil(backend.event(withID: "fixture-reminder-02"))
         let readOnly = try XCTUnwrap(backend.event(withID: "fixture-event-04"))
         XCTAssertFalse(CalendarPanelSession.canDeleteInIsland(readOnly))
+        // 重复记录一律不给删（提醒在 EventKit 里删的是整串；与「重复日程交给系统应用」同一条边界）。
+        // fixture-reminder-03 就是 fixtures 里带重复规则的那条（index == 3）。
+        let recurring = try XCTUnwrap(backend.event(withID: "fixture-reminder-03"))
+        XCTAssertTrue(recurring.hasRecurrenceRules, "前提：这条 fixture 带重复规则")
+        XCTAssertFalse(CalendarPanelSession.canDeleteInIsland(recurring), "重复待办不给岛内删")
+        let refusedSeries = await session.delete(recurring)
+        XCTAssertFalse(refusedSeries, "会话层也不许删整串")
         let deletedReadOnly = await session.delete(readOnly)
         XCTAssertFalse(deletedReadOnly, "只读记录：会话层也不许删（D-12 的第二道门）")
 
@@ -15738,8 +15745,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                       "行下方就地确认条")
         XCTAssertTrue(panel.contains("private func requestDelete(_ event: EventModel)"),
                       "行内 🗑 只叫确认条")
-        XCTAssertTrue(panel.contains("if await session.delete(event) { deleteTargetID = nil }"),
-                      "确认后才真的删")
+        XCTAssertTrue(panel.contains("guard await session.delete(event) else { return }"),
+                      "确认后才真的删，删成功再把锚点挪到邻近条目")
         XCTAssertTrue(panel.contains("calendar.panel.deleteReminderConsequence")
                       && panel.contains("calendar.panel.deleteEventConsequence"),
                       "确认文案写清后果（C2 硬规则②）")
