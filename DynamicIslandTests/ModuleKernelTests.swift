@@ -15338,7 +15338,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                      #"Text("calendar.panel.additional")"#, #"Button("calendar.generation.settings")"#] {
             XCTAssertFalse(panel.contains(gone), "\(gone) 不应再出现在编辑页")
         }
-        XCTAssertTrue(panel.contains(#"Button("calendar.generation.generate")"#), "「生成」按钮用新键")
+        XCTAssertTrue(panel.contains(#"case .ready: "calendar.generation.generate""#), "「生成」按钮用新键（三态共用一枚，见 T3）")
     }
 
     /// T2 / D-03·D-04：AI 模型设置只以齿轮出现；失败时只留一行「生成失败：<原因>」+ 重试。
@@ -15358,7 +15358,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         // 失败只保留一行：状态词 + 错误原因 + 重试（旧的状态词一行 + 独立红字一行已合并）。
         XCTAssertTrue(panel.contains(#"Text("calendar.generation.state.failed")"#))
-        XCTAssertTrue(panel.contains(#"Button("calendar.generation.retry")"#))
+        XCTAssertTrue(panel.contains(#"case .failed: "calendar.generation.retry""#),
+                      "重试文案挂在三态共用的那枚按钮上（不再是失败行里的第二个入口）")
+        XCTAssertFalse(panel.contains(#"Button("calendar.generation.retry")"#), "失败行不许再出现第二个重试入口")
         XCTAssertFalse(panel.contains(#".accessibilityIdentifier("calendar-generation-state")"#),
                        "状态词不再单独占一行")
         XCTAssertFalse(panel.contains("generationState.labelKey"), "成功 / 等待不占行")
@@ -15574,6 +15576,77 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        "20 行备注也不能把框顶高")
         XCTAssertGreaterThan(notes.frame.height, notes.cappedHeight(), "文档视图比框高 → 框内可滚动")
         XCTAssertEqual(notes.enclosingScrollView?.hasVerticalScroller, true)
+    }
+
+    /// 生成行右端的按钮槽（SwiftUI 画的 `Button` 会留下一枚 `_FocusRingView`，按它的宿主坐标取）：
+    /// 主按钮是定尺寸 76×26，齿轮是 15×15 —— 三态里主按钮必须落在**同一格**。
+    private func generationRowButtonSlots(in host: NSView) -> [NSRect] {
+        guard let note = sourceEditors(in: host).first else { return [] }
+        let noteFrame = note.convert(note.bounds, to: host)
+        let band = NSRect(x: noteFrame.maxX, y: noteFrame.minY, width: 200, height: noteFrame.height)
+        return collectViews(host) { String(describing: type(of: $0)).contains("FocusRing") }
+            .map { $0.convert($0.bounds, to: host) }
+            .filter { $0.intersects(band) }
+            .sorted { $0.minX < $1.minX }
+    }
+
+    /// V5 / D-05：生成区三态共用同一枚主按钮——就绪「生成」/ 生成中「取消」/ 失败「重新生成」，
+    /// 三种状态都渲染得出那枚按钮、且落在同一格；失败行只剩红字 + 改为手工填写（没有第二个重试入口）。
+    func testGenerationPrimaryButtonExistsInEveryStateAlongOneSlot() async throws {
+        // ① 纯函数：状态映射与文案键（设计图 C4 的三种状态逐字）。
+        XCTAssertEqual(CalendarGenerationPrimary(.idle), .ready)
+        XCTAssertEqual(CalendarGenerationPrimary(.ready), .ready)
+        XCTAssertEqual(CalendarGenerationPrimary(.cancelled), .ready)
+        XCTAssertEqual(CalendarGenerationPrimary(.debouncing), .busy)
+        XCTAssertEqual(CalendarGenerationPrimary(.parsing), .busy)
+        XCTAssertEqual(CalendarGenerationPrimary(.failed), .failed)
+        XCTAssertEqual(CalendarGenerationPrimary(.ready).labelKey, "calendar.generation.generate")
+        XCTAssertEqual(CalendarGenerationPrimary.busy.labelKey, "Cancel")
+        XCTAssertEqual(CalendarGenerationPrimary(.failed).labelKey, "calendar.generation.retry")
+        XCTAssertEqual(CalendarGenerationPrimary(.idle).identifier, "calendar-generation-generate")
+        XCTAssertEqual(CalendarGenerationPrimary(.debouncing).identifier, "calendar-generation-cancel")
+        XCTAssertEqual(CalendarGenerationPrimary(.failed).identifier, "calendar-generation-retry")
+
+        // ② 挂载：三态各来一次，主按钮每次都渲染、且是同一格（用户报的「失败后按钮没了」）。
+        let (session, manager) = editorSession(kind: .event, editing: false)
+        let host = mountEditor(session, manager: manager)
+        settle(host)
+        session.commitSourceForGeneration("明天下午五点周会")
+        session.cancelSourceParsing()
+        var slots: [(CalendarGenerationState, NSRect)] = []
+        for state in [CalendarGenerationState.cancelled, .parsing, .failed] {
+            if state == .parsing { session.commitSourceForGeneration("明天下午五点周会") }
+            if state == .failed { await session.generateDraft() }
+            settle(host)
+            XCTAssertEqual(session.generationState, state, "前提：会话确实在 \(state) 态")
+            XCTAssertEqual(CalendarGenerationPrimary(state).identifier,
+                           [CalendarGenerationState.cancelled: "calendar-generation-generate",
+                            .parsing: "calendar-generation-cancel",
+                            .failed: "calendar-generation-retry"][state])
+            let buttons = generationRowButtonSlots(in: host)
+            XCTAssertEqual(buttons.count, 2, "\(state)：生成行右端只有主按钮与齿轮，实得 \(buttons.map(\.debugDescription))")
+            let primary = try XCTUnwrap(buttons.first)
+            XCTAssertEqual(primary.width, 76, accuracy: 0.5, "\(state)：主按钮定宽 76")
+            XCTAssertEqual(primary.height, 26, accuracy: 0.5, "\(state)：主按钮定高 26")
+            slots.append((state, primary))
+        }
+        XCTAssertEqual(slots.count, 3)
+        for (state, slot) in slots.dropFirst() {
+            XCTAssertEqual(slot, slots[0].1, "\(state) 与就绪态必须是同一格（位置与尺寸都不变）")
+        }
+
+        // ③ 失败行只剩两样：一行红字 + 「改为手工填写」；重试不再是独立入口。
+        // 失败行（生成行下方那一条）只放「改为手工填写」一枚按钮。
+        let failureBand = NSRect(x: 0, y: slots[0].1.maxY + 1, width: slots[0].1.maxX + 76,
+                                 height: 60)
+        let failureRowButtons = collectViews(host) { String(describing: type(of: $0)).contains("FocusRing") }
+            .map { $0.convert($0.bounds, to: host) }
+            .filter { $0.intersects(failureBand) }
+        XCTAssertEqual(failureRowButtons.count, 1,
+                       "失败行只有「改为手工填写」一枚按钮（实得 \(failureRowButtons.map(\.debugDescription))）")
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertFalse(panel.contains("Button(\"calendar.generation.retry\")"), "不许再出现第二个重试入口")
+        XCTAssertTrue(panel.contains("manualEntryButton"))
     }
 
     /// V4 / D-03·D-04·D-17：新建待办的表单收进编辑档——内容高 ≤ 400（本轮口径），且**可视区**里

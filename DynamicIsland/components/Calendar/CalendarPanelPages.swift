@@ -720,6 +720,36 @@ struct CalendarPanelPages: View {
     }
 }
 
+/// 生成区主按钮的三种状态（设计图 C4 的「就绪 / 生成中 / 失败」；纯函数，便于钉住映射）。
+/// 三态**共用同一枚按钮**、同一位置与尺寸，只换文案——不存在「按钮不见了」这一态。
+enum CalendarGenerationPrimary: Equatable {
+    case ready, busy, failed
+
+    init(_ state: CalendarGenerationState) {
+        switch state {
+        case .parsing, .debouncing: self = .busy
+        case .failed: self = .failed
+        default: self = .ready
+        }
+    }
+
+    var labelKey: LocalizedStringKey {
+        switch self {
+        case .ready: "calendar.generation.generate"
+        case .busy: "Cancel"
+        case .failed: "calendar.generation.retry"
+        }
+    }
+
+    var identifier: String {
+        switch self {
+        case .ready: "calendar-generation-generate"
+        case .busy: "calendar-generation-cancel"
+        case .failed: "calendar-generation-retry"
+        }
+    }
+}
+
 /// 显式生成：原文先落在本视图的本地 state，点「生成」（或 ⌘↩）才写回草稿并触发一次解析。
 ///
 /// 输入框的复位：权威机制是**本视图被卸载**（`pendingConfirmation != nil` 时 body 走别的分支、
@@ -743,15 +773,7 @@ private struct CalendarSourceGeneration: View {
             HStack(alignment: .bottom, spacing: 8) {
                 CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
                     .accessibilityIdentifier("calendar-generation-source")
-                if session.generationState == .parsing || session.generationState == .debouncing {
-                    ProgressView().controlSize(.mini)
-                    Button("Cancel") { session.cancelSourceParsing() }
-                        .accessibilityIdentifier("calendar-generation-cancel")
-                } else if session.generationState != .failed, hasSource {
-                    Button("calendar.generation.generate") { generate() }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .accessibilityIdentifier("calendar-generation-generate")
-                }
+                generationPrimaryButton
                 // AI 模型设置：从按钮降级为生成行右端的齿轮，文案复用既有键。
                 Button { CalendarAISettingsNavigation.open() } label: { Image(systemName: "gearshape") }
                     .help(Text("calendar.generation.settings"))
@@ -761,24 +783,61 @@ private struct CalendarSourceGeneration: View {
             if session.configuredAI == nil {
                 Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
             }
-            // 状态词不再单独占行：只有失败时留一行「生成失败：<原因>」+ 重试。
+            // 状态词不再单独占行：只有失败时留一行「生成失败：<原因>」+ 改为手工填写。
+            // 重试就是上面那枚常驻按钮——不再有第二个重试入口（设计图 C4）。
             if session.generationState == .failed {
                 HStack(spacing: 8) {
                     (Text("calendar.generation.state.failed") + Text(session.generationError.map { "：" + $0 } ?? ""))
                         .font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("calendar-generation-failed")
-                    Button("calendar.generation.retry") { generate() }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .font(.caption).accessibilityIdentifier("calendar-generation-retry")
-                    Button("calendar.generation.manual") { session.useManualEntry() }
-                        .font(.caption).accessibilityIdentifier("calendar-generation-manual")
+                    manualEntryButton
                 }
             } else if session.draft?.generationMode == .required || session.generationState == .cancelled {
-                Button("calendar.generation.manual") { session.useManualEntry() }
-                    .font(.caption).accessibilityIdentifier("calendar-generation-manual")
+                manualEntryButton
             }
         }
+    }
+
+    /// 三态共用同一格、同一尺寸（76 × 26 的白 14% 圆角胶囊），只换文案——不存在「按钮不见了」这一态。
+    private var generationPrimaryButton: some View {
+        let primary = CalendarGenerationPrimary(session.generationState)
+        // 就绪态没写原文时按钮仍在同一格，只是不可点（点它只会造一条无意义的失败）。
+        let enabled = primary != .ready || hasSource
+        // 生成中比就绪态暗一档（设计图 C4 ②）：同一格里的「取消」不该看起来像主行动。
+        let fillAlpha: Double = (primary == .busy || !enabled) ? 0.07 : 0.14
+        let textAlpha: Double = primary == .busy ? 0.75 : (enabled ? 0.95 : 0.45)
+        return Button { primaryAction(primary) } label: {
+            Text(primary.labelKey)
+                .font(.caption).fontWeight(.semibold)
+                .foregroundStyle(.white.opacity(textAlpha))
+                .frame(width: 76, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.white.opacity(fillAlpha)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .keyboardShortcut(.return, modifiers: .command)
+        .accessibilityIdentifier(primary.identifier)
+    }
+
+    private func primaryAction(_ primary: CalendarGenerationPrimary) {
+        switch primary {
+        case .busy: session.cancelSourceParsing()
+        case .ready, .failed: generate()
+        }
+    }
+
+    /// 「改为手工填写」：浅底文字按钮（原来是一枚看不出能点的纯文字）。
+    private var manualEntryButton: some View {
+        Button { session.useManualEntry() } label: {
+            Text("calendar.generation.manual")
+                .font(.caption)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.10)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("calendar-generation-manual")
     }
 
     private var hasSource: Bool {
