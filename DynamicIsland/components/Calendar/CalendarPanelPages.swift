@@ -132,6 +132,10 @@ struct CalendarPanelPages: View {
     @StateObject private var lifecycle: CalendarEditorLifecycle
     @FocusState private var focusedField: Field?
     @State private var datePopover: DateField?
+    /// 详情浮层状态（D-07：列表行整行点开它；页/列级一份，**不**在滚动视口里）。
+    @StateObject private var details = CalendarEventDetailsModel()
+    /// 就地删除确认的目标 id（C2：行下方确认条；同一时刻只认一条）。
+    @State private var deleteTargetID: String?
     @State private var deleteConfirmation = false
     @State private var targets: [CalendarModel] = []
     @State private var authorizationRevision = 0
@@ -210,7 +214,15 @@ struct CalendarPanelPages: View {
         }
         .onChange(of: session.detailEvent?.id) { _, _ in deleteConfirmation = false }
         .task(id: session.draft?.kind) { await loadTargets() }
-        .onDisappear { lifecycle.stop() }
+        // 收面板 / 视图卸载：浮窗与确认条一律复位（D-23：不抑制自动收起，浮窗随面板一起关）。
+        .onChange(of: vm.notchState) { _, state in
+            if state != .open { details.clear(); deleteTargetID = nil }
+        }
+        .onDisappear {
+            details.clear()
+            deleteTargetID = nil
+            lifecycle.stop()
+        }
         .onExitCommand { escape() }
     }
 
@@ -270,6 +282,8 @@ struct CalendarPanelPages: View {
             .onChange(of: events.isEmpty) { _, empty in if !empty { restoreListAnchor() } }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // 详情浮层挂在**列级**（滚动视口之外，C2 硬规则）：锚点由行上报，浮层就近定位。
+        .calendarEventDetails(model: details, actions: detailActions)
     }
 
     private func restoreListAnchor() {
@@ -282,41 +296,148 @@ struct CalendarPanelPages: View {
         session.showDetail(event, source: .calendar(date: session.selectedDate, anchor: session.calendarScrollAnchor ?? event.id))
     }
 
+    /// 面板列表行的会议入口（一枚 22×22 按钮，与首页同款；docs/49 D-19）。既有用例
+    /// （`CalendarGenerationAndMeetingActionTests`）靠它取面板侧的会议接线。
+    func meetingAction(_ event: EventModel) -> MeetingActionView {
+        MeetingActionView(event: event, session: session)
+    }
+
+    /// 列表行（C1 设计图 / docs/49 D-07·D-19·D-20）：整行可点 → 钉住详情浮层；右端动作**整组贴右**
+    /// （会议 22 + ✎ 28 + 🗑 28，间距 8，最后一枚的右缘 = 行内边距内缘 11）；只读记录整组不画
+    /// （标题用满宽度）。行下方可挂就地删除确认条。
     @ViewBuilder
     private func itemCard(_ event: EventModel) -> some View {
-        if event.type.isReminder {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                completionButton(event)
-                VStack(alignment: .leading, spacing: 4) {
+                if event.type.isReminder {
+                    completionButton(event)
+                } else {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(Color(event.calendar.color)).frame(width: 4, height: 36)
+                }
+                VStack(alignment: .leading, spacing: 3) {
                     CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
                                            font: CalendarPanelTypography.appKitTitle(.medium),
                                            maximumLines: showFullEventTitles ? 0 : 2)
-                    Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: CalendarPanelDates.sourceCalendar(for: event))) : String(localized: "calendar.panel.noDueDate"))
-                        .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text(dueOrTimeText(event))
+                            .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
+                        MeetingActionInfoText(event: event, session: session)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                meetingAction(event)
-                Button { show(event) } label: { Image(systemName: "chevron.right") }
-                    .disabled(session.isSubmitting)
-                    .accessibilityLabel(Text("calendar.panel.details"))
-                    .accessibilityIdentifier("calendar-item-\(event.id)")
+                rowActionGroup(event)
             }
             .padding(.horizontal, 11).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.1 : 0.05)))
-            .opacity(isCompleted(event) ? 0.55 : 1)
-            .onHover { hoveredID = $0 ? event.id : nil }
-        } else {
-            VStack(alignment: .leading, spacing: 3) {
-                CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles,
-                                  onDetail: { show(event) }, detailEnabled: !session.isSubmitting)
-                if event.conferenceURL == nil {
+            if deleteTargetID == event.id { deleteConfirmationBar(event) }
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.06 : 0.03)))
+        .opacity(isCompleted(event) ? 0.55 : 1)
+        .contentShape(Rectangle())
+        .onHover { hoveredID = $0 ? event.id : nil }
+        // 整行点开详情浮层（D-07）：再点同一行取消。文字上的单击由文本视图自己吃（可拖选），
+        // 属实现时实测 + 人工项（计划 ②）。
+        .onTapGesture { details.togglePin(event.id) }
+        .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
+    }
+
+    /// 行的第二行文字：日程给时段、待办给截止（无截止给既有「无截止」键）。
+    private func dueOrTimeText(_ event: EventModel) -> String {
+        let calendar = CalendarPanelDates.sourceCalendar(for: event)
+        if event.type.isReminder {
+            guard CalendarPanelDates.hasDueDate(event) else { return String(localized: "calendar.panel.noDueDate") }
+            return event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: calendar)
+        }
+        return CalendarPanelDates.formatted(event.start, allDay: event.isAllDay, calendar: calendar)
+    }
+
+    /// 右端动作组（C1：只对可写记录给 ✎ / 🗑；会议入口与首页同款一枚按钮，`hasMeetingInformation` 判据）。
+    @ViewBuilder
+    private func rowActionGroup(_ event: EventModel) -> some View {
+        let source = CalendarMeetingSource(event: event)
+        let canDelete = CalendarPanelSession.canDeleteInIsland(event)
+        if source.hasMeetingInformation || event.canModifyInIsland || canDelete {
+            HStack(spacing: 8) {
+                if source.hasMeetingInformation {
                     meetingAction(event)
                 }
+                if event.canModifyInIsland, !event.type.isReminder {
+                    rowIconButton("calendar.panel.editItem", systemImage: "pencil") { session.beginEdit(event) }
+                        .accessibilityIdentifier("calendar-row-edit-\(event.id)")
+                }
+                if canDelete {
+                    rowIconButton("calendar.panel.delete", systemImage: "trash") { requestDelete(event) }
+                        .accessibilityIdentifier("calendar-row-delete-\(event.id)")
+                }
             }
-                .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.05 : 0)))
-                .contentShape(Rectangle())
-                .onHover { hoveredID = $0 ? event.id : nil }
+            .disabled(session.isSubmitting)
         }
+    }
+
+    /// 行内一枚动作图标：28pt 命中区 + 16pt 图标（C1 的圆形按钮）。
+    private func rowIconButton(_ labelKey: LocalizedStringKey, systemImage: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(.white.opacity(0.10)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(Text(labelKey))
+        .accessibilityLabel(Text(labelKey))
+    }
+
+    /// 行内 🗑 / 浮层里的删除（C2 硬规则③）：**先收浮窗**，再在行下方出确认条——同屏只留一个浮层。
+    private func requestDelete(_ event: EventModel) {
+        details.clear()
+        deleteTargetID = event.id
+    }
+
+    /// 就地删除确认条（C2）：行下方一条，不弹系统窗；Esc / 「取消」都不改任何东西。
+    private func deleteConfirmationBar(_ event: EventModel) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(format: String(localized: "Are you sure you want to delete \"%@\"?"),
+                            event.title))
+                    .font(CalendarPanelTypography.action).foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(event.type.isReminder ? "calendar.panel.deleteReminderConsequence"
+                                           : "calendar.panel.deleteEventConsequence")
+                    .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("calendar.panel.delete") { Task { await confirmDelete(event) } }
+                .font(CalendarPanelTypography.action).foregroundStyle(.red)
+                .accessibilityIdentifier("calendar-delete-confirm")
+            Button("Cancel") { deleteTargetID = nil }
+                .font(CalendarPanelTypography.action)
+                .accessibilityIdentifier("calendar-delete-cancel")
+        }
+        .padding(.horizontal, 11).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.06)))
+        .accessibilityIdentifier("calendar-delete-confirmation")
+    }
+
+    private func confirmDelete(_ event: EventModel) async {
+        if await session.delete(event) { deleteTargetID = nil }
+    }
+
+    /// 浮层卡片的动作集（H2 设计图 / D-20）：按记录类型给；只读记录只给「打开系统日历」。
+    private func detailActions(_ event: EventModel) -> CalendarEventDetailActions {
+        let source = CalendarMeetingSource(event: event)
+        let isReminder = event.type.isReminder
+        let completed = isCompleted(event)
+        return CalendarEventDetailActions(
+            openSystem: { session.openInSystemApp(event) },
+            complete: isReminder ? { Task { _ = await session.complete(event, completed: !completed) } } : nil,
+            edit: event.canModifyInIsland && !isReminder ? { session.beginEdit(event) } : nil,
+            delete: CalendarPanelSession.canDeleteInIsland(event) ? { requestDelete(event) } : nil,
+            meeting: source.hasMeetingInformation ? { MeetingActionView(source: source, session: session) } : nil
+        )
     }
 
     private func isCompleted(_ event: EventModel) -> Bool {
@@ -355,7 +476,8 @@ struct CalendarPanelPages: View {
                     Text("calendar.panel.notesEnd").font(.caption2).foregroundStyle(.secondary)
                         .accessibilityIdentifier("calendar-notes-end")
                 }
-                meetingAction(event)
+                // 详情档在 T6 退休：这里先与列表行同款（一枚图标按钮），不再单留 `.row` 两键。
+                MeetingActionView(event: event, session: session)
                 if event.type.isReminder {
                     Text(LocalizedStringKey(event.calendar.allowsContentModifications ? "Edit saved reminders in the system app." : "This calendar is read-only."))
                         .font(.caption).foregroundStyle(.secondary)
@@ -370,9 +492,6 @@ struct CalendarPanelPages: View {
         .onHover { lifecycle.setScrolling($0) }
     }
 
-    func meetingAction(_ event: EventModel) -> MeetingActionView {
-        MeetingActionView(event: event, session: session, style: .row)
-    }
 
     private func displayDate(_ date: Date, allDay: Bool, calendar: Calendar) -> String {
         CalendarPanelDates.formatted(date, allDay: allDay, calendar: calendar)
@@ -737,7 +856,9 @@ struct CalendarPanelPages: View {
     }
 
     private func escape() {
-        if datePopover != nil { datePopover = nil }
+        // Esc 顺序（C2）：先收浮窗 / 确认条 → 再处理日期弹层与菜单 → 最后才返回上一页 / 收面板。
+        if details.activeID != nil { details.clear() }
+        else if deleteTargetID != nil { deleteTargetID = nil }
         else if session.pendingConfirmation != nil { session.dismissConfirmation() }
         else if deleteConfirmation { deleteConfirmation = false }
         else if session.route != .list { goBack() }
@@ -754,7 +875,7 @@ enum CalendarGenerationPrimary: Equatable {
         switch state {
         case .parsing, .debouncing: self = .busy
         case .failed: self = .failed
-        default: self = .ready
+        case .idle, .ready, .cancelled: self = .ready
         }
     }
 
@@ -795,9 +916,14 @@ private struct CalendarSourceGeneration: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("calendar.generation.source").font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
                     .accessibilityIdentifier("calendar-generation-source")
+                // 生成中的 mini 指示器（C4 ②）：槽位**恒定**占宽，按钮三态才不会左右挪。
+                ProgressView().controlSize(.mini)
+                    .opacity(CalendarGenerationPrimary(session.generationState) == .busy ? 1 : 0)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
                 generationPrimaryButton
                 // AI 模型设置：从按钮降级为生成行右端的齿轮，文案复用既有键。
                 Button { CalendarAISettingsNavigation.open() } label: { Image(systemName: "gearshape") }
@@ -827,8 +953,8 @@ private struct CalendarSourceGeneration: View {
     /// 三态共用同一格、同一尺寸（76 × 26 的白 14% 圆角胶囊），只换文案——不存在「按钮不见了」这一态。
     private var generationPrimaryButton: some View {
         let primary = CalendarGenerationPrimary(session.generationState)
-        // 就绪态没写原文时按钮仍在同一格，只是不可点（点它只会造一条无意义的失败）。
-        let enabled = primary != .ready || hasSource
+        // 只有生成中的「取消」可以无条件点：其余两态都要有原文（清空原文后的重试没有意义）。
+        let enabled = primary == .busy || hasSource
         // 生成中比就绪态暗一档（设计图 C4 ②）：同一格里的「取消」不该看起来像主行动。
         let fillAlpha: Double = (primary == .busy || !enabled) ? 0.07 : 0.14
         let textAlpha: Double = primary == .busy ? 0.75 : (enabled ? 0.95 : 0.45)
@@ -837,7 +963,7 @@ private struct CalendarSourceGeneration: View {
                 .font(CalendarPanelTypography.action).fontWeight(.semibold)
                 .foregroundStyle(.white.opacity(textAlpha))
                 .frame(width: 76, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(.white.opacity(fillAlpha)))
         }
         .buttonStyle(.plain)

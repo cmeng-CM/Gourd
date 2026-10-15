@@ -518,6 +518,37 @@ private struct MeetingActionContent: View {
     }
 }
 
+/// 会议**文字信息**（平台名 + 会议号）：面板列表行把这两项当信息留着（docs/49 D-19「平台名 + 会议号
+/// 作为文字信息保留」），动作本身不再用两枚文字键——那是行右端那枚 22×22 图标按钮的事。
+struct MeetingActionInfoText: View {
+    let event: EventModel
+    let session: CalendarPanelSession
+    @StateObject private var model: MeetingActionModel
+
+    init(event: EventModel, session: CalendarPanelSession) {
+        self.event = event
+        self.session = session
+        _model = StateObject(wrappedValue: MeetingActionModel(event: event, session: session))
+    }
+
+    var body: some View {
+        let provider = MeetingActionPresentation.rowProviderName(for: model)
+        let value = MeetingActionPresentation.rowValue(for: model)
+        if provider != nil || value != nil {
+            HStack(spacing: 4) {
+                if let provider {
+                    Text(provider).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7)).lineLimit(1).fixedSize()
+                }
+                if let value {
+                    Text(value).font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85)).lineLimit(1).truncationMode(.middle)
+                }
+            }
+        }
+    }
+}
+
 /// `.row`：设计图 ④ 的面板形态 —— 一行 `<provider 名> <号码或链接>` + 右端「打开 / 复制」两个小键。
 ///
 /// 退化态（审查 I-1）：判不出平台时主动作就是复制，此时**不画「打开」**（键名与行为必须一致）；

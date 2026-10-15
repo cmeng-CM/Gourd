@@ -33,6 +33,8 @@ protocol CalendarServiceProviding {
     func createReminderRecord(input: CalendarReminderInput) async throws -> EventModel
     func createReminderRecord(title: String, due: Date, listID: String?) async throws -> EventModel
     func deleteEvent(id: String) async throws
+    /// 删除待办（岛内列表行的 🗑 也管待办：C2 / D-10「待办只给删除」）。
+    func deleteReminder(id: String) async throws
     func completeReminder(id: String, completed: Bool) async throws -> EventModel
     func event(withID id: String) -> EventModel?
     func writableEventCalendars() -> [CalendarModel]
@@ -279,6 +281,18 @@ class CalendarService: CalendarServiceProviding {
             guard let event = item as? EKEvent else { throw CalendarMutationError.wrongRecordType }
             try CalendarMutationPolicy.performEventWrite(event: try self.savedModel(from: event)) {
                 try self.store.remove(event, span: .thisEvent, commit: true)
+            }
+        }
+    }
+
+    func deleteReminder(id: String) async throws {
+        try await performWrite(to: .reminder) {
+            guard let item = self.store.calendarItem(withIdentifier: id) else {
+                throw CalendarMutationError.recordNotFound
+            }
+            guard let reminder = item as? EKReminder else { throw CalendarMutationError.wrongRecordType }
+            try CalendarMutationPolicy.performReminderWrite(event: try self.savedModel(from: reminder)) {
+                try self.store.remove(reminder, commit: true)
             }
         }
     }

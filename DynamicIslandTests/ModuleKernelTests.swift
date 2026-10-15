@@ -11531,6 +11531,10 @@ private final class CalendarInteractionServiceFake: CalendarServiceProviding {
         if let writeError { throw writeError }
         deletedID = id
     }
+    func deleteReminder(id: String) async throws {
+        if let writeError { throw writeError }
+        deletedID = id
+    }
     func completeReminder(id: String, completed: Bool) async throws -> EventModel {
         if let writeError { throw writeError }
         return try XCTUnwrap(reminderRecord)
@@ -14914,7 +14918,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(MeetingActionView(source: source, session: session, style: .row).style, .row)
 
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
-        XCTAssertTrue(panel.contains("MeetingActionView(event: event, session: session, style: .row)"))
+        // docs/49 D-19（2026-10-15）：面板列表行的会议入口与首页同款——一枚 22×22 图标按钮
+        // （点 = 打开 / 复制、右键 = 菜单），不再是 `.row` 的两枚文字键；「平台名 + 会议号」留作文字信息。
+        XCTAssertTrue(panel.contains("MeetingActionView(event: event, session: session)"))
+        XCTAssertFalse(panel.contains("style: .row"), "面板行不许再用 `.row` 形态")
         let detail = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
         XCTAssertTrue(detail.contains("style: .row"))
         let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
@@ -15588,6 +15595,156 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        "长内容不许把整页顶高（旧形态「编辑框随内容在页内长高」的护栏）")
     }
 
+    // MARK: - T5（本轮 docs/49）：列表行整行点开详情浮层 + 行内编辑/删除（V7 / V8 / V9）
+
+    /// 行带 → 行内按钮：按标题文本框的位置切出每一行的竖直带，再数落在带里的焦点环
+    /// （SwiftUI `Button` 会留下一枚 `_FocusRingView`；会议按钮是 NSView，不算在里面）。
+    private func rowButtonSlots(in host: NSView) -> [(string: String, title: NSRect, buttons: [NSRect])] {
+        let titles = collectViews(host) { ($0 as? CalendarReadOnlyTextView)?.string.isEmpty == false }
+            .compactMap { $0 as? CalendarReadOnlyTextView }
+            .map { ($0.string, $0.convert($0.bounds, to: host)) }
+            .filter { $0.1.width > 40 && $0.1.height > 0 }
+        let rings = collectViews(host) { String(describing: type(of: $0)).contains("FocusRing") }
+            .map { $0.convert($0.bounds, to: host) }
+        // 行带只取**列表列**（左栏月历里也有焦点环，混进来就会把每个行带都数成十几枚）。
+        let column = titles.map(\.1.minX).min() ?? 0
+        return titles.map { string, title in
+            let band = NSRect(x: max(0, column - 40), y: title.midY - 20,
+                              width: host.bounds.width - max(0, column - 40), height: 40)
+            return (string, title, rings.filter { $0.intersects(band) && $0.midX > column - 40 })
+        }
+    }
+
+    /// V7 / D-07·D-12·D-19：行内动作键按「可写性 + 记录类型」给——可写日程两枚（✎ / 🗑）、
+    /// 只读记录一枚都不给、待办只有 🗑（完成圈在左边，不算动作键）。
+    func testListRowActionsFollowWritabilityAndKind() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 4, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                          saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                          createReminder: { try await backend.createReminderRecord(input: $0) },
+                                          deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                          completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                          event: { backend.event(withID: $0) })
+        let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+        session.showList(on: reference)
+        await manager.updateCurrentDate(reference)
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
+        settle(host)
+
+        let rows = rowButtonSlots(in: host)
+        func actions(_ needle: String) -> (right: Int, left: Int) {
+            guard let row = rows.first(where: { $0.string.contains(needle) }) else { return (-1, -1) }
+            return (row.buttons.filter { $0.minX > row.title.maxX }.count,
+                    row.buttons.filter { $0.maxX < row.title.minX }.count)
+        }
+        XCTAssertGreaterThanOrEqual(rows.count, 4, "前提：当日渲染出 4 行（\(rows.map(\.string))）")
+        XCTAssertEqual(actions("01 ·").right, 2, "可写日程：右端 ✎ + 🗑 两枚")
+        XCTAssertEqual(actions("02 ·").right, 1, "待办：右端只有 🗑（本批不给编辑，D-10）")
+        XCTAssertEqual(actions("02 ·").left, 1, "待办左端那枚是完成圈")
+        XCTAssertEqual(actions("04 ·").right, 0, "只读记录（fixture-event-04）：一枚动作键都不给（D-12）")
+        XCTAssertEqual(actions("04 ·").left, 0)
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        // 行内动作的可见性判据（源码口径与上面实测同源）。
+        XCTAssertTrue(panel.contains("if event.canModifyInIsland, !event.type.isReminder {"))
+        XCTAssertTrue(panel.contains("if canDelete {\n                    rowIconButton(\"calendar.panel.delete\""))
+        // 会议入口走与首页同款的一枚按钮（D-19），不再用 `.row` 的两枚文字键；平台名 + 会议号仍作文字信息。
+        XCTAssertTrue(panel.contains("MeetingActionView(event: event, session: session)"))
+        XCTAssertFalse(panel.contains("MeetingActionView(event: event, session: session, style: .row)"))
+        XCTAssertTrue(panel.contains("MeetingActionInfoText(event: event, session: session)"))
+        // 整行可点 + 锚点上报（浮层定位靠它）。
+        XCTAssertTrue(panel.contains(".onTapGesture { details.togglePin(event.id) }"))
+        XCTAssertTrue(panel.contains(".anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds)"))
+        // 浮层**不在**滚动视口里：宿主挂在 listPage 的列级（`calendar-list-scroll` 之外）。
+        XCTAssertTrue(panel.contains(".calendarEventDetails(model: details, actions: detailActions)"))
+        // 浮层必须是面板内自绘：不许出现 NSPopover / sheet（限定在浮层与列表行代码里）。
+        let detail = try repositorySource("DynamicIsland/components/Calendar/CalendarEventDetail.swift")
+        for banned in ["NSPopover", ".sheet(", ".popover("] {
+            XCTAssertFalse(detail.contains(banned), "\(banned) 不许出现在详情浮层里（D-08）")
+        }
+        // 动作行是图标形态（D-20）：动作集里没有文字按钮构造，只有 iconAction。
+        XCTAssertTrue(detail.contains("private func iconAction("))
+        XCTAssertFalse(detail.contains("Label(\"Open in Calendar\""))
+    }
+
+    /// V8 / D-23：钉住**不**抑制自动收起（该标志恒 false，本轮无写入点）；浮窗状态在
+    /// 切页 / 收面板 / 卸载三处收口，Esc 先收浮窗（源码 + 模型两半取证）。
+    func testDetailsPopupNeverSuppressesAutoCloseAndClearsOnEveryExit() throws {
+        let model = CalendarEventDetailsModel()
+        XCTAssertFalse(model.isPinRenderable)
+        model.togglePin("a")
+        XCTAssertEqual(model.pinnedID, "a")
+        XCTAssertEqual(model.activeID, "a", "钉住优先于悬停")
+        model.hover("b")
+        XCTAssertEqual(model.activeID, "a", "悬停不许抢走钉住档")
+        model.togglePin("a")
+        XCTAssertEqual(model.activeID, "b", "再点同一行取消钉住 → 回落到仍然悬停的那一条")
+        model.hover(nil)
+        XCTAssertNil(model.activeID, "悬停也走了就什么都不显示")
+        model.togglePin("b")
+        model.clear()
+        XCTAssertNil(model.pinnedID)
+        XCTAssertNil(model.hoveredID)
+        XCTAssertFalse(model.isPinRenderable)
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        // 三处收口 + Esc 第一步。
+        XCTAssertEqual(panel.components(separatedBy: "details.clear()").count - 1, 4,
+                       "Esc / 切页 / 收面板 / 视图卸载各一处")
+        XCTAssertTrue(panel.contains("if state != .open { details.clear(); deleteTargetID = nil }"))
+        XCTAssertTrue(panel.contains("if details.activeID != nil { details.clear() }"))
+        // D-23：不写 `vm.isCalendarDetailsPinned`（该标志恒 false，浮窗不抑制自动收起）。
+        for file in ["CalendarPanelPages.swift", "CalendarEventDetail.swift",
+                     "CalendarEditorLifecycle.swift", "DynamicIslandCalendar.swift"] {
+            let text = try repositorySource("DynamicIsland/components/Calendar/" + file)
+            XCTAssertFalse(text.contains("isCalendarDetailsPinned ="),
+                           "\(file) 不许写收起抑制标志（D-23）")
+        }
+    }
+
+    /// V9 / D-10：删除走**会话层**同一条路（列表档也要能用），唯一判据是 `canModifyInIsland`；
+    /// 行内先出就地确认条、确认后才调删除（源码口径 + 会话行为两半）。
+    func testDeleteWorksFromTheListAndStaysConfirmedFirst() async throws {
+        let backend = CalendarInteractionFixtures.makeBackend(count: 4, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                          saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                          createReminder: { try await backend.createReminderRecord(input: $0) },
+                                          deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                          completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                          event: { backend.event(withID: $0) },
+                                          deleteReminder: { try await backend.deleteReminder(id: $0) })
+        session.showList(on: reference)
+        let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
+        XCTAssertFalse(reminder.canModifyInIsland, "'岛内可编辑'对提醒恒 false（它的写入判据是另一条）")
+        XCTAssertTrue(CalendarPanelSession.canDeleteInIsland(reminder), "但可写待办在岛内可删（D-10）")
+        XCTAssertEqual(session.route, .list)
+        let deletedReminder = await session.delete(reminder)
+        XCTAssertTrue(deletedReminder, "列表档删待办必须能走通（改前 guard 是 route == .detail）")
+        XCTAssertNil(backend.event(withID: "fixture-reminder-02"))
+        let readOnly = try XCTUnwrap(backend.event(withID: "fixture-event-04"))
+        XCTAssertFalse(CalendarPanelSession.canDeleteInIsland(readOnly))
+        let deletedReadOnly = await session.delete(readOnly)
+        XCTAssertFalse(deletedReadOnly, "只读记录：会话层也不许删（D-12 的第二道门）")
+
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(panel.contains("if deleteTargetID == event.id { deleteConfirmationBar(event) }"),
+                      "行下方就地确认条")
+        XCTAssertTrue(panel.contains("private func requestDelete(_ event: EventModel)"),
+                      "行内 🗑 只叫确认条")
+        XCTAssertTrue(panel.contains("if await session.delete(event) { deleteTargetID = nil }"),
+                      "确认后才真的删")
+        XCTAssertTrue(panel.contains("calendar.panel.deleteReminderConsequence")
+                      && panel.contains("calendar.panel.deleteEventConsequence"),
+                      "确认文案写清后果（C2 硬规则②）")
+        let sessionSource = try repositorySource("DynamicIsland/models/CalendarPanelSession.swift")
+        XCTAssertTrue(sessionSource.contains("guard !isSubmitting, Self.canDeleteInIsland(event) else { return false }"),
+                      "删除的唯一判据是 canDeleteInIsland（不再卡 route == .detail）")
+        XCTAssertTrue(sessionSource.contains("if event.type.isReminder {"), "待办走 deleteReminder 那条注入")
+        let provider = try repositorySource("DynamicIsland/Providers/CalendarServiceProviding.swift")
+        XCTAssertTrue(provider.contains("func deleteReminder(id: String) async throws"),
+                      "服务层补上了删待办（原 deleteEvent 只吃 EKEvent，会抛 wrongRecordType）")
+    }
+
     /// V6 / D-06：字号档只在一个常量里改——编辑页五类与列表卡片两类都引用具名常量，数值即设计值；
     /// 挂载后读**真实控件**的字号（SwiftUI `Text` 不是 NSView，标签那档靠常量 + 源码引用点取证）。
     func testEditorAndCardTypographyUsesTheNamedScale() throws {
@@ -15701,6 +15858,11 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         XCTAssertFalse(panel.contains("Button(\"calendar.generation.retry\")"), "不许再出现第二个重试入口")
         XCTAssertTrue(panel.contains("manualEntryButton"))
+        // 只有生成中的「取消」无条件可点：其余两态都要有原文（清空原文后的重试没有意义）。
+        XCTAssertTrue(panel.contains("let enabled = primary == .busy || hasSource"))
+        // 生成中的 mini 指示器槽位**恒定**占宽，按钮三态才不会左右挪。
+        XCTAssertTrue(panel.contains("ProgressView().controlSize(.mini)"),
+                      "生成中要有进行中的提示（C4 ② 的小圈）")
     }
 
     /// V4 / D-03·D-04·D-17：新建待办的表单收进编辑档——**内容高 ≤ 400**（编辑档自然高，计划的 V4 口径），

@@ -662,6 +662,11 @@ class CalendarManager: ObservableObject {
         await refreshAfterCalendarWrite()
     }
 
+    func deleteReminder(id: String) async throws {
+        try await calendarService.deleteReminder(id: id)
+        await refreshAfterCalendarWrite()
+    }
+
     func completeReminder(id: String, completed: Bool) async throws -> EventModel {
         let reminder = try await calendarService.completeReminder(id: id, completed: completed)
         await refreshAfterCalendarWrite()

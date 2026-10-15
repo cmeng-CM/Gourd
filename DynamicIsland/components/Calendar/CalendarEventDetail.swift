@@ -79,6 +79,23 @@ import SwiftUI
 /// 差异（按内容量）：水平内边距同为 11，垂直取 10（条目卡是 8，备注最多 6 行时上下略松更透气）；
 /// 卡底 `white.opacity(0.07)`（比条目卡 0.05 略实——浮层压盖在别的卡片上，要能读出来）
 /// + 一圈 `white.opacity(0.08)` 的 1pt 细边（`strokeBorder` 内描边，与卡底同形同界）。
+/// 浮层卡片底部的动作集（H2 设计图 / D-20：**图标形态**，文字只在悬停提示与无障碍标签里）。
+///
+/// 由**宿主**按记录类型填：日程 = 打开系统日历 / 编辑 / 删除；待办 = 打开提醒 / 完成 / 删除
+/// （本批不给岛内编辑提醒，D-10）；只读记录只有「打开系统日历」一枚（`canModifyInIsland` 判据，
+/// D-12）。`meeting` 有会议信息时给（点 = 打开 / 复制、右键 = 菜单，与列表行同款一枚按钮）。
+struct CalendarEventDetailActions {
+    var openSystem: (() -> Void)?
+    var complete: (() -> Void)?
+    var edit: (() -> Void)?
+    var delete: (() -> Void)?
+    var meeting: (() -> MeetingActionView)?
+
+    var isEmpty: Bool {
+        openSystem == nil && complete == nil && edit == nil && delete == nil && meeting == nil
+    }
+}
+
 struct CalendarEventDetailCard: View {
     let event: EventModel
     /// 钉住档标记（T3 fix）：`true` 时右上角出关闭按钮（×）。悬停档整层 `.allowsHitTesting(false)`，
@@ -86,6 +103,8 @@ struct CalendarEventDetailCard: View {
     let isPinned: Bool
     /// 关闭按钮动作（解钉；由宿主 / 修饰符接到 `model.togglePin(event.id)`）。
     let onClose: () -> Void
+    /// 底部动作集（默认空 = 不画动作行）。
+    var actions = CalendarEventDetailActions()
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -126,7 +145,7 @@ struct CalendarEventDetailCard: View {
                     ConferenceJoinButton(url: conferenceURL, event: event)
                 }
 
-                openButton
+                actionRow
             }
 
             Spacer(minLength: 0)
@@ -182,25 +201,47 @@ struct CalendarEventDetailCard: View {
         }
     }
 
-    /// 「Open in Calendar」：执行旧点击行为（打开系统 App——`calendarAppURL()` 里按偏好走
-    /// Fantastical / Notion / Apple 日历；提醒条目返回的是提醒事项深链）。**复用既有键**，
-    /// 图标沿用 `MinimalisticMusicPlayerView` 里同一动作的 `arrow.up.right.square`。
-    private var openButton: some View {
-        Button {
-            if let url = event.calendarAppURL() {
-                openURL(url)
+    /// 待办是否已完成（「完成 / 取消完成」那一枚据此换图标与文案）。
+    private var reminderIsCompleted: Bool {
+        if case .reminder(let completed) = event.type { return completed }
+        return false
+    }
+
+    /// 底部动作行（H2 / D-20）：图标 + 顶上一道细分隔线；`actions` 为空时整行不画。
+    @ViewBuilder
+    private var actionRow: some View {
+        if !actions.isEmpty {
+            Divider().overlay(Color.white.opacity(0.16))
+            HStack(spacing: 6) {
+                if let meeting = actions.meeting { meeting() }
+                iconAction("calendar.panel.openCalendar", systemImage: "arrow.up.right.square", action: actions.openSystem)
+                if let complete = actions.complete {
+                    iconAction(reminderIsCompleted ? "calendar.panel.markIncomplete" : "calendar.panel.markComplete",
+                               systemImage: reminderIsCompleted ? "checkmark.circle.fill" : "circle",
+                               action: complete)
+                }
+                iconAction("calendar.panel.editItem", systemImage: "pencil", action: actions.edit)
+                iconAction("calendar.panel.delete", systemImage: "trash", action: actions.delete)
             }
-        } label: {
-            Label("Open in Calendar", systemImage: "arrow.up.right.square")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.12))
-                .cornerRadius(6)
         }
-        .buttonStyle(.plain)
+    }
+
+    /// 一枚动作图标：文字只进 `.help` 与无障碍标签（D-20）。`action` 为 nil 时这一枚不画。
+    @ViewBuilder
+    private func iconAction(_ labelKey: LocalizedStringKey, systemImage: String, action: (() -> Void)?) -> some View {
+        if let action {
+            Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(width: 22, height: 22)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.16)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(Text(labelKey))
+            .accessibilityLabel(Text(labelKey))
+        }
     }
 }
 
@@ -353,9 +394,10 @@ extension View {
     /// （条目离开当日窗口 / 被偏好过滤 / 表单替换列表 → 查不到 → false；宿主据此复位收起抑制标志，
     /// 否则标志悬空、面板再也收不起来）。`pinnedID` 自身的变化由浮层内层那条
     /// `.onChange(of: model.pinnedID)` 用同一口径补算（锚点表在那一刻不一定会变）。
-    func calendarEventDetails(model: CalendarEventDetailsModel) -> some View {
+    func calendarEventDetails(model: CalendarEventDetailsModel,
+                             actions: @escaping (EventModel) -> CalendarEventDetailActions = { _ in .init() }) -> some View {
         overlayPreferenceValue(CalendarEventAnchorKey.self) { anchors in
-            CalendarEventDetailsOverlay(model: model, anchors: anchors)
+            CalendarEventDetailsOverlay(model: model, anchors: anchors, actions: actions)
         }
         .onPreferenceChange(CalendarEventAnchorKey.self) { anchors in
             model.refreshPinRenderable(
@@ -374,6 +416,8 @@ private struct CalendarEventDetailsOverlay: View {
     /// 浮层内容按 id 反查条目：两处宿主渲染卡片用的是**同一个**单日窗口（`CalendarManager.shared.events`）。
     @ObservedObject private var calendarManager = CalendarManager.shared
     let anchors: [String: Anchor<CGRect>]
+    /// 宿主给的动作集（按记录类型填；本层只透传给卡片）。
+    let actions: (EventModel) -> CalendarEventDetailActions
 
     /// 详情卡实测高（T3 fix）：初值 120 是保守档（首帧先用它定位），卡片量出真实高后经
     /// `CalendarEventDetailHeightKey` 修正——差的只是一帧，换来「翻转 / 夹取」都按真实高度判。
@@ -410,7 +454,8 @@ private struct CalendarEventDetailsOverlay: View {
                 CalendarEventDetailCard(
                     event: event,
                     isPinned: model.pinnedID == event.id,
-                    onClose: { model.togglePin(event.id) }
+                    onClose: { model.togglePin(event.id) },
+                    actions: actions(event)
                 )
                 .frame(width: width, alignment: .leading)
                 // 真实高度由内容定（备注行数 / 地点有无 / 标题行数），先量再定位（见上）。

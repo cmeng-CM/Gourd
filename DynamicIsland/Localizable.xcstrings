@@ -1467,6 +1467,38 @@
         }
       }
     },
+    "calendar.panel.deleteEventConsequence": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This also deletes it from Calendar. It can't be undone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时会从系统「日历」删除，不能撤销。"
+          }
+        }
+      }
+    },
+    "calendar.panel.deleteReminderConsequence": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This also deletes it from Reminders. It can't be undone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时会从系统「提醒事项」删除，不能撤销。"
+          }
+        }
+      }
+    },
     "calendar.panel.deleteQuestion": {
       "localizations": {
         "en": {

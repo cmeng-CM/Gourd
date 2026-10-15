@@ -138,6 +138,9 @@ final class CalendarPanelSession: ObservableObject {
     private let saveEventRecord: (CalendarEventInput, String?) async throws -> EventModel
     private let createReminderRecord: (CalendarReminderInput) async throws -> EventModel
     private let deleteEventRecord: (String) async throws -> Void
+    /// 待办删除（C2 / D-10：列表行对**可写待办**也给 🗑）。服务层的能力是分开的
+    /// （`deleteEvent` 只吃 EKEvent），所以这里也分开注入；nil = 该宿主不支持删待办。
+    private let deleteReminderRecord: ((String) async throws -> Void)?
     private let completeReminderRecord: (String, Bool) async throws -> EventModel
     private let readEvent: (String) -> EventModel?
     private let openSystemEvent: (EventModel) -> Void
@@ -315,6 +318,7 @@ final class CalendarPanelSession: ObservableObject {
         deleteEvent: @escaping (String) async throws -> Void,
         completeReminder: @escaping (String, Bool) async throws -> EventModel,
         event: @escaping (String) -> EventModel?,
+        deleteReminder: ((String) async throws -> Void)? = nil,
         openSystemEvent: @escaping (EventModel) -> Void = { _ in }
     ) {
         self.selectedDate = calendar.startOfDay(for: selectedDate)
@@ -324,6 +328,7 @@ final class CalendarPanelSession: ObservableObject {
         saveEventRecord = saveEvent
         createReminderRecord = createReminder
         deleteEventRecord = deleteEvent
+        deleteReminderRecord = deleteReminder
         completeReminderRecord = completeReminder
         readEvent = event
         self.openSystemEvent = openSystemEvent
@@ -338,6 +343,7 @@ final class CalendarPanelSession: ObservableObject {
         deleteEvent: @escaping (String) async throws -> Void,
         completeReminder: @escaping (String, Bool) async throws -> EventModel,
         event: @escaping (String) -> EventModel?,
+        deleteReminder: ((String) async throws -> Void)? = nil,
         openSystemEvent: @escaping (EventModel) -> Void = { _ in }
     ) {
         self.init(
@@ -346,7 +352,8 @@ final class CalendarPanelSession: ObservableObject {
                 let arguments = try input.legacyArguments()
                 return try await createReminder(arguments.title, arguments.due, arguments.listID)
             },
-            deleteEvent: deleteEvent, completeReminder: completeReminder, event: event, openSystemEvent: openSystemEvent
+            deleteEvent: deleteEvent, completeReminder: completeReminder, event: event,
+            deleteReminder: deleteReminder, openSystemEvent: openSystemEvent
         )
     }
 
@@ -358,6 +365,7 @@ final class CalendarPanelSession: ObservableObject {
             deleteEvent: { try await manager.deleteEvent(id: $0) },
             completeReminder: { try await manager.completeReminder(id: $0, completed: $1) },
             event: { manager.event(withID: $0) },
+            deleteReminder: { try await manager.deleteReminder(id: $0) },
             openSystemEvent: { CalendarInteractionFixtures.openSystemEvent($0) }
         )
     }
@@ -623,13 +631,32 @@ final class CalendarPanelSession: ObservableObject {
         }
     }
 
-    func delete() async -> Bool {
-        guard !isSubmitting, route == .detail, let event = detailEvent, event.canModifyInIsland else { return false }
+    /// 岛内**可删**判据：可写日程走 `canModifyInIsland`；可写待办走 `canCompleteReminderInIsland`
+    /// （`canModifyInIsland` 对提醒恒 false——它的语义是「岛内可编辑」）。两处行内按钮与会话层共用它。
+    static func canDeleteInIsland(_ event: EventModel) -> Bool {
+        event.canModifyInIsland || event.canCompleteReminderInIsland
+    }
+
+    /// 删除记录（**列表档行内 🗑 与详情档共用这一条**）：唯一判据是 `CanDeleteInIsland`。
+    ///
+    /// 改前首行 guard 是 `route == .detail`——列表档的删除因此在会话层直接返回 false（用户报的
+    /// 「行内删除点了没反应」类问题的根）。列表档删除后**留在列表**（面板停在列表档，T5 / C2）；
+    /// 详情档删除后按既有口径 `back()`。
+    func delete(_ event: EventModel) async -> Bool {
+        guard !isSubmitting, Self.canDeleteInIsland(event) else { return false }
         let generation = navigationGeneration
+        let fromDetail = route == .detail && detailEvent?.id == event.id
+        let writer: (String) async throws -> Void
+        if event.type.isReminder {
+            guard let deleteReminderRecord else { return false }
+            writer = deleteReminderRecord
+        } else {
+            writer = deleteEventRecord
+        }
         return await submit {
             do {
-                try await self.deleteEventRecord(event.id)
-                if self.navigationGeneration == generation, self.detailEvent?.id == event.id {
+                try await writer(event.id)
+                if self.navigationGeneration == generation, fromDetail {
                     _ = self.back()
                 }
                 return true
@@ -638,6 +665,12 @@ final class CalendarPanelSession: ObservableObject {
                 return false
             }
         }
+    }
+
+    /// 详情档的无参入口（既有调用点保留）：目标取 `detailEvent`。
+    func delete() async -> Bool {
+        guard let event = detailEvent else { return false }
+        return await delete(event)
     }
 
     func complete(_ event: EventModel, completed: Bool) async -> Bool {
