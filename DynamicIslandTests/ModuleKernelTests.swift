@@ -13740,6 +13740,42 @@ final class ScheduleGenerationTests: XCTestCase {
             XCTAssertTrue(value.confirmations.isEmpty, numeral)
         }
     }
+
+    /// V2：新 prompt 要求模型在「只有时长说法」时把 end 与 endEvidence 一起留空。
+    /// 这条钉的是**万一模型没照做**——把时长短语当 endEvidence 喂回来，也必须确定性拒绝、
+    /// 不能静默接受（否则等于放行了一条原文里没有钟点的「结束时间」）。
+    func testDurationPhraseAsEndEvidenceIsStillRejected() async {
+        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
+        do {
+            _ = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "下午三点半", end: "16:30", endEvidence: "会议时长一个点"))
+            XCTFail("时长短语不是钟点证据，必须拒绝")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+    }
+
+    /// 审查 I1：小时也走 0–59 词法后，合法的「十三点 / 二十三点 / 三点零零分」解得开
+    /// （旧实现只到「十二」且不认「零零」，模型逐字引用它们会恒被 invalidEvidence 拒绝）。
+    func testLegalExtendedChineseClockWordingsDecode() async throws {
+        for (evidence, clock, expected) in [
+            ("十三点", "13:00", date(12, hour: 13)),
+            ("二十三点", "23:00", date(12, hour: 23)),
+            ("三点零零分", "03:00", date(12, hour: 3))
+        ] {
+            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
+            XCTAssertEqual(value.start, expected, evidence)
+            XCTAssertTrue(value.confirmations.isEmpty, evidence)
+        }
+    }
+
+    /// 审查 I1/I3/I4：越界取值（时 >23、分 >59）与畸形词法（`十零`/`一十`/阿拉伯「刻」）
+    /// 仍按原路径确定性拒绝——小时走同一词法、但范围守卫与「刻只认一二三」两侧口径保持不变。
+    func testOutOfRangeAndMalformedClockWordingsAreRejected() async {
+        for evidence in ["二十五点", "三点六十分", "三点十零分", "三点一十分", "三点3刻"] {
+            do {
+                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:00", startEvidence: evidence))
+                XCTFail("必须确定性拒绝：" + evidence)
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
+        }
+    }
 }
 
 // Native text regressions create production controls without a window or system input.

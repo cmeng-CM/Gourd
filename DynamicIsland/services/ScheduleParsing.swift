@@ -270,10 +270,12 @@ struct ScheduleParsing: ScheduleParser {
             hour = parts[0]; minute = parts[1]
             if parts.count == 3 { second = parts[2] }
         } else if let point = value.firstIndex(of: "点") {
-            let digits = ["零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12]
-            guard let number = digits[String(value[value.startIndex..<point])] ?? Int(value[value.startIndex..<point]) else { return nil }
-            hour = number
-            // Every 点 form `timePattern` accepts must be decoded here: 点 / 点半 / 点Y分 / 点Y刻.
+            // Hours use the same 0–59 lexer as minutes; the (0...23) guard below rejects
+            // out-of-range values such as 二十五点 while 十三点 / 二十三点 still decode.
+            guard let parsedHour = Self.number(String(value[value.startIndex..<point])) else { return nil }
+            hour = parsedHour
+            // Every 点 form `timePattern` accepts **with a legal value** (hour 0–23, minute 0–59)
+            // must be decoded here: 点 / 点半 / 点Y分 / 点Y刻. Illegal values stay deterministically rejected.
             switch String(value[value.index(after: point)...]) {
             case "": minute = 0
             case "半": minute = 30
@@ -281,8 +283,13 @@ struct ScheduleParsing: ScheduleParser {
                 guard let amount = Self.number(String(tail.dropLast())) else { return nil }
                 minute = amount
             case let tail where tail.hasSuffix("刻"):
-                guard let quarters = Self.number(String(tail.dropLast())), (1...3).contains(quarters) else { return nil }
-                minute = quarters * 15
+                // `timePattern` only matches 一/二/三刻, so the decoder must accept exactly those.
+                switch String(tail.dropLast()) {
+                case "一": minute = 15
+                case "二": minute = 30
+                case "三": minute = 45
+                default: return nil
+                }
             default: return nil
             }
         } else { return nil }
@@ -303,25 +310,31 @@ struct ScheduleParsing: ScheduleParser {
         return second.map { String(format: "%02d:%02d:%02d", hour, minute, $0) } ?? String(format: "%02d:%02d", hour, minute)
     }
 
-    /// Recognize an amount 0–59 written as an Arabic numeral or a simple Chinese numeral
-    /// (`零`…`九`, `十`…`十九`, `二十`…`五十九`). Drives the minute part of `X点Y分`.
+    /// Recognize an amount 0–59 written as an Arabic numeral or a simple Chinese numeral.
+    /// Accepted Chinese lexemes: `零`…`九`, `十`, `十一`…`十九`, `二十`/`三十`/`四十`/`五十`
+    /// and their `X十Y` forms; a run of zeros (`零零` → 0) is tolerated. Malformed
+    /// combinations such as `十零` / `一十` return nil. Drives both hour and minute of `X点Y分`.
     private static func number(_ text: String) -> Int? {
         if let value = Int(text) { return (0...59).contains(value) ? value : nil }
         let digits: [Character: Int] = ["零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
         let characters = Array(text)
         guard !characters.isEmpty else { return nil }
-        if let ten = characters.firstIndex(of: "十") {
-            let tensPart = characters[..<ten]
-            let onesPart = characters[(ten + 1)...]
-            let tens: Int
-            if tensPart.isEmpty { tens = 1 } else if tensPart.count == 1, let digit = digits[tensPart.first!] { tens = digit } else { return nil }
-            let ones: Int
-            if onesPart.isEmpty { ones = 0 } else if onesPart.count == 1, let digit = digits[onesPart.first!] { ones = digit } else { return nil }
-            let value = tens * 10 + ones
-            return (0...59).contains(value) ? value : nil
+        guard let ten = characters.firstIndex(of: "十") else {
+            if characters.allSatisfy({ $0 == "零" }) { return 0 }
+            guard characters.count == 1, let value = digits[characters[0]] else { return nil }
+            return value
         }
-        guard characters.count == 1, let value = digits[characters[0]] else { return nil }
-        return value
+        let tensPart = characters[..<ten]
+        let onesPart = characters[(ten + 1)...]
+        let tens: Int
+        // A leading 十 ("十" / "十一"…"十九") means tens 1; otherwise the tens digit is 二…九
+        // (一 / 零 as a tens digit, like "一十" / "零十", is malformed).
+        if tensPart.isEmpty { tens = 1 } else if tensPart.count == 1, let digit = digits[tensPart.first!], (2...9).contains(digit) { tens = digit } else { return nil }
+        // A trailing unit must be 一…九 ("X十Y"); "十零" / "二十零" are malformed.
+        let ones: Int
+        if onesPart.isEmpty { ones = 0 } else if onesPart.count == 1, let digit = digits[onesPart.first!], (1...9).contains(digit) { ones = digit } else { return nil }
+        let value = tens * 10 + ones
+        return (0...59).contains(value) ? value : nil
     }
 
     private static func timeRanges(in text: String) -> [TimeRange] {
