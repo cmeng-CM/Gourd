@@ -98,8 +98,9 @@ enum CalendarPanelRoute { case list, editor }                       // .detail �
 
 ## 实际交付
 
-工作流 `calendar-panel-round2`（gated：方案门 + 计划门，2026-10-15 用户「六条都按照你的计划走，开工吧，直到验证完成」）。
-**本轮交付 T1–T5 + T9；T6（详情页退休 + 40/60 分栏）、T7（首页今日块浮窗）、T8（指南与 Release）未做**（下一步见文末）。
+工作流 `calendar-panel-round2`（gated：方案门 + 计划门，2026-10-15 用户「六条都按照你的计划走，开工吧，直到验证完成」＋「继续，直到做完」）。
+**九条任务全部实现并记账（T1–T9）**；全量 XCTest 886 条 0 失败、本地化守卫 4 条通过、Release 构建通过、已安装 `/Applications/壶中天.app`。
+尚未完成的只有：T4–T9 的独立审查（T1–T3 已审）、全量终审、以及**用户上屏人工验收**（V13/V14/V18 + 合并上一批 `calendar-editor` 的 V8/V9）。
 
 | 任务 | 提交 | 交付 |
 |------|------|------|
@@ -109,11 +110,17 @@ enum CalendarPanelRoute { case list, editor }                       // .detail �
 | T4 | `a6265459`…`1087d684` | 字号 +3 号：`CalendarPanelTypography` 一组具名常量（13 / 15 / 13 / 15 / 13 / 16），编辑页与列表卡片都引用它 |
 | T5 | `1087d684`..`2feaaf6e` | 浮层宿主（列级）+ 行整行点击钉住 + 行内 ✎/🗑（整组贴右）+ 就地删除确认条 + 浮层图标动作行 + 会议入口改一枚按钮 + 待办删除链路（见下） |
 | T9 | `12bc73f0`..`57005968` | 环境带前台应用块列数上限 16 → 24（677pt 的块从 448 用到 672，露白 229 → 5pt） |
+| T6 | `2feaaf6e`..`d559374c` | 详情档退休（`CalendarPanelRoute` 只剩 list/editor、`showDetail`/`detailEvent` 全仓绝迹、保存后回列表）+ 列表档左栏 = 容器 40%（`containerRelativeFrame`，不读几何）+ 初一副标只显月名（D-21） |
+| T7 | `d559374c`..`38636e34` | 首页今日条目**就地弹同一个浮窗**（宿主在块的滚动视口之外、行形态不动、完成走既有 store 写路径、删除走浮窗内确认行） |
+| T8 | `38636e34`..`6287d149` | 指南按新交互改口（两页档位 / 40% 左栏 / 初一显月名 / 整行弹窗 + 图标动作 + 就地删除确认 / 生成按钮常驻 / 会议一枚按钮）+ 清理 2 条无引用键 + Release 构建 |
 
 **实现期发现的偏离（三处，都已在报告里披露）**：
 1. T2 额外改了 `CalendarEditableTextView`（计划只授权改 `measuredSize` 的高度上限）：新增 `placeholder` / `drawPlaceholderIfEmpty` / `cappedHeight`，并把 `measuredSize` 的语义从「随内容长高」改成「定高」（该接口随后**删除**——已无生产调用方）；备注那一行的「备注」标签被整行删掉（框内占位承担落点，避免同一条文案写两遍，也让表单少 17pt）。
 2. T5 的**计划外延伸**：C2 / D-10 要求待办行可删，但服务层 `deleteEvent(id:)` 只吃 `EKEvent`（提醒必抛 `wrongRecordType`），会话判据 `canModifyInIsland` 对提醒恒 false。补了 `CalendarServiceProviding.deleteReminder` + `CalendarManager.deleteReminder` + 会话的 `deleteReminderRecord` 可选注入 + 新增 `CalendarPanelSession.canDeleteInIsland`（= `canModifyInIsland \|\| canCompleteReminderInIsland`）作为删除的唯一判据。
 3. T9 的用例改在 `ShortcutsFrontAppTests.swift` 的**既有** `FrontAppGridBudget` 用例上（计划写的 `ModuleKernelTests.swift` 里没有这组预算用例）。
+4. T6 必须改 `LunarDayLabel.swift`（D-21 的初一显示口径），而计划的任务文件清单里漏了它；`back()` / `DraftContext` 的简化也超出清单里「删页面分支」的字面范围（详情档没了，这两处不改就编译不过）。
+
+**实现期补的一条能力**：首页浮窗的删除**先确认**（C2 硬规则①）在首页没有「行下方确认条」可用，于是给详情卡加了可选的 `actions.deleteConfirmation`（浮窗底部换成一行确认 + 删除 / 取消）；面板侧不变。
 
 ## 已知限制
 
