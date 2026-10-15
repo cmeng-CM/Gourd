@@ -98,6 +98,28 @@ enum CalendarPanelAccess {
 }
 
 /// 真实日历右栏。局部状态只描述控件呈现，所有记录与草稿均归共享会话。
+/// 编辑页与列表卡片的字号档（docs/49 D-06 / D-17：整体 +3 号）。
+/// 视图只引用名字，数值只在这里改一次；AppKit 侧（原生文本控件）走 `PointSize` 那几个数。
+enum CalendarPanelTypography {
+    static let fieldLabelPointSize: CGFloat = 13      // 字段标签（原 .caption ≈ 10）
+    static let fieldInputPointSize: CGFloat = 15      // 输入框正文（原 12）
+    static let actionPointSize: CGFloat = 13          // 按钮与状态文字（原 .caption / .caption2）
+    static let cardTitlePointSize: CGFloat = 15       // 列表卡片标题（原 systemFontSize 13）
+    static let cardSecondaryPointSize: CGFloat = 13   // 列表卡片次要（原 smallSystemFontSize 11 / .caption 10）
+    static let bigEditorPointSize: CGFloat = 16       // 大文本编辑器（原 systemFontSize 13）
+
+    static var fieldLabel: Font { .system(size: fieldLabelPointSize) }
+    static var fieldInput: Font { .system(size: fieldInputPointSize) }
+    static var action: Font { .system(size: actionPointSize) }
+    static var cardTitle: Font { .system(size: cardTitlePointSize) }
+    static var cardSecondary: Font { .system(size: cardSecondaryPointSize) }
+
+    static func appKitTitle(_ weight: NSFont.Weight) -> NSFont {
+        .systemFont(ofSize: cardTitlePointSize, weight: weight)
+    }
+    static func appKitSecondary() -> NSFont { .systemFont(ofSize: cardSecondaryPointSize) }
+}
+
 struct CalendarPanelPages: View {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @ObservedObject var session: CalendarPanelSession
@@ -267,10 +289,10 @@ struct CalendarPanelPages: View {
                 completionButton(event)
                 VStack(alignment: .leading, spacing: 4) {
                     CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
-                                           font: .systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                                           font: CalendarPanelTypography.appKitTitle(.medium),
                                            maximumLines: showFullEventTitles ? 0 : 2)
                     Text(CalendarPanelDates.hasDueDate(event) ? (event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: CalendarPanelDates.sourceCalendar(for: event))) : String(localized: "calendar.panel.noDueDate"))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 meetingAction(event)
@@ -375,13 +397,14 @@ struct CalendarPanelPages: View {
                         Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
                         Text("calendar.quickAdd.kindEvent").tag(CalendarDraft.Kind.event)
                     }
-                    .pickerStyle(.segmented).controlSize(.small)
+                    .pickerStyle(.segmented).controlSize(.regular)
                     .disabled(draft.eventID != nil)
                     .accessibilityIdentifier("calendar-kind")
                     if draft.eventID == nil { generationControls(draft) }
                     fieldRow("calendar.panel.title") {
                         TextField("calendar.quickAdd.title", text: stringBinding(\.title), axis: .vertical)
-                            .textFieldStyle(.roundedBorder).focused($focusedField, equals: .title)
+                            .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
+                            .focused($focusedField, equals: .title)
                             .accessibilityIdentifier("calendar-title")
                     }
                     // 目标｜全天
@@ -394,7 +417,7 @@ struct CalendarPanelPages: View {
                     }
                     if let identifier = draft.timeZoneIdentifier, identifier != TimeZone.current.identifier {
                         Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(CalendarPanelTypography.action).foregroundStyle(.secondary)
                     }
                     // 日程：开始｜结束 一行、地点｜链接 一行；待办：截止｜链接 一行（不留任何空半格）
                     if draft.kind == .event {
@@ -407,7 +430,8 @@ struct CalendarPanelPages: View {
                         HStack(spacing: 8) {
                             fieldRow("calendar.panel.location") {
                                 TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
-                                    .textFieldStyle(.roundedBorder).focused($focusedField, equals: .location)
+                                    .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
+                                    .focused($focusedField, equals: .location)
                                     .accessibilityIdentifier("calendar-location")
                             }
                             urlField
@@ -425,7 +449,7 @@ struct CalendarPanelPages: View {
                                               onFocus: setNativeEditorFocus)
                         .accessibilityIdentifier("calendar-notes")
                     confirmationControls(draft)
-                    if !hasAccess { Text("Calendar access is required.").font(.caption).foregroundStyle(.secondary) }
+                    if !hasAccess { Text("Calendar access is required.").font(CalendarPanelTypography.action).foregroundStyle(.secondary) }
                 }
                 .disabled(session.isSubmitting)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -440,7 +464,7 @@ struct CalendarPanelPages: View {
     /// 表单里的一格：沿用「标签在上、控件在下」的既有风格，并占满所在列宽（两列网格的一半）。
     private func fieldRow(_ label: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -450,7 +474,8 @@ struct CalendarPanelPages: View {
     private var urlField: some View {
         fieldRow("calendar.panel.url") {
             TextField("calendar.panel.url", text: urlBinding)
-                .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
+                .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
+                .focused($focusedField, equals: .url)
                 .accessibilityIdentifier("calendar-url")
         }
     }
@@ -474,13 +499,13 @@ struct CalendarPanelPages: View {
     @ViewBuilder
     private func confirmationControls(_ draft: CalendarDraft) -> some View {
         if draft.generationMode == .required || !draft.confirmations.isEmpty {
-            Text("calendar.generation.blocked").font(.caption).foregroundStyle(.secondary)
+            Text("calendar.generation.blocked").font(CalendarPanelTypography.action).foregroundStyle(.secondary)
                 .accessibilityIdentifier("calendar-generation-blocked")
             if draft.generationMode != .required {
                 ForEach(ScheduleConfirmation.allCases, id: \.rawValue) { item in
                     if draft.confirmations.contains(item) {
                         Button(LocalizedStringKey(item.labelKey)) { session.confirmSource(item) }
-                            .font(.caption).accessibilityIdentifier("calendar-generation-confirm-" + item.rawValue)
+                            .font(CalendarPanelTypography.action).accessibilityIdentifier("calendar-generation-confirm-" + item.rawValue)
                     }
                 }
             }
@@ -537,11 +562,11 @@ struct CalendarPanelPages: View {
     private func dateRow(_ key: LocalizedStringKey, field: DateField, date: Date, allDay: Bool) -> some View {
         let calendar = session.draft.map { CalendarPanelDates.sourceCalendar(for: $0) } ?? .current
         return VStack(alignment: .leading, spacing: 4) {
-            Text(key).font(.caption).foregroundStyle(.secondary)
+            Text(key).font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Button { datePopover = field } label: {
                     Label(CalendarPanelDates.formatted(date, allDay: true, calendar: calendar), systemImage: "calendar")
-                        .font(.caption)
+                        .font(CalendarPanelTypography.action)
                 }
                 .accessibilityIdentifier("calendar-\(field.rawValue)-date")
                 .popover(isPresented: Binding(get: { datePopover == field }, set: { datePopover = $0 ? field : nil })) {
@@ -556,7 +581,7 @@ struct CalendarPanelPages: View {
                 }
                 if !allDay {
                     DatePicker(key, selection: dateBinding(field), displayedComponents: .hourAndMinute)
-                        .labelsHidden().controlSize(.small)
+                        .labelsHidden().controlSize(.regular)
                         .environment(\.calendar, calendar)
                         .environment(\.timeZone, calendar.timeZone)
                         .focused($focusedField, equals: field == .start ? .startTime : .endTime)
@@ -569,14 +594,14 @@ struct CalendarPanelPages: View {
     private func targetPicker(_ draft: CalendarDraft) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(draft.kind == .event ? "calendar.panel.calendar" : "calendar.panel.list")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
             if targets.isEmpty {
-                Text("No writable calendar is available.").font(.caption).foregroundStyle(.secondary)
+                Text("No writable calendar is available.").font(CalendarPanelTypography.action).foregroundStyle(.secondary)
             } else {
                 CalendarPanelTargetPicker(targets: targets, selection: Binding(
                     get: { session.draft?.calendarID }, set: { session.draft?.calendarID = $0 }
                 ), session: session, ownerID: ownerID, lifecycle: lifecycle)
-                .frame(height: 24).accessibilityIdentifier("calendar-target")
+                .frame(height: 26).accessibilityIdentifier("calendar-target")
             }
         }
     }
@@ -619,7 +644,7 @@ struct CalendarPanelPages: View {
                                       || session.draft?.generationMode == .required || session.draft?.confirmations.isEmpty != true)
                             .accessibilityIdentifier("calendar-save")
                     } else { authorizationButton }
-                }.disabled(session.isSubmitting).font(.caption).frame(height: 28)
+                }.disabled(session.isSubmitting).font(CalendarPanelTypography.action).frame(height: 28)
             }
         }
     }
@@ -769,7 +794,7 @@ private struct CalendarSourceGeneration: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("calendar.generation.source").font(.caption).foregroundStyle(.secondary)
+            Text("calendar.generation.source").font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
             HStack(alignment: .bottom, spacing: 8) {
                 CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
                     .accessibilityIdentifier("calendar-generation-source")
@@ -781,14 +806,14 @@ private struct CalendarSourceGeneration: View {
                     .accessibilityIdentifier("calendar-generation-settings")
             }
             if session.configuredAI == nil {
-                Text("calendar.generation.unconfigured").font(.caption2).foregroundStyle(.secondary)
+                Text("calendar.generation.unconfigured").font(CalendarPanelTypography.action).foregroundStyle(.secondary)
             }
             // 状态词不再单独占行：只有失败时留一行「生成失败：<原因>」+ 改为手工填写。
             // 重试就是上面那枚常驻按钮——不再有第二个重试入口（设计图 C4）。
             if session.generationState == .failed {
                 HStack(spacing: 8) {
                     (Text("calendar.generation.state.failed") + Text(session.generationError.map { "：" + $0 } ?? ""))
-                        .font(.caption).foregroundStyle(.red)
+                        .font(CalendarPanelTypography.action).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("calendar-generation-failed")
                     manualEntryButton
@@ -809,7 +834,7 @@ private struct CalendarSourceGeneration: View {
         let textAlpha: Double = primary == .busy ? 0.75 : (enabled ? 0.95 : 0.45)
         return Button { primaryAction(primary) } label: {
             Text(primary.labelKey)
-                .font(.caption).fontWeight(.semibold)
+                .font(CalendarPanelTypography.action).fontWeight(.semibold)
                 .foregroundStyle(.white.opacity(textAlpha))
                 .frame(width: 76, height: 26)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -832,7 +857,7 @@ private struct CalendarSourceGeneration: View {
     private var manualEntryButton: some View {
         Button { session.useManualEntry() } label: {
             Text("calendar.generation.manual")
-                .font(.caption)
+                .font(CalendarPanelTypography.action)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.10)))
         }
@@ -864,7 +889,7 @@ private struct CalendarPanelTargetPicker: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSPopUpButton {
         let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.controlSize = .small
+        button.controlSize = .regular
         button.target = context.coordinator
         button.action = #selector(Coordinator.choose(_:))
         button.menu?.delegate = context.coordinator

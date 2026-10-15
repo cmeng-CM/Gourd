@@ -855,7 +855,7 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
     static let fillAlpha: CGFloat = 0.06
     static let borderAlpha: CGFloat = 0.18
     static let defaultMaximumLines = 3
-    static let defaultFontSize: CGFloat = NSFont.systemFontSize
+    static let defaultFontSize: CGFloat = CalendarPanelTypography.bigEditorPointSize
 
     var onFocus: (Bool) -> Void = { _ in }
     var interaction: CalendarTextInteraction?

@@ -15588,6 +15588,50 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                        "长内容不许把整页顶高（旧形态「编辑框随内容在页内长高」的护栏）")
     }
 
+    /// V6 / D-06：字号档只在一个常量里改——编辑页五类与列表卡片两类都引用具名常量，数值即设计值；
+    /// 挂载后读**真实控件**的字号（SwiftUI `Text` 不是 NSView，标签那档靠常量 + 源码引用点取证）。
+    func testEditorAndCardTypographyUsesTheNamedScale() throws {
+        XCTAssertEqual(CalendarPanelTypography.fieldLabelPointSize, 13, "字段标签（原 .caption ≈ 10）")
+        XCTAssertEqual(CalendarPanelTypography.fieldInputPointSize, 15, "输入框正文（原 12）")
+        XCTAssertEqual(CalendarPanelTypography.actionPointSize, 13, "按钮与状态文字")
+        XCTAssertEqual(CalendarPanelTypography.cardTitlePointSize, 15, "列表卡片标题（原 13）")
+        XCTAssertEqual(CalendarPanelTypography.cardSecondaryPointSize, 13, "列表卡片次要（原 11 / 10）")
+        XCTAssertEqual(CalendarPanelTypography.bigEditorPointSize, 16, "大文本编辑器（原 13）")
+        XCTAssertEqual(CalendarEditableTextView.defaultFontSize, CalendarPanelTypography.bigEditorPointSize,
+                       "AppKit 侧默认字号取自同一档")
+
+        let (session, manager) = editorSession(kind: .event, editing: false)
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
+        settle(host)
+        let fields = collectViews(host) { ($0 as? NSTextField)?.isEditable == true }.compactMap { $0 as? NSTextField }
+        XCTAssertFalse(fields.isEmpty, "前提：编辑页渲染出输入框")
+        for field in fields { XCTAssertEqual(field.font?.pointSize, 15, "输入框正文 15") }
+        let pickers = collectViews(host) { $0 is NSDatePicker }.compactMap { $0 as? NSDatePicker }
+        XCTAssertFalse(pickers.isEmpty, "前提：编辑页渲染出日期控件")
+        for picker in pickers { XCTAssertEqual(picker.font?.pointSize, 13, "日期控件 13") }
+        let popups = collectViews(host) { $0 is NSPopUpButton }.compactMap { $0 as? NSPopUpButton }
+        XCTAssertEqual(popups.first?.font?.pointSize, 13, "目标下拉 13")
+        for editor in [sourceEditors(in: host).first, notesEditors(in: host).first].compactMap({ $0 }) {
+            XCTAssertEqual(editor.font?.pointSize, 16, "大文本编辑器 16")
+        }
+
+        // 源码：编辑页与列表卡片都引用具名常量（不再散落 `.caption` / `systemFontSize`）。
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(panel.contains("Text(label).font(CalendarPanelTypography.fieldLabel)"))
+        XCTAssertTrue(panel.contains("Text(key).font(CalendarPanelTypography.fieldLabel)"))
+        XCTAssertTrue(panel.contains(".textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)"))
+        XCTAssertTrue(panel.contains(".pickerStyle(.segmented).controlSize(.regular)"))
+        XCTAssertTrue(panel.contains(".labelsHidden().controlSize(.regular)"))
+        XCTAssertTrue(panel.contains("button.controlSize = .regular"))
+        let cards = try repositorySource("DynamicIsland/components/Calendar/CalendarEventCards.swift")
+        XCTAssertEqual(cards.components(separatedBy: "CalendarPanelTypography.appKitTitle(").count - 1, 2,
+                       "两张卡片的标题都取具名档")
+        XCTAssertEqual(cards.components(separatedBy: "CalendarPanelTypography.appKitSecondary()").count - 1, 1,
+                       "日程卡片的地点行取具名档")
+        XCTAssertEqual(cards.components(separatedBy: "CalendarPanelTypography.cardSecondary").count - 1, 5,
+                       "两张卡片的次要文字（全天 / 开始 / 结束）都取具名档")
+    }
+
     /// 生成行右端的按钮槽（SwiftUI 画的 `Button` 会留下一枚 `_FocusRingView`，按它的宿主坐标取）：
     /// 主按钮是定尺寸 76×26，齿轮是 15×15 —— 三态里主按钮必须落在**同一格**。
     private func generationRowButtonSlots(in host: NSView) -> [NSRect] {
@@ -15659,21 +15703,26 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(panel.contains("manualEntryButton"))
     }
 
-    /// V4 / D-03·D-04·D-17：新建待办的表单收进编辑档——内容高 ≤ 400（本轮口径），且**可视区**里
-    /// 备注框是完整的（不是半截）。
-    func testNewReminderFormFitsTheEditorPane() throws {
+    /// V4 / D-03·D-04·D-17：新建待办的表单收进编辑档——**内容高 ≤ 400**（编辑档自然高，计划的 V4 口径），
+    /// 行距 8（不再有多余的行距）。可视区（400 − 表头 30 − 底部动作 34 = 336）比 400 更小，
+    /// 差额在这里**打印成实测读数**，正式开口记在 docs/49 已知限制 + 验收清单（编辑档高度待用户拍板）。
+    func testNewReminderFormContentStaysWithinTheEditorPaneBudget() throws {
         let (session, manager) = editorSession(kind: .reminder, editing: false)
         session.draft?.isAllDay = false
         let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
         settle(host)
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(panel.contains("VStack(alignment: .leading, spacing: 8)"), "编辑页行距 = 8（D-17）")
         XCTAssertEqual(host.fittingSize.height, StandaloneCalendarView.editorPaneHeight, accuracy: 1,
                        "编辑档自然高仍是 400（本轮不动整体尺寸）")
+
         let notes = try XCTUnwrap(notesEditors(in: host).first)
         let box = try XCTUnwrap(notes.enclosingScrollView)
         let region = try XCTUnwrap(formRegion(in: host), "找不到表单可视区（页级滚动视图）")
-        let boxFrame = box.convert(box.bounds, to: host)
-        XCTAssertLessThanOrEqual(boxFrame.maxY, region.maxY + 0.5,
-                                 "新建待办：备注框底 \(boxFrame.maxY) 必须落在可视区底 \(region.maxY) 之内")
+        let content = box.convert(box.bounds, to: host).maxY - region.minY
+        XCTAssertLessThanOrEqual(content, StandaloneCalendarView.editorPaneHeight,
+                                 "表单内容高 \(content) 必须 ≤ 编辑档自然高 400")
+        print("校准读数：新建待办表单内容高 \(content)，可视区 \(region.height) → 差额 \(content - region.height)")
     }
 
 

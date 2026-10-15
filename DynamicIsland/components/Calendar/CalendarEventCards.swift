@@ -92,12 +92,12 @@ struct CalendarEventCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
-                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
+                                       font: CalendarPanelTypography.appKitTitle(.semibold),
                                        maximumLines: showFullEventTitles ? 0 : 2)
 
                 if let location = event.location, !location.isEmpty {
                     CalendarSelectableText(text: location, payload: CalendarCopyPayload(event: event),
-                                           font: .systemFont(ofSize: NSFont.smallSystemFontSize),
+                                           font: CalendarPanelTypography.appKitSecondary(),
                                            color: .white.withAlphaComponent(MonthGridLayout.cardSecondaryOpacity), maximumLines: 1)
                 }
 
@@ -111,15 +111,15 @@ struct CalendarEventCard: View {
             VStack(alignment: .trailing, spacing: 2) {
                 if event.isAllDay {
                     Text("All-day")
-                        .font(.caption)
+                        .font(CalendarPanelTypography.cardSecondary)
                         .fontWeight(.medium)
                         .foregroundColor(.white)
                 } else {
                     Text(event.start, style: .time)
-                        .font(.caption)
+                        .font(CalendarPanelTypography.cardSecondary)
                         .foregroundColor(.white)
                     Text(event.end, style: .time)
-                        .font(.caption2)
+                        .font(CalendarPanelTypography.cardSecondary)
                         .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 }
             }
@@ -177,12 +177,12 @@ struct ReminderCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
-                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                                       font: CalendarPanelTypography.appKitTitle(.medium),
                                        maximumLines: showFullEventTitles ? 0 : 2)
 
                 if event.isAllDay {
                     Text("All-day")
-                        .font(.caption)
+                        .font(CalendarPanelTypography.cardSecondary)
                         .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
                 }
             }
@@ -191,7 +191,7 @@ struct ReminderCard: View {
 
             if !event.isAllDay {
                 Text(event.start, style: .time)
-                    .font(.caption)
+                    .font(CalendarPanelTypography.cardSecondary)
                     .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryStrongOpacity))
             }
             if let onDetail {
