@@ -90,6 +90,9 @@ struct CalendarEventDetailActions {
     var edit: (() -> Void)?
     var delete: (() -> Void)?
     var meeting: (() -> MeetingActionView)?
+    /// 就地删除确认（首页浮窗用：那里没有「行下方确认条」可用）。非空时卡片底部换成
+    /// 一行确认 + 删除 / 取消（C2 硬规则①「删除必须先确认」在浮窗里也成立）。
+    var deleteConfirmation: (onConfirm: () -> Void, onCancel: () -> Void)?
 
     var isEmpty: Bool {
         openSystem == nil && complete == nil && edit == nil && delete == nil && meeting == nil
@@ -210,7 +213,24 @@ struct CalendarEventDetailCard: View {
     /// 底部动作行（H2 / D-20）：图标 + 顶上一道细分隔线；`actions` 为空时整行不画。
     @ViewBuilder
     private var actionRow: some View {
-        if !actions.isEmpty {
+        if let deleteConfirmation = actions.deleteConfirmation {
+            Divider().overlay(Color.white.opacity(0.16))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(event.type.isReminder ? "calendar.panel.deleteReminderConsequence"
+                                           : "calendar.panel.deleteEventConsequence")
+                    .font(CalendarPanelTypography.cardSecondary)
+                    .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("calendar.panel.delete") { deleteConfirmation.onConfirm() }
+                    .font(CalendarPanelTypography.action).foregroundColor(.red)
+                    .accessibilityIdentifier("calendar-delete-confirm")
+                Button("Cancel") { deleteConfirmation.onCancel() }
+                    .font(CalendarPanelTypography.action)
+                    .accessibilityIdentifier("calendar-delete-cancel")
+            }
+            .buttonStyle(.plain)
+        } else if !actions.isEmpty {
             Divider().overlay(Color.white.opacity(0.16))
             HStack(spacing: 6) {
                 if let meeting = actions.meeting { meeting() }

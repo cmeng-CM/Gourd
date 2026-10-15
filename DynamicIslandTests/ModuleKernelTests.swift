@@ -15021,6 +15021,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(list.session === owned)
         // No registry activation is required for the meeting branch. Navigation is separately disabled.
         let unavailableCalendarList = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: list.session,
+                                                        details: CalendarEventDetailsModel(),
                                                         canOpenDetail: false, isSubmitting: false,
                                                         openEvent: { _ in XCTFail("Must not navigate") },
                                                         openTodo: { _ in XCTFail("Must not navigate") }, completeTodo: { _ in })
@@ -15083,6 +15084,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     func testSourceAwareHomeEntryIncludesAmbiguousLongCodeAndInvitationButHidesOrdinaryItems() throws {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
+                                     details: CalendarEventDetailsModel(),
                                     canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
         for notes in [MeetingInvitationFixtures.huaweiHTTPS,
                       MeetingInvitationFixtures.huaweiHTTPS + "\n" + MeetingInvitationFixtures.tencent,
@@ -15116,6 +15118,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     func testInvitationIntentExcludesPlaceAndMaterialNounsWhileKeepingFollowUpActions() async {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
+                                     details: CalendarEventDetailsModel(),
                                     canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
         for notes in ["请参加会议室保洁工作", "欢迎加入会议室保洁工作", "邀请你参加会议室保洁工作",
                       "请参加会议记录整理", "请加入会议材料准备", "制作会议邀请函模板",
@@ -15773,6 +15776,42 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let saved = await session.save()
         XCTAssertTrue(saved)
         XCTAssertEqual(session.route, .list, "保存成功后回列表（T6）")
+    }
+
+    /// V15 / D-15·D-18：首页今日条目点击 = 就地弹同一个浮窗（不切页、不写别的会话状态）；
+    /// 浮层宿主挂在**滚动视口之外**；行形态不动（会议仍一枚 `.icon` 图标、行内不加 ✎ / 🗑）。
+    func testHomeTodayRowsOpenTheSharedPopupInPlace() throws {
+        let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
+        // 点击：写自己那份 `details`，不再切模块 / 不再走旧详情路径。
+        XCTAssertTrue(todos.contains("details.togglePin(event.id)"), "今日条目点击 = 钉住浮窗")
+        XCTAssertTrue(todos.contains(".calendarEventDetails(model: details, actions: homeDetailActions)"),
+                      "浮层由**块**持有并画")
+        XCTAssertFalse(todos.contains("selectModule(CalendarModule.moduleID)\n    }\n\n    private func openTodo"),
+                       "openDetail 不再切页（编辑那一枚仍会切，属 Actions 内部）")
+        XCTAssertFalse(todos.contains("showDetail"))
+        // 锚点：两种行都上报。
+        XCTAssertEqual(todos.components(separatedBy: ".anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds)").count - 1, 2,
+                       "日程行与待办行各上报一次锚点")
+        // 行形态不动（D-18）：首页两种行都没有 ✎ / 🗑 的构造，会议入口仍是默认 `.icon`。
+        let eventRow = try XCTUnwrap(todos.range(of: "struct TodoHomeEventRow"))
+        let rowBody = String(todos[eventRow.lowerBound...].prefix(2600))
+        XCTAssertFalse(rowBody.contains("pencil"), "首页行不加编辑键")
+        XCTAssertFalse(rowBody.contains("trash"), "首页行不加删除键")
+        XCTAssertTrue(rowBody.contains("MeetingActionView(source: source, session: session)"),
+                      "会议入口仍是那枚单图标（默认 .icon）")
+        XCTAssertFalse(rowBody.contains("style: .row"))
+        // 浮层挂在滚动视口之外：`home-today-scroll` 是滚动视图，浮层修饰符挂在块级（其后）。
+        let scrollIndex = try XCTUnwrap(todos.range(of: #".accessibilityIdentifier("home-today-scroll")"#))
+        let overlayIndex = try XCTUnwrap(todos.range(of: ".calendarEventDetails(model: details, actions: homeDetailActions)"))
+        XCTAssertLessThan(scrollIndex.lowerBound, overlayIndex.lowerBound)
+        // 删除仍先确认（C2 硬规则①）：浮窗里换成确认行，确认后才真删。
+        XCTAssertTrue(todos.contains("deleteConfirmation: deleteTargetID == event.id ?"),
+                      "首页浮窗里的删除走确认行")
+        XCTAssertTrue(todos.contains("Task { _ = await session.delete(event) }"),
+                      "确认后才调删除")
+        let detail = try repositorySource("DynamicIsland/components/Calendar/CalendarEventDetail.swift")
+        XCTAssertTrue(detail.contains("if let deleteConfirmation = actions.deleteConfirmation"),
+                      "卡片支持就地确认（首页那一份）")
     }
 
     /// V16 / D-16·D-21：列表档左栏 = **内容宽 × 40%**——用「两个宿主宽下的右栏起点差」证**关系式**

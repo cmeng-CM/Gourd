@@ -1480,6 +1480,10 @@ struct TodosHomeBlockView: View {
     @State private var actionError: String?
     @State private var completingItemID: String?
     @State private var scrollToken = UUID()
+    /// 详情浮层状态（docs/49 D-15：首页今日条目**就地**弹同一个浮窗，不切页）。
+    @StateObject private var details = CalendarEventDetailsModel()
+    /// 浮窗里的就地删除确认目标（首页没有「行下方确认条」可用，确认就画在浮窗底部）。
+    @State private var deleteTargetID: String?
 
     init(store: TodoStore, session: CalendarPanelSession = .shared, manager: CalendarManager = .shared) {
         self.store = store
@@ -1489,7 +1493,7 @@ struct TodosHomeBlockView: View {
 
     var listContent: TodoHomeTodayList {
         TodoHomeTodayList(entries: entries, reminderRecords: store.reminderRecords,
-                          tier: .full, session: session,
+                          tier: .full, session: session, details: details,
                           canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
                           isSubmitting: session.isSubmitting || completingItemID != nil,
                           openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo)
@@ -1537,15 +1541,61 @@ struct TodosHomeBlockView: View {
             .padding(.top, HomeBlockChrome.contentInsetTopListHeader)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // 详情浮层挂在**块的滚动视口之外**（锚点由行上报，浮层不会随滚动被裁）。
+        .calendarEventDetails(model: details, actions: homeDetailActions)
         .task { await store.refresh() }
-        .onDisappear { vm.setScrollGestureSuppression(false, token: scrollToken) }
+        .onChange(of: vm.notchState) { _, state in
+            if state != .open { details.clear(); deleteTargetID = nil }
+        }
+        .onDisappear {
+            details.clear()
+            deleteTargetID = nil
+            vm.setScrollGestureSuppression(false, token: scrollToken)
+        }
     }
 
-    /// 暂时保留「切到日历模块」这条老路（详情档已退休）：T7 把它换成就地弹浮窗。
+    /// 首页条目点击 = **就地弹浮窗**（D-15）：不再切页、不再走详情档。
     private func openDetail(_ event: EventModel) {
         guard canOpenDetail, !session.isSubmitting else { return }
-        session.showList(on: event.start, anchor: session.homeScrollAnchor ?? event.id)
-        vm.coordinator.selectModule(CalendarModule.moduleID)
+        details.togglePin(event.id)
+    }
+
+    /// 浮窗动作集：与日历面板同一份卡片、同一套动作（H2 设计图 / D-20）。
+    private func homeDetailActions(_ event: EventModel) -> CalendarEventDetailActions {
+        let source = CalendarMeetingSource(event: event)
+        let isReminder = event.type.isReminder
+        var completed = false
+        if case .reminder(let done) = event.type { completed = done }
+        return CalendarEventDetailActions(
+            openSystem: { session.openInSystemApp(event) },
+            complete: isReminder ? {
+                guard let item = store.items.first(where: { $0.id == event.id }) else { return }
+                completeTodo(item)
+            } : nil,
+            edit: event.canModifyInIsland && !isReminder ? {
+                // 岛内编辑只在日历面板的编辑档里（本批不改首页那一屏）：收浮窗 + 切到日历模块的编辑档。
+                details.clear()
+                session.beginEdit(event)
+                vm.coordinator.selectModule(CalendarModule.moduleID)
+            } : nil,
+            delete: CalendarPanelSession.canDeleteInIsland(event) ? {
+                details.clear()
+                deleteTargetID = event.id
+                details.togglePin(event.id)
+            } : nil,
+            meeting: source.hasMeetingInformation ? { MeetingActionView(source: source, session: session) } : nil,
+            deleteConfirmation: deleteTargetID == event.id ? (
+                onConfirm: {
+                    deleteTargetID = nil
+                    details.clear()
+                    Task { _ = await session.delete(event) }
+                },
+                onCancel: {
+                    deleteTargetID = nil
+                    details.clear()
+                }
+            ) : nil
+        )
     }
 
     private func openTodo(_ item: TodoBucketing.Item) {
@@ -1651,6 +1701,8 @@ struct TodoHomeTodayList: View {
     let reminderRecords: [String: EventModel]
     let tier: TodosHomeBlockLayout.Tier
     let session: CalendarPanelSession
+    /// 详情浮层状态（宿主一份）：行点击写它，浮层由宿主挂在滚动视口之外画（D-15）。
+    let details: CalendarEventDetailsModel
     let canOpenDetail: Bool
     let isSubmitting: Bool
     let openEvent: (EventModel) -> Void
@@ -1659,6 +1711,7 @@ struct TodoHomeTodayList: View {
 
     func withTier(_ tier: TodosHomeBlockLayout.Tier) -> TodoHomeTodayList {
         TodoHomeTodayList(entries: entries, reminderRecords: reminderRecords, tier: tier, session: session,
+                          details: details,
                           canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
                           openEvent: openEvent, openTodo: openTodo, completeTodo: completeTodo)
     }
@@ -1684,7 +1737,10 @@ struct TodoHomeTodayList: View {
                 groupHeader(events)
                 ForEach(eventEntries, id: \.recordID) { entry in
                     if case .event(let event) = entry {
-                        eventRow(event).id(event.id)
+                        // 行形态逐字不动（D-18）；只多一次锚点上报，供块级浮层就近定位。
+                        eventRow(event)
+                            .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
+                            .id(event.id)
                     }
                 }
             }
@@ -1692,7 +1748,9 @@ struct TodoHomeTodayList: View {
                 groupHeader(todos)
                 ForEach(todoEntries, id: \.recordID) { entry in
                     if case .todo(let item) = entry {
-                        todoRow(item).id(item.id)
+                        todoRow(item)
+                            .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [item.id: $0] }
+                            .id(item.id)
                     }
                 }
             }
