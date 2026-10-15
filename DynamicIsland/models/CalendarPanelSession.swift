@@ -11,7 +11,7 @@ enum CalendarPanelSource: Equatable {
     case calendar(date: Date, anchor: String?)
 }
 
-enum CalendarPanelRoute: Equatable { case list, detail, editor }
+enum CalendarPanelRoute: Equatable { case list, editor }
 enum CalendarDraftConflictChoice { case resume, discardAndStart, cancel }
 enum CalendarTerminationChoice { case save, discard, cancel }
 
@@ -79,8 +79,8 @@ final class CalendarPanelSession: ObservableObject {
 
     enum Confirmation: Equatable { case discardDraft, draftConflict }
 
+    /// 只有两种档位（T6 / D-11：详情档退休，详情内容改由列表行的浮层承担）。
     @Published private(set) var route: CalendarPanelRoute = .list
-    @Published private(set) var detailEvent: EventModel?
     @Published var selectedDate: Date {
         didSet { if oldValue != selectedDate { navigationGeneration += 1 } }
     }
@@ -119,8 +119,7 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     private struct DraftContext {
-        var route: CalendarPanelRoute
-        var event: EventModel?
+        /// 只记「来源」——详情档退休后，编辑档的唯一归宿就是列表（T6）。
         var source: CalendarPanelSource
     }
     private struct PendingDraft {
@@ -422,14 +421,6 @@ final class CalendarPanelSession: ObservableObject {
         changeNavigation()
         applySource(.calendar(date: date, anchor: anchor))
         route = .list
-        detailEvent = nil
-    }
-
-    func showDetail(_ event: EventModel, source: CalendarPanelSource) {
-        changeNavigation()
-        applySource(source)
-        route = .detail
-        detailEvent = readEvent(event.id) ?? event
     }
 
     func beginCreate(kind: CalendarDraft.Kind, on date: Date, calendarID: String?) {
@@ -461,7 +452,7 @@ final class CalendarPanelSession: ObservableObject {
     private func currentContext() -> DraftContext {
         let source: CalendarPanelSource = route == .list
             ? .calendar(date: selectedDate, anchor: calendarScrollAnchor) : returnSource
-        return DraftContext(route: route == .editor ? .list : route, event: detailEvent, source: source)
+        return DraftContext(source: source)
     }
 
     private func requestDraft(_ newDraft: CalendarDraft, context: DraftContext) {
@@ -501,37 +492,25 @@ final class CalendarPanelSession: ObservableObject {
         }
     }
 
+    /// 退出编辑档：回列表（详情档退休后这是唯一归宿），并把来源交回调用方。
     @discardableResult
     func back() -> CalendarPanelSource? {
-        if route == .editor, let context = draftContext {
-            changeNavigation()
-            route = context.route
-            detailEvent = context.event
-            applySource(context.source)
-            return context.route == .list ? context.source : nil
-        }
-        if route == .detail {
-            let source = returnSource
-            changeNavigation()
-            route = .list
-            detailEvent = nil
-            applySource(source)
-            return source
-        }
-        return nil
+        guard route == .editor, let context = draftContext else { return nil }
+        changeNavigation()
+        route = .list
+        applySource(context.source)
+        return context.source
     }
 
     func suspend() {
         changeNavigation()
         route = .list
-        detailEvent = nil
     }
 
     func resumeDraft() {
         guard draft != nil, let context = draftContext else { return }
         changeNavigation()
         route = .editor
-        detailEvent = context.event
         returnSource = context.source
         error = draftError
     }
@@ -570,7 +549,7 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     func openInSystemApp(_ event: EventModel? = nil) {
-        guard let event = event ?? detailEvent else { return }
+        guard let event else { return }
         openSystemEvent(event)
     }
 
@@ -613,8 +592,8 @@ final class CalendarPanelSession: ObservableObject {
                 }
                 // 用户已恢复同一份稿时允许展示其保存结果；其他新页面仍由代数隔离。
                 if unchangedDraft && (self.navigationGeneration == generation || self.route == .editor) {
-                    self.route = .detail
-                    self.detailEvent = saved
+                    // 保存成功后回**列表**（T6：详情档不存在了）。
+                    self.route = .list
                     if let context { self.returnSource = context.source }
                     self.error = nil
                     self.ownership.removeAll()
@@ -640,12 +619,11 @@ final class CalendarPanelSession: ObservableObject {
     /// 删除记录（**列表档行内 🗑 与详情档共用这一条**）：唯一判据是 `CanDeleteInIsland`。
     ///
     /// 改前首行 guard 是 `route == .detail`——列表档的删除因此在会话层直接返回 false（用户报的
-    /// 「行内删除点了没反应」类问题的根）。列表档删除后**留在列表**（面板停在列表档，T5 / C2）；
-    /// 详情档删除后按既有口径 `back()`。
+    /// 「行内删除点了没反应」类问题的根）；判据也已从 `canModifyInIsland` 换成 `canDeleteInIsland`
+    /// （后者含可写待办）。删除后面板**停在列表**（C2）。
     func delete(_ event: EventModel) async -> Bool {
         guard !isSubmitting, Self.canDeleteInIsland(event) else { return false }
         let generation = navigationGeneration
-        let fromDetail = route == .detail && detailEvent?.id == event.id
         let writer: (String) async throws -> Void
         if event.type.isReminder {
             guard let deleteReminderRecord else { return false }
@@ -656,21 +634,13 @@ final class CalendarPanelSession: ObservableObject {
         return await submit {
             do {
                 try await writer(event.id)
-                if self.navigationGeneration == generation, fromDetail {
-                    _ = self.back()
-                }
+                guard self.navigationGeneration == generation else { return true }
                 return true
             } catch {
                 if self.navigationGeneration == generation { self.error = error.localizedDescription }
                 return false
             }
         }
-    }
-
-    /// 详情档的无参入口（既有调用点保留）：目标取 `detailEvent`。
-    func delete() async -> Bool {
-        guard let event = detailEvent else { return false }
-        return await delete(event)
     }
 
     func complete(_ event: EventModel, completed: Bool) async -> Bool {
@@ -683,10 +653,8 @@ final class CalendarPanelSession: ObservableObject {
         let generation = navigationGeneration
         return await submit {
             do {
-                let saved = try await self.completeReminderRecord(event.id, completed)
-                if self.navigationGeneration == generation, self.detailEvent?.id == event.id {
-                    self.detailEvent = saved
-                }
+                _ = try await self.completeReminderRecord(event.id, completed)
+                _ = generation
                 return true
             } catch {
                 self.completionError = error.localizedDescription

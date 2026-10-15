@@ -514,14 +514,12 @@ final class HomeTodayBandTests: XCTestCase {
         let after = TodoBucketing.classify(store.items).today
         XCTAssertEqual(after.total, before.total)
         XCTAssertEqual(after.completed, before.completed + 1)
+        // T6 / D-11：详情档退休后，首页完成待办不再驱动面板导航——只留会话自己的状态。
         XCTAssertEqual(session.route, .list)
-        XCTAssertNil(session.detailEvent)
         XCTAssertEqual(session.homeScrollAnchor, item.id)
         XCTAssertEqual(backend.writeAttempts, 1)
         XCTAssertFalse(session.isSubmitting)
-        session.showDetail(record, source: .home(anchor: item.id))
-        XCTAssertEqual(session.back(), .home(anchor: item.id))
-        XCTAssertEqual(session.homeScrollAnchor, item.id)
+        XCTAssertEqual(session.back(), nil, "列表档没有可退的上一档")
         backend.writeFailure = .readOnlyCalendar
         let original = store.items
         let failed = await session.complete(record, completed: false)

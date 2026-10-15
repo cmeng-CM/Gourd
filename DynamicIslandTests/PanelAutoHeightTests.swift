@@ -959,7 +959,7 @@ final class PanelAutoHeightTests: XCTestCase {
     }
 
     /// **日历页按档两键**（T3 / docs/48 D-07，判据同 `testCalendarIsAMeasuredTab` 的 ① 层）：
-    /// 同一页两种档各有一枚键——列表 / 详情档 = 模块 id（**现键不变**），编辑档 = **页键**
+    /// 两种档各有一枚键（T6 起只有列表 / 编辑两档：详情档已随详情页退休）——列表档 = 模块 id（**现键不变**），编辑档 = **页键**
     /// `calendarEditorTab`（与 `notesFixedTab` 同类的页键风格，不是点分模块 id 派生，也不写第二份字面量）。
     /// 探针（`ContentView` 的 `.module` 分支）与 `selectedPanelTabKey` 两边都由 `calendarPanelTabKey(route:)`
     /// 派生；两档不同键，否则编辑档会借列表档量出来的高（`heightCache` 串味）。
@@ -968,9 +968,7 @@ final class PanelAutoHeightTests: XCTestCase {
                        "编辑档键 = 页键风格（与 notesFixedTab = \"notesFixed\" 同类）")
         XCTAssertEqual(calendarPanelTabKey(route: .editor), PanelContentHeight.calendarEditorTab)
         XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID,
-                       "列表档 = 模块 id（现键不变）")
-        XCTAssertEqual(calendarPanelTabKey(route: .detail), CalendarModule.moduleID,
-                       "详情档同列表档（同一份两栏自然布局）")
+                       "列表档 = 模块 id（现键不变）——详情档退休后列表档是唯一的非编辑档")
         XCTAssertNotEqual(calendarPanelTabKey(route: .editor), calendarPanelTabKey(route: .list),
                           "两档不同键——编辑档不能借列表档量出来的高")
     }

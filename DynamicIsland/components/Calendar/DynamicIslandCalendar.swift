@@ -1407,8 +1407,8 @@ struct StandaloneCalendarView: View {
         // 「宽给定、高 unspecified」量这一页时，`GeometryReader` 的理想高只有 10pt 级，整页自然高
         // 因此被答成 10、面板落到下限。现在两栏的高度都来自**内容**：左栏 = 月网格按固定格高自然堆叠的
         // 高（`43N + 63`，与首页日历行同源），右栏 = 同一个高度（事件列在它里面滚动 / 裁剪），
-        // 这一页**不再读任何几何高度**（宽度也不读：两栏 `.frame(maxWidth: .infinity)` 等分，
-        // 结果与旧的 `paneWidth = (width − 间距) / 2` 逐字相同）。
+        // 这一页**不再读任何几何**（宽度也不读：列表档左栏走 `containerRelativeFrame` 的 40%，
+        // 编辑档左栏是定宽 260，右栏 `maxWidth: .infinity` 拿其余）。
         HStack(alignment: .top, spacing: Self.paneSpacing) {
             if session.route == .editor {
                 // **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
@@ -1441,8 +1441,11 @@ struct StandaloneCalendarView: View {
                     // 选中日居中自己表达。`MonthGridView` 的参数保留（默认 `true`，其余宿主 / 预览用）。
                     showsScrollFades: false
                 )
-                    // 左栏宽度 = 两栏等分（`.frame(maxWidth: .infinity)` 的结果与旧 `paneWidth` 同值）
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    // **列表档分栏 = 内容宽 × 40%**（docs/49 D-16）：用 `containerRelativeFrame`
+                    // 表达「容器的 5 份取 2 份」，不写死 434、也不引 `GeometryReader`（这一页刻意不读几何，
+                    // 一读就把自然高答成 10pt 级，见 body 的说明）。日格宽 = (左栏 − gridInset 42) / 7。
+                    .containerRelativeFrame(.horizontal, count: 5, span: 2, spacing: 0)
+                    .frame(alignment: .topLeading)
                     .frame(height: monthGridHeight, alignment: .topLeading)
                     .layoutPriority(1)
             }
@@ -1451,7 +1454,7 @@ struct StandaloneCalendarView: View {
                 if case .home = source { vm.coordinator.currentView = .home }
             }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                // 右栏拿**同一个高度**：列表 / 详情档 = `monthGridHeight`（事件列在它里面滚动 / 裁剪）；
+                // 右栏拿**同一个高度**（宽度是剩下的 60%）：列表档 = `monthGridHeight`（事件列在里面滚动 / 裁剪）；
                 // 编辑档 = `editorPaneHeight`（400，与左栏同高）——它不参与「这一页要多高」，两档都由左栏
                 // 那个数定（旧结构正是靠 `paneHeight` 把它钉住的，T3 换成按档的自然高）。
                 .frame(height: session.route == .editor ? Self.editorPaneHeight : monthGridHeight,

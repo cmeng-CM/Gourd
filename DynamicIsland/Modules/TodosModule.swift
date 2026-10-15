@@ -1541,9 +1541,10 @@ struct TodosHomeBlockView: View {
         .onDisappear { vm.setScrollGestureSuppression(false, token: scrollToken) }
     }
 
+    /// 暂时保留「切到日历模块」这条老路（详情档已退休）：T7 把它换成就地弹浮窗。
     private func openDetail(_ event: EventModel) {
         guard canOpenDetail, !session.isSubmitting else { return }
-        session.showDetail(event, source: .home(anchor: session.homeScrollAnchor ?? event.id))
+        session.showList(on: event.start, anchor: session.homeScrollAnchor ?? event.id)
         vm.coordinator.selectModule(CalendarModule.moduleID)
     }
 

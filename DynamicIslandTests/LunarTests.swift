@@ -22,8 +22,8 @@
 //  覆盖 docs/26-home-widgets-and-settings.md §做法 机制四 / D-05 与 §验收标准 1 点名的五组 + 三组：
 //
 //  **`LunarDayLabel`（农历，五组）**
-//  - 初一显示月名（「八月初一」「正月初一」「九月初一」）；
-//  - 十五、月末（「八月廿九」「九月三十」）、闰月（「闰六月初一」「闰六月初八」——同一个月里
+//  - 初一显示**月名**（「八月」「正月」「九月」——docs/49 D-21 起不再带「初一」）；
+//  - 十五、月末（「八月廿九」「九月三十」）、闰月（「闰六月」「闰六月初八」——同一个月里
 //    非初一的日子不带月名，但月名表里第六章要能算出「闰）」；
 //  - 普通日（「八月二十」）与**日名/月名表本身**（初二 … 初十、十一、二十、廿一、廿九、三十；
 //    正月 … 腊月；表外的 0 / 31 / 13 一律 `nil`）。
@@ -156,14 +156,15 @@ final class LunarTests: XCTestCase {
 
     // MARK: - 农历：初一
 
-    /// **初一显示月名**（机制四的原话「初一显示月名（如「八月初一」）」）：三个不同月序都走一遍
+    /// **初一显示月名**（docs/49 D-21：40/60 分栏后日格宽 56.1，「九月初一」4 字 ≈36 + 余量 22 = 58
+    /// 放不下，只给月名「九月」≈18 + 22 = 40 绰绰有余）：三个不同月序都走一遍
     /// （八月、正月、九月——月名表的前中后三段），并钉住「闰年不影响非闰月的月名」。
     func testLunarLabelOfFirstDayCarriesMonthName() {
-        XCTAssertEqual(LunarDayLabel.label(for: day(2026, 9, 11), calendar: chinese()), "八月初一")
-        XCTAssertEqual(LunarDayLabel.label(for: day(2026, 10, 10), calendar: chinese()), "九月初一")
+        XCTAssertEqual(LunarDayLabel.label(for: day(2026, 9, 11), calendar: chinese()), "八月")
+        XCTAssertEqual(LunarDayLabel.label(for: day(2026, 10, 10), calendar: chinese()), "九月")
         XCTAssertEqual(
-            LunarDayLabel.label(for: day(2026, 2, 17), calendar: chinese()), "正月初一",
-            "2026 年春节（正月初一）"
+            LunarDayLabel.label(for: day(2026, 2, 17), calendar: chinese()), "正月",
+            "2026 年春节（正月初一）——只显月名"
         )
     }
 
@@ -195,13 +196,13 @@ final class LunarTests: XCTestCase {
     // MARK: - 农历：闰月
 
     /// **闰月**：闰月的初一在月名前带「闰」——与正六月的初一形成对照（同为初一，
-    /// 一个是「六月初一」、一个是「闰六月初一」，这正是用户要的「这个月从哪天起」）。
+    /// 一个是「六月」、一个是「闰六月」，这正是用户要的「这个月从哪天起」）。
     ///
     /// 同一条口径的另一半也钉在这里：**闰月里非初一的日子只显示日名**（「初八」）——
     /// 9pt 一行放不下「闰六月」+ 日名两段，月名只留给初一（机制四的取舍）。
     func testLunarLabelOfLeapMonth() {
-        XCTAssertEqual(LunarDayLabel.label(for: day(2025, 6, 25), calendar: chinese()), "六月初一", "正六月的初一")
-        XCTAssertEqual(LunarDayLabel.label(for: day(2025, 7, 25), calendar: chinese()), "闰六月初一", "闰六月的初一")
+        XCTAssertEqual(LunarDayLabel.label(for: day(2025, 6, 25), calendar: chinese()), "六月", "正六月的初一")
+        XCTAssertEqual(LunarDayLabel.label(for: day(2025, 7, 25), calendar: chinese()), "闰六月", "闰六月的初一")
         XCTAssertEqual(
             LunarDayLabel.label(for: day(2025, 7, 24), calendar: chinese()), "三十",
             "闰月前一天是正六月的月末（不带月名）"

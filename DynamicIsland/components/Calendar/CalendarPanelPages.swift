@@ -136,7 +136,6 @@ struct CalendarPanelPages: View {
     @StateObject private var details = CalendarEventDetailsModel()
     /// 就地删除确认的目标 id（C2：行下方确认条；同一时刻只认一条）。
     @State private var deleteTargetID: String?
-    @State private var deleteConfirmation = false
     @State private var targets: [CalendarModel] = []
     @State private var authorizationRevision = 0
     @State private var nativeEditorFocused = false
@@ -181,13 +180,9 @@ struct CalendarPanelPages: View {
             }
             if session.pendingConfirmation != nil {
                 draftConfirmation
-            } else if deleteConfirmation, let event = session.detailEvent {
-                deletionConfirmation(event)
             } else {
                 switch session.route {
                 case .list: listPage
-                case .detail:
-                    if let event = session.detailEvent { detailPage(event) }
                 case .editor: editorPage
                 }
             }
@@ -209,10 +204,8 @@ struct CalendarPanelPages: View {
             focusedField = nil
             nativeEditorFocused = false
             datePopover = nil
-            deleteConfirmation = false
             lifecycle.clearLocalInput()
         }
-        .onChange(of: session.detailEvent?.id) { _, _ in deleteConfirmation = false }
         .task(id: session.draft?.kind) { await loadTargets() }
         // 收面板 / 视图卸载：浮窗与确认条一律复位（D-23：不抑制自动收起，浮窗随面板一起关）。
         .onChange(of: vm.notchState) { _, state in
@@ -249,7 +242,6 @@ struct CalendarPanelPages: View {
     private var headerTitle: String {
         switch session.route {
         case .list: session.selectedDate.formatted(.dateTime.month(.abbreviated).day())
-        case .detail: String(localized: "calendar.panel.details")
         case .editor:
             session.draft?.eventID == nil ? String(localized: "calendar.panel.newItem") : String(localized: "calendar.panel.editItem")
         }
@@ -292,9 +284,6 @@ struct CalendarPanelPages: View {
         session.calendarScrollAnchor = scrollTargetForTimedEvents(timed: timed, referenceTime: scrollReferenceTime(for: session.selectedDate))?.id
     }
 
-    private func show(_ event: EventModel) {
-        session.showDetail(event, source: .calendar(date: session.selectedDate, anchor: session.calendarScrollAnchor ?? event.id))
-    }
 
     /// 面板列表行的会议入口（一枚 22×22 按钮，与首页同款；docs/49 D-19）。既有用例
     /// （`CalendarGenerationAndMeetingActionTests`）靠它取面板侧的会议接线。
@@ -455,56 +444,12 @@ struct CalendarPanelPages: View {
         .accessibilityIdentifier("calendar-complete-\(event.id)")
     }
 
-    private func detailPage(_ event: EventModel) -> some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 10) {
-                CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
-                                       font: .systemFont(ofSize: NSFont.systemFontSize, weight: .bold))
-                labeledText("calendar.panel.calendar", event.calendar.title)
-                if CalendarPanelDates.hasDueDate(event) {
-                    labeledText(event.type.isReminder ? "calendar.panel.dueDate" : "calendar.panel.start", displayDate(event.start, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event)))
-                    if !event.type.isReminder {
-                        let end = event.isAllDay ? CalendarEventInput.includedAllDayEnd(exclusiveEnd: event.end, calendar: CalendarPanelDates.sourceCalendar(for: event)) ?? event.start : event.end
-                        labeledText("calendar.panel.end", displayDate(end, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event)))
-                    }
-                } else { Text("calendar.panel.noDueDate").foregroundStyle(.secondary) }
-                if event.isAllDay { Text("All-day").font(.caption).foregroundStyle(.secondary) }
-                if let location = event.location, !location.isEmpty { labeledText("calendar.panel.location", location) }
-                if let notes = event.notes, !notes.isEmpty {
-                    labeledText("calendar.panel.notes", notes)
-                    // 尾标记给 UI 验证明确的可滚达节点，不截断或限制备注高度。
-                    Text("calendar.panel.notesEnd").font(.caption2).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("calendar-notes-end")
-                }
-                // 详情档在 T6 退休：这里先与列表行同款（一枚图标按钮），不再单留 `.row` 两键。
-                MeetingActionView(event: event, session: session)
-                if event.type.isReminder {
-                    Text(LocalizedStringKey(event.calendar.allowsContentModifications ? "Edit saved reminders in the system app." : "This calendar is read-only."))
-                        .font(.caption).foregroundStyle(.secondary)
-                } else if let reason = event.modificationRestriction {
-                    Text(reason.localizedDescription).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.trailing, 4)
-        }
-        .accessibilityIdentifier("calendar-detail-scroll")
-        .onHover { lifecycle.setScrolling($0) }
-    }
 
 
     private func displayDate(_ date: Date, allDay: Bool, calendar: Calendar) -> String {
         CalendarPanelDates.formatted(date, allDay: allDay, calendar: calendar)
     }
 
-    private func labeledText(_ key: LocalizedStringKey, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(key).font(.caption).foregroundStyle(.secondary)
-            if let event = session.detailEvent {
-                CalendarSelectableText(text: value, payload: CalendarCopyPayload(event: event))
-            }
-        }
-    }
 
     private var editorPage: some View {
         ScrollView(.vertical) {
@@ -735,24 +680,9 @@ struct CalendarPanelPages: View {
 
     @ViewBuilder
     private var footer: some View {
-        if session.pendingConfirmation == nil && !deleteConfirmation {
+        if session.pendingConfirmation == nil {
             switch session.route {
             case .list: EmptyView()
-            case .detail:
-                if let event = session.detailEvent {
-                    HStack(spacing: 12) {
-                        Button(event.type.isReminder ? "calendar.panel.openReminders" : "calendar.panel.openCalendar") { session.openInSystemApp(event) }
-                            .font(.caption).accessibilityIdentifier("calendar-open-system")
-                        Spacer(minLength: 0)
-                        if event.type.isReminder { completionButton(event) }
-                        else if event.canModifyInIsland {
-                            Button { session.beginEdit(event) } label: { Image(systemName: "pencil") }
-                                .accessibilityLabel(Text("calendar.panel.editItem")).accessibilityIdentifier("calendar-edit")
-                            Button { deleteConfirmation = true } label: { Image(systemName: "trash") }
-                                .accessibilityLabel(Text("calendar.panel.delete")).accessibilityIdentifier("calendar-delete")
-                        }
-                    }.disabled(session.isSubmitting).frame(height: 28)
-                }
             case .editor:
                 HStack(spacing: 12) {
                     Button("Cancel") { session.requestCancel() }.accessibilityIdentifier("calendar-cancel")
@@ -817,39 +747,6 @@ struct CalendarPanelPages: View {
         .accessibilityIdentifier(session.pendingConfirmation == .draftConflict ? "calendar-draft-conflict" : "calendar-draft-discard")
     }
 
-    private func deletionConfirmation(_ event: EventModel) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("calendar.panel.deleteQuestion").font(.headline)
-                    Text(event.title)
-                    Text(displayDate(event.start, allDay: event.isAllDay, calendar: CalendarPanelDates.sourceCalendar(for: event))).font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Button("Cancel") { deleteConfirmation = false }.accessibilityIdentifier("calendar-delete-cancel")
-                Spacer()
-                Button("calendar.panel.delete") {
-                    // 删除后保留来源附近的锚点，不能继续指向已消失记录。
-                    if case .calendar(let date, let anchor) = session.returnSource,
-                       anchor == event.id, let index = events.firstIndex(where: { $0.id == event.id }) {
-                        let neighbor = events.dropFirst(index + 1).first?.id ?? events.prefix(index).last?.id
-                        // 提交前绑定来源；异步完成后不改共享锚点，避免旧结果污染新导航。
-                        session.showDetail(event, source: .calendar(date: date, anchor: neighbor))
-                    }
-                    let source = session.returnSource
-                    Task {
-                        if await session.delete() {
-                            deleteConfirmation = false
-                            if session.route == .list, session.returnSource == source, case .home = source {
-                                onReturnSource(source)
-                            }
-                        }
-                    }
-                }.accessibilityIdentifier("calendar-delete-confirm")
-            }.disabled(session.isSubmitting)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
 
     private func goBack() {
         if let source = session.back() { onReturnSource(source) }
@@ -860,7 +757,6 @@ struct CalendarPanelPages: View {
         if details.activeID != nil { details.clear() }
         else if deleteTargetID != nil { deleteTargetID = nil }
         else if session.pendingConfirmation != nil { session.dismissConfirmation() }
-        else if deleteConfirmation { deleteConfirmation = false }
         else if session.route != .list { goBack() }
         else { vm.close() }
     }

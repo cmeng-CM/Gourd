@@ -10319,7 +10319,7 @@ final class CalendarInteractionTests: XCTestCase {
         let backend = panelBackend()
         let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
         let session = panelSession(service: backend)
-        session.showDetail(event, source: .calendar(date: date(day: 11), anchor: event.id))
+        session.showList(on: date(day: 11), anchor: event.id)
         session.beginEdit(event)
         XCTAssertEqual(session.route, .editor)
         XCTAssertEqual(session.draft, session.baseline)
@@ -10346,19 +10346,18 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(backend.writeAttempts, 0)
     }
 
-    func testPanelBackRestoresPriorDetailThenHomeOrCalendarAnchor() throws {
+    /// T6（D-11）：详情档退休后 `back()` 只有「回列表并把来源交回」一种语义——不再有中间那一档。
+    func testPanelBackRestoresTheListAnchor() throws {
         let backend = panelBackend()
         let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
         let session = panelSession(service: backend)
-        session.showDetail(event, source: .home(anchor: "home-tail"))
+        session.showList(on: date(day: 11), anchor: "calendar-tail")
         session.beginEdit(event)
         session.draft?.notes = "Retained"
-        XCTAssertNil(session.back())
-        XCTAssertEqual(session.route, .detail)
-        XCTAssertEqual(session.detailEvent, event)
+        XCTAssertEqual(session.back(), .calendar(date: date(day: 11), anchor: "calendar-tail"))
+        XCTAssertEqual(session.route, .list)
+        XCTAssertEqual(session.calendarScrollAnchor, "calendar-tail")
         XCTAssertEqual(session.draft?.notes, "Retained")
-        XCTAssertEqual(session.back(), .home(anchor: "home-tail"))
-        XCTAssertEqual(session.homeScrollAnchor, "home-tail")
         session.discardDraft()
         session.showList(on: date(day: 14), anchor: "calendar-tail")
         session.beginCreate(kind: .event, on: date(day: 14), calendarID: "fixture-events")
@@ -10494,12 +10493,13 @@ final class CalendarInteractionTests: XCTestCase {
         let backend = panelBackend()
         let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
         let session = panelSession(service: backend)
-        session.showDetail(event, source: .home(anchor: "home-tail"))
+        session.showList(on: date(day: 11), anchor: "calendar-tail")
+        session.beginEdit(event)
         let lifecycle = CalendarEditorLifecycle(session: session)
         lifecycle.setEditorFocus(true)
         lifecycle.setOwnedMenuCount(1)
         lifecycle.setDatePopoverPresented(true)
-        XCTAssertEqual(session.back(), .home(anchor: "home-tail"))
+        XCTAssertEqual(session.back(), .calendar(date: date(day: 11), anchor: "calendar-tail"))
         XCTAssertFalse(session.editorHasFocus)
         XCTAssertEqual(session.ownedMenuCount, 0)
         XCTAssertFalse(session.datePopoverPresented)
@@ -10514,7 +10514,7 @@ final class CalendarInteractionTests: XCTestCase {
         session.clearOwnership(lifecycle.ownerID)
         XCTAssertEqual(publications, 0, "返回已清 ownership 后，菜单拆卸与生命周期清理不能重复发布")
         XCTAssertEqual(session.route, .list)
-        XCTAssertEqual(session.homeScrollAnchor, "home-tail")
+        XCTAssertEqual(session.calendarScrollAnchor, "calendar-tail")
         XCTAssertFalse(session.shouldProtectAutoClose)
     }
 
@@ -10573,10 +10573,8 @@ final class CalendarInteractionTests: XCTestCase {
         backend.writeFailure = nil
         let savedResult = await session.save()
         XCTAssertTrue(savedResult)
-        XCTAssertEqual(session.route, .detail)
-        XCTAssertEqual(session.detailEvent?.id, "fixture-created-1")
-        XCTAssertEqual(session.detailEvent?.title, "Draft")
-        XCTAssertEqual(backend.event(withID: "fixture-created-1"), session.detailEvent)
+        XCTAssertEqual(session.route, .list, "保存成功后回列表（T6：详情档退休）")
+        XCTAssertEqual(backend.event(withID: "fixture-created-1")?.title, "Draft")
         XCTAssertNil(session.draft)
         XCTAssertNil(session.baseline)
         XCTAssertNil(session.error)
@@ -10595,8 +10593,8 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(saved.start, date(day: 14))
         XCTAssertEqual(saved.calendar.id, "fixture-reminders")
         XCTAssertEqual(saved.title, "Reminder")
-        XCTAssertEqual(session.route, .detail)
-        session.openInSystemApp()
+        XCTAssertEqual(session.route, .list, "保存成功后回列表（T6：详情档退休）")
+        session.openInSystemApp(saved)
         XCTAssertEqual(backend.systemOpenedIDs, [saved.id])
     }
 
@@ -10620,20 +10618,19 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertTrue(session.shouldProtectAutoClose)
         let second = await session.save()
         XCTAssertFalse(second)
-        let newEvent = try XCTUnwrap(backend.event(withID: "fixture-event-04"))
-        session.showDetail(newEvent, source: .home(anchor: "new-home"))
+        session.showList(on: date(day: 11), anchor: "new-tail")
         continuation?.resume(returning: record("saved-real-id"))
         let savedResult = await saving.value
         XCTAssertTrue(savedResult)
         XCTAssertEqual(writes, 1)
-        XCTAssertEqual(session.route, .detail)
-        XCTAssertEqual(session.detailEvent, newEvent)
-        XCTAssertEqual(session.returnSource, .home(anchor: "new-home"))
+        XCTAssertEqual(session.route, .list, "迟到的保存不许把用户后来切到的档位换掉")
+        XCTAssertEqual(session.calendarScrollAnchor, "new-tail")
+        XCTAssertEqual(session.returnSource, .calendar(date: date(day: 11), anchor: "new-tail"))
         XCTAssertNil(session.draft)
         XCTAssertFalse(session.isSubmitting)
     }
 
-    func testPanelResumingTheSameInFlightDraftShowsSavedDetailInsteadOfEmptyEditor() async {
+    func testPanelResumingTheSameInFlightDraftShowsTheSavedRecordInsteadOfEmptyEditor() async {
         let backend = panelBackend()
         let started = expectation(description: "save started")
         var continuation: CheckedContinuation<EventModel, Error>?
@@ -10651,8 +10648,8 @@ final class CalendarInteractionTests: XCTestCase {
         let saved = await saving.value
         XCTAssertTrue(saved)
         XCTAssertNil(session.draft)
-        XCTAssertEqual(session.route, .detail)
-        XCTAssertEqual(session.detailEvent?.id, "saved-real-id")
+        // T6：保存成功后回列表；会话不再持有「刚存的记录」这种引用（详情档退休，记录改由列表渲染它）。
+        XCTAssertEqual(session.route, .list, "保存成功后回列表")
     }
 
     func testPanelLateFailureRetainsOldDraftAndDoesNotPolluteNewPage() async throws {
@@ -10703,27 +10700,26 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertTrue(session.hasDirtyDraft)
     }
 
-    func testPanelCompletionFailureKeepsReminderAndHomeCompletionDoesNotNavigate() async throws {
+    func testPanelCompletionFailureKeepsReminderAndListCompletionDoesNotNavigate() async throws {
         let backend = panelBackend()
         let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-03"))
         let session = panelSession(service: backend)
-        session.showDetail(reminder, source: .home(anchor: reminder.id))
+        session.showList(on: date(day: 11), anchor: reminder.id)
         backend.writeFailure = .readOnlyCalendar
         let failed = await session.complete(reminder, completed: true)
         XCTAssertFalse(failed)
-        XCTAssertEqual(session.detailEvent, reminder)
+        XCTAssertEqual(session.calendarScrollAnchor, reminder.id)
         XCTAssertEqual(backend.event(withID: reminder.id), reminder)
         backend.writeFailure = nil
         session.suspend()
         let completed = await session.complete(reminder, completed: true)
         XCTAssertTrue(completed)
         XCTAssertEqual(session.route, .list)
-        XCTAssertNil(session.detailEvent)
         XCTAssertEqual(backend.event(withID: reminder.id)?.type, .reminder(completed: true))
         XCTAssertTrue(backend.event(withID: reminder.id)?.hasRecurrenceRules == true)
     }
 
-    func testPanelLateCompletionDoesNotUpdateAnotherDetail() async throws {
+    func testPanelLateCompletionDoesNotUpdateAnotherNavigation() async throws {
         let backend = panelBackend()
         let reminder = try XCTUnwrap(backend.event(withID: "fixture-reminder-02"))
         let started = expectation(description: "completion started")
@@ -10731,38 +10727,37 @@ final class CalendarInteractionTests: XCTestCase {
         let session = panelSession(service: backend, complete: { _, _ in
             try await withCheckedThrowingContinuation { continuation = $0; started.fulfill() }
         })
-        session.showDetail(reminder, source: .home(anchor: reminder.id))
+        session.showList(on: date(day: 11), anchor: reminder.id)
         let completing = Task { await session.complete(reminder, completed: true) }
         await fulfillment(of: [started], timeout: 2)
         let other = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
-        session.showDetail(other, source: .calendar(date: date(day: 11), anchor: other.id))
+        session.showList(on: date(day: 11), anchor: other.id)
         continuation?.resume(returning: record(reminder.id, type: .reminder(completed: true)))
         let completed = await completing.value
         XCTAssertTrue(completed)
-        XCTAssertEqual(session.detailEvent, other)
+        XCTAssertEqual(session.calendarScrollAnchor, other.id)
         XCTAssertEqual(session.returnSource, .calendar(date: date(day: 11), anchor: other.id))
     }
 
-    func testPanelDeleteFailureKeepsDetailAndSuccessRestoresSourceAnchor() async throws {
+    func testPanelDeleteFailureKeepsRecordAndSuccessKeepsListAnchor() async throws {
         let backend = panelBackend()
         let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
         let session = panelSession(service: backend)
-        session.showDetail(event, source: .calendar(date: date(day: 11), anchor: "neighbor"))
+        session.showList(on: date(day: 11), anchor: "neighbor")
         backend.writeFailure = .readOnlyCalendar
-        let failed = await session.delete()
+        let failed = await session.delete(event)
         XCTAssertFalse(failed)
-        XCTAssertEqual(session.detailEvent, event)
         XCTAssertNotNil(session.error)
         XCTAssertNotNil(backend.event(withID: event.id))
         backend.writeFailure = nil
-        let deleted = await session.delete()
+        let deleted = await session.delete(event)
         XCTAssertTrue(deleted)
         XCTAssertEqual(session.route, .list)
         XCTAssertEqual(session.calendarScrollAnchor, "neighbor")
         XCTAssertEqual(session.returnSource, .calendar(date: date(day: 11), anchor: "neighbor"))
         XCTAssertNil(backend.event(withID: event.id))
-        session.showDetail(try XCTUnwrap(backend.event(withID: "fixture-event-04")), source: .home(anchor: nil))
-        let restricted = await session.delete()
+        let readOnly = try XCTUnwrap(backend.event(withID: "fixture-event-04"))
+        let restricted = await session.delete(readOnly)
         XCTAssertFalse(restricted)
         XCTAssertEqual(backend.writeAttempts, 2)
     }
@@ -13144,7 +13139,8 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(input.notes, "Summary\n\n" + source)
         XCTAssertEqual(input.url, candidate().url)
         let saved = await session.save(); XCTAssertTrue(saved)
-        let savedRecord = try XCTUnwrap(session.detailEvent)
+        XCTAssertEqual(session.route, .list, "保存成功后回列表（T6）")
+        let savedRecord = try XCTUnwrap(backend.allRecords().last { $0.id.hasPrefix("fixture-created") })
         XCTAssertEqual(savedRecord.start, input.due)
         XCTAssertEqual(savedRecord.notes, input.notes)
         XCTAssertEqual(savedRecord.url, input.url)
@@ -15389,7 +15385,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(PanelContentHeight.calendarEditorTab, "calendarEditor")
         XCTAssertEqual(calendarPanelTabKey(route: .editor), PanelContentHeight.calendarEditorTab)
         XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID)
-        XCTAssertEqual(calendarPanelTabKey(route: .detail), CalendarModule.moduleID)
+        XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID,
+                       "T6：详情档退休，非编辑档只有列表这一档")
 
         // ② 名单：编辑档有自然高 400，因此在名单里（探针据此进门）。
         XCTAssertTrue(PanelContentHeight.measuredTabs.contains(PanelContentHeight.calendarEditorTab))
@@ -15719,7 +15716,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(CalendarPanelSession.canDeleteInIsland(reminder), "但可写待办在岛内可删（D-10）")
         XCTAssertEqual(session.route, .list)
         let deletedReminder = await session.delete(reminder)
-        XCTAssertTrue(deletedReminder, "列表档删待办必须能走通（改前 guard 是 route == .detail）")
+        XCTAssertTrue(deletedReminder, "列表档删待办必须能走通（改前 guard 是 route == .detail，T6 已删掉那一档）")
         XCTAssertNil(backend.event(withID: "fixture-reminder-02"))
         let readOnly = try XCTUnwrap(backend.event(withID: "fixture-event-04"))
         XCTAssertFalse(CalendarPanelSession.canDeleteInIsland(readOnly))
@@ -15743,6 +15740,87 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let provider = try repositorySource("DynamicIsland/Providers/CalendarServiceProviding.swift")
         XCTAssertTrue(provider.contains("func deleteReminder(id: String) async throws"),
                       "服务层补上了删待办（原 deleteEvent 只吃 EKEvent，会抛 wrongRecordType）")
+    }
+
+    // MARK: - T6（本轮 docs/49）：详情档退休 + 列表档分栏 40/60（V10 / V16）
+
+    /// V10 / D-11·D-13：详情档退休——`CalendarPanelRoute` 只两种档位、`showDetail` / `detailEvent`
+    /// 全仓绝迹、保存成功后回列表；既有引用该页的用例同批改成列表口径。
+    func testDetailRouteIsRetiredAcrossTheApp() async throws {
+        XCTAssertEqual(String(describing: CalendarPanelRoute.list), "list")
+        let sessionSource = try repositorySource("DynamicIsland/models/CalendarPanelSession.swift")
+        XCTAssertTrue(sessionSource.contains("enum CalendarPanelRoute: Equatable { case list, editor }"),
+                      "只剩列表 / 编辑两档")
+        XCTAssertFalse(sessionSource.contains("showDetail"), "入口已删")
+        XCTAssertFalse(sessionSource.contains("detailEvent"), "会话不再持有「详情记录」这一状态")
+        for file in ["DynamicIsland/components/Calendar/CalendarPanelPages.swift",
+                     "DynamicIsland/components/Calendar/DynamicIslandCalendar.swift",
+                     "DynamicIsland/Modules/TodosModule.swift",
+                     "DynamicIsland/ContentView.swift",
+                     "DynamicIslandTests/PanelAutoHeightTests.swift"] {
+            XCTAssertFalse(try repositorySource(file).contains("showDetail"), "\(file) 不许再有 showDetail 调用")
+        }
+        // 行为：保存成功后回列表（不是旧的详情档）。
+        let backend = CalendarInteractionFixtures.makeBackend(count: 0, on: reference)
+        let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                          saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                          createReminder: { try await backend.createReminderRecord(input: $0) },
+                                          deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                          completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                          event: { backend.event(withID: $0) })
+        session.beginCreate(kind: .event, on: reference, calendarID: "fixture-events")
+        session.draft?.title = "Saved"
+        let saved = await session.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(session.route, .list, "保存成功后回列表（T6）")
+    }
+
+    /// V16 / D-16·D-21：列表档左栏 = **内容宽 × 40%**——用「两个宿主宽下的右栏起点差」证**关系式**
+    /// （写死常量时差会是 0 或线性错值），再按真机内容宽 1086 推日格宽是否 ≥ 56（3 字节日名门槛）。
+    /// **为什么测斜率而不是绝对值**：右栏第一条目标题的 x 还要让开行内部偏移（色条 / 间距 / 行内边距），
+    /// 拿绝对 x 反推左栏会把那些实现细节卷进来；两个宿主宽的差把这些常量全部约掉，剩下的就是斜率。
+    func testListColumnTakesFortyPercentOfContentWidth() async throws {
+        func titleOrigin(hostWidth: CGFloat) async throws -> CGFloat {
+            let backend = CalendarInteractionFixtures.makeBackend(count: 4, on: reference)
+            let session = CalendarPanelSession(selectedDate: reference, now: { self.reference },
+                                              saveEvent: { try await backend.saveEvent(input: $0, eventID: $1) },
+                                              createReminder: { try await backend.createReminderRecord(input: $0) },
+                                              deleteEvent: { try await backend.deleteEvent(id: $0) },
+                                              completeReminder: { try await backend.completeReminder(id: $0, completed: $1) },
+                                              event: { backend.event(withID: $0) })
+            let manager = CalendarManager(service: backend, now: { self.reference }, startMonitoring: false)
+            session.showList(on: reference)
+            await manager.updateCurrentDate(reference)
+            let host = mountStandaloneCalendar(session: session, manager: manager, width: hostWidth)
+            settle(host)
+            let origin = rowButtonSlots(in: host).map(\.title.minX).min() ?? -1
+            XCTAssertGreaterThan(origin, 0, "前提：\(hostWidth) 宿主下渲染出行标题")
+            return origin
+        }
+        let narrow = try await titleOrigin(hostWidth: 887)
+        let wide = try await titleOrigin(hostWidth: 1086)
+        XCTAssertEqual(wide - narrow, (1086 - 887) * 0.4, accuracy: 1,
+                       "右栏起点随宿主宽按 40% 走（斜率 = 1 − 0.4）——写死常量时这里必红")
+
+        // 真机内容宽 1086 → 左栏 434.4 → 日格宽 (434.4 − 42) / 7 = 56.1（3 字节日名门槛 ≈55 放得下；
+        // 初一那格只显月名的「九月」门槛 44 更宽裕，D-21）。
+        let realLeft = 1086 * 0.4
+        let cellWidth = (realLeft - MonthGridLayout.gridInset) / 7
+        XCTAssertEqual(cellWidth, 56.1, accuracy: 0.2, "内容宽 1086 → 日格宽 56.1")
+        XCTAssertGreaterThanOrEqual(cellWidth, 56)
+        // 副标判据走实现自己的 `MonthCellSubtitle.fits`（D-21 就是这么定的）。
+        XCTAssertTrue(MonthCellSubtitle.fits("九月", cellWidth: cellWidth), "初一那格只显月名 → 放得下")
+        XCTAssertFalse(MonthCellSubtitle.fits("九月初一", cellWidth: cellWidth),
+                       "4 字写不下——这正是 D-21 改成只显月名的原因")
+        XCTAssertTrue(MonthCellSubtitle.fits("重阳节", cellWidth: cellWidth), "3 字节日名仍放得下")
+
+        // 高度不动：页高仍是当月 `monthGridHeight`（43N + 63）。
+        XCTAssertEqual(MonthGridLayout.monthGridHeight(forMonth: fixedMonth(2026, 10),
+                                                       calendar: fixedGridCalendar(firstWeekday: 1)),
+                       278, accuracy: 1e-9, "2026-10 五周 → 43 × 5 + 63")
+        XCTAssertTrue(try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
+            .contains(".containerRelativeFrame(.horizontal, count: 5, span: 2, spacing: 0)"),
+                      "分栏是「容器的 5 份取 2 份」的关系式，不是写死常量")
     }
 
     /// V6 / D-06：字号档只在一个常量里改——编辑页五类与列表卡片两类都引用具名常量，数值即设计值；
