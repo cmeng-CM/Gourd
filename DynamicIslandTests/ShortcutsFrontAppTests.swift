@@ -1137,11 +1137,11 @@ final class ShortcutsFrontAppTests: XCTestCase {
     /// （吃余量），固定列数会让多出来的宽度白留）。
     ///
     /// 三条边界值得钉住：① 被丢的块拿到 `.zero` 提案 → `cellsPerRow` 是 0（一格都不画，
-    /// 而不是画一格越界）；② **列数上限 16**（再宽不加列，见 docs/38 §已知限制 4）；
+    /// 而不是画一格越界）；② **列数上限 24**（再宽不加列，见 docs/49 D-24：16 → 24）；
     /// ③ 高度只决定行数（上限 4），与环境带档高 96 一起给出 3 行（96 − 顶部内缩 7 = 89 →
     /// `floor((89 + 4) / (28 + 4)) = 2`… 见下面对 `HomeEnvironmentBand.height` 的断言）。
     func testFrontAppGridBudgetIsWidthDrivenWithCaps() {
-        XCTAssertEqual(FrontAppGridBudget.maximumColumns, 16, "列数上限（D-09 / §已知限制 4）")
+        XCTAssertEqual(FrontAppGridBudget.maximumColumns, 24, "列数上限（docs/49 D-24：16 → 24）")
         XCTAssertEqual(FrontAppGridBudget.maximumRows, 4, "行数上限")
         XCTAssertEqual(FrontAppGridBudget.cellSize, 28, "一格 = 图标 24 + 内边距 2 × 2")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 300), 10, "最小块宽 300 → 10 列")
@@ -1151,8 +1151,15 @@ final class ShortcutsFrontAppTests: XCTestCase {
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 0), 0, "`.zero` 提案 → 一格都不画（不越界）")
         XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: .nan), 0, "非有限宽同样不画")
         XCTAssertEqual(
-            FrontAppGridBudget.cellsPerRow(forWidth: 4000), 16,
-            "超宽面板也钳在上限（一行 16 格以上的图标墙不好点）"
+            FrontAppGridBudget.cellsPerRow(forWidth: 4000), 24,
+            "超宽面板也钳在上限（一行 24 格 = 672pt；再加列只会让图标墙更难点）"
+        )
+        // 面板 1126 那一档：弹性块 677pt 画满 24 列（旧上限 16 只用到 448pt，右侧露白 229pt）。
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 677), 24, "环境带弹性块 677 → 24 列")
+        XCTAssertEqual(FrontAppGridBudget.cellsPerRow(forWidth: 448), 16, "448 → 16 列（旧上限那一档）")
+        XCTAssertEqual(
+            24 * FrontAppGridBudget.cellSize, 672,
+            "24 列占 672pt，677 的块里只剩 5pt 余量 → 那次露白消失"
         )
 
         XCTAssertEqual(FrontAppGridBudget.rowCount(forHeight: 89), 2, "环境带档高扣掉顶部内缩 → 2 行")
