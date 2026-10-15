@@ -54,6 +54,12 @@ sh tools/build.sh --install     # 构建并装到 /Applications/壶中天.app
 sh tools/build.sh --dmg         # 或在 dist/ 产出 DMG
 ```
 
+改完代码想装到本机看效果，走**一键安装**那条（等价于上面第一行，装完顺手启动一次）：
+
+```bash
+sh tools/install-local.sh       # 或直接双击仓库根的 install-local.command
+```
+
 应用是**菜单栏小工具**（没有 Dock 图标）：启动后看屏幕顶部（刘海 / 刘海位），鼠标悬停即展开。
 
 ## 文档

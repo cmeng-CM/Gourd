@@ -11,6 +11,8 @@ Use Xcode on macOS 26+ with Apple Silicon (arm64). Open `DynamicIsland.xcodeproj
 - `sh tools/build.sh`: build Release `Gourd.app` and print its path.
 - `sh tools/build.sh --install`: build and install `/Applications/壶中天.app`, quitting the previous instance.
 - `sh tools/build.sh --dmg`: produce a DMG in `dist/`.
+- `sh tools/install-local.sh` (or double-click `install-local.command`): one-click local install — same as `build.sh --install` and then launch the app once. Pass `--no-open` when running from a non-interactive shell (launching from one yields an instance with no UI session).
+- `sh install.sh`: the *end-user* installer — downloads the DMG from a GitHub Release. Not for local development.
 
 Provision `Gourd Local` with `sh tools/setup-signing.sh` before running local XCTest or `--dmg`. Retain the project-configured signing identity for local tests; avoid command-line `CODE_SIGN_IDENTITY` overrides. Run tests from the repository root:
 

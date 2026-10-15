@@ -27,7 +27,7 @@
 |---|---|
 | **DMG**（推荐给使用者） | 下载 `Gourd-0.2.0.dmg` → 打开 → 把「壶中天」拖进「应用程序」 |
 | **命令行**（装完无提示） | `curl -fsSL https://raw.githubusercontent.com/cmeng-CM/Gourd/main/install.sh \| bash` |
-| **自己构建**（开发机） | 仓库里执行 `sh tools/build.sh --install`（直接装到 `/Applications/壶中天.app`），或 `sh tools/build.sh --dmg` 出安装包 |
+| **自己构建**（开发机） | 仓库里执行 `sh tools/install-local.sh`（一键：构建 → 装到 `/Applications/壶中天.app` → 启动），也可以直接双击仓库根的 `install-local.command`；`sh tools/build.sh --dmg` 则出安装包 |
 | **覆盖升级** | 把新版「壶中天」拖进「应用程序」覆盖旧版即可；偏好、权限、登录项都不会丢 |
 
 要求：**macOS 26（Tahoe）及以上**、**Apple 芯片（arm64）**。
