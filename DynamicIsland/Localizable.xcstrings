@@ -1243,22 +1243,6 @@
         }
       }
     },
-    "calendar.panel.notesEnd": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "End of notes"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "备注结束"
-          }
-        }
-      }
-    },
     "calendar.panel.kind": {
       "localizations": {
         "en": {
@@ -1495,22 +1479,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "同时会从系统「提醒事项」删除，不能撤销。"
-          }
-        }
-      }
-    },
-    "calendar.panel.deleteQuestion": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete this event?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "删除此日程？"
           }
         }
       }
