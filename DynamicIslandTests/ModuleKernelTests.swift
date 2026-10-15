@@ -15530,7 +15530,6 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     func testReminderFormMergesDueDateAndLinkWithoutBlankHalfCells() throws {
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         XCTAssertFalse(panel.contains("Color.clear"), "空半格占位必须整条删掉（D-03）")
-        XCTAssertFalse(panel.contains("minimumBoxHeight"), "旧的高度下限常量已随 D-04 的定高改掉")
         XCTAssertTrue(panel.contains(
             #"dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)"#),
                       "待办仍要有「截止」这一格")
@@ -15559,23 +15558,34 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let notes = try XCTUnwrap(notesEditors(in: host).first)
         let box = try XCTUnwrap(notes.enclosingScrollView, "备注编辑器必须住在带框的框里（D-04）")
         XCTAssertEqual(box.layer?.borderWidth, 1)
-        XCTAssertEqual(box.layer?.cornerRadius, CalendarEditableTextView.cornerRadius)
+        XCTAssertEqual(box.layer?.cornerRadius, 6, "圆角 6（设计值，不镜像生产常量）")
         // `NSColor.components` 在非 RGB 色彩空间下长度不定（灰阶只有 2 个）——先转 sRGB 再读分量。
         let border = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(box.layer?.borderColor))?
             .usingColorSpace(.sRGB))
         XCTAssertEqual(Double(border.redComponent), 1, accuracy: 0.01)
-        XCTAssertEqual(Double(border.alphaComponent), Double(CalendarEditableTextView.borderAlpha), accuracy: 0.01,
-                       "描边是白 18%（浅到不抢内容、又看得出落点）")
-        XCTAssertEqual(box.frame.height, notes.cappedHeight(), accuracy: 0.5, "框高 = 3 行（D-04）")
+        XCTAssertEqual(Double(border.alphaComponent), 0.18, accuracy: 0.01,
+                       "描边是白 18%（设计值；浅到不抢内容、又看得出落点）")
+        // 框高 = 3 行：用布局管理器的行高**独立算**一遍（改 cappedHeight 的实现也不会骗过它）。
+        let lineHeight = try XCTUnwrap(notes.layoutManager).defaultLineHeight(
+            for: try XCTUnwrap(notes.font))
+        XCTAssertEqual(box.frame.height, ceil(lineHeight) * 3 + 2 * notes.textContainerInset.height,
+                       accuracy: 0.5, "框高 = 3 行（D-04）")
         XCTAssertTrue(notes.string.isEmpty)
         XCTAssertEqual(notes.placeholder, NSLocalizedString("calendar.panel.notes", comment: ""))
+        // 生产形态：文档视图住在 clip view 里（不是裸放），纵向自增长只发生在框内。
+        XCTAssertTrue(notes.isVerticallyResizable, "框内容器要能自己长（否则长备注没法滚）")
+        XCTAssertTrue(box.documentView === notes, "文本视图是滚动框的文档视图")
         // 内容更长时框不再长高（封住无限长高），多出来的部分靠框内滚动到达。
+        let pageHeightBefore = host.fittingSize.height
         session.draft?.notes = (1...20).map { "第\($0)行" }.joined(separator: "\n")
         settle(host)
-        XCTAssertEqual(try XCTUnwrap(notes.enclosingScrollView).frame.height, notes.cappedHeight(), accuracy: 0.5,
+        XCTAssertEqual(try XCTUnwrap(notes.enclosingScrollView).frame.height,
+                       ceil(lineHeight) * 3 + 2 * notes.textContainerInset.height, accuracy: 0.5,
                        "20 行备注也不能把框顶高")
-        XCTAssertGreaterThan(notes.frame.height, notes.cappedHeight(), "文档视图比框高 → 框内可滚动")
-        XCTAssertEqual(notes.enclosingScrollView?.hasVerticalScroller, true)
+        XCTAssertGreaterThan(notes.frame.height, box.frame.height, "文档视图比框高 → 框内可滚动")
+        XCTAssertEqual(box.hasVerticalScroller, true)
+        XCTAssertEqual(host.fittingSize.height, pageHeightBefore, accuracy: 1,
+                       "长内容不许把整页顶高（旧形态「编辑框随内容在页内长高」的护栏）")
     }
 
     /// 生成行右端的按钮槽（SwiftUI 画的 `Button` 会留下一枚 `_FocusRingView`，按它的宿主坐标取）：
@@ -15726,12 +15736,16 @@ final class CalendarPageLayoutTests: XCTestCase {
         let coordinator = editor.makeCoordinator()
         view.delegate = coordinator
         view.insertText("原文\n用户备注", replacementRange: NSRange(location: 0, length: 0))
-        view.setFrameSize(NSSize(width: 374, height: view.measuredSize(width: 374).height))
+        let boxHeight = view.cappedHeight()
+        view.setFrameSize(NSSize(width: 374, height: boxHeight))
         view.setSelectedRange(NSRange(location: 0, length: 2))
         let frame = view.frame, ranges = view.selectedRanges, string = view.string
-        for width: CGFloat in [0, 1, 200, 374, 80, .infinity, .nan, 0] {
-            let size = view.measuredSize(width: width)
-            XCTAssertTrue(size.width.isFinite && size.height.isFinite)
+        // 框是**定高**：不再有「随内容量出不同高度」的路径（旧 `measuredSize` 已随 D-04 删除）。
+        let lineHeight = try XCTUnwrap(view.layoutManager).defaultLineHeight(for: try XCTUnwrap(view.font))
+        XCTAssertEqual(boxHeight, ceil(lineHeight) * 3 + 2 * view.textContainerInset.height, accuracy: 0.5,
+                       "框高 = 3 行（D-04；用行高独立算一遍，不镜像 cappedHeight 的实现）")
+        for _ in 0..<4 {
+            XCTAssertEqual(view.cappedHeight(), boxHeight, accuracy: 1e-9, "测量不许改框高、也不许有副作用")
             XCTAssertEqual(view.frame, frame)
             XCTAssertEqual(view.textContainer?.containerSize.width ?? 0, view.bounds.width - 8, accuracy: 0.5)
             XCTAssertEqual(view.selectedRanges, ranges)
@@ -15740,13 +15754,11 @@ final class CalendarPageLayoutTests: XCTestCase {
         }
         view.insertText("实际替换", replacementRange: view.selectedRange())
         XCTAssertEqual(bound, "实际替换\n用户备注")
-        let before = view.measuredSize(width: 374).height
         view.insertText(String(repeating: "\n新增完整内容", count: 20),
                         replacementRange: NSRange(location: (view.string as NSString).length, length: 0))
-        let after = view.measuredSize(width: 374).height
-        XCTAssertGreaterThan(after, before, "Multiline growth is preserved through SwiftUI sizing")
+        XCTAssertEqual(view.cappedHeight(), boxHeight, accuracy: 1e-9, "20 行也不许把框顶高")
         XCTAssertEqual(view.frame, frame, "Native insertion cannot grow across adjacent controls")
-        view.setFrameSize(NSSize(width: 220, height: after))
+        view.setFrameSize(NSSize(width: 220, height: boxHeight))
         XCTAssertEqual(view.textContainer?.containerSize.width ?? 0, 212, accuracy: 0.5)
         XCTAssertEqual(bound, view.string)
     }

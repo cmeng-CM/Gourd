@@ -799,9 +799,10 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         view.drawsBackground = false
         // 文档视图只在这一处放开纵向自增长（SwiftUI 管的是**框**的高度，见 sizeThatFits）：
         // 内容超过 3 行时它比框高，多出来的部分在框内滚动（D-04）。
+        // 高度下限走 `minSize`（布局参数），**不**在任何测量回调里对活视图改 frame。
         view.isVerticallyResizable = true
         view.autoresizingMask = [.width]
-        view.minSize = .zero
+        view.minSize = NSSize(width: 0, height: view.cappedHeight(lines: maximumLines))
         view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         view.interaction = CalendarTextInteraction(
             setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
@@ -815,23 +816,23 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? CalendarEditableTextView else { return }
         view.onFocus = onFocus
+        view.minSize = NSSize(width: 0, height: view.cappedHeight(lines: maximumLines))
         if view.string != text {
             view.string = text
             view.needsDisplay = true
         }
+        // 删到空时占位那一笔要补上（AppKit 只失效被编辑的那块矩形）。
+        if text.isEmpty { view.needsDisplay = true }
         view.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
         view.placeholder = placeholder.map { NSLocalizedString($0, comment: "") }
     }
+    /// **纯读**：框高恒为 `maximumLines` 行的定高；文档视图的伸缩交给 `minSize` + `isVerticallyResizable`，
+    /// 测量回调里不对活视图改 frame（本文件的同类约定见 `CalendarSelectableText` 的注释）。
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
-        let width = proposal.width ?? 200
         guard let view = nsView.documentView as? CalendarEditableTextView else { return nil }
-        let height = view.cappedHeight(lines: maximumLines)
-        // 内容真实高：不设下限（下限就是框高，若一并设进来就永远测不出「内容比框高」）。
-        let content = CalendarTextMeasurement.size(of: view, width: width, minimumHeight: 0)
-        // 文档视图撑满可见框，内容更高时更高；超出的部分靠 clip view 滚动到达。
-        let document = NSSize(width: width, height: max(content.height, height))
-        if view.frame.size != document { view.setFrameSize(document) }
-        return CGSize(width: width, height: height)
+        // 宽度兜底取**clip 宽**（不是滚动视图宽：常显滚动条那一档会宽出 15pt）。
+        let width = proposal.width ?? (nsView.contentSize.width > 0 ? nsView.contentSize.width : 200)
+        return CGSize(width: width, height: view.cappedHeight(lines: maximumLines))
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         (scroll.documentView as? CalendarEditableTextView)?.stop()
@@ -897,10 +898,6 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    /// 框的可见高度：至少 `cappedHeight`（短内容也撑满 3 行框）。
-    func measuredSize(width: CGFloat) -> CGSize {
-        CalendarTextMeasurement.size(of: self, width: width, minimumHeight: cappedHeight())
-    }
     /// 可见高度**就是** `defaultMaximumLines` 行（含上下内缩）：不是下限而是定高——内容更多时框内滚动。
     /// 行高取布局管理器的默认行高（≈16pt @13），`boundingRectForFont` 会把字体的升部余量算进去（≈17pt），
     /// 三行就多出 3pt —— 那 3pt 正是编辑档可视区容不下的部分。
