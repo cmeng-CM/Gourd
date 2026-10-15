@@ -13668,6 +13668,78 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertTrue(source.contains("await session.generateDraft()"))
         XCTAssertTrue(source.contains(".keyboardShortcut(.return, modifiers: .command)"))
     }
+
+    // MARK: - T1 解析层：半点/点分解码与生成失败回归（docs/49 做法 1）
+
+    /// T1 主回归：原文同时含「X点半」钟点与「时长一个点」。半小时必须解得开，
+    /// 时长说法落回应用既有的「默认一小时」，而不是抛 invalidEvidence。
+    func testHalfHourClockWithDurationFallsBackToDefaultHourInsteadOfFailing() async throws {
+        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
+        let (value, _) = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "下午三点半"))
+        XCTAssertEqual(value.start, date(12, hour: 15, minute: 30))
+        XCTAssertEqual(value.end, date(12, hour: 16, minute: 30), "只有时长说法时应用默认补一小时")
+        XCTAssertTrue(value.confirmations.isEmpty)
+    }
+
+    /// T1：「三点十五分」「三点一刻」与「三点半」同类可解——修好之前它们会被判无效。
+    func testChineseMinuteAndQuarterClockFormsDecode() async throws {
+        for (evidence, clock) in [("下午三点十五分", "15:15"), ("下午三点一刻", "15:15")] {
+            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
+            XCTAssertEqual(value.start, date(12, hour: 15, minute: 15), evidence)
+            XCTAssertTrue(value.confirmations.isEmpty, evidence)
+        }
+    }
+
+    /// T1：模型把证据归一化成原文里没有的 `15:30`，证据校验仍必须确定性拒绝（不静默放行）。
+    func testNormalizedClockEvidenceAbsentFromSourceIsStillRejected() async {
+        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
+        do {
+            _ = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "15:30"))
+            XCTFail("原文里没有 15:30，证据必须是原文片段")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+    }
+
+    /// T1 不变量：`timePattern` 认得的每一种词形，`clockEvidence` 都要解得开。
+    /// 逐一走真实解析器——两边漏一侧都会红：缺 pattern 会落时间确认，缺解码会抛 invalidEvidence。
+    func testEverySupportedClockFormDecodesWithoutConfirmation() async throws {
+        let forms: [(String, String, Date)] = [
+            ("15:30", "15:30", date(12, hour: 15, minute: 30)),
+            ("15:30:45", "15:30:45", date(12, hour: 15, minute: 30).addingTimeInterval(45)),
+            ("三点", "03:00", date(12, hour: 3)),
+            ("三点半", "03:30", date(12, hour: 3, minute: 30)),
+            ("三点十五分", "03:15", date(12, hour: 3, minute: 15)),
+            ("三点一刻", "03:15", date(12, hour: 3, minute: 15))
+        ]
+        for (evidence, clock, expected) in forms {
+            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
+            XCTAssertEqual(value.start, expected, evidence)
+            XCTAssertTrue(value.confirmations.isEmpty, "词形 \(evidence) 不该再要求时间确认")
+        }
+    }
+
+    /// T1：支持集合之外的词形（如「三点三刻半」）仍确定性拒绝，不静默放行。
+    func testUnsupportedClockWordingsStayDeterministicallyRejected() async {
+        for evidence in ["三点三刻半", "三点半半"] {
+            do {
+                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:45", startEvidence: evidence))
+                XCTFail("不支持的词形必须拒绝：" + evidence)
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
+        }
+    }
+
+    /// T1：分钟的中文数词要真能认 0–59（「三点二十五分」「三点四十五分」这类必须可用）。
+    func testChineseMinuteNumeralsZeroThroughFiftyNineDecode() async throws {
+        let pairs: [(String, Int)] = [
+            ("零", 0), ("一", 1), ("九", 9), ("十", 10), ("十一", 11), ("十九", 19),
+            ("二十", 20), ("二十五", 25), ("二十九", 29), ("三十", 30), ("三十五", 35),
+            ("四十", 40), ("四十五", 45), ("五十", 50), ("五十五", 55), ("五十九", 59)
+        ]
+        for (numeral, minute) in pairs {
+            let (value, _) = try await parse("今天三点\(numeral)分开会", output: output(date: "2026-10-12", evidence: "今天", start: String(format: "%02d:%02d", 3, minute), startEvidence: "三点\(numeral)分"))
+            XCTAssertEqual(value.start, date(12, hour: 3, minute: minute), numeral)
+            XCTAssertTrue(value.confirmations.isEmpty, numeral)
+        }
+    }
 }
 
 // Native text regressions create production controls without a window or system input.
