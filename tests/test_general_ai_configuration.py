@@ -110,6 +110,8 @@ LOCALE_KEYS = (
     'calendar.meeting.tooltip.multiple',
     'calendar.meeting.tooltip.open',
     'calendar.panel.backToMonth',
+    'calendar.panel.deleteEventConsequence',
+    'calendar.panel.deleteReminderConsequence',
     'calendar.panel.sourceTimeZoneFormat',
     'calendar.panel.url',
 )
