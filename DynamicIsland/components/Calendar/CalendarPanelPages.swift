@@ -201,6 +201,10 @@ struct CalendarPanelPages: View {
             lifecycle.setDatePopoverPresented(value != nil)
         }
         .onChange(of: session.route) { _, _ in
+            // 切页（列表 ↔ 编辑）也要把浮窗与确认条收掉：C2「条目离窗 / 切页 / 收起面板 → 自动复位」，
+            // 否则从编辑档返回列表时那条浮窗会带着旧态自己冒出来。
+            details.clear()
+            deleteTargetID = nil
             focusedField = nil
             nativeEditorFocused = false
             datePopover = nil
@@ -323,6 +327,8 @@ struct CalendarPanelPages: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.06 : 0.03)))
         .opacity(isCompleted(event) ? 0.55 : 1)
         .contentShape(Rectangle())
+        // 既有 UI 套件的定位符（`calendar-item-<id>`）：改前挂在右端箭头按钮上，现在整行可点，挂回容器。
+        .accessibilityIdentifier("calendar-item-\(event.id)")
         .onHover { hoveredID = $0 ? event.id : nil }
         // 整行点开详情浮层（D-07）：再点同一行取消。文字上的单击由文本视图自己吃（可拖选），
         // 属实现时实测 + 人工项（计划 ②）。
@@ -330,14 +336,20 @@ struct CalendarPanelPages: View {
         .anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds) { [event.id: $0] }
     }
 
-    /// 行的第二行文字：日程给时段、待办给截止（无截止给既有「无截止」键）。
+    /// 行的第二行文字（C1 设计图）：日程给「起–止」时段、全天只写 All-day；待办给「截止 日期」
+    /// （无截止给既有「无截止」键）。刻意不写日期——列表本身就是按日分组的。
     private func dueOrTimeText(_ event: EventModel) -> String {
         let calendar = CalendarPanelDates.sourceCalendar(for: event)
         if event.type.isReminder {
             guard CalendarPanelDates.hasDueDate(event) else { return String(localized: "calendar.panel.noDueDate") }
-            return event.isAllDay ? String(localized: "All-day") : CalendarPanelDates.formattedTime(event.start, calendar: calendar)
+            return event.isAllDay
+                ? String(localized: "All-day")
+                : String(localized: "calendar.panel.dueDate") + " "
+                    + CalendarPanelDates.formatted(event.start, allDay: true, calendar: calendar)
         }
-        return CalendarPanelDates.formatted(event.start, allDay: event.isAllDay, calendar: calendar)
+        if event.isAllDay { return String(localized: "All-day") }
+        return CalendarPanelDates.formattedTime(event.start, calendar: calendar)
+            + " – " + CalendarPanelDates.formattedTime(event.end, calendar: calendar)
     }
 
     /// 右端动作组（C1：只对可写记录给 ✎ / 🗑；会议入口与首页同款一枚按钮，`hasMeetingInformation` 判据）。
@@ -756,6 +768,7 @@ struct CalendarPanelPages: View {
         // Esc 顺序（C2）：先收浮窗 / 确认条 → 再处理日期弹层与菜单 → 最后才返回上一页 / 收面板。
         if details.activeID != nil { details.clear() }
         else if deleteTargetID != nil { deleteTargetID = nil }
+        else if datePopover != nil { datePopover = nil }
         else if session.pendingConfirmation != nil { session.dismissConfirmation() }
         else if session.route != .list { goBack() }
         else { vm.close() }

@@ -414,10 +414,15 @@ extension View {
     /// （条目离开当日窗口 / 被偏好过滤 / 表单替换列表 → 查不到 → false；宿主据此复位收起抑制标志，
     /// 否则标志悬空、面板再也收不起来）。`pinnedID` 自身的变化由浮层内层那条
     /// `.onChange(of: model.pinnedID)` 用同一口径补算（锚点表在那一刻不一定会变）。
+    /// - Parameter lookup: 按 id 取条目。缺省用 `CalendarManager.events`（选中日的单日窗口，面板两侧都用它）。
+    ///   **首页必须传自己的那份**：今日带的行来自 `todayEvents` + `store.reminderRecords`，
+    ///   里面包含「到期在过去且未完成」这类**不在当日窗口**的条目——缺省查找会找不到、浮层什么都不画
+    ///   （用户看到的是「点了没反应」）。
     func calendarEventDetails(model: CalendarEventDetailsModel,
-                             actions: @escaping (EventModel) -> CalendarEventDetailActions = { _ in .init() }) -> some View {
+                             actions: @escaping (EventModel) -> CalendarEventDetailActions = { _ in .init() },
+                             lookup: ((String) -> EventModel?)? = nil) -> some View {
         overlayPreferenceValue(CalendarEventAnchorKey.self) { anchors in
-            CalendarEventDetailsOverlay(model: model, anchors: anchors, actions: actions)
+            CalendarEventDetailsOverlay(model: model, anchors: anchors, actions: actions, lookup: lookup)
         }
         .onPreferenceChange(CalendarEventAnchorKey.self) { anchors in
             model.refreshPinRenderable(
@@ -438,6 +443,8 @@ private struct CalendarEventDetailsOverlay: View {
     let anchors: [String: Anchor<CGRect>]
     /// 宿主给的动作集（按记录类型填；本层只透传给卡片）。
     let actions: (EventModel) -> CalendarEventDetailActions
+    /// 宿主给的取数兜底（nil = 用 `CalendarManager.shared.events` 的单日窗口）。
+    let lookup: ((String) -> EventModel?)?
 
     /// 详情卡实测高（T3 fix）：初值 120 是保守档（首帧先用它定位），卡片量出真实高后经
     /// `CalendarEventDetailHeightKey` 修正——差的只是一帧，换来「翻转 / 夹取」都按真实高度判。
@@ -445,10 +452,12 @@ private struct CalendarEventDetailsOverlay: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let resolve: (String) -> EventModel? = lookup
+                ?? { id in calendarManager.events.first { $0.id == id } }
             if let id = model.activeID,
                let anchor = anchors[id],
                proxy.size.width > 24,
-               let event = calendarManager.events.first(where: { $0.id == id }) {
+               let event = resolve(id) {
                 let rect = proxy[anchor]
                 let hostHeight = proxy.size.height
                 let h = measuredHeight

@@ -1542,7 +1542,7 @@ struct TodosHomeBlockView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         // 详情浮层挂在**块的滚动视口之外**（锚点由行上报，浮层不会随滚动被裁）。
-        .calendarEventDetails(model: details, actions: homeDetailActions)
+        .calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)
         .task { await store.refresh() }
         .onChange(of: vm.notchState) { _, state in
             if state != .open { details.clear(); deleteTargetID = nil }
@@ -1558,6 +1558,12 @@ struct TodosHomeBlockView: View {
     private func openDetail(_ event: EventModel) {
         guard canOpenDetail, !session.isSubmitting else { return }
         details.togglePin(event.id)
+    }
+
+    /// 浮层按 id 取条目：今日带的行来自 `todayEvents` + `store.reminderRecords`，
+    /// 里面有过期／今天完成的条目**不在** `CalendarManager.events` 的单日窗口里——浮层必须用同一份数据查。
+    private func homeDetailLookup(_ id: String) -> EventModel? {
+        calendarManager.todayEvents.first { $0.id == id } ?? store.reminderRecords[id]
     }
 
     /// 浮窗动作集：与日历面板同一份卡片、同一套动作（H2 设计图 / D-20）。
@@ -1588,7 +1594,14 @@ struct TodosHomeBlockView: View {
                 onConfirm: {
                     deleteTargetID = nil
                     details.clear()
-                    Task { _ = await session.delete(event) }
+                    Task {
+                        // 首页没有面板那条 `calendar-error` 行：失败要在这里自己说出来（M-2）。
+                        if await session.delete(event) {
+                            actionError = nil
+                        } else {
+                            actionError = session.error ?? CalendarMutationError.readOnlyCalendar.localizedDescription
+                        }
+                    }
                 },
                 onCancel: {
                     deleteTargetID = nil
@@ -1799,6 +1812,9 @@ struct TodoHomeEventRow: View {
                 .accessibilityIdentifier("home-item-" + event.id)
         }.frame(height: TodosHomeBlockLayout.eventRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // 整行可点 = 就地弹浮窗（D-22 的同款口径；完成圈 / 会议按钮 / › 各自吞自己的点击）。
+            .contentShape(Rectangle())
+            .onTapGesture { if canOpenDetail { open() } }
     }
 }
 
@@ -1842,6 +1858,8 @@ struct TodoHomeRow: View {
                 .accessibilityLabel(Text("calendar.panel.details"))
                 .accessibilityIdentifier("home-item-" + item.id)
         }.frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
+            .contentShape(Rectangle())
+            .onTapGesture { if canOpenDetail { open() } }
     }
 }
 

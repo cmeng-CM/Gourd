@@ -634,7 +634,7 @@ final class CalendarPanelSession: ObservableObject {
         return await submit {
             do {
                 try await writer(event.id)
-                guard self.navigationGeneration == generation else { return true }
+                _ = generation
                 return true
             } catch {
                 if self.navigationGeneration == generation { self.error = error.localizedDescription }

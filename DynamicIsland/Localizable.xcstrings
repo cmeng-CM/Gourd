@@ -1291,22 +1291,6 @@
         }
       }
     },
-    "calendar.panel.openReminders": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open in Reminders"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在提醒事项中打开"
-          }
-        }
-      }
-    },
     "calendar.panel.openCalendar": {
       "localizations": {
         "en": {

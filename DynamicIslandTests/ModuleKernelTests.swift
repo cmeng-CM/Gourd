@@ -15689,8 +15689,15 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
 
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         // 三处收口 + Esc 第一步。
-        XCTAssertEqual(panel.components(separatedBy: "details.clear()").count - 1, 4,
-                       "Esc / 切页 / 收面板 / 视图卸载各一处")
+        XCTAssertEqual(panel.components(separatedBy: "details.clear()").count - 1, 5,
+                       "Esc / **切页** / 收面板 / 视图卸载 / 叫确认条前各一处")
+        // 切页那一处要在 route 变化的回调里（只数总次数会被别的调用点凑齐——审查抓到过）。
+        let routeChange = try XCTUnwrap(panel.range(of: ".onChange(of: session.route) { _, _ in"))
+        let routeBlock = String(panel[routeChange.lowerBound...].prefix(400))
+        XCTAssertTrue(routeBlock.contains("details.clear()"), "切页必须收浮窗（C2「切页 → 自动复位」）")
+        XCTAssertTrue(routeBlock.contains("deleteTargetID = nil"), "切页也要清确认条")
+        XCTAssertTrue(panel.contains("else if datePopover != nil { datePopover = nil }"),
+                      "Esc 链仍要先处理日期弹层（C2 的顺序）")
         XCTAssertTrue(panel.contains("if state != .open { details.clear(); deleteTargetID = nil }"))
         XCTAssertTrue(panel.contains("if details.activeID != nil { details.clear() }"))
         // D-23：不写 `vm.isCalendarDetailsPinned`（该标志恒 false，浮窗不抑制自动收起）。
@@ -15784,8 +15791,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let todos = try repositorySource("DynamicIsland/Modules/TodosModule.swift")
         // 点击：写自己那份 `details`，不再切模块 / 不再走旧详情路径。
         XCTAssertTrue(todos.contains("details.togglePin(event.id)"), "今日条目点击 = 钉住浮窗")
-        XCTAssertTrue(todos.contains(".calendarEventDetails(model: details, actions: homeDetailActions)"),
-                      "浮层由**块**持有并画")
+        XCTAssertTrue(todos.contains(".calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)"),
+                      "浮层由**块**持有并画（并带上取数兜底）")
         XCTAssertFalse(todos.contains("selectModule(CalendarModule.moduleID)\n    }\n\n    private func openTodo"),
                        "openDetail 不再切页（编辑那一枚仍会切，属 Actions 内部）")
         XCTAssertFalse(todos.contains("showDetail"))
@@ -15802,16 +15809,30 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertFalse(rowBody.contains("style: .row"))
         // 浮层挂在滚动视口之外：`home-today-scroll` 是滚动视图，浮层修饰符挂在块级（其后）。
         let scrollIndex = try XCTUnwrap(todos.range(of: #".accessibilityIdentifier("home-today-scroll")"#))
-        let overlayIndex = try XCTUnwrap(todos.range(of: ".calendarEventDetails(model: details, actions: homeDetailActions)"))
+        let overlayIndex = try XCTUnwrap(todos.range(of: ".calendarEventDetails(model: details, actions: homeDetailActions, lookup:"))
         XCTAssertLessThan(scrollIndex.lowerBound, overlayIndex.lowerBound)
         // 删除仍先确认（C2 硬规则①）：浮窗里换成确认行，确认后才真删。
         XCTAssertTrue(todos.contains("deleteConfirmation: deleteTargetID == event.id ?"),
                       "首页浮窗里的删除走确认行")
-        XCTAssertTrue(todos.contains("Task { _ = await session.delete(event) }"),
-                      "确认后才调删除")
+        XCTAssertTrue(todos.contains("if await session.delete(event) {"),
+                      "确认后才调删除，且失败要在首页说出来（M-2）")
         let detail = try repositorySource("DynamicIsland/components/Calendar/CalendarEventDetail.swift")
         XCTAssertTrue(detail.contains("if let deleteConfirmation = actions.deleteConfirmation"),
                       "卡片支持就地确认（首页那一份）")
+        // 取数兜底：首页的行来自 todayEvents + store.reminderRecords（含**不在当日窗口**的过期条目），
+        // 浮层必须用同一份数据查，否则那些行点了什么都不画（审查 I-2）。
+        XCTAssertTrue(todos.contains("calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)"))
+        XCTAssertTrue(todos.contains("calendarManager.todayEvents.first { $0.id == id } ?? store.reminderRecords[id]"))
+        XCTAssertTrue(detail.contains("lookup: ((String) -> EventModel?)? = nil"))
+        // 首页行整行可点（与面板同款；原来只有那枚 › 能点）。
+        XCTAssertEqual(todos.components(separatedBy: "onTapGesture { if canOpenDetail").count - 1, 2,
+                       "日程行与待办行都整行可点")
+        // 列表行第二行按 C1：日程给「起–止」时段、待办给「截止 日期」。
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(panel.contains("+ CalendarPanelDates.formattedTime(event.end, calendar: calendar)"),
+                      "日程行第二行是时段（C1）")
+        XCTAssertTrue(panel.contains(#"String(localized: "calendar.panel.dueDate") + " ""#),
+                      "待办行第二行带「截止」（C1）")
     }
 
     /// V16 / D-16·D-21：列表档左栏 = **内容宽 × 40%**——用「两个宿主宽下的右栏起点差」证**关系式**
@@ -15880,11 +15901,19 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let fields = collectViews(host) { ($0 as? NSTextField)?.isEditable == true }.compactMap { $0 as? NSTextField }
         XCTAssertFalse(fields.isEmpty, "前提：编辑页渲染出输入框")
         for field in fields { XCTAssertEqual(field.font?.pointSize, 15, "输入框正文 15") }
+        // 日期控件 / 下拉的**字号**在 small 与 regular 下都是 13（实测），判据是 `controlSize` 与
+        // 随之变化的固有高度（small 20 / regular 24）——用 font.pointSize 断言会假绿。
         let pickers = collectViews(host) { $0 is NSDatePicker }.compactMap { $0 as? NSDatePicker }
         XCTAssertFalse(pickers.isEmpty, "前提：编辑页渲染出日期控件")
-        for picker in pickers { XCTAssertEqual(picker.font?.pointSize, 13, "日期控件 13") }
+        for picker in pickers {
+            // 断言 `controlSize` 本身：`font.pointSize` 在 small / regular 下都是 13（实测），
+            // 而 NSDatePicker 的固有高反而是 regular 更小（20 vs small 22）——只有档位才是判据。
+            XCTAssertEqual(picker.controlSize, .regular, "日期控件跟到 regular 档")
+        }
         let popups = collectViews(host) { $0 is NSPopUpButton }.compactMap { $0 as? NSPopUpButton }
-        XCTAssertEqual(popups.first?.font?.pointSize, 13, "目标下拉 13")
+        XCTAssertEqual(popups.first?.controlSize, .regular, "目标下拉跟到 regular 档")
+        XCTAssertGreaterThanOrEqual(popups.first?.intrinsicContentSize.height ?? 0, 24,
+                                    "regular NSPopUpButton 的固有高 = 24")
         for editor in [sourceEditors(in: host).first, notesEditors(in: host).first].compactMap({ $0 }) {
             XCTAssertEqual(editor.font?.pointSize, 16, "大文本编辑器 16")
         }
