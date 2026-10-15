@@ -13776,6 +13776,30 @@ final class ScheduleGenerationTests: XCTestCase {
             } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
         }
     }
+
+    /// 审查二：`零X` 读法（「三点零五分」「零点零五分」是极常见的口语写法）——解得开，
+    /// 且 `timeHints` 与证据同值，不落时间确认。
+    func testLeadingZeroReadingDecodesWithoutConfirmation() async throws {
+        for (evidence, clock, expected) in [
+            ("三点零五分", "03:05", date(12, hour: 3, minute: 5)),
+            ("三点零一分", "03:01", date(12, hour: 3, minute: 1)),
+            ("零点零五分", "00:05", date(12, hour: 0, minute: 5))
+        ] {
+            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
+            XCTAssertEqual(value.start, expected, evidence)
+            XCTAssertTrue(value.confirmations.isEmpty, evidence)
+        }
+    }
+
+    /// 审查二：`零X` 只认「零 + 单个个位数」——`零十`、三位「零」前缀仍是 nil。
+    func testMalformedLeadingZeroWordingsAreRejected() async {
+        for evidence in ["三点零十", "三点零零五分"] {
+            do {
+                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:05", startEvidence: evidence))
+                XCTFail("必须确定性拒绝：" + evidence)
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
+        }
+    }
 }
 
 // Native text regressions create production controls without a window or system input.

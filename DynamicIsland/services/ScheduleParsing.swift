@@ -274,8 +274,10 @@ struct ScheduleParsing: ScheduleParser {
             // out-of-range values such as 二十五点 while 十三点 / 二十三点 still decode.
             guard let parsedHour = Self.number(String(value[value.startIndex..<point])) else { return nil }
             hour = parsedHour
-            // Every 点 form `timePattern` accepts **with a legal value** (hour 0–23, minute 0–59)
-            // must be decoded here: 点 / 点半 / 点Y分 / 点Y刻. Illegal values stay deterministically rejected.
+            // Every canonical 点 form `timePattern` accepts is decoded here: 点 / 点半 / 点Y分 /
+            // 点Y刻, including the 零X reading (三点零五分 → 03:05). Non-canonical spellings
+            // (十零 / 一十 / 零十 / 零零五) and out-of-range values (二十五点 / 三点六十分 /
+            // 三点3刻) stay deterministically rejected, so no canonical legal-value form is dropped.
             switch String(value[value.index(after: point)...]) {
             case "": minute = 0
             case "半": minute = 30
@@ -310,17 +312,18 @@ struct ScheduleParsing: ScheduleParser {
         return second.map { String(format: "%02d:%02d:%02d", hour, minute, $0) } ?? String(format: "%02d:%02d", hour, minute)
     }
 
-    /// Recognize an amount 0–59 written as an Arabic numeral or a simple Chinese numeral.
+    /// Recognize an amount 0–59 written as an Arabic numeral or a Chinese numeral.
     /// Accepted Chinese lexemes: `零`…`九`, `十`, `十一`…`十九`, `二十`/`三十`/`四十`/`五十`
-    /// and their `X十Y` forms; a run of zeros (`零零` → 0) is tolerated. Malformed
-    /// combinations such as `十零` / `一十` return nil. Drives both hour and minute of `X点Y分`.
+    /// and their `X十Y` forms, plus the `零X` reading (`零五` → 5, `零零` → 0). Malformed
+    /// spellings (`十零` / `一十` / `零十` / `零零五`) return nil. Drives hour and minute of `X点Y分`.
     private static func number(_ text: String) -> Int? {
         if let value = Int(text) { return (0...59).contains(value) ? value : nil }
         let digits: [Character: Int] = ["零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
         let characters = Array(text)
         guard !characters.isEmpty else { return nil }
         guard let ten = characters.firstIndex(of: "十") else {
-            if characters.allSatisfy({ $0 == "零" }) { return 0 }
+            // `零X` reading: 三点零五分 → 05, 零零 → 00. Exactly "零" followed by one single digit.
+            if characters.count == 2, characters[0] == "零", let value = digits[characters[1]] { return value }
             guard characters.count == 1, let value = digits[characters[0]] else { return nil }
             return value
         }

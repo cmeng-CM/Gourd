@@ -37,7 +37,7 @@
 
 ## 做法
 
-1. **解析层修生成失败**（`ScheduleParsing`）：给 `clockEvidence` 补「X点半」「X点Y分」两支，并用一条不变量把它和 `timePattern` 绑在一起（**凡是 `timePattern` 能匹配且取值合法的词形（时 0–23、分 0–59），`clockEvidence` 都必须解得开；非法取值按原路径确定性拒绝**——现测试里一个「点半」样例都没有，这个分叉就是这么长出来的）；prompt 侧把「只有原文出现钟点时才给 `end`（否则 `end` 与 `endEvidence` 都留空）」写死，让时长类说法落回应用既有的「默认一小时」。
+1. **解析层修生成失败**（`ScheduleParsing`）：给 `clockEvidence` 补「X点半」「X点Y分」两支，并用一条不变量把它和 `timePattern` 绑在一起（**凡是 `timePattern` 能匹配且含义规范的词形（时 0–23、分 0–59），`clockEvidence` 都必须解得开，含 `零X` 读法如 `三点零五分` → 03:05；越界取值与畸形写法（`十零`/`一十`/`零十`/`零零五`）按原路径确定性拒绝**——现测试里一个「点半」样例都没有，这个分叉就是这么长出来的）；prompt 侧把「只有原文出现钟点时才给 `end`（否则 `end` 与 `endEvidence` 都留空）」写死，让时长类说法落回应用既有的「默认一小时」。
 2. **表单收口**（`CalendarPanelPages.editorPage`）：待办把「截止」与「链接」并成一行（各占半格，两处 `Color.clear` 占位删除；日程的「开始｜结束」「地点｜链接」两行不动）；备注给浅边框与占位文字（**占位复用既有 `calendar.panel.notes` 键**，与「链接」字段同款，不新增本地化键）；`CalendarSourceGeneration` 的原文区默认收高到 3 行（内容更多时框内滚动）；+3 号后若内容高超过 400，允许在**不改尺寸**的前提下把行距从 10 收到 8 腾出 ≤12pt。
 3. **生成区三态**：主按钮常驻同一格（同一 x、76 × 26pt），文案随状态换「生成 / 取消 / 重新生成」；外观改成白 14% 圆角胶囊 + 白字；失败行只留「一行红字 + 改为手工填写」。
 4. **字号 +3 号**：编辑页标签 13 / 输入框 15 / 日期控件 13（`controlSize` small→regular）/ 大文本编辑器 16 / 按钮与状态文字 13；列表卡片标题 15、次要 13。
@@ -63,7 +63,7 @@
 // 解析层（services/ScheduleParsing.swift）
 private static func clockEvidence(_ evidence: String, inheritedPeriod: String? = nil) -> String?
 //   新增分支：`X点半` → HH:30；`X点Y分` → HH:YY（Y 支持中文数字与阿拉伯数字）
-//   不变量（用例钉住）：timePattern 能匹配且取值合法（时 0–23、分 0–59）的每一种词形，clockEvidence 都返回非 nil；非法取值确定性拒绝
+//   不变量（用例钉住）：timePattern 能匹配且含义规范的每一种词形（时 0–23、分 0–59，含 零X 读法）clockEvidence 都返回非 nil；越界取值与畸形写法（十零/一十/零十/零零五）确定性拒绝
 
 // 视图（components/Calendar/CalendarPanelPages.swift）
 private var editorPage: some View          // 待办：`截止｜链接` 并成一行；删除两处 Color.clear 占位
