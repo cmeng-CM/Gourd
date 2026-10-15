@@ -761,34 +761,81 @@ private struct MeetingActionIcon: NSViewRepresentable {
     }
 }
 
-/// Editable text grows inside the page's single ScrollView rather than owning a nested scroll view.
+/// Editable text sits in its own clip view: the box follows the text up to `maximumLines` and then
+/// holds that height, so a pasted paragraph scrolls inside the box instead of stretching the form
+/// (docs/49 D-04). The box draws its own outline + fill, so an empty field still reads as a place
+/// to type. The page keeps a single scroll axis around it.
 struct CalendarGrowingTextEditor: NSViewRepresentable {
     @EnvironmentObject private var vm: DynamicIslandViewModel
     @Binding var text: String
     var label: String
+    /// 空框时在框内画的占位文字（本地化键；复用既有键，不新增）。nil = 不画。
+    var placeholder: String?
     var onFocus: (Bool) -> Void
+    /// 可见高度上限（行数）：原文区与备注都收在这一档，再多就框内滚动。
+    var maximumLines: Int = CalendarEditableTextView.defaultMaximumLines
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeNSView(context: Context) -> CalendarEditableTextView {
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = true
+        scroll.backgroundColor = NSColor.white.withAlphaComponent(CalendarEditableTextView.fillAlpha)
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = CalendarEditableTextView.cornerRadius
+        scroll.layer?.cornerCurve = .continuous
+        scroll.layer?.borderWidth = 1
+        scroll.layer?.borderColor = NSColor.white
+            .withAlphaComponent(CalendarEditableTextView.borderAlpha).cgColor
+        scroll.layer?.masksToBounds = true
+
         let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
         view.delegate = context.coordinator
         view.onFocus = onFocus
+        // 底色与描边由外层框负责：文档视图比框高，自己画底会把描边一起滚走。
+        view.drawsBackground = false
+        // 文档视图只在这一处放开纵向自增长（SwiftUI 管的是**框**的高度，见 sizeThatFits）：
+        // 内容超过 3 行时它比框高，多出来的部分在框内滚动（D-04）。
+        view.isVerticallyResizable = true
+        view.autoresizingMask = [.width]
+        view.minSize = .zero
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         view.interaction = CalendarTextInteraction(
             setProtection: { [weak vm] in vm?.setAutoCloseSuppression($0, token: $1) },
             recheckHover: { [weak vm] in vm?.shouldRecheckHover.toggle() })
         view.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
-        return view
+        view.placeholder = placeholder.map { NSLocalizedString($0, comment: "") }
+        scroll.documentView = view
+        return scroll
     }
-    func updateNSView(_ view: CalendarEditableTextView, context: Context) {
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        guard let view = scroll.documentView as? CalendarEditableTextView else { return }
         view.onFocus = onFocus
-        if view.string != text { view.string = text }
+        if view.string != text {
+            view.string = text
+            view.needsDisplay = true
+        }
         view.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
+        view.placeholder = placeholder.map { NSLocalizedString($0, comment: "") }
     }
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: CalendarEditableTextView, context: Context) -> CGSize? {
-        nsView.measuredSize(width: proposal.width ?? 200)
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 200
+        guard let view = nsView.documentView as? CalendarEditableTextView else { return nil }
+        let height = view.cappedHeight(lines: maximumLines)
+        // 内容真实高：不设下限（下限就是框高，若一并设进来就永远测不出「内容比框高」）。
+        let content = CalendarTextMeasurement.size(of: view, width: width, minimumHeight: 0)
+        // 文档视图撑满可见框，内容更高时更高；超出的部分靠 clip view 滚动到达。
+        let document = NSSize(width: width, height: max(content.height, height))
+        if view.frame.size != document { view.setFrameSize(document) }
+        return CGSize(width: width, height: height)
     }
-    static func dismantleNSView(_ view: CalendarEditableTextView, coordinator: Coordinator) { view.stop() }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        (scroll.documentView as? CalendarEditableTextView)?.stop()
+    }
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CalendarGrowingTextEditor
         init(_ parent: CalendarGrowingTextEditor) { self.parent = parent }
@@ -801,8 +848,18 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
 
 @MainActor
 final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
+    /// 大文本框的视觉与高度口径（docs/49 D-04）：圆角 6 + 白 6% 底 + 白 18% 描边（由外层框画），
+    /// 可见高度 = `defaultMaximumLines` 行（见 `cappedHeight`）。
+    static let cornerRadius: CGFloat = 6
+    static let fillAlpha: CGFloat = 0.06
+    static let borderAlpha: CGFloat = 0.18
+    static let defaultMaximumLines = 3
+    static let defaultFontSize: CGFloat = NSFont.systemFontSize
+
     var onFocus: (Bool) -> Void = { _ in }
     var interaction: CalendarTextInteraction?
+    /// 空框时画的占位文字（D-04：新建时也看得出这里能写字）。
+    var placeholder: String? { didSet { if placeholder != oldValue { needsDisplay = true } } }
     private var ownedMenus: [NSMenu] = []
     private var resignObserver: NSObjectProtocol?
 
@@ -826,11 +883,11 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         wantsLayer = true
         layer?.masksToBounds = true
         drawsBackground = true
-        backgroundColor = NSColor.white.withAlphaComponent(0.06)
+        backgroundColor = NSColor.white.withAlphaComponent(Self.fillAlpha)
         textColor = .white
         insertionPointColor = .white
         allowsUndo = true
-        font = .systemFont(ofSize: NSFont.systemFontSize)
+        font = .systemFont(ofSize: Self.defaultFontSize)
         textContainerInset = NSSize(width: 4, height: 4)
         self.textContainer?.lineFragmentPadding = 0
         self.textContainer?.widthTracksTextView = true
@@ -840,8 +897,18 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// 框的可见高度：至少 `cappedHeight`（短内容也撑满 3 行框）。
     func measuredSize(width: CGFloat) -> CGSize {
-        CalendarTextMeasurement.size(of: self, width: width, minimumHeight: 60)
+        CalendarTextMeasurement.size(of: self, width: width, minimumHeight: cappedHeight())
+    }
+    /// 可见高度**就是** `defaultMaximumLines` 行（含上下内缩）：不是下限而是定高——内容更多时框内滚动。
+    /// 行高取布局管理器的默认行高（≈16pt @13），`boundingRectForFont` 会把字体的升部余量算进去（≈17pt），
+    /// 三行就多出 3pt —— 那 3pt 正是编辑档可视区容不下的部分。
+    func cappedHeight(lines: Int = CalendarEditableTextView.defaultMaximumLines) -> CGFloat {
+        let font = self.font ?? .systemFont(ofSize: Self.defaultFontSize)
+        let measured = layoutManager?.defaultLineHeight(for: font) ?? 0
+        let lineHeight = measured > 0 ? measured : ceil(font.boundingRectForFont.height)
+        return ceil(lineHeight) * CGFloat(lines) + 2 * textContainerInset.height
     }
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -855,7 +922,18 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         NSGraphicsContext.saveGraphicsState()
         bounds.clip()
         super.draw(dirtyRect.intersection(bounds))
+        drawPlaceholderIfEmpty()
         NSGraphicsContext.restoreGraphicsState()
+    }
+    /// 占位文字用与正文同一个 font 与内缩画，位置天然与输入起点重合。
+    private func drawPlaceholderIfEmpty() {
+        guard string.isEmpty, let placeholder, !placeholder.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: Self.defaultFontSize),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.35)
+        ]
+        (placeholder as NSString).draw(at: NSPoint(x: textContainerInset.width, y: textContainerInset.height),
+                                      withAttributes: attributes)
     }
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()

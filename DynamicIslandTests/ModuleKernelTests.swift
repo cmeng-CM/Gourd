@@ -15318,8 +15318,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // 抽出的「一格」helper：标签在上、控件在下。
         XCTAssertTrue(panel.contains(
             "private func fieldRow(_ label: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View"))
-        XCTAssertEqual(panel.components(separatedBy: "fieldRow(").count - 1, 6,
-                       "1 处声明 + 5 处调用（标题 / 全天 / 地点 / 链接 / 备注）")
+        XCTAssertEqual(panel.components(separatedBy: "fieldRow(").count - 1, 5,
+                       "1 处声明 + 4 处调用（标题 / 全天 / 地点 / 链接）——备注改由框自身承担落点（T2 本轮）")
         // 三组并排：目标｜全天、开始｜结束（待办一格）、地点｜链接（待办无地点）。
         XCTAssertTrue(panel.contains("targetPicker(draft).frame(maxWidth: .infinity, alignment: .leading)"))
         XCTAssertTrue(panel.contains(#"fieldRow("All-day")"#))
@@ -15328,7 +15328,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(panel.contains(#"dateRow("calendar.panel.dueDate""#))
         XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.location")"#))
         XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.url")"#))
-        XCTAssertTrue(panel.contains(#"fieldRow("calendar.panel.notes")"#))
+        XCTAssertTrue(panel.contains(#"placeholder: "calendar.panel.notes""#),
+                      "备注的落点在框内（占位文字复用既有键，T2 本轮）")
         // 类型控件新建可点、编辑锁定（`disabled` 而不是整段不渲染）。
         XCTAssertTrue(panel.contains(#".accessibilityIdentifier("calendar-kind")"#))
         XCTAssertTrue(panel.contains(".disabled(draft.eventID != nil)"))
@@ -15502,6 +15503,96 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertGreaterThan(looseSidebar.fittingSize.height, StandaloneCalendarView.editorPaneHeight,
                              "对照：左栏不钉高时理想高 > 400（清单条目多）——证 400 是钉出来的")
     }
+
+    // MARK: - T2（本轮 docs/49）：待办表单收口——并一行、备注落点、原文区收高（V3 / V4）
+
+    /// 从某个视图往上数的所有 `NSScrollView` 祖先（最近的在最前）。
+    private func ancestorScrollViews(of view: NSView) -> [NSScrollView] {
+        var result: [NSScrollView] = []
+        var node: NSView? = view
+        while let current = node {
+            if let scroll = current as? NSScrollView { result.append(scroll) }
+            node = current.superview
+        }
+        return result
+    }
+
+    /// 表单可视区 = 编辑档 400 减去表头与底部动作后留给表单的那一块（页级滚动视图，宿主侧矩形）。
+    private func formRegion(in host: NSView) -> NSRect? {
+        guard let notes = notesEditors(in: host).first else { return nil }
+        return ancestorScrollViews(of: notes).last.map { $0.convert($0.bounds, to: host) }
+    }
+
+    /// V3 / D-03：待办表单不再留空半格——「截止」与「链接」并成一行，`Color.clear` 占位整条删掉；
+    /// 挂载后能测到的两格仍是 (内容宽 − 8) / 2。
+    func testReminderFormMergesDueDateAndLinkWithoutBlankHalfCells() throws {
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertFalse(panel.contains("Color.clear"), "空半格占位必须整条删掉（D-03）")
+        XCTAssertFalse(panel.contains("minimumBoxHeight"), "旧的高度下限常量已随 D-04 的定高改掉")
+        XCTAssertTrue(panel.contains(
+            #"dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)"#),
+                      "待办仍要有「截止」这一格")
+
+        let (session, manager) = editorSession(kind: .reminder, editing: false)
+        session.draft?.isAllDay = false
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
+        settle(host)
+        let notes = try XCTUnwrap(notesEditors(in: host).first)
+        let content = notes.bounds.width
+        let fields = collectViews(host) { ($0 as? NSTextField)?.isEditable == true }
+            .compactMap { $0 as? NSTextField }
+            .map { $0.bounds.width }
+            .sorted()
+        XCTAssertEqual(fields.count, 2, "待办只有「标题」与「链接」两个输入框（地点那格不渲染，也不留空占位）")
+        XCTAssertEqual(fields[0], (content - 8) / 2, accuracy: 1.5, "「链接」与「截止」并排，各占半格")
+        XCTAssertEqual(fields[1], content, accuracy: 1.5, "「标题」整宽")
+    }
+
+    /// V3 / D-04：备注有可见落点——编辑器住进带描边的框（白 18% 描边、圆角 6），空框时框内画占位文字
+    /// （复用 `calendar.panel.notes` 键，不新增本地化键）。
+    func testNotesEditorDrawsAVisibleBoxWithPlaceholderInsideIt() throws {
+        let (session, manager) = editorSession(kind: .reminder, editing: false)
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
+        settle(host)
+        let notes = try XCTUnwrap(notesEditors(in: host).first)
+        let box = try XCTUnwrap(notes.enclosingScrollView, "备注编辑器必须住在带框的框里（D-04）")
+        XCTAssertEqual(box.layer?.borderWidth, 1)
+        XCTAssertEqual(box.layer?.cornerRadius, CalendarEditableTextView.cornerRadius)
+        // `NSColor.components` 在非 RGB 色彩空间下长度不定（灰阶只有 2 个）——先转 sRGB 再读分量。
+        let border = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(box.layer?.borderColor))?
+            .usingColorSpace(.sRGB))
+        XCTAssertEqual(Double(border.redComponent), 1, accuracy: 0.01)
+        XCTAssertEqual(Double(border.alphaComponent), Double(CalendarEditableTextView.borderAlpha), accuracy: 0.01,
+                       "描边是白 18%（浅到不抢内容、又看得出落点）")
+        XCTAssertEqual(box.frame.height, notes.cappedHeight(), accuracy: 0.5, "框高 = 3 行（D-04）")
+        XCTAssertTrue(notes.string.isEmpty)
+        XCTAssertEqual(notes.placeholder, NSLocalizedString("calendar.panel.notes", comment: ""))
+        // 内容更长时框不再长高（封住无限长高），多出来的部分靠框内滚动到达。
+        session.draft?.notes = (1...20).map { "第\($0)行" }.joined(separator: "\n")
+        settle(host)
+        XCTAssertEqual(try XCTUnwrap(notes.enclosingScrollView).frame.height, notes.cappedHeight(), accuracy: 0.5,
+                       "20 行备注也不能把框顶高")
+        XCTAssertGreaterThan(notes.frame.height, notes.cappedHeight(), "文档视图比框高 → 框内可滚动")
+        XCTAssertEqual(notes.enclosingScrollView?.hasVerticalScroller, true)
+    }
+
+    /// V4 / D-03·D-04·D-17：新建待办的表单收进编辑档——内容高 ≤ 400（本轮口径），且**可视区**里
+    /// 备注框是完整的（不是半截）。
+    func testNewReminderFormFitsTheEditorPane() throws {
+        let (session, manager) = editorSession(kind: .reminder, editing: false)
+        session.draft?.isAllDay = false
+        let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
+        settle(host)
+        XCTAssertEqual(host.fittingSize.height, StandaloneCalendarView.editorPaneHeight, accuracy: 1,
+                       "编辑档自然高仍是 400（本轮不动整体尺寸）")
+        let notes = try XCTUnwrap(notesEditors(in: host).first)
+        let box = try XCTUnwrap(notes.enclosingScrollView)
+        let region = try XCTUnwrap(formRegion(in: host), "找不到表单可视区（页级滚动视图）")
+        let boxFrame = box.convert(box.bounds, to: host)
+        XCTAssertLessThanOrEqual(boxFrame.maxY, region.maxY + 0.5,
+                                 "新建待办：备注框底 \(boxFrame.maxY) 必须落在可视区底 \(region.maxY) 之内")
+    }
+
 
 }
 

@@ -368,7 +368,8 @@ struct CalendarPanelPages: View {
     private var editorPage: some View {
         ScrollView(.vertical) {
             if let draft = session.draft {
-                VStack(alignment: .leading, spacing: 10) {
+                // 行距 8（D-17）：+3 号字号下把整页收进 400 的编辑档高——不动字号、控件尺寸与内外边距。
+                VStack(alignment: .leading, spacing: 8) {
                     // 新建可点、编辑锁定（而不是不渲染）：四种入口的版式不再跳。
                     Picker("calendar.panel.kind", selection: kindBinding) {
                         Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
@@ -395,41 +396,34 @@ struct CalendarPanelPages: View {
                         Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    // 开始｜结束（待办时只有「截止」一格）
-                    HStack(spacing: 8) {
-                        if draft.kind == .event {
+                    // 日程：开始｜结束 一行、地点｜链接 一行；待办：截止｜链接 一行（不留任何空半格）
+                    if draft.kind == .event {
+                        HStack(spacing: 8) {
                             dateRow("calendar.panel.start", field: .start, date: draft.start, allDay: draft.isAllDay)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             dateRow("calendar.panel.end", field: .end, date: CalendarPanelDates.includedEnd(of: draft), allDay: draft.isAllDay)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Color.clear.frame(maxWidth: .infinity)
                         }
-                    }
-                    // 地点｜链接（待办没有地点，链接占半宽）
-                    HStack(spacing: 8) {
-                        if draft.kind == .event {
+                        HStack(spacing: 8) {
                             fieldRow("calendar.panel.location") {
                                 TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
                                     .textFieldStyle(.roundedBorder).focused($focusedField, equals: .location)
                                     .accessibilityIdentifier("calendar-location")
                             }
-                        } else {
-                            Color.clear.frame(maxWidth: .infinity)
+                            urlField
                         }
-                        fieldRow("calendar.panel.url") {
-                            TextField("calendar.panel.url", text: urlBinding)
-                                .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
-                                .accessibilityIdentifier("calendar-url")
+                    } else {
+                        HStack(spacing: 8) {
+                            dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            urlField
                         }
                     }
-                    fieldRow("calendar.panel.notes") {
-                        CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
-                                                  onFocus: setNativeEditorFocus)
-                            .accessibilityIdentifier("calendar-notes")
-                    }
+                    // 备注的落点由框本身承担（浅边框 + 框内占位文字，D-04）：不再另起一行标签。
+                    CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
+                                              placeholder: "calendar.panel.notes",
+                                              onFocus: setNativeEditorFocus)
+                        .accessibilityIdentifier("calendar-notes")
                     confirmationControls(draft)
                     if !hasAccess { Text("Calendar access is required.").font(.caption).foregroundStyle(.secondary) }
                 }
@@ -450,6 +444,15 @@ struct CalendarPanelPages: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 「链接」一格：日程的「地点｜链接」行与待办的「截止｜链接」行共用，避免两处漂移。
+    private var urlField: some View {
+        fieldRow("calendar.panel.url") {
+            TextField("calendar.panel.url", text: urlBinding)
+                .textFieldStyle(.roundedBorder).focused($focusedField, equals: .url)
+                .accessibilityIdentifier("calendar-url")
+        }
     }
 
     private func setNativeEditorFocus(_ focused: Bool) {
