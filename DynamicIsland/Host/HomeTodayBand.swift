@@ -74,6 +74,32 @@ enum HomeTodayBandLayout {
     /// 两行共用的左右内缩（与块的内容内缩同档：内容不贴板缘——本条没有板，但两侧与块的
     /// 内容左缘对齐，整页才是一条竖线）。
     static let horizontalInset: CGFloat = HomeBlockChrome.contentInsetHorizontal
+
+    // MARK: 三段式（2026-10-16 变体 A：胶囊分组）
+    //
+    // 段间与段内的样式档集中在这里；视图只引用名字（与 `MonthGridLayout` 的写法一致）。
+
+    /// 三段之间的间距。
+    static let segmentSpacing: CGFloat = 12
+    /// 胶囊圆角。
+    static let pillRadius: CGFloat = 10
+    /// 日期段胶囊的高度（12pt 文字 + 上下各 4）。
+    static let datePillHeight: CGFloat = 24
+    /// 下一个段胶囊的高度（19pt 标题 + 上下各 5；比日期段高一档）。
+    static let nextPillHeight: CGFloat = 30
+    /// 倒计时胶囊的高度（14pt 文字 + 上下各 7）与左右内边距。
+    static let countdownPillHeight: CGFloat = 28
+    static let countdownPillPadding: CGFloat = 10
+    /// 段② 左缘那条日历色竖条的宽度。
+    static let nextBarWidth: CGFloat = 3
+    /// 日期段胶囊的底（白 6%）与下一个段胶囊的底（白 10%）——两档不同的「有底」。
+    static let datePillFill: Double = 0.06
+    static let nextPillFill: Double = 0.10
+    /// 农历比公历亮一档（同一段内的层次）。
+    static let datePrimaryOpacity: Double = 0.62
+    static let lunarOpacity: Double = 0.9
+    /// 工作日段（最弱的一档）。
+    static let workdayOpacity: Double = 0.42
 }
 
 // MARK: - 农历（中文专名）
@@ -130,17 +156,20 @@ enum TodayHeadline {
     /// 组装整行。公历与星期走 `Date.FormatStyle`（随语言：en 得 `Oct 10 Sat`、zh 得 `10月10日 周六`）；
     /// 农历与节假日名是中文专名（口径 ①），取不到就整段略去。
     static func text(for date: Date, calendar: Calendar = .autoupdatingCurrent) -> String {
-        var parts = [
+        let parts = parts(for: date, calendar: calendar)
+        return ([parts.weekday] + [parts.lunar, parts.holiday].compactMap { $0 }).joined(separator: " · ")
+    }
+
+    /// 拆成三段（2026-10-16 变体 A：同一段里分两档亮度）——公历+星期 / 农历 / 节假日。
+    /// 农历与节假日取不到时给 nil，调用方**整段略去**（口径 ①/②：不画占位的破折号）。
+    static func parts(
+        for date: Date, calendar: Calendar = .autoupdatingCurrent
+    ) -> (weekday: String, lunar: String?, holiday: String?) {
+        let weekday = [
             date.formatted(.dateTime.month(.abbreviated).day()),
             date.formatted(.dateTime.weekday(.abbreviated)),
-        ]
-        if let lunar = LunarDateLabel.text(for: date) {
-            parts.append(lunar)
-        }
-        if let holiday = holidayLabel(for: date, calendar: calendar) {
-            parts.append(holiday)
-        }
-        return parts.joined(separator: " · ")
+        ].joined(separator: " · ")
+        return (weekday, LunarDateLabel.text(for: date), holidayLabel(for: date, calendar: calendar))
     }
 
     /// 节假日那一段：**名 + 是否调休上班**（`国庆节（班）` / `春节`）。表外年份返回 nil（口径 ②）。
@@ -218,17 +247,25 @@ enum TodayNextEvent {
         return .upcoming(upcoming, minutesUntilStart: minutes(from: now, to: upcoming.start, calendar: calendar))
     }
 
-    /// 左侧大字：`下一个 · 评审会 · 14:00–15:00`（没有时 `今天没有更多日程`）。
-    static func headline(for pick: Pick, calendar: Calendar = .autoupdatingCurrent) -> String {
-        guard let event = pick.event else { return localized("home.today.noMore") }
+    /// 段②的三段文字（2026-10-16 变体 A：前缀 / 标题 / 时间各一档样式；倒计时由 `countdown(for:)` 给）。
+    /// `.none` 时只给一句「今天没有更多日程」（前缀与时间都为 nil）。
+    static func parts(
+        for pick: Pick, calendar: Calendar = .autoupdatingCurrent
+    ) -> (prefix: String?, title: String, time: String?) {
+        guard let event = pick.event else { return (nil, localized("home.today.noMore"), nil) }
         let prefix: String
         switch pick {
         case .ongoing: prefix = localized("home.today.now")
         default: prefix = localized("home.today.next")
         }
-        return [prefix, event.title, timeRange(of: event, calendar: calendar)]
-            .filter { !$0.isEmpty }
-            .joined(separator: " · ")
+        return (prefix, event.title, timeRange(of: event, calendar: calendar))
+    }
+
+    /// 拼成一行（纯文案口径，用例直接钉）：`下一个 · 评审会 · 14:00–15:00`（没有时 `今天没有更多日程`）。
+    static func headline(for pick: Pick, calendar: Calendar = .autoupdatingCurrent) -> String {
+        let parts = parts(for: pick, calendar: calendar)
+        return ([parts.prefix, parts.title, parts.time].compactMap { $0 }
+            .filter { !$0.isEmpty }).joined(separator: " · ")
     }
 
     /// 时间列（与待办块的日程行同一条口径：全天 → `全天`；定时 → `9:30` 或 `9:30 – 10:30`）。
@@ -353,42 +390,105 @@ struct HomeTodayBand: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    private func rows(now: Date) -> some View {
-        let events = HomeTodayEvents.filtered(calendarManager.todayEvents, now: now, hideAllDayEvents: hideAllDayEvents)
-        let pick = TodayNextEvent.pick(events: events, now: now)
-        // **一行四段**（2026-10-16）：日期 · 下一个（会截断）· 工作日剩余 · 倒计时。
-        return HStack(spacing: 12) {
-            Text(TodayHeadline.text(for: now))
+    /// 段①：公历 + 星期（白 62%）· 农历（白 90%，同一段内亮一档）· 节假日（同段末尾）。
+    private func dateSegment(now: Date) -> some View {
+        let parts = TodayHeadline.parts(for: now)
+        return HStack(spacing: 6) {
+            Text(parts.weekday)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.62))
+                .foregroundStyle(.white.opacity(HomeTodayBandLayout.datePrimaryOpacity))
                 .lineLimit(1)
-                .truncationMode(.tail)
                 .fixedSize()
+            if let lunar = parts.lunar {
+                Text(lunar)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(HomeTodayBandLayout.lunarOpacity))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if let holiday = parts.holiday {
+                Text(holiday)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(HomeTodayBandLayout.datePrimaryOpacity))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: HomeTodayBandLayout.datePillHeight)
+        .background(RoundedRectangle(cornerRadius: HomeTodayBandLayout.pillRadius, style: .continuous)
+            .fill(.white.opacity(HomeTodayBandLayout.datePillFill)))
+    }
 
-            Text(TodayNextEvent.headline(for: pick))
-                .font(.system(size: 20, weight: .semibold))
+    /// 段②：「下一个」前缀 · 标题（会截断的唯一一段）· 起止时间 · 倒计时蓝胶囊；左缘一条事件日历色。
+    private func nextSegment(pick: TodayNextEvent.Pick) -> some View {
+        let parts = TodayNextEvent.parts(for: pick)
+        return HStack(spacing: 8) {
+            if let prefix = parts.prefix {
+                Text(prefix)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(HomeTodayBandLayout.workdayOpacity + 0.1))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            Text(parts.title)
+                .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .layoutPriority(1)
-
-            Spacer(minLength: 12)
-
-            Text(WorkdayRemainderLine.text(now: now))
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.45))
-                .monospacedDigit()
-                .lineLimit(1)
-                .fixedSize()
-
-            if let countdown = TodayNextEvent.countdown(for: pick) {
-                Text(countdown)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+            if let time = parts.time {
+                Text(time)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.72))
                     .monospacedDigit()
-                    .foregroundStyle(.blue)
                     .lineLimit(1)
                     .fixedSize()
             }
+            if let countdown = TodayNextEvent.countdown(for: pick) {
+                Text(countdown)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, HomeTodayBandLayout.countdownPillPadding)
+                    .frame(height: HomeTodayBandLayout.countdownPillHeight)
+                    // 强调色（默认蓝，跟随「外观 → 强调色」设置）：整条带里唯一的强调色（设计图 F5 的口径）。
+                    .background(Capsule().fill(Color.effectiveAccent))
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .frame(height: HomeTodayBandLayout.nextPillHeight)
+        .background(RoundedRectangle(cornerRadius: HomeTodayBandLayout.pillRadius, style: .continuous)
+            .fill(.white.opacity(HomeTodayBandLayout.nextPillFill)))
+        .overlay(alignment: .leading) {
+            // 左缘那条日历色（只有真的有一条日程时才画：没有事件就没有颜色）。
+            if let event = pick.event {
+                Rectangle()
+                    .fill(Color(event.calendar.color))
+                    .frame(width: HomeTodayBandLayout.nextBarWidth)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: HomeTodayBandLayout.pillRadius, style: .continuous))
+    }
+
+    private func rows(now: Date) -> some View {
+        let events = HomeTodayEvents.filtered(calendarManager.todayEvents, now: now, hideAllDayEvents: hideAllDayEvents)
+        let pick = TodayNextEvent.pick(events: events, now: now)
+        // **三段式**（2026-10-16 变体 A，设计图 F5）：① 日期（白 6% 胶囊）② 下一个 + 倒计时
+        // （白 10% 胶囊 + 事件日历色左条，倒计时做蓝胶囊贴在段内右端）③ 工作日（无底，最弱一档）。
+        return HStack(spacing: HomeTodayBandLayout.segmentSpacing) {
+            dateSegment(now: now)
+            nextSegment(pick: pick)
+            Spacer(minLength: HomeTodayBandLayout.segmentSpacing)
+            Text(WorkdayRemainderLine.text(now: now))
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(HomeTodayBandLayout.workdayOpacity))
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
         }
         .frame(height: HomeTodayBandLayout.nextLineHeight)
         // 内容左缘与块的**内容左缘**对齐（块的内容内缩 5 + 板 = 块框，见 `HomeBlockChrome`）。

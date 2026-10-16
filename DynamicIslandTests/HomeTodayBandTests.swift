@@ -37,6 +37,60 @@ import XCTest
 @MainActor
 final class HomeTodayBandTests: XCTestCase {
 
+    /// 2026-10-16（设计图 F5 变体 A）：日期段拆三段（公历+星期 / 农历 / 节假日），
+    /// 「下一个」段拆三段（前缀 / 标题 / 时间）——视图按这三份分别给样式，纯函数这一侧要钉住。
+    func testSegmentedTextsSplitIntoTheirOwnParts() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "zh_CN")
+        let nationalDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 1, hour: 9)))
+        let parts = TodayHeadline.parts(for: nationalDay, calendar: calendar)
+        XCTAssertTrue(parts.weekday.contains("10月1日"), "\(parts.weekday)")
+        XCTAssertTrue(parts.weekday.contains("周"), "公历与星期在同一段里")
+        XCTAssertEqual(parts.lunar, "八月廿一", "农历单独一段（2026-10-01 = 八月廿一）")
+        XCTAssertNotNil(parts.holiday, "国庆节那天有节假日名")
+        XCTAssertEqual([parts.weekday, parts.lunar, parts.holiday].compactMap { $0 }.joined(separator: " · "),
+                       TodayHeadline.text(for: nationalDay, calendar: calendar),
+                       "拼起来与整行文案逐字一致（视图拆开画、旧口径不断）")
+
+        let event = EventModel(
+            id: "segmented", start: nationalDay, end: nationalDay.addingTimeInterval(3600),
+            title: "评审会", location: nil, notes: nil, url: nil, isAllDay: false, type: .event(.unknown),
+            calendar: CalendarModel(accountName: "F", id: "f", title: "F", color: .systemBlue,
+                                    isSubscribed: false, isReminder: false),
+            participants: [], timeZone: nil, hasRecurrenceRules: false, priority: nil,
+            conferenceURL: nil, isDetached: false
+        )
+        let upcoming = TodayNextEvent.parts(for: .upcoming(event, minutesUntilStart: 20), calendar: calendar)
+        XCTAssertEqual(upcoming.prefix, TodayNextEvent.localized("home.today.next"))
+        XCTAssertEqual(upcoming.title, "评审会")
+        XCTAssertNotNil(upcoming.time)
+        let ongoing = TodayNextEvent.parts(for: .ongoing(event, minutesUntilEnd: 5), calendar: calendar)
+        XCTAssertEqual(ongoing.prefix, TodayNextEvent.localized("home.today.now"), "进行中换前缀")
+        let none = TodayNextEvent.parts(for: .none, calendar: calendar)
+        XCTAssertNil(none.prefix, "没有下一条：不画前缀")
+        XCTAssertEqual(none.title, TodayNextEvent.localized("home.today.noMore"))
+        XCTAssertNil(none.time, "也不画时间")
+    }
+
+    /// 三段式的样式档集中在 `HomeTodayBandLayout`：整带 32、三段间距 12、两个胶囊两档底色、
+    /// 倒计时胶囊与「下一个」胶囊的高度——视图只引用名字。
+    func testSegmentedBandStyleTokens() {
+        XCTAssertEqual(HomeTodayBandLayout.height, 32, "三段一行：整带 32pt")
+        XCTAssertEqual(HomeTodayBandLayout.segmentSpacing, 12)
+        XCTAssertEqual(HomeTodayBandLayout.pillRadius, 10)
+        XCTAssertEqual(HomeTodayBandLayout.datePillHeight, 24, "日期段胶囊 24（12pt 文字 + 上下 4）")
+        XCTAssertEqual(HomeTodayBandLayout.nextPillHeight, 30, "下一个段胶囊 30（19pt 标题 + 上下 5）")
+        XCTAssertEqual(HomeTodayBandLayout.countdownPillHeight, 28)
+        XCTAssertEqual(HomeTodayBandLayout.nextBarWidth, 3, "左侧日历色条 3pt")
+        XCTAssertLessThan(HomeTodayBandLayout.datePillFill, HomeTodayBandLayout.nextPillFill,
+                          "两段的底是两档（下一个更实一点）")
+        XCTAssertGreaterThan(HomeTodayBandLayout.lunarOpacity, HomeTodayBandLayout.datePrimaryOpacity,
+                             "同一段里农历比公历亮一档")
+        XCTAssertLessThan(HomeTodayBandLayout.workdayOpacity, HomeTodayBandLayout.datePrimaryOpacity,
+                          "工作日段是最弱的一档")
+    }
+
     /// 固定日历：格里高利 + GMT + `en_US_POSIX`（构造夹具时刻的时区与语言都钉死，同文件其余日历用例同口径）。
     private func fixtureCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
