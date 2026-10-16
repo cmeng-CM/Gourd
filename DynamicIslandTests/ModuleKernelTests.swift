@@ -16279,6 +16279,7 @@ final class CalendarPageLayoutTests: XCTestCase {
     }
 }
 
+
 // MARK: - 歌词取词的查询阶梯与失败分类（2026-10-16 / docs/50）
 
 /// 用例的素材全部来自**本机实测**（2026-10-16：`mediaremote-adapter get` 读到 LX Music 的
@@ -16286,13 +16287,16 @@ final class CalendarPageLayoutTests: XCTestCase {
 /// - 「慕夏」的歌手报成 `邓寓君(等什么君)`，词库里存的是 `等什么君`——**同样的歌，字面量差一个字就查不到**；
 /// - 「我也可以是流浪诗人」的歌手报成 `好妹妹乐队`，词库里是 `好妹妹`；
 /// - 「素颜」的歌手报成 `许嵩、何曼婷`，词库里是 `许嵩&何曼婷`（分隔符不同）；
-/// - 「樱花(现场吉他版）」在词库里只有 `樱花` 这个名字，而且上游给的开括号是半角、闭括号是全角。
+/// - 「樱花(现场吉他版）」在词库里只有 `樱花` 这个名字，而且上游给的开括号是半角、闭括号是全角；
+/// - 「如果当时 / 许嵩」按歌手查**空**，但词库里有它——存的名字是繁体的 `許嵩` 与 `Xu, Song`
+///   （时长 316 / 314 / 317）；「丢了幸福的猪 (烟嗓版) / 穆菲菲」词库里是 `姜玉阳` 那一版。
+///   这两条就是「只按歌名 + 时长」那一档存在的理由。
 final class LyricsQueryPlannerTests: XCTestCase {
 
     // MARK: 阶梯
 
     func testExactQueryComesFirstAndOnlyOnce() {
-        let queries = LyricsQueryPlanner.variants(title: "慕夏", artist: "邓寓君(等什么君)")
+        let queries = LyricsQueryPlanner.plan(title: "慕夏", artist: "邓寓君(等什么君)")
         XCTAssertEqual(queries.first?.isExact, true, "原样那条恒在第一——它承载既有的打分匹配")
         XCTAssertEqual(queries.first?.title, "慕夏")
         XCTAssertEqual(queries.first?.artist, "邓寓君(等什么君)")
@@ -16300,27 +16304,27 @@ final class LyricsQueryPlannerTests: XCTestCase {
     }
 
     func testArtistAliasInsideParenthesesIsQueried() {
-        let queries = LyricsQueryPlanner.variants(title: "慕夏", artist: "邓寓君(等什么君)")
-        XCTAssertTrue(queries.contains { $0.artist == "等什么君" && !$0.isExact },
+        let queries = LyricsQueryPlanner.plan(title: "慕夏", artist: "邓寓君(等什么君)")
+        XCTAssertTrue(queries.contains { $0.artist == "等什么君" && $0.kind == .artistVariant },
                       "括号里的别名（词库里就是这个）要成为一条候选：\(queries.map(\.artist))")
         XCTAssertTrue(queries.contains { $0.artist == "邓寓君" }, "去掉括号的原名也是一条候选")
     }
 
     func testBandSuffixIsStripped() {
-        let queries = LyricsQueryPlanner.variants(title: "我也可以是流浪诗人", artist: "好妹妹乐队")
-        XCTAssertTrue(queries.contains { $0.artist == "好妹妹" && !$0.isExact },
+        let queries = LyricsQueryPlanner.plan(title: "我也可以是流浪诗人", artist: "好妹妹乐队")
+        XCTAssertTrue(queries.contains { $0.artist == "好妹妹" && $0.kind == .artistVariant },
                       "团体后缀（乐队）要去掉：\(queries.map(\.artist))")
     }
 
     func testCollaboratorsAreSplit() {
-        let queries = LyricsQueryPlanner.variants(title: "素颜", artist: "许嵩、何曼婷")
-        XCTAssertTrue(queries.contains { $0.artist == "许嵩" && !$0.isExact }, "多歌手要拆开各问一遍")
-        XCTAssertTrue(queries.contains { $0.artist == "何曼婷" && !$0.isExact })
+        let queries = LyricsQueryPlanner.plan(title: "素颜", artist: "许嵩、何曼婷")
+        XCTAssertTrue(queries.contains { $0.artist == "许嵩" && $0.kind == .artistVariant }, "多歌手要拆开各问一遍")
+        XCTAssertTrue(queries.contains { $0.artist == "何曼婷" && $0.kind == .artistVariant })
     }
 
     func testTitleVersionTagIsStripped() {
-        let queries = LyricsQueryPlanner.variants(title: "樱花(现场吉他版）", artist: "茶季杨")
-        XCTAssertTrue(queries.contains { $0.title == "樱花" && !$0.isExact },
+        let queries = LyricsQueryPlanner.plan(title: "樱花(现场吉他版）", artist: "茶季杨")
+        XCTAssertTrue(queries.contains { $0.title == "樱花" && $0.kind == .artistVariant },
                       "尾部版本标注要去掉（注意这里的闭括号是全角、开括号是半角）：\(queries.map(\.title))")
         XCTAssertFalse(queries.contains { $0.title.isEmpty })
     }
@@ -16332,22 +16336,42 @@ final class LyricsQueryPlannerTests: XCTestCase {
         XCTAssertTrue(LyricsQueryPlanner.titleVariants("Rock (Live").isEmpty, "只有闭括号、没有开括号 → 不剥")
     }
 
+    func testTitleOnlyTierIsAlwaysLastAndSingle() {
+        for (title, artist) in [("如果当时", "许嵩"), ("慕夏", "邓寓君(等什么君)"), ("某首歌 (Live)", "甲、乙乐队")] {
+            let queries = LyricsQueryPlanner.plan(title: title, artist: artist)
+            let titleOnly = queries.filter { $0.kind == .titleOnly }
+            XCTAssertEqual(titleOnly.count, 1, "「只按歌名」那一档只许有一条：\(title)")
+            XCTAssertEqual(queries.last?.kind, .titleOnly, "它永远排最后（闸最松）：\(title)")
+            XCTAssertEqual(titleOnly.first?.artist, "", "这一档不带歌手")
+        }
+    }
+
+    func testTitleOnlyTierUsesTheVersionTagStrippedTitle() {
+        let queries = LyricsQueryPlanner.plan(title: "丢了幸福的猪 (烟嗓版)", artist: "穆菲菲")
+        XCTAssertEqual(queries.last?.kind, .titleOnly)
+        XCTAssertEqual(queries.last?.title, "丢了幸福的猪", "词库里存的是规范名，不带版本标注")
+        let plain = LyricsQueryPlanner.plan(title: "如果当时", artist: "许嵩")
+        XCTAssertEqual(plain.last?.title, "如果当时", "没有版本标注就用原样歌名")
+    }
+
     func testQueryCountIsCappedAndDeduplicated() {
-        let queries = LyricsQueryPlanner.variants(title: "某首歌 (Live)", artist: "甲、乙、丙、丁乐队")
+        let queries = LyricsQueryPlanner.plan(title: "某首歌 (Live)", artist: "甲、乙、丙、丁乐队")
         XCTAssertLessThanOrEqual(queries.count, LyricsQueryPlanner.maximumQueryCount,
                                  "一次取词最多问这么多遍（公共免费词库，不许把重试当默认策略）")
         let keys = queries.map { LyricsQueryPlanner.normalizedKey($0.title) + "\u{1}" + LyricsQueryPlanner.normalizedKey($0.artist) }
         XCTAssertEqual(Set(keys).count, keys.count, "候选不许重复")
-        XCTAssertTrue(queries.allSatisfy { !$0.title.isEmpty && !$0.artist.isEmpty })
+        XCTAssertTrue(queries.allSatisfy { !$0.title.isEmpty })
+        XCTAssertTrue(queries.filter { $0.kind != .titleOnly }.allSatisfy { !$0.artist.isEmpty },
+                      "只有最后一档允许没有歌手")
     }
 
     func testMissingArtistOrTitleProducesNoQueries() {
-        XCTAssertTrue(LyricsQueryPlanner.variants(title: "", artist: "茶季杨").isEmpty)
-        XCTAssertTrue(LyricsQueryPlanner.variants(title: "樱花", artist: "  ").isEmpty,
+        XCTAssertTrue(LyricsQueryPlanner.plan(title: "", artist: "茶季杨").isEmpty)
+        XCTAssertTrue(LyricsQueryPlanner.plan(title: "樱花", artist: "  ").isEmpty,
                       "歌名与歌手都要有——没有歌手就只剩歌名，那会撞上同名不同曲")
     }
 
-    // MARK: 归一化与接受闸
+    // MARK: 归一化与两道闸
 
     func testNormalizedKeyIgnoresPunctuationWidthAndCase() {
         XCTAssertEqual(LyricsQueryPlanner.normalizedKey("许嵩、何曼婷"),
@@ -16360,7 +16384,7 @@ final class LyricsQueryPlannerTests: XCTestCase {
     }
 
     func testVariantAcceptanceRequiresTheSameTitle() {
-        let alias = LyricsQueryPlanner.Query(title: "可乐", artist: "赵紫骅", isExact: false)
+        let alias = LyricsQueryPlanner.Query(title: "可乐", artist: "赵紫骅", kind: .artistVariant)
         XCTAssertTrue(LyricsQueryPlanner.accepts(resultTitle: "可乐", resultArtist: "赵紫骅", query: alias))
         XCTAssertFalse(LyricsQueryPlanner.accepts(resultTitle: "可乐", resultArtist: "半吨兄弟", query: alias),
                        "同名不同歌手不许放行（「可乐」在词库里有半吨兄弟的版本）")
@@ -16370,7 +16394,7 @@ final class LyricsQueryPlannerTests: XCTestCase {
     }
 
     func testVariantAcceptanceAllowsArtistContainment() {
-        let alias = LyricsQueryPlanner.Query(title: "慕夏", artist: "等什么君", isExact: false)
+        let alias = LyricsQueryPlanner.Query(title: "慕夏", artist: "等什么君", kind: .artistVariant)
         XCTAssertTrue(LyricsQueryPlanner.accepts(resultTitle: "慕夏", resultArtist: "等什么君", query: alias))
         XCTAssertTrue(LyricsQueryPlanner.accepts(resultTitle: "慕夏", resultArtist: "等什么君 & 伊格赛听", query: alias),
                       "歌手串互相包含即可（`&` / `、` 这类分隔符在归一化里被丢掉）")
@@ -16378,10 +16402,45 @@ final class LyricsQueryPlannerTests: XCTestCase {
     }
 
     func testExactQueryIsNeverGated() {
-        let exact = LyricsQueryPlanner.Query(title: "樱花(现场吉他版）", artist: "茶季杨", isExact: true)
+        let exact = LyricsQueryPlanner.Query(title: "樱花(现场吉他版）", artist: "茶季杨", kind: .exact)
         XCTAssertTrue(LyricsQueryPlanner.accepts(resultTitle: "樱花", resultArtist: "茶季杨", query: exact),
                       "原样那条沿用既有打分匹配，本次不加闸（行为零变化）")
         XCTAssertTrue(LyricsQueryPlanner.accepts(resultTitle: "完全不同的名字", resultArtist: "别人", query: exact))
+    }
+
+    func testTitleOnlyAcceptanceRequiresSameTitleAndCloseDuration() {
+        // 实测：词库里「如果当时」是 316 / 314 / 317，本机报的时长在这一档附近。
+        XCTAssertTrue(LyricsQueryPlanner.acceptsTitleOnly(
+            resultTitle: "如果当时", queryTitle: "如果当时", duration: 316, trackDuration: 318
+        ), "差 2s 要放行（同一版录音的秒级误差）")
+        XCTAssertFalse(LyricsQueryPlanner.acceptsTitleOnly(
+            resultTitle: "如果当时", queryTitle: "如果当时", duration: 316, trackDuration: 322
+        ), "差 6s 不放行（可能是别的版本）")
+        XCTAssertFalse(LyricsQueryPlanner.acceptsTitleOnly(
+            resultTitle: "如果当时（Live）", queryTitle: "如果当时", duration: 316, trackDuration: 316
+        ), "歌名要归一化后相等，不是包含")
+        XCTAssertFalse(LyricsQueryPlanner.acceptsTitleOnly(
+            resultTitle: "さくら (樱花)", queryTitle: "樱花", duration: 316, trackDuration: 316
+        ), "同名不同曲：词库里「樱花」只有日语歌，歌名不是同一个")
+    }
+
+    func testTitleOnlyAcceptanceRejectsUnknownDuration() {
+        for track in [TimeInterval?.none, 0, -1, .nan, .infinity] {
+            XCTAssertFalse(LyricsQueryPlanner.acceptsTitleOnly(
+                resultTitle: "如果当时", queryTitle: "如果当时", duration: 316, trackDuration: track
+            ), "本机时长取不到（\(String(describing: track))）→ 不放行：宁可不出歌词，也不出没验过的歌词")
+        }
+        for result in [TimeInterval?.none, 0, -1, .nan] {
+            XCTAssertFalse(LyricsQueryPlanner.acceptsTitleOnly(
+                resultTitle: "如果当时", queryTitle: "如果当时", duration: result, trackDuration: 316
+            ), "词库那条没有时长（\(String(describing: result))）→ 不放行")
+        }
+    }
+
+    func testDurationToleranceStaysTight() {
+        XCTAssertLessThanOrEqual(LyricsQueryPlanner.durationTolerance, 5,
+                                 "时长容差别放宽到「另一个版本也可能撞进来」的量级")
+        XCTAssertGreaterThan(LyricsQueryPlanner.durationTolerance, 0)
     }
 
     // MARK: 失败分类

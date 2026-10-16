@@ -47,27 +47,44 @@ enum LyricsQueryPlanner {
 
     /// 一次取词里的一条候选查询。
     ///
-    /// `isExact` = 「原样那条」（歌名与歌手都是播放器报上来的原值）。它**恒在第一位**且**唯一**：
-    /// 它沿用既有的打分匹配（行为零变化）；其余变体必须过 `accepts(...)`。
+    /// `kind` 决定它**怎么问**与**结果怎么验**：
+    /// - `.exact`：歌名与歌手都是播放器报上来的原值（恒在第一位且唯一）——沿用既有的打分匹配，
+    ///   行为零变化（不加闸）；
+    /// - `.artistVariant`：歌手串换一种写法（别名/去团体后缀/拆多歌手）或歌名去掉版本标注——
+    ///   结果要过 `accepts(...)` 的「同名 + 相关歌手」闸；
+    /// - `.titleOnly`：**只按歌名问**（不带歌手）——结果要过 `acceptsTitleOnly(...)` 的
+    ///   「同名 + **时长吻合**」闸。这一档存在的理由是实测出来的：同一首歌在词库里常常挂在
+    ///   另一种歌手写法下（「如果当时」在词库里是繁体的 `許嵩` 与 `Xu, Song`；「丢了幸福的猪
+    ///   (烟嗓版)」在词库里是 `姜玉阳` 那一版），只认「歌手串相关」会把这些全判掉。
     struct Query: Equatable {
+        enum Kind: Equatable {
+            case exact
+            case artistVariant
+            case titleOnly
+        }
+
         let title: String
+        /// `.titleOnly` 档为空串（只按歌名问，不带 `artist_name`）。
         let artist: String
-        let isExact: Bool
+        let kind: Kind
+
+        var isExact: Bool { kind == .exact }
     }
 
-    /// 一次取词最多问几条查询（**含**原样那条）。
+    /// 一次取词最多问几条查询（**含**原样那条与最后那条「只按歌名」）。
     ///
     /// 依据：本机实测的歌手串变体最多也就 2～3 条（别名 1 条 + 去后缀 1 条 + 拆多歌手 1 条），
-    /// 4 条足以覆盖；再往上加只会让「词库里确实没有」的歌多打几次网络请求（LRCLIB 是公共免费
-    /// 服务，本机实测已经有 503，不该把重试当默认策略）。
-    static let maximumQueryCount = 4
+    /// 加上原样与「只按歌名」那一档，5 条足以覆盖；再往上加只会让「词库里确实没有」的歌多打几次
+    /// 网络请求（LRCLIB 是公共免费服务，本机实测已经有 503，不该把重试当默认策略）。
+    static let maximumQueryCount = 5
 
-    /// 候选查询阶梯：**原样 → 歌手变体 → 歌名变体**。
+    /// 候选查询阶梯：**原样 → 歌手/歌名变体 → 只按歌名（同名 + 时长）**。
     ///
     /// 顺序有依据：中文歌的查不到更多来自**歌手串**（别名/多歌手/乐队后缀，实测「慕夏」「我也可以
-    /// 是流浪诗人」都是这一类），版本标注（歌名那侧）次之，所以歌手变体排在歌名变体前面——
-    /// 上限 `maximumQueryCount` 截断时，先被砍掉的是收益更低的那一类。
-    static func variants(title: String, artist: String) -> [Query] {
+    /// 是流浪诗人」都是这一类），版本标注（歌名那侧）次之，所以歌手变体排在歌名变体前面；
+    /// 「只按歌名」那一档**永远排最后**（它只看歌名 + 时长，闸门最松，只在前面的都问不出来时才用），
+    /// 因此实现上**给它留一个槽位**：前面的档位拿 `maximumQueryCount - 1` 条封顶。
+    static func plan(title: String, artist: String) -> [Query] {
         let baseTitle = normalizedSpacing(title)
         let baseArtist = normalizedSpacing(artist)
         guard !baseTitle.isEmpty, !baseArtist.isEmpty else { return [] }
@@ -75,28 +92,37 @@ enum LyricsQueryPlanner {
         var queries: [Query] = []
         var seen = Set<String>()
 
-        func append(title: String, artist: String, isExact: Bool) {
+        func append(title: String, artist: String, kind: Query.Kind) {
             let title = normalizedSpacing(title)
             let artist = normalizedSpacing(artist)
-            guard !title.isEmpty, !artist.isEmpty else { return }
-            guard queries.count < maximumQueryCount else { return }
+            guard !title.isEmpty else { return }
+            if kind != .titleOnly, artist.isEmpty { return }
+            guard queries.count < maximumQueryCount - 1 else { return }
             let key = normalizedKey(title) + "\u{1}" + normalizedKey(artist)
             guard seen.insert(key).inserted else { return }
-            queries.append(Query(title: title, artist: artist, isExact: isExact))
+            queries.append(Query(title: title, artist: artist, kind: kind))
         }
 
-        append(title: baseTitle, artist: baseArtist, isExact: true)
+        append(title: baseTitle, artist: baseArtist, kind: .exact)
 
         let artists = artistVariants(baseArtist)
         let titles = titleVariants(baseTitle)
 
-        for variant in artists { append(title: baseTitle, artist: variant, isExact: false) }
-        for variant in titles { append(title: variant, artist: baseArtist, isExact: false) }
+        for variant in artists { append(title: baseTitle, artist: variant, kind: .artistVariant) }
+        for variant in titles { append(title: variant, artist: baseArtist, kind: .artistVariant) }
         // 交叉只在还有余量时才补（两条都带毛病的歌很少，但真遇上就不必拆成两轮取词）
         for variant in titles {
             for artistVariant in artists {
-                append(title: variant, artist: artistVariant, isExact: false)
+                append(title: variant, artist: artistVariant, kind: .artistVariant)
             }
+        }
+
+        // 最后一档：只按歌名问。歌名取**剥掉版本标注之后**的那个（词库里存的多半是规范名，
+        // 如 `丢了幸福的猪` 而不是 `丢了幸福的猪 (烟嗓版)`）；没有可剥的就用原样歌名。
+        let titleOnlyTitle = titleVariants(baseTitle).last ?? baseTitle
+        let titleOnlyKey = normalizedKey(titleOnlyTitle) + "\u{1}"
+        if !normalizedKey(titleOnlyTitle).isEmpty, !seen.contains(titleOnlyKey) {
+            queries.append(Query(title: titleOnlyTitle, artist: "", kind: .titleOnly))
         }
 
         return queries
@@ -113,8 +139,10 @@ enum LyricsQueryPlanner {
     /// 2. **相关歌手**（归一化后互相包含）：挡掉「搜别名却拿回另一个团体」这种。
     ///
     /// **原样那条不走这里**（`isExact` → 真）：它沿用既有打分匹配，行为与改动前逐字一致。
+    /// `.titleOnly` 那一档也不走这里（它没有歌手可对）——走 `acceptsTitleOnly(...)`。
     static func accepts(resultTitle: String, resultArtist: String, query: Query) -> Bool {
         guard !query.isExact else { return true }
+        guard query.kind == .artistVariant else { return false }
         let resultTitleKey = normalizedKey(resultTitle)
         let queryTitleKey = normalizedKey(query.title)
         guard !resultTitleKey.isEmpty, resultTitleKey == queryTitleKey else { return false }
@@ -123,6 +151,40 @@ enum LyricsQueryPlanner {
         let queryArtistKey = normalizedKey(query.artist)
         guard !resultArtistKey.isEmpty, !queryArtistKey.isEmpty else { return false }
         return resultArtistKey.contains(queryArtistKey) || queryArtistKey.contains(resultArtistKey)
+    }
+
+    // MARK: 「只按歌名」那一档的接受闸（同名 + 时长）
+
+    /// 时长差的上界（秒）。**唯一取值处**。
+    ///
+    /// 为什么是 3s：同一首歌的同一版录音，词库里的整数秒与本机播放器报的时长实测差在 0～2s
+    /// （本机实测「如果当时」：词库 `316 / 314 / 317`），3s 能容下这种误差；而「同名不同曲」
+    /// 撞上 3s 内的概率极低。**再放宽**就会开始吃进别的版本（现场版 / 加长版往往差十几秒以上，
+    /// 但也可能出现只差 5s 的剪辑版）。
+    static let durationTolerance: TimeInterval = 3
+
+    /// **只按歌名**那一档的结果能不能用：歌名归一化后**相等** + **时长吻合**（±`durationTolerance`）。
+    ///
+    /// 这一档不带歌手，靠的正是「同名 + 时长」这对组合（LRCLIB 自己的 `get` 接口也是拿
+    /// 歌名 + 歌手 + 专辑 + 时长做签名匹配的）。两个都拿来当闸的必要性：
+    /// - 只认歌名 → 会拿回同名不同曲（实测「樱花」在词库里只有日语歌 `さくら`，用户听的是
+    ///   茶季杨的那首）；
+    /// - 只认时长 → 毫无意义。
+    ///
+    /// **时长取不到（0 / NaN / 负数）时一律不放行**：宁可不出歌词，也不出一段没验过的歌词。
+    static func acceptsTitleOnly(
+        resultTitle: String,
+        queryTitle: String,
+        duration: TimeInterval?,
+        trackDuration: TimeInterval?
+    ) -> Bool {
+        let resultTitleKey = normalizedKey(resultTitle)
+        let queryTitleKey = normalizedKey(queryTitle)
+        guard !resultTitleKey.isEmpty, resultTitleKey == queryTitleKey else { return false }
+        guard let duration, let trackDuration,
+              duration.isFinite, trackDuration.isFinite,
+              duration > 0, trackDuration > 0 else { return false }
+        return abs(duration - trackDuration) <= durationTolerance
     }
 
     // MARK: 归一化

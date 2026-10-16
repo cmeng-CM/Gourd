@@ -1527,6 +1527,9 @@ class MusicManager: ObservableObject {
         let requestArtist = lookup.requestArtist
         let requestTitle = lookup.requestTitle
         let requestAlbum = lookup.requestAlbum
+        // 「只按歌名」那一档要用**本机此刻报的时长**当闸（docs/50 D-11）：取值点在进入网络之前，
+        // 免得取词期间换歌把时长换掉。
+        let trackDuration = songDuration
 
         lyricsFetchTask = Task { [weak self] in
             guard let self else { return }
@@ -1535,7 +1538,8 @@ class MusicManager: ObservableObject {
                 let lyrics = try await self.fetchLyricsFromAPI(
                     artist: requestArtist,
                     title: requestTitle,
-                    album: requestAlbum
+                    album: requestAlbum,
+                    trackDuration: trackDuration
                 )
                 guard !Task.isCancelled else { return }
 
@@ -1597,17 +1601,23 @@ class MusicManager: ObservableObject {
         }
     }
 
-    /// 取词：按 `LyricsQueryPlanner` 的候选阶梯依次问 LRCLIB（docs/50 D-01/D-02）。
+    /// 取词：按 `LyricsQueryPlanner` 的候选阶梯依次问 LRCLIB（docs/50 D-01/D-02/D-11）。
     ///
     /// 两个返回态必须分清（这是「歌词按钮点了没用」的根因）：
-    /// - **返回 `[]`** = 词库**确实没有这条**（原样与所有变体都问过、都是 200 且空）→ 调用方可缓存；
+    /// - **返回 `[]`** = 词库**确实没有这条**（所有候选都问过、都是 200 且空）→ 调用方可缓存；
     /// - **抛 `LyricsFetchFailure`** = 这一次**没问出来**（网络 / 超时 / 429 / 5xx）→ 调用方
     ///   **不许**缓存、不许当成「没有歌词」。
     ///
-    /// 变体查询的结果要过 `LyricsQueryPlanner.accepts` 的同名闸；**原样那条沿用既有打分匹配**
-    /// （`bestLyricsMatch` 取最高分），行为与改动前逐字一致。
-    private func fetchLyricsFromAPI(artist: String, title: String, album: String) async throws -> [LyricLine] {
-        let queries = LyricsQueryPlanner.variants(title: title, artist: artist)
+    /// 三档各有各的验法：**原样**那条沿用既有打分匹配（行为与改动前逐字一致）；**歌手/歌名变体**
+    /// 过 `accepts` 的同名 + 相关歌手闸；**只按歌名**那条过 `acceptsTitleOnly` 的同名 + 时长闸
+    /// （`trackDuration` 是播放器此刻报的时长）。
+    private func fetchLyricsFromAPI(
+        artist: String,
+        title: String,
+        album: String,
+        trackDuration: TimeInterval
+    ) async throws -> [LyricLine] {
+        let queries = LyricsQueryPlanner.plan(title: title, artist: artist)
         guard !queries.isEmpty else { return [] }
 
         var lastFailure: LyricsFetchFailure?
@@ -1616,7 +1626,7 @@ class MusicManager: ObservableObject {
             do {
                 results = try await searchLRCLIB(trackName: query.title, artistName: query.artist)
             } catch let failure as LyricsFetchFailure {
-                // 这条查询的瞬时故障：不为它再叠变体（重试已在 `searchLRCLIB` 里用完），
+                // 这条查询的瞬时故障：不为它再叠候选（重试已在 `searchLRCLIB` 里用完），
                 // 留给调用方决定要不要稍后再来。
                 lastFailure = failure
                 break
@@ -1624,7 +1634,8 @@ class MusicManager: ObservableObject {
             guard !results.isEmpty else { continue }
 
             let match: [String: Any]?
-            if query.isExact {
+            switch query.kind {
+            case .exact:
                 // 原样那条：输入**逐字沿用改动前**的口径（三个串都先去变音符再打分），
                 // 行为因此零变化（见 `docs/50` §做法 1）。
                 let folded = { (value: String) -> String in
@@ -1636,7 +1647,7 @@ class MusicManager: ObservableObject {
                     title: folded(query.title),
                     album: folded(album)
                 )
-            } else {
+            case .artistVariant:
                 match = results.first {
                     LyricsQueryPlanner.accepts(
                         resultTitle: $0["trackName"] as? String ?? "",
@@ -1644,34 +1655,77 @@ class MusicManager: ObservableObject {
                         query: query
                     )
                 }
+            case .titleOnly:
+                // 「同名 + 时长」那一档：先把过关的都挑出来，再**有 synced 的优先、其次时长最接近**
+                // （同一首歌在词库里可能有多版：本机实测「如果当时」有 316 / 314 / 317 三条）。
+                let accepted = results.filter {
+                    LyricsQueryPlanner.acceptsTitleOnly(
+                        resultTitle: $0["trackName"] as? String ?? "",
+                        queryTitle: query.title,
+                        duration: Self.resultDuration($0),
+                        trackDuration: trackDuration
+                    )
+                }
+                match = accepted.sorted { lhs, rhs in
+                    let lhsSynced = Self.hasSyncedLyrics(lhs)
+                    let rhsSynced = Self.hasSyncedLyrics(rhs)
+                    if lhsSynced != rhsSynced { return lhsSynced }
+                    let lhsDelta = abs((Self.resultDuration(lhs) ?? trackDuration) - trackDuration)
+                    let rhsDelta = abs((Self.resultDuration(rhs) ?? trackDuration) - trackDuration)
+                    return lhsDelta < rhsDelta
+                }.first
             }
 
             guard let match else { continue }
             let lines = lyricLines(from: match)
             guard !lines.isEmpty else { continue }
             if index > 0 {
-                lyricsLog.info("取词命中用的是变体查询 #\(index)：\(query.title, privacy: .public) — \(query.artist, privacy: .public)")
+                switch query.kind {
+                case .titleOnly:
+                    lyricsLog.info("取词命中用的是「同名 + 时长」档：\(query.title, privacy: .public) — 词库那版是 \(match["artistName"] as? String ?? "?", privacy: .public)（\(Self.resultDuration(match) ?? 0, privacy: .public)s ≈ 本机 \(trackDuration, privacy: .public)s）")
+                case .artistVariant, .exact:
+                    lyricsLog.info("取词命中用的是变体查询 #\(index)：\(query.title, privacy: .public) — \(query.artist, privacy: .public)")
+                }
             }
             return lines
         }
 
         if let lastFailure { throw lastFailure }
-        lyricsLog.info("词库没有这条（原样 + \(queries.count - 1) 条变体都问过）：\(title, privacy: .public) — \(artist, privacy: .public)")
+        lyricsLog.info("词库没有这条（\(queries.count) 条候选都问过）：\(title, privacy: .public) — \(artist, privacy: .public)")
         return []
     }
 
+    /// 结果里的 `duration`（秒，LRCLIB 给整数）；没有 / 不是数 → `nil`（那一档因此不放行）。
+    private static func resultDuration(_ result: [String: Any]) -> TimeInterval? {
+        if let number = result["duration"] as? NSNumber { return number.doubleValue }
+        if let value = result["duration"] as? Double { return value }
+        return nil
+    }
+
+    /// 结果里有没有时间轴歌词（排序时给 synced 的优先）。
+    private static func hasSyncedLyrics(_ result: [String: Any]) -> Bool {
+        !((result["syncedLyrics"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).isEmpty
+    }
+
     /// 问一次 LRCLIB（**带瞬时故障重试**，`LyricsFetchPolicy`）。空数组 = 词库没有这条。
+    ///
+    /// `artistName` 为空 = 「只按歌名」那一档：请求里**不带** `artist_name`（LRCLIB 按歌名跨歌手
+    /// 返回，本机实测「如果当时」能拿到 `許嵩` / `Xu, Song` 等不同写法的那几条）。
     private func searchLRCLIB(trackName: String, artistName: String) async throws -> [[String: Any]] {
         // Normalize input and percent-encode
         let cleanArtist = artistName.folding(options: .diacriticInsensitive, locale: .current)
         let cleanTitle = trackName.folding(options: .diacriticInsensitive, locale: .current)
-        guard let encodedArtist = cleanArtist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let encodedTitle = cleanTitle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+        guard let encodedTitle = cleanTitle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return []
         }
 
-        // Use LRCLIB search endpoint which returns an array JSON with `plainLyrics` and/or `syncedLyrics`.
-        let urlString = "https://lrclib.net/api/search?track_name=\(encodedTitle)&artist_name=\(encodedArtist)"
+        var urlString = "https://lrclib.net/api/search?track_name=\(encodedTitle)"
+        if !cleanArtist.isEmpty {
+            guard let encodedArtist = cleanArtist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+                return []
+            }
+            urlString += "&artist_name=\(encodedArtist)"
+        }
         guard let url = URL(string: urlString) else { return [] }
         var request = URLRequest(url: url)
         // LRCLIB 是公共免费服务、明确要求带上可识别的 UA（默认的 CFNetwork 串什么都没有）。
