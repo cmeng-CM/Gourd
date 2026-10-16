@@ -4251,6 +4251,17 @@ struct LiveActivitiesSettings: View {
                 }
                 .settingsHighlight(id: highlightID("Show notification HUD"))
 
+                // 在哪几块屏上显示（2026-10-16 用户要求「主屏默认显示，增加开关控制是否在外界
+                // 显示器上显示」）：**默认关**——浮层只上主屏（系统主显示器那块，不跟 `NSScreen.main`
+                // 的焦点屏跑）；打开 = 主屏 + 外接屏。与「岛画在哪几块屏」（多屏设置）是两件事，
+                // 判据与分发在 `NotificationsModule.NotificationHUDPolicy.screenScope…`
+                // 与 `ModuleHUDWindowHost.mainDisplayTargetScreenNames`（docs/53）。
+                Defaults.Toggle(key: .notificationHUDOnExternalDisplays) {
+                    Text("Show notification HUD on external displays")
+                }
+                .disabled(!enableNotificationHUD)
+                .settingsHighlight(id: highlightID("Show notification HUD on external displays"))
+
                 // 显示时长（2026-09-28 用户反馈「显示时长太短」）：原口径是模块里的代码常量 4s，
                 // 现为设置项、**默认 8s**。区间 2…15 与内核的 ttl 夹取区间（1…15）同源
                 // （`NotificationHUDPolicy.durationRange`），步进 1s、label 里显示当前秒数。
@@ -4298,7 +4309,7 @@ struct LiveActivitiesSettings: View {
             } header: {
                 Text("Notification HUD")
             } footer: {
-                Text("Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears on every display at once, in its own floating window. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below.")
+                Text("Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears in its own floating window on the main display — turn on the external-display switch to show it there too. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below.")
             }
         }
         .navigationTitle("Live Activities")

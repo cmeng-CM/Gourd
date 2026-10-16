@@ -102,8 +102,11 @@ public protocol UIHandle: AnyObject {
     ///
     /// - 覆盖语义（不排队）：已有浮层被新的替换——后到者就是最新事件；
     /// - `ttl` 由宿主夹取到 1…15s（`ModuleRegistry.hudTTLRange`），模块给什么值都不会常驻；
-    /// - 关掉/无刘海（`hideOnClosed`）时宿主不渲染它，但方法本身仍返回正常（不抛错、不降级）。
-    func presentTransient(view: AnyView, ttl: TimeInterval)
+    /// - 关掉/无刘海（`hideOnClosed`）时宿主不渲染它，但方法本身仍返回正常（不抛错、不降级）；
+    /// - `screenScope`（docs/53 D-01）：这一条浮层显示在**哪几块屏**上。缺省
+    ///   `.followsIsland` = 改动前那条口径（岛在哪几块屏，浮层就在哪几块屏）；通知浮层传
+    ///   `.mainDisplay(allowsExternalDisplays:)`——**默认只上主屏**，用户开了开关才带外接屏。
+    func presentTransient(view: AnyView, ttl: TimeInterval, screenScope: HUDScreenScope)
     /// **主动撤掉本模块当前的瞬时浮层**：模块上的 × / 关闭入口被点掉后调它，
     /// 关闭态那一格**立刻**让位给下层内容（音乐 / 计时器 / 槽位…），而不是等 ttl 到点。
     ///
@@ -122,6 +125,16 @@ public protocol UIHandle: AnyObject {
     /// 语义与 06 §3.4 的 `requestCollapse(reason:)` 差一个 `reason` 参数：本批还没有
     /// 「事件账本 / 诊断面板」消费它（P1-2 的 `NotchStateMachine` 一起补）。
     func requestCollapse()
+}
+
+extension UIHandle {
+    /// 旧签名（`view:ttl:`，不带屏口径）的**默认实现** = `.followsIsland`（改动前的逐字行为）。
+    ///
+    /// 留着它只为「加了一个参数，但既有调用方一行都不用改」——协议要求已经是带 `screenScope`
+    /// 的那条，只想要默认口径的模块仍可只写 `view:` / `ttl:`（docs/53 D-01）。
+    func presentTransient(view: AnyView, ttl: TimeInterval) {
+        presentTransient(view: view, ttl: ttl, screenScope: .followsIsland)
+    }
 }
 
 /// 自动带 `moduleID` 与 subsystem 前缀 `com.cmeng.gourd.module.<shortID>` 的日志器。

@@ -48,11 +48,15 @@
 //  而不是所有屏幕都显示，这个应该是所有屏幕都显示才对」）
 //  旧口径是「跟随鼠标屏」——单窗口 `present` 时挪到鼠标所在屏，于是只有一块屏看得见。
 //  现口径：**应用会显示岛的每一块屏上各有一个窗口**，同一条浮层在所有屏同时出现、同时消失：
-//  - 「哪些屏」= 纯函数 `targetScreenNames(showOnAllDisplays:screenNames:mainScreenName:
-//    preferredScreenName:)`（单测直接钉）：`showOnAllDisplays` 为真 → `NSScreen.screens` 全集；
-//    为假 → 只在该设置指定的那块屏（读上游既有的 `preferred_screen_name`，与岛同源），
-//    指定屏不在场时依次退到 `NSScreen.main` → 列表第一块（浮层不该因为设置里那台显示器
-//    没接上就彻底不出现）；
+//  - 「哪些屏」**由这一条浮层自己的口径决定**（`ModuleHUD.screenScope`，docs/53 D-01）：
+//    - `.followsIsland`（缺省，其它模块）：纯函数 `targetScreenNames(showOnAllDisplays:screenNames:
+//      mainScreenName:preferredScreenName:)`——`showOnAllDisplays` 为真 → `NSScreen.screens` 全集；
+//      为假 → 只在该设置指定的那块屏（读上游既有的 `preferred_screen_name`，与岛同源），
+//      指定屏不在场时依次退到 `NSScreen.main` → 列表第一块（浮层不该因为设置里那台显示器
+//      没接上就彻底不出现）；
+//    - `.mainDisplay(allowsExternalDisplays:)`（通知浮层）：默认**只上主屏**（系统主显示器，
+//      `CGMainDisplayID()` 那块——**不读 `NSScreen.main`**，那是"当前键窗所在的屏"，会跟着跑），
+//      用户在设置里打开开关后 = 全部屏（`mainDisplayTargetScreenNames(...)`）；
 //  - 窗口键 = `NSScreen.localizedName`（`NSScreen` 实例会被系统替换，不能拿它当键）；
 //  - 放置几何与单窗口时期一致（贴该屏可用顶边下方 `topGap`、水平居中于该屏），只是**逐屏各算一份**；
 //  - 屏幕配置变化（`NSApplication.didChangeScreenParametersNotification`）→ 清理已断开屏的窗口、
@@ -277,14 +281,13 @@ public final class ModuleHUDWindowHost {
     ///
     /// 逐屏各做三件事（与单屏时期一致，只是按屏遍历）：① 尺寸（固定值，同一来源）；
     /// ② 显隐（状态机按**该窗口自己的**状态给动作）；③ 逼一次布局。
+    ///
+    /// **目标屏由这一条浮层自己的口径算**（`hud.screenScope`，docs/53 D-01）：通知浮层默认只上
+    /// 主屏，别的模块仍是 `.followsIsland`——同一个调用点、两种口径，分发在
+    /// `targetScreenNames(scope:…)` 里（纯函数，单测钉）。
     private func present(_ hud: ModuleHUD) {
         generation += 1
-        let names = Self.targetScreenNames(
-            showOnAllDisplays: Defaults[.showOnAllDisplays],
-            screenNames: NSScreen.screens.map(\.localizedName),
-            mainScreenName: NSScreen.main?.localizedName,
-            preferredScreenName: UserDefaults.standard.string(forKey: Self.preferredScreenDefaultsKey)
-        )
+        let names = resolvedTargetScreenNames(scope: hud.screenScope)
         // 先清掉不该有的窗口（屏断开 / 用户改了单屏设置后原来那块屏不再显示），再逐屏展示。
         discardSlots(notIn: names)
 
@@ -505,13 +508,28 @@ public final class ModuleHUDWindowHost {
     }
 
     /// 该屏现在是否属于显示范围（内容布局回调的守卫用，见 `contentDidLayout(on:)`）。
+    ///
+    /// **跟着台前那一条浮层的口径**（docs/53 D-01）：通知浮层关掉「外接屏」开关后，外接屏上的
+    /// 旧窗口会从这里被判成「不该显示」，下一次布局回调就会把它收掉。没有浮层时按既有的
+    /// `.followsIsland`（= 改动前逐字行为）。
     private func isTargetScreen(_ name: String) -> Bool {
+        let scope = ModuleRegistry.shared.activeHUD?.screenScope ?? .followsIsland
+        return resolvedTargetScreenNames(scope: scope).contains(name)
+    }
+
+    /// 把**屏口径 + 当前屏集合**解析成目标屏名集合（`present` 与 `isTargetScreen` 的**唯一**入口）。
+    ///
+    /// `NSScreen` 只在这里转成纯函数的入参（屏名 / 主屏名 / `NSScreen.main` 名 / 设置里指定的屏名），
+    /// 因此判据本身仍可在单测里穷举（`ModuleHUDWindowHost.targetScreenNames(scope:…)`）。
+    private func resolvedTargetScreenNames(scope: HUDScreenScope) -> Set<String> {
         Self.targetScreenNames(
+            scope: scope,
             showOnAllDisplays: Defaults[.showOnAllDisplays],
             screenNames: NSScreen.screens.map(\.localizedName),
+            primaryScreenName: Self.primaryScreenName(for: NSScreen.screens),
             mainScreenName: NSScreen.main?.localizedName,
             preferredScreenName: UserDefaults.standard.string(forKey: Self.preferredScreenDefaultsKey)
-        ).contains(name)
+        )
     }
 
     // MARK: - 目标屏（纯函数：单测直接钉，`NSScreen` 只用来喂入参）
@@ -519,7 +537,7 @@ public final class ModuleHUDWindowHost {
     /// **纯函数**：浮层该出现在哪些屏上（返回值 = 屏名集合，键是 `NSScreen.localizedName`）。
     ///
     /// 口径（2026-09-28 用户反馈「应该是所有屏幕都显示才对」，覆盖 D-23 的「跟随鼠标屏」）：
-    /// - `showOnAllDisplays` 为真（**用户当前设置**）→ **所有屏**（`NSScreen.screens` 全集）；
+    /// - `showOnAllDisplays` 为真 → **所有屏**（`NSScreen.screens` 全集）；
     /// - 为假 → 只在该设置指定的那块屏（`preferred_screen_name`，与岛同源）；指定屏不在场时
     ///   退到 `NSScreen.main`；再取不到（`main` 为 nil）→ 列表第一块。三档兜底的理由：
     ///   单屏模式下「设置里那台显示器没接」不该让浮层**彻底不出现**（用户刚收到一条通知），
@@ -536,6 +554,72 @@ public final class ModuleHUDWindowHost {
         if let preferredScreenName, screenNames.contains(preferredScreenName) { return [preferredScreenName] }
         if let mainScreenName, screenNames.contains(mainScreenName) { return [mainScreenName] }
         return [screenNames[0]]
+    }
+
+    /// **纯函数**：按浮层自己的**屏口径**挑一条解析（docs/53 D-01，唯一分发点）。
+    ///
+    /// `.followsIsland` 转发给上面那条（逐字不动）；`.mainDisplay(...)` 走
+    /// `mainDisplayTargetScreenNames(...)`——通知浮层那条。
+    nonisolated static func targetScreenNames(
+        scope: HUDScreenScope,
+        showOnAllDisplays: Bool,
+        screenNames: [String],
+        primaryScreenName: String?,
+        mainScreenName: String?,
+        preferredScreenName: String?
+    ) -> Set<String> {
+        switch scope {
+        case .followsIsland:
+            return targetScreenNames(
+                showOnAllDisplays: showOnAllDisplays,
+                screenNames: screenNames,
+                mainScreenName: mainScreenName,
+                preferredScreenName: preferredScreenName
+            )
+        case .mainDisplay(let allowsExternalDisplays):
+            return mainDisplayTargetScreenNames(
+                allowsExternalDisplays: allowsExternalDisplays,
+                screenNames: screenNames,
+                primaryScreenName: primaryScreenName,
+                fallbackScreenName: mainScreenName
+            )
+        }
+    }
+
+    /// **纯函数**：`.mainDisplay` 那条口径（docs/53 D-02，用户 2026-10-16：「主屏默认显示，
+    /// 增加开关控制是否在外界显示器上显示」）——
+    /// - `allowsExternalDisplays` 为真 → **全部屏**（主屏 + 外接屏）；
+    /// - 为假（默认）→ **只主屏**：`primaryScreenName`（系统的主显示器，见 `primaryScreenName(for:)`）
+    ///   在场就用它；不在场退 `fallbackScreenName`（`NSScreen.main`）；再取不到 → 列表第一块；
+    /// - 屏集合为空 → 空集合。
+    ///
+    /// 兜底链与 `.followsIsland` 同形（理由一样：主屏判定万一失败，也不该让浮层彻底不出现）。
+    nonisolated static func mainDisplayTargetScreenNames(
+        allowsExternalDisplays: Bool,
+        screenNames: [String],
+        primaryScreenName: String?,
+        fallbackScreenName: String?
+    ) -> Set<String> {
+        guard !screenNames.isEmpty else { return [] }
+        if allowsExternalDisplays { return Set(screenNames) }
+        if let primaryScreenName, screenNames.contains(primaryScreenName) { return [primaryScreenName] }
+        if let fallbackScreenName, screenNames.contains(fallbackScreenName) { return [fallbackScreenName] }
+        return [screenNames[0]]
+    }
+
+    /// **纯函数（除读一次 `CGMainDisplayID()`）**：系统定义的**主屏**名——`CGMainDisplayID()`
+    /// 那块，也就是系统「显示器」面板里标着「主显示器 / Main Display」的那一块。
+    ///
+    /// **刻意不读 `NSScreen.main`**：那是「当前键窗所在的屏」，用户在外接屏上干活时它会跟着跑
+    /// （本机 2026-10-16 实测：`NSScreen.main` 会在内建屏与外接 VA2478 之间来回跳，
+    /// 连我自己的悬停脚本都因此瞄错过屏）；而用户说的「主屏」是**固定那一块**。
+    /// 取不到（屏刚断开等）返回 nil，由调用方的兜底链接手。
+    static func primaryScreenName(for screens: [NSScreen]) -> String? {
+        let mainDisplayID = CGMainDisplayID()
+        return screens.first { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return number?.uint32Value == mainDisplayID
+        }?.localizedName
     }
 
     /// 该屏顶部要避开的**内边**高度（pt）：

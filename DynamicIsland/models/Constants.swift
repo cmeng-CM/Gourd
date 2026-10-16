@@ -1684,6 +1684,23 @@ extension Defaults.Keys {
         default: .liquidGlass
     )
 
+    /// 通知浮层是否**也在外接显示器上显示**（2026-10-16 用户要求「消息通知…主屏默认显示，
+    /// 增加开关，控制是否在外界显示器上显示消息通知」）。
+    ///
+    /// **默认 false**：浮层只显示在**主屏**（系统主显示器 = `CGMainDisplayID()` 那块，
+    /// 即设置里标着「主显示器 / Main Display」的内建屏）。打开后 = 主屏 + 外接屏（全部屏）。
+    ///
+    /// 消费点唯一：`NotificationsModule.NotificationHUDPolicy.screenScopeFromDefaults()`
+    /// → `UIHandle.presentTransient(…:screenScope:)` → 内核浮层窗口的屏口径
+    ///（`ModuleHUDWindowHost.mainDisplayTargetScreenNames`）。
+    ///
+    /// **与 `showOnAllDisplays` 是两件事**（docs/53 D-03）：后者是「岛画在哪几块屏」，
+    /// 本键只管通知浮层——岛开在多屏上也不会因此把通知带到副屏去。
+    static let notificationHUDOnExternalDisplays = Key<Bool>(
+        "notificationHUDOnExternalDisplays",
+        default: false
+    )
+
     /// 已关闭（**仅从岛上移除**）的通知 `rec_id` 集合，有序、最近关闭的在后。
     ///
     /// 为什么必须落盘：关闭只是「本地隐藏」——系统通知中心里的那一条仍然在（只读原则，

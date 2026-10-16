@@ -175,8 +175,11 @@ private final class RedrawUIHandle: UIHandle {
 
     /// 瞬时浮层：转发到注册表（**唯一实现落点**——覆盖与到期清除都在那边，
     /// 这里只负责补上 moduleID，模块自己不持有浮层的生命周期）。
-    func presentTransient(view: AnyView, ttl: TimeInterval) {
-        ModuleRegistry.shared.presentHUD(moduleID: moduleID, view: view, ttl: ttl)
+    ///
+    /// `screenScope` 原样转发（docs/53 D-01）：旧签名 `view:ttl:` 由 `UIHandle` 的**协议扩展**
+    /// 补成 `.followsIsland`，这里**不再留一条重载**——两条实现会让人分不清哪条在生效。
+    func presentTransient(view: AnyView, ttl: TimeInterval, screenScope: HUDScreenScope) {
+        ModuleRegistry.shared.presentHUD(moduleID: moduleID, view: view, ttl: ttl, screenScope: screenScope)
     }
 
     /// 主动撤浮层：**先判归属**再撤——模块只能撤自己弹的那一条

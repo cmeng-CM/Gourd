@@ -736,6 +736,25 @@ enum NotificationHUDPolicy {
     static func ttlFromDefaults() -> TimeInterval {
         ttl(forSettingSeconds: Defaults[.notificationHUDDurationSeconds])
     }
+
+    // MARK: - 显示在哪几块屏（2026-10-16 用户要求）
+
+    /// **纯函数**：设置 → 浮层的**屏口径**（docs/53 D-02）。
+    ///
+    /// - `onExternalDisplays == false`（默认）→ `.mainDisplay(allowsExternalDisplays: false)`
+    ///   = **只上主屏**（用户原话「主屏默认显示」）；
+    /// - `true` → `.mainDisplay(allowsExternalDisplays: true)` = 主屏 + 外接屏（全部屏）。
+    ///
+    /// **不跟随 `showOnAllDisplays`**（那是「岛画在哪几块屏」）：用户要的是「通知固定落在主屏」，
+    /// 唯一受影响的是浮层，岛与展开面板的口径一个字不动（docs/53 D-03）。
+    static func screenScope(onExternalDisplays: Bool) -> HUDScreenScope {
+        .mainDisplay(allowsExternalDisplays: onExternalDisplays)
+    }
+
+    /// 生产路径入口：读当前设置 → 屏口径。两条通道（AX / DB）都走这里。
+    static func screenScopeFromDefaults() -> HUDScreenScope {
+        screenScope(onExternalDisplays: Defaults[.notificationHUDOnExternalDisplays])
+    }
 }
 
 // MARK: - 点击动作序列
@@ -1025,7 +1044,10 @@ final class NotificationsModule: GourdModule {
                     }
                 )
             ),
-            ttl: NotificationHUDPolicy.ttlFromDefaults()
+            ttl: NotificationHUDPolicy.ttlFromDefaults(),
+            // 屏口径（docs/53）：默认只上主屏，用户在设置里打开「外接显示器」才带外接屏——
+            // 两条通道（DB / AX）都在这两处出口上，一次读齐，改设置下一条通知就生效。
+            screenScope: NotificationHUDPolicy.screenScopeFromDefaults()
         )
     }
 
@@ -1070,7 +1092,10 @@ final class NotificationsModule: GourdModule {
                     }
                 )
             ),
-            ttl: NotificationHUDPolicy.ttlFromDefaults()
+            ttl: NotificationHUDPolicy.ttlFromDefaults(),
+            // 屏口径（docs/53）：默认只上主屏，用户在设置里打开「外接显示器」才带外接屏——
+            // 两条通道（DB / AX）都在这两处出口上，一次读齐，改设置下一条通知就生效。
+            screenScope: NotificationHUDPolicy.screenScopeFromDefaults()
         )
     }
 

@@ -2687,6 +2687,150 @@ final class ModuleKernelTests: XCTestCase {
         )
     }
 
+    /// **屏口径的默认档**（docs/53 D-01）：`presentHUD` 的老签名（不带屏口径）必须落
+    /// `.followsIsland`——这是「别的模块的浮层一行都不用改、行为逐字不变」的判据。
+    func testPresentHUDWithoutScopeKeepsFollowingTheIsland() {
+        let registry = ModuleRegistry.shared
+        registry.presentHUD(moduleID: "com.cmeng.gourd.probe-alpha", view: AnyView(Text("A")), ttl: 4)
+        XCTAssertEqual(registry.activeHUD?.screenScope, .followsIsland, "缺省 = 改动前那条口径")
+        registry.clearHUD()
+    }
+
+    /// 显式传进来的屏口径**原样存下来**（通知模块走的就是这条：默认只上主屏）。
+    func testPresentHUDStoresExplicitScreenScope() {
+        let registry = ModuleRegistry.shared
+        registry.presentHUD(
+            moduleID: "com.cmeng.gourd.probe-alpha",
+            view: AnyView(Text("A")),
+            ttl: 4,
+            screenScope: .mainDisplay(allowsExternalDisplays: false)
+        )
+        XCTAssertEqual(registry.activeHUD?.screenScope, .mainDisplay(allowsExternalDisplays: false))
+        registry.clearHUD()
+    }
+
+    /// **主屏档**（docs/53 D-02，用户 2026-10-16「主屏默认显示，增加开关控制是否在外界显示器上
+    /// 显示」）：关（默认）→ **只上主屏**，焦点屏（`fallback`）不参与；开 → 全部屏（主屏 + 外接）。
+    func testHUDMainDisplayScopeDefaultsToPrimaryScreenOnly() {
+        let names = ["Built-in Retina Display", "VA2478-H-2"]
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: false,
+                screenNames: names,
+                primaryScreenName: names[0],
+                fallbackScreenName: names[1]
+            ),
+            [names[0]],
+            "只上主屏——哪怕焦点屏（NSScreen.main）在外接屏上也不跟过去"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: true,
+                screenNames: names,
+                primaryScreenName: names[0],
+                fallbackScreenName: names[1]
+            ),
+            Set(names),
+            "开了「外接显示器」开关 = 全部屏"
+        )
+    }
+
+    /// **主屏档的兜底链**（与 `.followsIsland` 同形，理由一样：主屏判定万一失败也不该让浮层彻底
+    /// 不出现）：主屏名不在场 → 退焦点屏 → 再退列表第一块；屏集合为空 → 空集合。
+    func testHUDMainDisplayScopeFallbacks() {
+        let names = ["Built-in Retina Display", "VA2478-H-2"]
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: false, screenNames: names,
+                primaryScreenName: "断开的屏", fallbackScreenName: names[1]
+            ),
+            [names[1]],
+            "主屏不在场 → 退焦点屏"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: false, screenNames: names,
+                primaryScreenName: nil, fallbackScreenName: nil
+            ),
+            [names[0]],
+            "主屏与焦点屏都取不到 → 列表第一块"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: true, screenNames: [],
+                primaryScreenName: "Main", fallbackScreenName: "Main"
+            ),
+            [],
+            "空屏集合 → 空集合（不越界取 screenNames[0]）"
+        )
+        XCTAssertEqual(
+            ModuleHUDWindowHost.mainDisplayTargetScreenNames(
+                allowsExternalDisplays: false, screenNames: [],
+                primaryScreenName: nil, fallbackScreenName: nil
+            ),
+            [],
+            "空屏集合 + 没有主屏 → 空集合"
+        )
+    }
+
+    /// **分发点**（`targetScreenNames(scope:…)`）：`.followsIsland` 那一支走过的仍是**既有那条
+    /// 纯函数**——同一组入参两侧的输出必须逐字相等（这是「别的模块零回归」的算式级判据）。
+    /// `.mainDisplay` 那一支转发给主屏档那条。
+    func testHUDScreenScopeDispatcherRoutesBothScopes() {
+        let names = ["Built-in Retina Display", "VA2478-H-2", "DELL U2720Q"]
+        let cases: [(allDisplays: Bool, main: String?, preferred: String?)] = [
+            (true, names[0], names[2]),
+            (false, names[0], names[2]),
+            (false, names[1], nil),
+            (false, nil, nil),
+        ]
+        for c in cases {
+            XCTAssertEqual(
+                ModuleHUDWindowHost.targetScreenNames(
+                    scope: .followsIsland,
+                    showOnAllDisplays: c.allDisplays,
+                    screenNames: names,
+                    primaryScreenName: names[0],
+                    mainScreenName: c.main,
+                    preferredScreenName: c.preferred
+                ),
+                ModuleHUDWindowHost.targetScreenNames(
+                    showOnAllDisplays: c.allDisplays,
+                    screenNames: names,
+                    mainScreenName: c.main,
+                    preferredScreenName: c.preferred
+                ),
+                "`.followsIsland` 必须与既有那条逐字同结果（全屏 \(c.allDisplays) / 焦点 \(c.main ?? "nil")）"
+            )
+        }
+        XCTAssertEqual(
+            ModuleHUDWindowHost.targetScreenNames(
+                scope: .mainDisplay(allowsExternalDisplays: false),
+                showOnAllDisplays: true,
+                screenNames: names,
+                primaryScreenName: names[0],
+                mainScreenName: names[1],
+                preferredScreenName: names[2]
+            ),
+            [names[0]],
+            "主屏档**不看** `showOnAllDisplays`（岛开在多屏上也不把通知带过去）"
+        )
+    }
+
+    /// **新键的口径**（docs/53 D-02）：`notificationHUDOnExternalDisplays` 默认 **false**
+    /// =「通知浮层只上主屏」（用户 2026-10-16 原话「主屏默认显示」）；键名与设置页开关一致。
+    /// 断言读 `defaultValue`，不受开发机上真实 UserDefaults 影响。
+    func testNotificationHUDExternalDisplaysKeyDefaultsOff() {
+        XCTAssertEqual(
+            Defaults.Keys.notificationHUDOnExternalDisplays.name,
+            "notificationHUDOnExternalDisplays"
+        )
+        XCTAssertFalse(
+            Defaults.Keys.notificationHUDOnExternalDisplays.defaultValue,
+            "默认关 = 只在主屏显示"
+        )
+    }
+
     // MARK: - 浮层窗口的可见性状态机（2026-09-28：「内置屏偶发只显示第一条」）
 
     /// ① **首次 present**：窗口还不在台上（刚创建时 `alphaValue` 是 1，所以这里是 `alpha = 1` +
@@ -4759,6 +4903,21 @@ final class ModuleKernelTests: XCTestCase {
 
     // MARK: - 浮层显示时长（D-25：可配 + 默认 8s）
 
+    /// **屏口径映射**（docs/53 D-02，2026-10-16 用户要求）：开关关（默认）→ 只主屏；
+    /// 开 → 主屏 + 外接屏。模块侧就是这一条映射，别处（窗口宿主）只消费它。
+    func testNotificationHUDScreenScopeFollowsTheExternalDisplaysSetting() {
+        XCTAssertEqual(
+            NotificationHUDPolicy.screenScope(onExternalDisplays: false),
+            .mainDisplay(allowsExternalDisplays: false),
+            "默认关 = 只上主屏（用户原话「主屏默认显示」）"
+        )
+        XCTAssertEqual(
+            NotificationHUDPolicy.screenScope(onExternalDisplays: true),
+            .mainDisplay(allowsExternalDisplays: true),
+            "打开 = 也上外接屏（= 全部屏）"
+        )
+    }
+
     /// **显示时长可配**（2026-09-28 用户反馈「显示时长太短」）：设置值 → ttl 的映射与夹取。
     /// 边界取 1 / 8 / 15 / 20 —— 内核 `hudTTLRange`（1…15）的两端、设置默认值（8）与其外侧。
     func testNotificationHUDDurationMapsToTTLWithClamp() {
@@ -6310,13 +6469,19 @@ private final class StubUIHandle: UIHandle {
     var redrawCount = 0
     /// 收到的瞬时浮层请求（`ttl` 逐条记下，断言夹取/覆盖语义时不必等真实到期）。
     var presentedTTLs: [TimeInterval] = []
+    /// 每条浮层请求带的**屏口径**（docs/53：模块侧那一半的判据——通知模块传的必须是
+    /// `.mainDisplay(allowsExternalDisplays:)`）。
+    var presentedScopes: [HUDScreenScope] = []
     /// 收到的主动撤浮层请求次数（只记次数：假体不持有注册表，转发语义由别处钉）。
     var dismissCount = 0
     /// 收到的收起刘海请求次数（D-28）：假体没有窗口，只记「模块调过来了」。
     var collapseCount = 0
     func requestRedraw() { redrawCount += 1 }
     var isLowPower: Bool { false }
-    func presentTransient(view: AnyView, ttl: TimeInterval) { presentedTTLs.append(ttl) }
+    func presentTransient(view: AnyView, ttl: TimeInterval, screenScope: HUDScreenScope) {
+        presentedTTLs.append(ttl)
+        presentedScopes.append(screenScope)
+    }
     func dismissTransient() { dismissCount += 1 }
     func requestCollapse() { collapseCount += 1 }
 }

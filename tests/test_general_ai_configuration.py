@@ -12,7 +12,10 @@ BASELINE = "cd825466"
 LEGACY_HASHES = {
     "DynamicIsland/managers/ScreenAssistantManager.swift": "dee7398b38c91c5586fa0e2af8544bace061e2dedd5cdda2415237788242ec76",
     "DynamicIsland/components/ScreenAssistant/ModelSelectionPanel.swift": "99ba81899ddf434ec0e969502d30bf413a1bafa96cdc199a9b9c32a7b60fec4e",
-    "DynamicIsland/models/Constants.swift": "f34ab41091721456cd2aa52a7349f4443ede77b9a246f463ff07c4d5f2be65c9",
+    # 2026-10-16（面板通知浮层的屏口径）：`Constants.swift` 新增一个 Defaults 键
+    # `notificationHUDOnExternalDisplays`（默认 false），指纹随之更新——核对方式：
+    # `git diff cd825466 -- DynamicIsland/models/Constants.swift` 只有那一处新增。
+    "DynamicIsland/models/Constants.swift": "da65f78a209b993ae19fce730c115dd780b87d7699fafd86d436571125f44b2c",
 }
 LEGACY_SETTINGS_HASH = "9ab4b78e456086b3813897b71349da3a8a99c8aed87cabb8e9f286153210502f"
 # All added/changed main-app catalog entries in cd825466..9bed9efc, not prefix filtering.
@@ -117,6 +120,17 @@ LOCALE_KEYS = (
     # docs/50（2026-10-16）：首页音乐块的封面成了「打开正在放歌的那个音乐软件」的入口，
     # 这条是该入口的 tooltip 与可访问性文案（en + zh-Hans）。
     'module.music.openPlayer',
+    # 2026-10-16（通知浮层的屏口径，docs/53）：设置页「通知浮层」那一段的控件文案与段脚注。
+    # 这五条（含段标题）此前**根本没有进 catalog**——整段是英文直显；本批顺手补齐 zh-Hans。
+    # 段脚注原文写了「appears on every display at once」，与新口径（默认只上主屏）冲突，
+    # 因此连文案一起改并双语化（旧英文串从未进过 catalog，没有留下无消费者的遗留键）。
+    'Notification HUD',
+    'Show notification HUD',
+    'Show notification HUD on external displays',
+    'Display duration',
+    'Show notification body in the notch HUD',
+    'Notification HUD size',
+    'Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears in its own floating window on the main display — turn on the external-display switch to show it there too. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below.',
 )
 
 # docs/45 → docs/47 的会议入口返工（T1–T6）删掉了「用 AI 识别会议」、行内状态文字、时间闸门

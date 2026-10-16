@@ -16,8 +16,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.openIn.tencent": {
       "localizations": {
         "en": {
@@ -33,8 +32,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.provider.huawei": {
       "localizations": {
         "en": {
@@ -50,8 +48,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.provider.tencent": {
       "localizations": {
         "en": {
@@ -67,8 +64,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.tooltip.multiple": {
       "localizations": {
         "en": {
@@ -100,8 +96,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.tooltip.copyValue": {
       "localizations": {
         "en": {
@@ -133,8 +128,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.row.choose": {
       "localizations": {
         "en": {
@@ -166,8 +160,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.meeting.row.copy": {
       "localizations": {
         "en": {
@@ -183,8 +176,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.generation.source": {
       "localizations": {
         "en": {
@@ -280,8 +272,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.generation.unconfigured": {
       "localizations": {
         "en": {
@@ -377,8 +368,7 @@
           }
         }
       }
-    }
-,
+    },
     "calendar.copy.selection": {
       "localizations": {
         "en": {
@@ -27652,6 +27642,125 @@
           "stringUnit": {
             "state": "translated",
             "value": "顯示樣式"
+          }
+        }
+      }
+    },
+    "Display duration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Display duration"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示时长"
+          }
+        }
+      }
+    },
+    "Notification HUD": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification HUD"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知浮层"
+          }
+        }
+      }
+    },
+    "Notification HUD size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification HUD size"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浮层大小"
+          }
+        }
+      }
+    },
+    "Show notification HUD": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show notification HUD"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示通知浮层"
+          }
+        }
+      }
+    },
+    "Show notification HUD on external displays": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show notification HUD on external displays"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在外接显示器上也显示"
+          }
+        }
+      }
+    },
+    "Show notification body in the notch HUD": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show notification body in the notch HUD"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浮层中显示通知正文"
+          }
+        }
+      }
+    },
+    "Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears in its own floating window on the main display — turn on the external-display switch to show it there too. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification HUD = the brief overlay shown when a new notification arrives. It reads the notification database (needs Full Disk Access) and appears in its own floating window on the main display — turn on the external-display switch to show it there too. Turn the switch off to receive notifications on the island without the overlay; body text and size are controlled below."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知浮层 = 新通知到达时短暂浮现的那一张卡片。它读系统通知数据库（需要「完全磁盘访问权限」），在主屏上以独立的浮层窗口显示——打开上一行的开关后也会显示在外接显示器上。关掉总开关后通知仍照常上岛，只是不弹浮层；正文与字号由下面两项控制。"
           }
         }
       }

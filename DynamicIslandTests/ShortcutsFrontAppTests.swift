@@ -1265,7 +1265,7 @@ private final class RecordingRunner {
 private final class SilentUIHandle: UIHandle {
     func requestRedraw() {}
     var isLowPower: Bool { false }
-    func presentTransient(view: AnyView, ttl: TimeInterval) {}
+    func presentTransient(view: AnyView, ttl: TimeInterval, screenScope: HUDScreenScope) {}
     func dismissTransient() {}
     func requestCollapse() {}
 }

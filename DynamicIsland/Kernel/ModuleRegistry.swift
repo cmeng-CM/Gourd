@@ -93,6 +93,21 @@ public struct ModuleHomeEntry: Identifiable, Equatable {
     public let order: Int
 }
 
+/// 一条浮层要显示在**哪几块屏**上的口径（docs/53 D-01；2026-10-16 用户要求
+/// 「消息通知…主屏默认显示，增加开关控制是否在外界显示器上显示」）。
+///
+/// 与岛本身的多屏口径（`showOnAllDisplays`）**刻意解耦**：那是「岛画在哪几块屏」，
+/// 这是「这一条浮层画在哪几块屏」——通知不该因为岛开在多屏上就跟到副屏去。
+public enum HUDScreenScope: Equatable {
+    /// **跟随岛的既有口径**（缺省；`ModuleHUDWindowHost.targetScreenNames`）：
+    /// `showOnAllDisplays` 为真 → 全部屏；否则 `preferred_screen_name` 指定的那块
+    /// （不在场时退 `NSScreen.main` → 列表第一块）。**其它模块的浮层保持这条，逐字未变。**
+    case followsIsland
+    /// **主屏优先**：默认只显示在**主屏**（`CGMainDisplayID()` 那块，= 系统设置里
+    /// 「Main Display: Yes 主显示器」）；`allowsExternalDisplays` 为真时再加上外接屏（= 全部屏）。
+    case mainDisplay(allowsExternalDisplays: Bool)
+}
+
 /// 一条**瞬时浮层**（09 §5.5 呈现 ①：新事件到达时在折叠态刘海上短暂展示）。
 ///
 /// 与 `ModuleCompactSlotView` / `ModuleHostView` 的关系：那两处渲染的是**常驻内容**
@@ -107,6 +122,8 @@ public struct ModuleHUD: Identifiable {
     public let view: AnyView
     /// 到期时刻（由 `presentHUD` 按夹取后的 ttl 算好，日志与测试读它）。
     public let expiresAt: Date
+    /// 这一条浮层显示在哪几块屏上（缺省 `.followsIsland` = 改动前的逐字行为）。
+    public let screenScope: HUDScreenScope
 }
 
 // MARK: - ModuleRegistry
@@ -591,11 +608,28 @@ public final class ModuleRegistry: ObservableObject {
     ///
     /// 到期清除**只清自己那一条**：任务醒来时先比对 `activeHUD?.id`，被后来者替换过就直接返回——
     /// 否则「先弹 A（短 ttl）、再弹 B（长 ttl）」会让 A 的旧任务把 B 提前清掉。
-    public func presentHUD(moduleID: String, view: AnyView, ttl: TimeInterval) {
+    ///
+    /// `screenScope`（docs/53 D-01）：这一条浮层显示在哪几块屏上；缺省 `.followsIsland`
+    /// = 改动前那条口径（所有 HUD 的调用方都不用改）。
+    public func presentHUD(
+        moduleID: String,
+        view: AnyView,
+        ttl: TimeInterval,
+        screenScope: HUDScreenScope = .followsIsland
+    ) {
         let clamped = min(max(ttl, Self.hudTTLRange.lowerBound), Self.hudTTLRange.upperBound)
-        let hud = ModuleHUD(id: UUID(), moduleID: moduleID, view: view, expiresAt: Date().addingTimeInterval(clamped))
+        let hud = ModuleHUD(
+            id: UUID(),
+            moduleID: moduleID,
+            view: view,
+            expiresAt: Date().addingTimeInterval(clamped),
+            screenScope: screenScope
+        )
         activeHUD = hud
-        log.info("presentHUD：模块 \(moduleID, privacy: .public)，ttl \(clamped, privacy: .public)s")
+        log.info("""
+        presentHUD：模块 \(moduleID, privacy: .public)，ttl \(clamped, privacy: .public)s，\
+        屏口径 \(String(describing: screenScope), privacy: .public)
+        """)
 
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(clamped))
