@@ -432,7 +432,12 @@ final class CalendarPanelSession: ObservableObject {
         }
     }
 
+    /// 回列表档（左栏「回到月历」与月历网格选日都走它）。
+    ///
+    /// 进入前先 `dropCleanDraft()`（docs/49 D-39）：没改过的稿不留在会话里——否则列表档顶部会
+    /// 冒出一行「有未保存的日程 · 继续编辑」的假提示（那行只看 `draft != nil`）。
     func showList(on date: Date, anchor: String? = nil) {
+        dropCleanDraft()
         changeNavigation()
         applySource(.calendar(date: date, anchor: anchor))
         route = .list
@@ -514,6 +519,7 @@ final class CalendarPanelSession: ObservableObject {
     @discardableResult
     func back() -> CalendarPanelSource? {
         guard route == .editor, let context = draftContext else { return nil }
+        dropCleanDraft()
         changeNavigation()
         route = .list
         applySource(context.source)
@@ -521,8 +527,25 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     func suspend() {
+        dropCleanDraft()
         changeNavigation()
         route = .list
+    }
+
+    /// **离开编辑档时，没改过的稿直接丢掉**（docs/49 D-39，2026-10-16 用户第二轮反馈：
+    /// 「打开一个日程编辑，不改动任何内容，点击回到月历，会显示存在一条草稿」）。
+    ///
+    /// 判据与「拦人」那一处**同源**（`hasDirtyDraft` = `draft != baseline`，D-36）：稿与基线一致
+    /// 时丢掉它不损失任何用户输入——留在会话里只会让列表档顶部冒出一行**假提示**
+    ///（「有未保存的日程 · 继续编辑」，那行只看 `draft != nil`）。
+    /// **改过的稿照旧留着**：那是用户真敲进去的东西，回来还能接着写（`resumeDraft()` 那条路）。
+    ///
+    /// 三个出口（顶部返回 `back()` / 左栏「回到月历」`showList(on:)` / 面板收起 `suspend()`）都调它；
+    /// **刻意不放进 `changeNavigation()`**——`resumeDraft()` 也走那个函数（它先把 route 切回编辑档），
+    /// 在那里丢掉「干净的稿」会让编辑档开成一张空表单。
+    private func dropCleanDraft() {
+        guard draft != nil, !hasDirtyDraft else { return }
+        clearDraft()
     }
 
     func resumeDraft() {

@@ -263,7 +263,11 @@ struct CalendarPanelPages: View {
 
     private var listPage: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let draft = session.draft {
+            // 「继续编辑」这一行**只看「有未保存改动」，不看「存在稿」**（docs/49 D-39，判据与 D-36
+            // 同源）：开一条日程一个字没改就回月历，不该在这里冒出一行假提示。会话侧那三个出口
+            // （`back()` / `showList(on:)` / `suspend()`）也会把干净的稿丢掉——这里是第二道，
+            // 将来多一条出口也不会漏。
+            if session.hasDirtyDraft, let draft = session.draft {
                 Button { session.resumeDraft() } label: {
                     Label(draft.kind == .event ? String(localized: "calendar.panel.resumeEvent") : String(localized: "calendar.panel.resumeReminder"), systemImage: "pencil.circle")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)

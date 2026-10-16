@@ -10545,6 +10545,53 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertNil(session.pendingConfirmation)
     }
 
+    /// **离开编辑档时，没改过的稿直接丢掉**（docs/49 D-39，2026-10-16 用户第二次反馈：「打开一个
+    /// 日程编辑，不改动任何内容，点击回到月历，会显示存在一条草稿」）。
+    ///
+    /// D-36 只把「切条目」那条出口改成按「有改动」判断，**列表档顶部那行「有未保存的日程 · 继续
+    /// 编辑」还在看 `draft != nil`**——同一个「存在稿 ≠ 有改动」的坑的另一半。本用例钉三个出口
+    /// （顶部返回 / 左栏回到月历 / 面板收起）都丢掉干净的稿，且**改过的稿必须留着**。
+    func testLeavingTheEditorDropsAnUnchangedDraftOnly() throws {
+        let backend = panelBackend()
+        let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
+        let session = panelSession(service: backend)
+
+        // ① 左栏「回到月历」（`showList`）：稿没改过 → 丢掉、列表档干净。
+        session.beginEdit(event)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertFalse(session.hasDirtyDraft, "前提：刚开出来的稿与基线一致")
+        session.showList(on: date(day: 11))
+        XCTAssertEqual(session.route, .list)
+        XCTAssertNil(session.draft, "没改过的稿不该留下来——列表上那行「继续编辑」就是假提示")
+
+        // ② 新建档一个字没填就回列表：同样不留稿（用户会看到一行「有未保存的日程」的空壳）。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.showList(on: date(day: 11))
+        XCTAssertNil(session.draft, "空白新稿也不留")
+
+        // ③ 顶部返回（`back()`）与面板收起（`suspend()`）：同一条口径。
+        session.beginEdit(event)
+        guard case .calendar = session.back() else {
+            return XCTFail("back() 仍要把来源交回调用方（详情档退休后回列表，来源随返回值交回）")
+        }
+        XCTAssertNil(session.draft)
+        session.beginEdit(event)
+        session.suspend()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertNil(session.draft)
+
+        // ④ **改过的稿必须留着**：那是用户真敲进去的东西，回来还能接着写。
+        session.beginEdit(event)
+        session.draft?.title = "改过的标题"
+        XCTAssertTrue(session.hasDirtyDraft, "前提：这条稿确实有改动")
+        session.showList(on: date(day: 11))
+        XCTAssertEqual(session.draft?.title, "改过的标题", "有改动的稿不能丢")
+        XCTAssertTrue(session.hasDirtyDraft, "留在会话里的仍是「有改动」那一档（列表行据此显示）")
+        session.resumeDraft()
+        XCTAssertEqual(session.route, .editor, "resumeDraft 仍能把稿接回来")
+        XCTAssertEqual(session.draft?.title, "改过的标题")
+    }
+
     /// 2026-10-16（用户）：**编辑 / 新增档整个期间都抑制自动收起**——不是只有「有焦点 / 有菜单 /
     /// 有日期弹层」时才抑制；离开编辑档（保存 / 取消 / 挂起）保护随之释放。
     func testEditorSessionProtectsAutoCloseUntilItIsLeft() throws {
@@ -10802,6 +10849,9 @@ final class CalendarInteractionTests: XCTestCase {
     func testPanelOwnerAggregationKeepsOtherWindowProtectionUntilGlobalSuspend() {
         let session = panelSession(service: panelBackend())
         session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        // **稿要有改动**才会在挂起后留下（docs/49 D-39）：空稿与「没改过的稿」一样随收起丢掉——
+        // 留着的只有用户真敲过的东西。本用例末尾因此能继续断言「挂起后稿还在、回来能接着写」。
+        session.draft?.title = "写了一半的日程"
         let ownerA = UUID(), ownerB = UUID()
         session.setEditorFocus(true, ownerID: ownerA)
         session.setEditorFocus(true, ownerID: ownerB)
@@ -10821,7 +10871,8 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertFalse(session.datePopoverPresented)
         XCTAssertEqual(session.ownedMenuCount, 0)
         XCTAssertFalse(session.shouldProtectAutoClose)
-        XCTAssertNotNil(session.draft)
+        XCTAssertNotNil(session.draft, "有改动的稿随挂起留着（回来接着写）")
+        XCTAssertTrue(session.hasDirtyDraft)
     }
 
     func testPanelValidationRestrictedEditAndFailurePreserveDraftWithoutWrites() async throws {
@@ -13796,6 +13847,9 @@ final class ScheduleGenerationTests: XCTestCase {
         let identity = session.draftIdentity
         // 本地打过字但没点「生成」：会话里没有原文，所以重新进编辑页的初值仍是空。
         XCTAssertEqual(session.draft?.sourceText, "")
+        // **稿要有改动才留得住**（docs/49 D-39）：这里给的改动**必须与原文无关**（标题），
+        // 否则本用例的前提（重新进编辑页的输入框初值是空）就被自己破坏了。
+        session.draft?.title = "有改动"
         session.suspend()
         XCTAssertEqual(session.route, .list)
         XCTAssertNotNil(session.draft, "暂停不丢草稿，只换页面")
@@ -13829,6 +13883,9 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertNotEqual(session.draftIdentity, identity, "换稿路径一：身份在编辑页不渲染期间才变")
         // 路径二：route 切走再回来（`suspend()` → `.list`），身份不变，靠卸载复位。
         let secondIdentity = session.draftIdentity
+        // **稿要有改动才留得住**（docs/49 D-39）：空稿/没改过的稿随离开丢掉，`resumeDraft()` 接不回来。
+        // 本用例要验的是身份在「切档来回」里不变，所以先给稿一处改动。
+        session.draft?.title = "有改动的稿"
         session.suspend()
         XCTAssertEqual(session.route, .list, "切档期间编辑页不渲染")
         session.resumeDraft()
@@ -13923,6 +13980,9 @@ final class ScheduleGenerationTests: XCTestCase {
 
         // 路径二：切档（suspend）后回来。本地未提交的输入同样不留下。
         rebuilt.insertText(typed, replacementRange: NSRange(location: 0, length: 0))
+        // **稿要有改动才留得住**（docs/49 D-39）：这条路径靠「稿还在」才走得通，所以给稿一处
+        // 与原文无关的改动（标题）。输入框里那串本地文字本来就不进稿——本用例验的正是这一点。
+        session.draft?.title = "有改动"
         session.suspend()
         settleEditorPage(host)
         XCTAssertEqual(session.route, .list)
