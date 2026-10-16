@@ -117,9 +117,9 @@ enum PanelAutoHeight {
     /// + `ContentView` 展开态的底边 12 = **20**（出处与 `homeVerticalPadding` 的表逐项同源）。
     ///
     /// **这份留白自本批起归可变流**（docs/51 D-01，用户 2026-10-16：「消息和日程的内容高度增加，
-    /// 铺满首页下面这条留白」）：面板可见黑框到底部两块板底之间原本留 20pt 空玻璃，接缝把这 20pt
-    /// 让给可变流的**末行**（`HomeFlowLayout.plan(…:lastRowStretchLimit:)` 长高，块跟着变高），
-    /// 两块因此贴到面板下缘。
+    /// 铺满首页下面这条留白」）：面板可见黑框到底部两块板底之间原本留 20pt 空玻璃，接缝用一条
+    /// **负底部内缩**把这 20pt 让给可变流（内容区因此多拿 20pt），流的**末行**再长高把它吃掉
+    /// （`HomeFlowLayout.plan(…:lastRowStretchLimit:)`）——吃多少见 `homeFlowBottomGap`。
     ///
     /// **账本口径一个字没动**：`homeVerticalPadding` 仍是 40，`contentHeight(from:)` 仍只算
     /// 「块的申报高之和 + 带 + 表头」——首页的内容自然高与这份留白无关，所以**面板高度也没变**，
@@ -128,6 +128,21 @@ enum PanelAutoHeight {
     /// **口径边界**：只动**底部**。顶部那 8（`NotchHomeView` 上侧）+ 顶出血 4 + 表头↔内容的缝 8
     /// 与折叠态无关地照旧——它们不是「面板下缘的留白」，也不在用户那条反馈的范围里。
     static let homeFlowBottomCredit: CGFloat = 8 + 12
+
+    /// 上面那 20pt 里**仍然留白的一条缝** = **8**（docs/51 D-09）。
+    ///
+    /// 口径改判（用户 2026-10-16 上屏复核后）：「铺满」到**贴边**视觉上太满——板的圆角撞上面板的
+    /// 下圆角、通知列表最后那半行直接切在面板边上，像被裁掉了。因此两块板底与面板下缘之间**保留
+    /// 这一段空玻璃；末行实际长高的量 = `homeFlowBottomCredit − homeFlowBottomGap` = 12
+    /// （让出的仍是 20，其中 8 留缝）。
+    ///
+    /// 取值 8 是用户在三档（0 / 8 / 20）真机样张之间选的：0 太满（就是上面那两条）、20 等于改前
+    /// （没有变化），8 既看得出「板不再贴边」，通知列表又能多露出第 7 条的标题行。
+    static let homeFlowBottomGap: CGFloat = 8
+
+    /// 末行**实际长高的量**（= 让出的 20 − 留的缝 8 = **12**）——接缝传给
+    /// `HomeFlowLayout.plan(…:lastRowStretchLimit:)` 的就是它（唯一算式，别再各算一遍）。
+    static var homeFlowBottomAbsorbed: CGFloat { homeFlowBottomCredit - homeFlowBottomGap }
 
     /// 测量出来的**自然高** → 账本口径的内容高（含表头，`PanelContentHeight.current`）的换算
     /// （纯函数，p5-home-blocks / T7）。

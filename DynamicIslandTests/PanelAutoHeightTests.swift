@@ -1086,6 +1086,19 @@ final class PanelAutoHeightTests: XCTestCase {
             "只让出底部那一份；顶部 8 + 出血 4 + 缝 8 不在其中"
         )
 
+        // **让出的 20 里留一条缝**（docs/51 D-09，用户上屏复核后选定 8）：缝必须
+        // ① 严格小于让出的量（否则末行没得长高、等于回到改前）、② 大于 0（0 就是「贴边」那版，
+        // 用户已否掉）；③ 末行实际长高的量 = 让出的 − 缝，且为正。
+        XCTAssertEqual(PanelAutoHeight.homeFlowBottomGap, 8, "两块板底到面板下缘留的那条缝")
+        XCTAssertGreaterThan(PanelAutoHeight.homeFlowBottomGap, 0, "0 = 贴边（用户已否掉）")
+        XCTAssertLessThan(PanelAutoHeight.homeFlowBottomGap, PanelAutoHeight.homeFlowBottomCredit)
+        XCTAssertEqual(
+            PanelAutoHeight.homeFlowBottomAbsorbed,
+            PanelAutoHeight.homeFlowBottomCredit - PanelAutoHeight.homeFlowBottomGap,
+            "末行实际长高的量 = 让出的 − 缝（唯一算式）"
+        )
+        XCTAssertEqual(PanelAutoHeight.homeFlowBottomAbsorbed, 12)
+
         // 换算：+ 表头、− 首页独有的 16；非有限项各自按 0。
         XCTAssertEqual(
             PanelAutoHeight.measuredContentHeight(naturalHeight: 300, headerHeight: 28), 312

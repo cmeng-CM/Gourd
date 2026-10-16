@@ -1633,7 +1633,7 @@ final class HomeStripLayoutTests: XCTestCase {
                 rowSpacing: HomeStripView.widgetRowSpacing,
                 tailReserve: HomeStripView.droppedHintWidth
             ),
-            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
+            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomAbsorbed
         )
 
         // 锚：先把「这道题该是什么答案」钉住（数值变了要有人复核，而不是被断言静默吸收）
@@ -1692,9 +1692,9 @@ final class HomeStripLayoutTests: XCTestCase {
                     rowSpacing: HomeStripView.widgetRowSpacing,
                     tailReserve: HomeStripView.droppedHintWidth
                 ),
-                // 同 `testMinimumPanelWidth…`：夹具饿着高度，末行会长高（docs/51 D-01），
-                // 期望 plan 与接缝用同一条上限才不会两处各算一个数。
-                lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
+                // 同 `testMinimumPanelWidth…`：夹具饿着高度，末行会长高（docs/51 D-01/D-09），
+                // 期望 plan 与接缝用同一条上限（= 让出的 20 − 留的缝 8）才不会两处各算一个数。
+                lastRowStretchLimit: PanelAutoHeight.homeFlowBottomAbsorbed
             )
 
             XCTAssertEqual(plan.visibleCount, expectedVisible, "面板 \(panelWidth)pt（带内可用 \(bandWidth)）的可见块数")
@@ -1921,7 +1921,7 @@ final class HomeStripLayoutTests: XCTestCase {
             availableWidth: bandWidth,
             availableHeight: flowAvailable,
             metrics: flowMetrics,
-            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
+            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomAbsorbed
         )
         XCTAssertEqual(drawnPlan.rowsDrawn, 1, "紧凑块那一行在（frame − 两带 ≥ 96）")
         XCTAssertEqual(drawnPlan.droppedCount, 0, "一块都不丢")
@@ -1931,30 +1931,30 @@ final class HomeStripLayoutTests: XCTestCase {
         // T2 起探针报的是**内容区**（见 `assertRenderedSizesMatchFlowPlan`）：档高 96 是格子 / 板矩形
         // 的数，内容区再减去上下两段内缩。
         //
-        // **docs/51 D-01 起再加一句**：自动高度下面板给首页的 frame 里，**多出来的一段留白正落在
-        // 末行上**——那 20pt（`homeFlowBottomCredit`）是接缝故意多要的，接了接缝的块因此比档高高
-        // 20pt。这里的期望值由**生产常数**给，不是写死的 116。
+        // **docs/51 D-01/D-09 起再加一句**：自动高度下面板给首页的 frame 里，**让出来的那一段正落在
+        // 末行上**——接缝故意多要 20pt、其中 8pt 留缝，块因此比档高高 `homeFlowBottomAbsorbed`（12）。
+        // 这里的期望值由**生产常数**给，不是写死的 108。
         let compactInsets = HomeBlockChrome.contentInsets(includeVertical: true)
         XCTAssertEqual(
             homeBlockSizeLog.size(of: HomeCompactProbeModule.ids[0]).height,
-            HomeFlowView.compactBlockHeight + PanelAutoHeight.homeFlowBottomCredit
+            HomeFlowView.compactBlockHeight + PanelAutoHeight.homeFlowBottomAbsorbed
                 - compactInsets.top - compactInsets.bottom,
-            "接缝在自动高度的 frame 里把紧凑块摆出来了，且面板底部那 20pt 已落在末行上"
+            "接缝在自动高度的 frame 里把紧凑块摆出来了，且让出来的那一段（20 − 缝 8）已落在末行上"
         )
         XCTAssertEqual(
             drawnPlan.rows[0].height,
-            HomeFlowView.compactBlockHeight + PanelAutoHeight.homeFlowBottomCredit,
-            "生产 plan 那一行 = 档高 96 + 底部呼吸 20（与渲染真值同源）"
+            HomeFlowView.compactBlockHeight + PanelAutoHeight.homeFlowBottomAbsorbed,
+            "生产 plan 那一行 = 档高 96 + 归流的那 12（与渲染真值同源）"
         )
     }
 
-    /// **面板底部的留白真的落在末行上**（docs/51 D-01 的**端到端**判据：负底部内缩 + 末行长高上限
-    /// 两半都参与）。夹具给一行紧凑块（档高 96），宿主给的高按 auto 档的关系取
-    /// 「流的需高 + 两带」（= `hostHeight(forFlowAvailable:)` 再 + 底部呼吸）——于是接缝拿到的可用高
-    /// 比需高多 20，那一行就该变高 20。
+    /// **让出来的那一段真的落在末行上**（docs/51 D-01/D-09 的**端到端**判据：负底部内缩 + 末行
+    /// 长高上限两半都参与）。夹具给一行紧凑块（档高 96），宿主给的高按 auto 档的关系取
+    /// 「流的需高 + 两带 + 让出的 20」（= `hostHeight(forFlowAvailable:)`）——于是接缝拿到的可用高
+    /// 比需高多 20，那一行该长高 `homeFlowBottomAbsorbed`（= 20 − 缝 8 = 12），剩下的 8pt 就是缝。
     ///
     /// 这条能逮住两种偏：① 负内缩被删 → 可用高回到需高，块高 96（渲染真值不变高）；② 上限没传 →
-    /// 富余再大也只吃 20（下面的 `taller` 那一档同样 96 + 20，不会变成 96 + 富余）。
+    /// 富余再大也越长越高（下面的 `taller` 那一档同样只长 12，不会变成 96 + 富余）。
     func testSeamHandsThePanelBottomCreditToTheLastRow() async {
         homeBlockSizeLog.reset()
         registerProbes([HomeCompactAProbeModule.self])
@@ -1964,7 +1964,7 @@ final class HomeStripLayoutTests: XCTestCase {
         let insets = HomeBlockChrome.contentInsets(includeVertical: true)
         let id = HomeCompactProbeModule.ids[0]
         let expectedContentHeight = HomeFlowView.compactBlockHeight
-            + PanelAutoHeight.homeFlowBottomCredit - insets.top - insets.bottom
+            + PanelAutoHeight.homeFlowBottomAbsorbed - insets.top - insets.bottom
 
         // ① 恰好把底部呼吸让出来（auto 档的关系）：末行拿到 96 + 20。
         renderRealHomeStrip(
@@ -1976,7 +1976,7 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             homeBlockSizeLog.size(of: id).height, expectedContentHeight, accuracy: 0.5,
-            "末行 = 档高 96 + 底部呼吸 20（内容区再减上下内缩）"
+            "末行 = 档高 96 + 归流的 12（内容区再减上下内缩）；缝 8 不进块高"
         )
 
         // ② 宿主给得再高（手动档那种）：吃到上限就停，不会跟着长。
@@ -1990,7 +1990,7 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             homeBlockSizeLog.size(of: id).height, expectedContentHeight, accuracy: 0.5,
-            "富余 400 也只吃 20（上限封顶，多出来的仍留空）"
+            "富余 400 也只长 12（上限封顶，多出来的仍留空）"
         )
     }
 
@@ -2537,7 +2537,7 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         let stretched = HomeFlowLayout.plan(
             items: items, availableWidth: 855, availableHeight: budget, metrics: flowMetrics,
-            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
+            lastRowStretchLimit: PanelAutoHeight.homeFlowBottomAbsorbed
         )
         XCTAssertEqual(
             PanelAutoHeight.contentHeight(from: ledgerPlan, hostBandsHeight: 144, headerHeight: 38),
@@ -2546,7 +2546,7 @@ final class HomeStripLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             PanelAutoHeight.contentHeight(from: stretched, hostBandsHeight: 144, headerHeight: 38),
-            228 + PanelAutoHeight.homeFlowBottomCredit + 144 + 38,
+            228 + PanelAutoHeight.homeFlowBottomAbsorbed + 144 + 38,
             "开着的那一份多算一截（上限封顶）——账本用它就会把面板顶着涨"
         )
     }

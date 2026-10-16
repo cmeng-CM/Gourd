@@ -1418,15 +1418,16 @@ struct HomeBandedHomeView: View {
 
             // **画出来的那一份** plan 用的仍是当前可用高：面板多高就画多满，
             // 预算里装不下的行不画（`HomeFlowLayout` 的整行进出）。**末行长高吃掉底部呼吸**
-            // （docs/51 D-01）：上限取接缝从「面板底部呼吸」让出来的那 20pt（同一条负内缩，见下），
-            // 因此手动高度档下多出来的几百 pt 不会被块吃掉。**账本那一份（下面）不开这一档**——
-            // 那一份逐字算申报高之和，开了会把面板撑到上界。
+            // （docs/51 D-01）：让出的那 20pt 里**留一条 8pt 的缝**（D-09，用户上屏复核后选定），
+            // 末行实际长高 `homeFlowBottomAbsorbed` = 12；上限就是它——手动高度档下多出来的几百 pt
+            // 因此不会被块吃掉。**账本那一份（下面）不开这一档**——那一份逐字算申报高之和，开了会把
+            // 面板撑到上界。
             let plan = HomeFlowLayout.plan(
                 items: items,
                 availableWidth: bandWidth,
                 availableHeight: max(0, geometry.size.height - hostBandsHeight),
                 metrics: Self.flowMetrics,
-                lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
+                lastRowStretchLimit: PanelAutoHeight.homeFlowBottomAbsorbed
             )
 
             // —— 「面板贴内容」的高度账本（p5-home-blocks / T6，docs/29 §做法 机制六）——
@@ -1507,7 +1508,8 @@ struct HomeBandedHomeView: View {
         // 下面这条留白」）：面板下缘到两块板底之间那 20pt 空玻璃（`NotchHomeView` 下侧 8 +
         // `ContentView` 底边 12）自本批起交给这条流——**负内缩**让内容区多拿这 20pt（内容照常画在
         // 面板原来的框里，多出来的一段正好落在那两处透明内边距上，裁剪仍只由面板的 `clipShape` 做），
-        // 流按 `lastRowStretchLimit` 把它吃成**末行的行高**，两块因此贴到面板下缘。
+        // 流按 `lastRowStretchLimit` 把它吃成**末行的行高**；其中 **8pt 留缝**（D-09，上屏复核后
+        // 用户选定「不要贴边」），末行实际长高 12pt，两块板底因此停在面板下缘之上 8pt。
         //
         // 为什么用负内缩而不是把那两处 `.padding` 改成 0：那两处是**所有页共用**的（`ContentView`
         // 的底边还给其它 tab 的「量高 → 面板高」换算当基准，`PanelAutoHeight.panelVerticalPadding`
