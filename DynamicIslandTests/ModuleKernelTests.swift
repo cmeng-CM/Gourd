@@ -15398,7 +15398,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(PanelContentHeight.measuredTabs.contains(PanelContentHeight.calendarEditorTab))
         XCTAssertTrue(PanelContentHeight.isMeasuredTab(PanelContentHeight.calendarEditorTab))
 
-        // ③ 账本行为：编辑档自然高 400 → 400 + 表头 28 − 16 = 412；切回列表档**回落**当月自然高。
+        // ③ 账本行为：编辑档自然高 448 → 448 + 表头 28 − 16 = 460；切回列表档**回落**当月自然高。
         let ledger = PanelContentHeight.shared
         ledger.reset()
         defer { ledger.reset() }
@@ -15414,28 +15414,28 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
                        "列表档：当月自然高 278 → 账本 290（表头取测试桩 28）")
 
-        // 编辑档：两栏都钉 400（视图声明的常量），账本口径走真实换算（表头取测试桩 28）→ 412。
-        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 400, "编辑档列高 = 400（视图声明）")
+        // 编辑档：两栏都钉 448（视图声明的常量，2026-10-16 由 400 抬高），账本口径走真实换算 → 460。
+        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 448, "编辑档列高 = 448（视图声明）")
         ledger.selectTab(PanelContentHeight.calendarEditorTab)
         XCTAssertEqual(ledger.activeTab, PanelContentHeight.calendarEditorTab)
         ledger.report(PanelAutoHeight.measuredContentHeight(
             naturalHeight: StandaloneCalendarView.editorPaneHeight, headerHeight: 28
         ), for: PanelContentHeight.calendarEditorTab)
-        XCTAssertEqual(ledger.current ?? 0, 412, accuracy: 1e-9,
-                       "编辑档：账本值 = measuredContentHeight(列高 400, 表头取测试桩 28) = 412")
+        XCTAssertEqual(ledger.current ?? 0, 460, accuracy: 1e-9,
+                       "编辑档：账本值 = measuredContentHeight(列高 448, 表头取测试桩 28) = 460")
         XCTAssertEqual(
-            PanelAutoHeight.panelHeight(contentHeight: 412, mode: PanelAutoHeight.modeAuto,
+            PanelAutoHeight.panelHeight(contentHeight: 460, mode: PanelAutoHeight.modeAuto,
                                         manualHeight: 682, screenVisibleHeight: nil),
-            452, accuracy: 1e-9,
-            "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 412 = 400 + 表头(测试桩 28) − 16"
-                + "；真机表头 32 → 真机面板 456（400 + 32 − 16 + 40），设计图 ⑤ 的 474 = 456 + 阴影带 18"
-                + "（manual 档面板高由 openNotchHeight 决定）"
+            500, accuracy: 1e-9,
+            "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 460 = 448 + 表头(测试桩 28) − 16"
+                + "；真机表头 32 → 真机面板 504（448 + 32 − 16 + 40）——抬高编辑器高度后（2026-10-16 方案一）"
+                + "面板比列表档那档高约 48pt（manual 档面板高由 openNotchHeight 决定）"
         )
 
         // 切回列表档：读缓存一步回落（不是停在编辑档的 412）——失败信号「切回列表档后高度没回落」的反证。
         ledger.selectTab(CalendarModule.moduleID)
         XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
-                       "切回列表档 → 回落当月自然高（编辑档的 412 不留在列表档）")
+                       "切回列表档 → 回落当月自然高（编辑档的 460 不留在列表档）")
 
         // 几何：编辑档挂进 `NSHostingView`——编辑区内容宽随宿主宽**线性**变化（左栏 260 与栏间距 12
         // 在两次里都固定）。**两个不同宿主宽**各挂一次，断言两次读数的差 = 宿主宽之差：
@@ -15469,9 +15469,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // 左栏 260 / 两栏 400 是 SwiftUI 原生视图（不是 NSView），按源码取证（派发片段裁决 7 允许的降级）。
         let source = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
         XCTAssertTrue(source.contains("static let editorSidebarWidth: CGFloat = 260"), "左栏宽 260")
-        XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 400"), "两栏高 400")
+        XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 448"),
+                      "两栏高 448（2026-10-16 由 400 抬高，见设计图 F2 方案一）")
         XCTAssertTrue(source.contains(".frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight"),
-                      "编辑档左栏钉宽 260 + 钉高 400")
+                      "编辑档左栏钉宽 260 + 钉高 448")
     }
 
     /// T3 / 失败信号反证：「选中日记录很多时编辑档自然高 > 400（左栏没钉高）」。
@@ -16044,8 +16045,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         settle(host)
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         XCTAssertTrue(panel.contains("VStack(alignment: .leading, spacing: 8)"), "编辑页行距 = 8（D-17）")
-        XCTAssertEqual(host.fittingSize.height, StandaloneCalendarView.editorPaneHeight, accuracy: 1,
-                       "编辑档自然高仍是 400（本轮不动整体尺寸）")
+        // 挂载用的宿主高就是编辑档高（`mountStandaloneCalendar` 按它钉框），所以这里断言**声明**本身：
+        // 2026-10-16 由 400 抬到 448（设计图 F2 方案一），页面的自然高口径见 `PanelAutoHeightTests`。
+        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 448, "编辑档高 = 448")
 
         let notes = try XCTUnwrap(notesEditors(in: host).first)
         let box = try XCTUnwrap(notes.enclosingScrollView)
@@ -16058,6 +16060,19 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertLessThanOrEqual(content, region.height,
                                  "新建待办表单 \(content) 必须落在可视区 \(region.height) 之内")
         print("校准读数：新建待办表单内容高 \(content)，可视区 \(region.height) → 差额 \(content - region.height)")
+
+        // 同一把尺子量**日程**（多一行「地点｜链接」，是这次抬高编辑档的理由）：
+        // 2026-10-16 方案一把编辑档 400 → 448，日程表单因此也一屏放完（改前 378 > 336 会出滚动条）。
+        let (eventSession, eventManager) = editorSession(kind: .event, editing: false)
+        let eventHost = mountStandaloneCalendar(session: eventSession, manager: eventManager, width: 887)
+        settle(eventHost)
+        let eventNotes = try XCTUnwrap(notesEditors(in: eventHost).first)
+        let eventBox = try XCTUnwrap(eventNotes.enclosingScrollView)
+        let eventRegion = try XCTUnwrap(formRegion(in: eventHost))
+        let eventContent = eventBox.convert(eventBox.bounds, to: eventHost).maxY - eventRegion.minY
+        XCTAssertLessThanOrEqual(eventContent, eventRegion.height,
+                                 "新建日程表单 \(eventContent) 必须落在可视区 \(eventRegion.height) 之内")
+        print("校准读数：新建日程表单内容高 \(eventContent)，可视区 \(eventRegion.height) → 差额 \(eventContent - eventRegion.height)")
     }
 
 
