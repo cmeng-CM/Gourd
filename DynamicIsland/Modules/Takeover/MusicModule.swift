@@ -302,60 +302,41 @@ private struct MusicHomeBlockView: View {
     let showsAlbumArt: Bool
 
     var body: some View {
-        if showsAlbumArt {
-            HStack(alignment: .top, spacing: Metrics.albumArtSpacing) {
-                albumArtButton
-                    .frame(width: Metrics.albumArtSide, height: Metrics.albumArtSide)
+        Group {
+            if showsAlbumArt {
+                HStack(alignment: .top, spacing: Metrics.albumArtSpacing) {
+                    AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+                        .frame(width: Metrics.albumArtSide, height: Metrics.albumArtSide)
+                    MusicControlsView()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：不再让封面贴着玻璃板的顶缘（改前上屏读数
+                // 0.0pt）——7pt 让封面上缘的可见留白与前台的图标 / 统计块的环顶同档，见 `HomeBlockChrome`。
+                .padding(.top, HomeBlockChrome.contentInsetTopGraphics)
+            } else {
+                // 整条内容高由 `MusicControlsView.CompactMetrics` 给（D-17；T6 前标准档内容 ≈127pt，
+                // 在 96 里控制三键整行被裁，T3 阶段 Checkpoint 上屏实测——那一档已退休）。
+                // 标题行同样让出上留白（与带封面那一支同源，两块形态的顶缘才对得上）。
                 MusicControlsView()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, HomeBlockChrome.contentInsetTopText)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            // **内容顶部内缩**（2026-10-07 / docs/32 D-22）：不再让封面贴着玻璃板的顶缘（改前上屏读数
-            // 0.0pt）——7pt 让封面上缘的可见留白与前台的图标 / 统计块的环顶同档，见 `HomeBlockChrome`。
-            .padding(.top, HomeBlockChrome.contentInsetTopGraphics)
-        } else {
-            // 整条内容高由 `MusicControlsView.CompactMetrics` 给（D-17；T6 前标准档内容 ≈127pt，
-            // 在 96 里控制三键整行被裁，T3 阶段 Checkpoint 上屏实测——那一档已退休）。
-            // 标题行同样让出上留白（与带封面那一支同源，两块形态的顶缘才对得上）。
-            MusicControlsView()
-                .padding(.top, HomeBlockChrome.contentInsetTopText)
         }
-    }
-
-    /// 封面的两个数**不在模块里自带一份**（p6 / T2）：36/6 那两档与「五键 + 四道键距」一起
-    /// 组成紧凑条的装宽度 `5×26 + 4×6 + 36 + 6 = 196 ≤ min 200`，四个数必须同源——
-    /// 真源是 `MusicControlsView.CompactMetrics`（那边有算式与依据的注释）。
-    private typealias Metrics = MusicControlsView.CompactMetrics
-
-    /// **封面 = 「打开正在放歌的那个音乐软件」的入口**（2026-10-16 / docs/50 D-06）。
-    ///
-    /// 上游极简档的封面本来就是这个行为（`MinimalisticMusicPlayerView.albumArtButton` →
-    /// `MusicManager.openMusicApp()`），首页音乐块接管（T5）时这一步漏了——用户 2026-10-16 的
-    /// 原话是「点击音乐软件，要打开对应的音乐软件」。`openMusicApp()` 按**此刻会话的
-    /// `bundleIdentifier`** 走，所以放歌的是谁就开谁（LX Music / Spotify / Apple Music 都行）。
-    ///
-    /// 命中区 = 封面那 36pt 那一格：下面的进度条拖拽改播放位置、再下面的控制键各是一枚按钮，
-    /// 都不碰。**封面关掉（`showAlbumArt = false`）时没有这个入口**——块里没有代表「哪个软件」
-    /// 的图形，这是已知限制（docs/50 §已知限制 1）。
-    ///
-    /// 指针在封面上变成手（与 `NotchColorPickerView` 同一条 `NSCursor` 用法），并给
-    /// `.help` 提示：这是个**藏起来的**动作，得让人有地方看出来它能点。
-    ///
-    /// **图形不参与命中**（`allowsHitTesting(false)` + 外层 `contentShape`）：封面那一层是
-    /// `DynamicIslandArtworkSourceView`，开启动态封面时它是**一个 AppKit 视图**（AVPlayerLayer）——
-    /// p17 那条教训（浮层吃了命中，鼠标点永远到不了按钮）在这里同样成立，所以把内容摘出命中链，
-    /// 由外层那一格定义热区。
-    @State private var hoveringAlbumArt = false
-
-    private var albumArtButton: some View {
-        ZStack {
-            AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
-                .allowsHitTesting(false)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: HomeBandChrome.hoverCornerRadius, style: .continuous))
+        // **整块是「打开正在放歌的那个音乐软件」的命中区**（docs/50 D-13）。
+        //
+        // 用户 2026-10-16 第一次说「点击音乐软件，要打开对应的音乐软件」，我先把 36pt 的**封面**
+        // 做成了入口；他第二次截图圈的是**整块**（封面 + 曲名 + 进度那一带）并说「点击音乐区域，
+        // 还是没能唤出音乐软件」——加上日志里连一条「打开音乐软件」都没有（点击根本没进处理函数），
+        // 结论是**命中区太小**：入口应该是整块，不是那块小封面。
+        //
+        // 挂在最外层、两个 `.padding` 之后（整格都算命中，含内缩那几条边）。块内两处自有手势
+        // **优先级更高、不受影响**：① 进度条是 `highPriorityGesture(DragGesture(minimumDistance: 0))`
+        // （点轨道 = 改播放位置，既有行为）；② 控制键各是一枚 `HoverButton`（Button 吃自己的点击）。
+        // 其余地方（封面 / 曲名 / 留白 / `.none` 槽位）点哪儿都开播放器。
+        .contentShape(Rectangle())
         .onTapGesture { MusicManager.shared.openMusicApp() }
         .onHover { isHovering in
-            hoveringAlbumArt = isHovering
+            hoveringMusicBlock = isHovering
             if isHovering {
                 NSCursor.pointingHand.push()
             } else {
@@ -364,14 +345,23 @@ private struct MusicHomeBlockView: View {
         }
         .onDisappear {
             // 悬停中消失（切页 / 块被换掉）时把指针还回去，不然手会「粘」在鼠标上。
-            if hoveringAlbumArt {
+            if hoveringMusicBlock {
                 NSCursor.pop()
-                hoveringAlbumArt = false
+                hoveringMusicBlock = false
             }
         }
         .help(Text("module.music.openPlayer"))
         .accessibilityLabel(Text("module.music.openPlayer"))
     }
+
+    /// 指针在块内变成手（与 `NotchColorPickerView` 同一条 `NSCursor` 用法）：这是个**藏起来的**
+    /// 动作，得让人有地方看出来它能点。
+    @State private var hoveringMusicBlock = false
+
+    /// 封面的两个数**不在模块里自带一份**（p6 / T2）：36/6 那两档与「五键 + 四道键距」一起
+    /// 组成紧凑条的装宽度 `5×26 + 4×6 + 36 + 6 = 196 ≤ min 200`，四个数必须同源——
+    /// 真源是 `MusicControlsView.CompactMetrics`（那边有算式与依据的注释）。
+    private typealias Metrics = MusicControlsView.CompactMetrics
 }
 
 /// 紧凑条里的**小封面**（36pt 圆角方，T2 起；T3 是 40pt）：封面来源那一层与改动前逐字相同
