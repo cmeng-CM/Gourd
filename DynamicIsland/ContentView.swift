@@ -1450,9 +1450,27 @@ struct ContentView: View {
                 syncStickyTerminalOutsideClickMonitor()
             }
             .sensoryFeedback(.alignment, trigger: haptics)
+            // 面板右键菜单（挂在**整块面板**上，`configuredMainLayout` 的末端）。
+            //
+            // 2026-10-16 用户要求「增加一个退出按钮，可以完全退出应用」——本应用只有菜单栏图标与
+            // 刘海面板两个入口，菜单栏被系统隐藏（`menubarIcon = false`）时就没有出口了，右键退出是
+            // 最小可用的一条。
+            //
+            // **必须走 `NSApplication.shared.terminate`**（与菜单栏那条 `Button("Quit")` 同一个调用）：
+            // `AppDelegate.applicationShouldTerminate` 里还有日历会话的收尾（有未落盘的编辑时会问一句），
+            // `exit(0)` 之类会绕过它 → 那才是"退不干净"。`role: .destructive` 与菜单栏那条一致
+            // （语义上标成破坏性动作；**实测本机这个菜单里并没有渲染成红字**——两条都是白字，
+            // 保留它要的是读屏那边的「破坏性」播报）。**不给 ⌘Q 快捷键**：面板是非激活窗口、没有键窗，
+            // 提示一个按不动的快捷键比不提示更糟。
+            //
+            // 文案复用既有键 `Quit`（catalog 里已有 18 种语言，zh-Hans = 退出），因此**不动本地化表**。
             .contextMenu {
                 Button("Settings") {
                     SettingsWindowController.shared.showWindow()
+                }
+                Divider()
+                Button("Quit", role: .destructive) {
+                    NSApplication.shared.terminate(nil)
                 }
 //                Button("Edit") { // Doesnt work....
 //                    let dn = DynamicNotch(content: EditPanelView())
