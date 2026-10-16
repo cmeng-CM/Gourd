@@ -1437,10 +1437,14 @@ class MusicManager: ObservableObject {
         showLyrics = isEnabled
 
         if isEnabled {
-            // 用户主动打开歌词 = **现在就去问一次**（docs/50 D-03）。原来这条走缓存：上一次若因为
-            // 503 / 网络抖动存进了一个空数组，光把开关打开什么都不会发生——用户看到的就是
-            // 「歌词标志点了没用」。手上已经有这首歌的歌词时才吃缓存（不重复打网络）。
-            prepareLyricsForCurrentTrack(forceFetch: syncedLyrics.isEmpty, prioritizeVisibleResult: true)
+            // **这一条现在会自动去问**（docs/50 D-04 的连带效果）：瞬时故障不写缓存，所以「关掉
+            // 再打开」时缓存里没有结论 → 直接落到下面那条取词路径。原来它命中的是「503 也被当成
+            // 没有歌词」的那份缓存，打开开关什么都不会发生——用户看到的就是「歌词标志点了没用」。
+            //
+            // 刻意**不**在这里 `forceFetch: true`：词库**确实没有**的歌（200 空数组）那份结论是
+            // 可信的、也是可复用的，每次拨开关都重问一遍等于白打（最多 4 条候选）——重问不出来的
+            // 还是问不出来，只是给公共免费词库添流量。
+            prepareLyricsForCurrentTrack(prioritizeVisibleResult: true)
         } else {
             discardLyrics()
         }
