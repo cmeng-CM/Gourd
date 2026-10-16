@@ -16465,3 +16465,243 @@ final class LyricsQueryPlannerTests: XCTestCase {
                              "瞬时故障后自动再试一次，但只一次（不是轮询）")
     }
 }
+
+// MARK: - 本机播放器歌词缓存（LX Music 本地库，2026-10-16 / docs/50 D-14）
+
+/// 用例的 schema 与数据形状都照**本机真库**来（2026-10-16 实测：`lx.data.db` 的
+/// `my_list_music_info`（id/name/singer/interval，如 `wy_424057089|万水|李雨|02:58`）与
+/// `lyric`（id/source/type/text，`type='lyric'` 的 `text` 是 base64 的 UTF-8 LRC））。
+/// 真库无法进单测，所以这里造一份同 schema 的 fixture；真数据那次核对在 docs/50 §取证里。
+final class LxMusicLyricsCacheTests: XCTestCase {
+
+    private var directory: URL!
+    private var databasePath: String!
+
+    override func setUpWithError() throws {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lx-lyrics-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        databasePath = directory.appendingPathComponent("lx.data.db").path
+    }
+
+    override func tearDownWithError() throws {
+        if let directory { try? FileManager.default.removeItem(at: directory) }
+    }
+
+    // MARK: fixture
+
+    private func makeDatabase(tracks: [(id: String, name: String, singer: String, interval: String)],
+                              lyrics: [(id: String, type: String, text: String)],
+                              includeOtherSourceTable: Bool = true) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+              let db else {
+            XCTFail("sqlite3_open_v2 失败")
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        try exec(db, "CREATE TABLE my_list_music_info (id TEXT, name TEXT, singer TEXT, interval TEXT)")
+        if includeOtherSourceTable {
+            try exec(db, "CREATE TABLE music_info_other_source (id TEXT, name TEXT, singer TEXT, interval TEXT)")
+        }
+        try exec(db, "CREATE TABLE lyric (id TEXT, source TEXT, type TEXT, text TEXT)")
+        for track in tracks {
+            try exec(db, "INSERT INTO my_list_music_info VALUES ('\(track.id)','\(track.name)','\(track.singer)','\(track.interval)')")
+        }
+        for lyric in lyrics {
+            try exec(db, "INSERT INTO lyric VALUES ('\(lyric.id)','wy','\(lyric.type)','\(lyric.text)')")
+        }
+    }
+
+    private func exec(_ db: OpaquePointer, _ sql: String) throws {
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, sql, nil, nil, &errorPointer) == SQLITE_OK else {
+            let message = errorPointer.map { String(cString: $0) } ?? "未知错误"
+            sqlite3_free(errorPointer)
+            throw NSError(domain: "LxMusicLyricsCacheTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(sql)：\(message)"])
+        }
+    }
+
+    private static func base64(_ text: String) -> String {
+        Data(text.utf8).base64EncodedString()
+    }
+
+    private static let wanShuiLRC = "[00:00.0]作词: 李雨\n[00:21.65]你把你过来见我时的草帽留着"
+
+    private var cache: LxMusicLyricsCache { LxMusicLyricsCache(databasePath: databasePath) }
+
+    // MARK: 命中
+
+    func testExactMatchReturnsDecodedLRC() throws {
+        try makeDatabase(
+            tracks: [("wy_1", "万水", "李雨", "02:58")],
+            lyrics: [("wy_1", "lyric", Self.base64(Self.wanShuiLRC))]
+        )
+        let text = cache.lyricText(titles: ["万水"], artist: "李雨", duration: 178.6)
+        XCTAssertEqual(text, Self.wanShuiLRC, "歌名 + 歌手对上就取主歌词，base64 要解开")
+    }
+
+    func testArtistAliasInsideParenthesesStillMatches() throws {
+        try makeDatabase(
+            tracks: [("wy_2", "慕夏", "等什么君", "04:10")],
+            lyrics: [("wy_2", "lyric", Self.base64("[00:00.0]慕夏"))]
+        )
+        XCTAssertEqual(
+            cache.lyricText(titles: ["慕夏"], artist: "邓寓君(等什么君)", duration: 250),
+            "[00:00.0]慕夏",
+            "播放器报的歌手带别名（词库里是 `等什么君`）也要算对上"
+        )
+    }
+
+    func testVersionTagStrippedTitleStillMatches() throws {
+        try makeDatabase(
+            tracks: [("wy_3", "丢了幸福的猪", "穆菲菲", "04:32")],
+            lyrics: [("wy_3", "lyric", Self.base64("[00:00.0]丢了幸福的猪"))]
+        )
+        XCTAssertEqual(
+            cache.lyricText(titles: ["丢了幸福的猪 (烟嗓版)", "丢了幸福的猪"], artist: "穆菲菲", duration: 272),
+            "[00:00.0]丢了幸福的猪",
+            "候选歌名里剥掉版本标注那个也算命中（与 LRCLIB 那条阶梯同源）"
+        )
+    }
+
+    func testDifferentArtistWithSameTitleDoesNotMatch() throws {
+        try makeDatabase(
+            tracks: [("wy_1", "万水", "李雨", "02:58")],
+            lyrics: [("wy_1", "lyric", Self.base64(Self.wanShuiLRC))]
+        )
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "张三", duration: 178),
+                     "同名不同人 → 宁可回落 LRCLIB，也不拿别人的歌词")
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "", duration: 178), "歌手为空也算对不上")
+    }
+
+    func testDurationPicksTheMatchingVersion() throws {
+        try makeDatabase(
+            tracks: [("wy_a", "如果当时", "许嵩", "05:16"), ("wy_b", "如果当时", "许嵩", "03:20")],
+            lyrics: [
+                ("wy_a", "lyric", Self.base64("[00:00.0]许嵩版")),
+                ("wy_b", "lyric", Self.base64("[00:00.0]另一个版本"))
+            ]
+        )
+        XCTAssertEqual(cache.lyricText(titles: ["如果当时"], artist: "许嵩", duration: 316), "[00:00.0]许嵩版")
+        XCTAssertEqual(cache.lyricText(titles: ["如果当时"], artist: "许嵩", duration: 200), "[00:00.0]另一个版本")
+        XCTAssertEqual(cache.lyricText(titles: ["如果当时"], artist: "许嵩", duration: 0), "[00:00.0]许嵩版",
+                       "时长取不到 → 退化成第一条（不因缺时长而放弃）")
+    }
+
+    // MARK: 取不到
+
+    func testMissingDatabaseReturnsNil() {
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "李雨", duration: 178))
+    }
+
+    func testMissingSchemaOrSongReturnsNil() throws {
+        try makeDatabase(tracks: [], lyrics: [])
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "李雨", duration: 178), "库里没有这首歌")
+        XCTAssertNil(cache.lyricText(titles: [], artist: "李雨", duration: 178), "没有候选歌名")
+    }
+
+    func testEmptyOrUnusableLyricReturnsNil() throws {
+        try makeDatabase(
+            tracks: [("wy_1", "万水", "李雨", "02:58"), ("wy_4", "没词的歌", "李雨", "03:00")],
+            lyrics: [
+                ("wy_1", "lyric", ""),                                   // 空串
+                ("wy_4", "lyric", Self.base64("   \n  "))                // 解出来是空白
+            ]
+        )
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "李雨", duration: 178))
+        XCTAssertNil(cache.lyricText(titles: ["没词的歌"], artist: "李雨", duration: 180))
+    }
+
+    func testOnlyMainLyricTypeIsRead() throws {
+        try makeDatabase(
+            tracks: [("wy_1", "万水", "李雨", "02:58")],
+            lyrics: [
+                ("wy_1", "tlyric", Self.base64("[00:00.0]Translation")),
+                ("wy_1", "rlyric", Self.base64("[00:00.0]Romanization"))
+            ]
+        )
+        XCTAssertNil(cache.lyricText(titles: ["万水"], artist: "李雨", duration: 178),
+                     "只读 `type='lyric'`：翻译与音译不当歌词")
+    }
+
+    // MARK: 纯函数
+
+    func testSecondsFromInterval() {
+        XCTAssertEqual(LxMusicLyricsCache.seconds(fromInterval: "02:58"), 178)
+        XCTAssertEqual(LxMusicLyricsCache.seconds(fromInterval: "04:32"), 272)
+        XCTAssertNil(LxMusicLyricsCache.seconds(fromInterval: ""))
+        XCTAssertNil(LxMusicLyricsCache.seconds(fromInterval: "3:0:0"))
+        XCTAssertNil(LxMusicLyricsCache.seconds(fromInterval: "abc"))
+    }
+
+    func testLyricTextFromStoredAcceptsBase64AndRawLRC() {
+        XCTAssertEqual(LxMusicLyricsCache.lyricText(fromStored: Self.base64(Self.wanShuiLRC)), Self.wanShuiLRC)
+        XCTAssertEqual(LxMusicLyricsCache.lyricText(fromStored: "[00:01.0]裸 LRC"), "[00:01.0]裸 LRC",
+                       "解不开 base64 但看着像 LRC → 照用（录歌器换编码也不至于整层失效）")
+        XCTAssertNil(LxMusicLyricsCache.lyricText(fromStored: "just some prose without timestamps"),
+                     "既不是 base64 也不是 LRC → 不拿乱码当歌词")
+        XCTAssertNil(LxMusicLyricsCache.lyricText(fromStored: "   "))
+    }
+
+    func testArtistMatchesIsMutualContainment() {
+        XCTAssertTrue(LxMusicLyricsCache.artistMatches(entryKey: "许嵩何曼婷", queryKey: "许嵩何曼婷"))
+        XCTAssertTrue(LxMusicLyricsCache.artistMatches(entryKey: "等什么君", queryKey: "邓寓君等什么君"))
+        XCTAssertFalse(LxMusicLyricsCache.artistMatches(entryKey: "李雨", queryKey: "张三"))
+        XCTAssertFalse(LxMusicLyricsCache.artistMatches(entryKey: "", queryKey: "李雨"))
+    }
+}
+
+// MARK: - LRC 解析（2026-10-16 / docs/50 D-15）
+
+/// 用例素材取自**真词条**：LX Music 本地缓存里「不知归期的故人 / 房东的猫」27 行，
+/// 时间轴是 `[00:06.100]`（三位毫秒）与 `[00:22.10]`（两位）混用——本次修的正是前者被整行丢掉。
+final class LyricsTextParserTests: XCTestCase {
+
+    func testMillisecondTimestampsAreKept() {
+        let lrc = "[00:00.0]编曲 : 王传统\n[00:06.100]芭蕉雨夜的蝉声\n[00:10.990]不知归期的故人\n[00:22.10]叫醒睡梦的鸢尾"
+        let lines = LyricsTextParser.parseLRC(lrc)
+        XCTAssertEqual(lines.count, 4, "三位小数的行不许被丢（原来只解出 2 行）")
+        XCTAssertEqual(lines.map(\.text), ["编曲 : 王传统", "芭蕉雨夜的蝉声", "不知归期的故人", "叫醒睡梦的鸢尾"])
+    }
+
+    func testFractionIsConvertedByDigitCount() {
+        XCTAssertEqual(LyricsTextParser.fractionSeconds("1"), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(LyricsTextParser.fractionSeconds("10"), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(LyricsTextParser.fractionSeconds("100"), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(LyricsTextParser.fractionSeconds(""), 0, accuracy: 1e-9)
+
+        let lines = LyricsTextParser.parseLRC("[00:06.100]A\n[00:06.10]B\n[00:06.1]C")
+        XCTAssertEqual(lines.map(\.timestamp), [6.1, 6.1, 6.1], "三种写法都该落在同一秒")
+    }
+
+    func testColonFractionSeparatorIsAccepted() {
+        let lines = LyricsTextParser.parseLRC("[00:12:34]旧写法")
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.timestamp ?? 0, 12.34, accuracy: 1e-9)
+    }
+
+    func testSortedByTimestampAndTextTrimmed() {
+        let lines = LyricsTextParser.parseLRC("[00:30.00]  后面的行\n[00:05.00]前面的行")
+        XCTAssertEqual(lines.map(\.text), ["前面的行", "后面的行"], "结果按时间排序")
+        XCTAssertEqual(lines.first?.timestamp ?? 0, 5, accuracy: 1e-9)
+    }
+
+    func testLinesWithoutTimestampOrTextAreDropped() {
+        let lines = LyricsTextParser.parseLRC("没有时间轴的一句\n[00:10.00]\n[00:20.00]   \n[00:30.00]有效")
+        XCTAssertEqual(lines.map(\.text), ["有效"], "无时间轴 / 只有时间轴 / 只有空白都不进结果")
+    }
+
+    func testMultipleTimestampsOnOneLineEmitOneLinePerTimestamp() {
+        let lines = LyricsTextParser.parseLRC("[00:01.00][00:31.00]同一句")
+        XCTAssertEqual(lines.count, 2, "副歌写法：同一句在多个时间点各出一条")
+        XCTAssertEqual(lines.map(\.timestamp), [1, 31], "时间点都取到")
+        XCTAssertEqual(lines.map(\.text), ["同一句", "同一句"], "文本里不许残留第二个时间轴标签")
+    }
+
+    func testEmptyInputGivesNoLines() {
+        XCTAssertTrue(LyricsTextParser.parseLRC("").isEmpty)
+        XCTAssertTrue(LyricsTextParser.parseLRC("\n\n").isEmpty)
+    }
+}

@@ -1601,16 +1601,18 @@ class MusicManager: ObservableObject {
         }
     }
 
-    /// 取词：按 `LyricsQueryPlanner` 的候选阶梯依次问 LRCLIB（docs/50 D-01/D-02/D-11）。
+    /// 取词：**先问本机播放器自己的歌词缓存，再按候选阶梯问 LRCLIB**（docs/50 D-01/D-02/D-11/D-14）。
     ///
     /// 两个返回态必须分清（这是「歌词按钮点了没用」的根因）：
-    /// - **返回 `[]`** = 词库**确实没有这条**（所有候选都问过、都是 200 且空）→ 调用方可缓存；
+    /// - **返回 `[]`** = 两边都**确实没有这条**（本地库里没有 + LRCLIB 所有候选都问过、都是 200 且空）
+    ///   → 调用方可缓存；
     /// - **抛 `LyricsFetchFailure`** = 这一次**没问出来**（网络 / 超时 / 429 / 5xx）→ 调用方
     ///   **不许**缓存、不许当成「没有歌词」。
     ///
-    /// 三档各有各的验法：**原样**那条沿用既有打分匹配（行为与改动前逐字一致）；**歌手/歌名变体**
-    /// 过 `accepts` 的同名 + 相关歌手闸；**只按歌名**那条过 `acceptsTitleOnly` 的同名 + 时长闸
-    /// （`trackDuration` 是播放器此刻报的时长）。
+    /// 三个来源各有各的验法：**本机缓存**按歌名 + 歌手（+ 时长）在 `LxMusicLyricsCache` 里匹配
+    /// （离线、与播放器界面逐行一致，见那边的口径）；LRCLIB 的**原样**那条沿用既有打分匹配
+    /// （行为与改动前逐字一致）、**歌手/歌名变体**过 `accepts` 的同名 + 相关歌手闸、
+    /// **只按歌名**那条过 `acceptsTitleOnly` 的同名 + 时长闸。
     private func fetchLyricsFromAPI(
         artist: String,
         title: String,
@@ -1620,6 +1622,27 @@ class MusicManager: ObservableObject {
         let queries = LyricsQueryPlanner.plan(title: title, artist: artist)
         guard !queries.isEmpty else { return [] }
 
+        // ① **本机播放器的歌词缓存**（LX Music 的本地 SQLite，见 `LxMusicLyricsCache` 的文件头）：
+        //    离线、与它自己界面上显示的逐行一致，因此排在 LRCLIB 前面。取不到就当没有，继续往下走。
+        let titleCandidates: [String] = {
+            var seen = Set<String>()
+            return queries.map(\.title).filter { seen.insert($0).inserted }
+        }()
+        if let localText = LxMusicLyricsCache.shared.lyricText(
+            titles: titleCandidates,
+            artist: artist,
+            duration: trackDuration
+        ) {
+            let synced = parseLRC(localText)
+            // 有时间轴就逐行；只有纯文本歌词（没有 [mm:ss]）就整段当 plain（同 LRCLIB 的 plain 口径）。
+            let lines = synced.isEmpty ? [LyricLine(timestamp: 0, text: localText)] : synced
+            if !lines.isEmpty {
+                lyricsLog.info("取词命中：LX Music 本地缓存（\(title, privacy: .public) — \(artist, privacy: .public)，\(lines.count) 行）")
+                return lines
+            }
+        }
+
+        // ② LRCLIB 的候选阶梯（原样 → 歌手/歌名变体 → 只按歌名 + 时长）。
         var lastFailure: LyricsFetchFailure?
         for (index, query) in queries.enumerated() {
             let results: [[String: Any]]
@@ -1691,7 +1714,7 @@ class MusicManager: ObservableObject {
         }
 
         if let lastFailure { throw lastFailure }
-        lyricsLog.info("词库没有这条（\(queries.count) 条候选都问过）：\(title, privacy: .public) — \(artist, privacy: .public)")
+        lyricsLog.info("两边都没有这条（LX Music 本地缓存 + LRCLIB 的 \(queries.count) 条候选都问过）：\(title, privacy: .public) — \(artist, privacy: .public)")
         return []
     }
 
@@ -1909,42 +1932,10 @@ class MusicManager: ObservableObject {
         }
     }
 
+    /// LRC 解析交给纯函数 `LyricsTextParser.parseLRC`（2026-10-16 / docs/50 D-15：原来这里那份
+    /// 只认 1～2 位小数，带毫秒时间轴的行会被整行丢掉——实测 27 行的歌词只解出 5 行）。
     private func parseLRC(_ lrc: String) -> [LyricLine] {
-        let lines = lrc.components(separatedBy: .newlines)
-        var lyrics: [LyricLine] = []
-
-        // Accept patterns like [m:ss], [mm:ss], [mm:ss.xx] where centiseconds are optional
-        let pattern = "\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,2}))?\\]"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
-
-        for line in lines {
-            let nsLine = line as NSString
-            let fullRange = NSRange(location: 0, length: nsLine.length)
-            if let match = regex.firstMatch(in: line, options: [], range: fullRange) {
-                let minRange = match.range(at: 1)
-                let secRange = match.range(at: 2)
-                let centiRange = match.range(at: 3)
-
-                let minStr = minRange.location != NSNotFound ? nsLine.substring(with: minRange) : "0"
-                let secStr = secRange.location != NSNotFound ? nsLine.substring(with: secRange) : "0"
-                let centiStr = (centiRange.location != NSNotFound) ? nsLine.substring(with: centiRange) : "0"
-
-                let minutes = Double(minStr) ?? 0
-                let seconds = Double(secStr) ?? 0
-                let centis = Double(centiStr) ?? 0
-                let timestamp = minutes * 60 + seconds + centis / 100.0
-
-                let textStart = match.range.location + match.range.length
-                if textStart <= nsLine.length {
-                    let text = nsLine.substring(from: textStart).trimmingCharacters(in: .whitespaces)
-                    if !text.isEmpty {
-                        lyrics.append(LyricLine(timestamp: timestamp, text: text))
-                    }
-                }
-            }
-        }
-
-        return lyrics.sorted(by: { $0.timestamp < $1.timestamp })
+        LyricsTextParser.parseLRC(lrc)
     }
 
     func updateCurrentLyric(for elapsedTime: TimeInterval) {

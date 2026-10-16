@@ -49,6 +49,21 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 
 ## 做法
 
+0. **先问本机播放器自己的歌词缓存**（新增 `LxMusicLyricsCache`，`components/Music/`；用户 2026-10-16
+   问「应用里面有歌词，为什么不显示，歌词不是从应用拿的？」）：
+   - **系统不给歌词**：macOS 的 Now Playing（MediaRemote）载荷只有 title / artist / album / artwork /
+     duration / 播放状态（本机实测载荷原文见 §取证），**没有歌词字段**——播放器界面里显示着歌词，
+     别的应用看不到；
+   - **但本机播放器自己存了**：LX Music（`cn.toside.music.desktop`）把歌词缓存在
+     `~/Library/Application Support/lx-music-desktop/LxDatas/lx.data.db`（SQLite）：`my_list_music_info`
+     是「id ↔ 歌名/歌手/时长」，`lyric` 表里 `type = 'lyric'` 的 `text` 是 **base64 的 UTF-8 LRC**。
+     本机实测 984 首歌有主歌词，用户当时在听的「万水 / 李雨」正在其中；
+   - **读取口径**：`SQLITE_OPEN_READONLY` + 300ms busy timeout（对方在写时会话让路）、**不写该库、
+     不落临时文件**；匹配 = 归一化同名（复用 `LyricsQueryPlanner.normalizedKey`）+ 歌手互相包含，
+     多条候选时优先**时长吻合**（`interval` 是 `mm:ss`）；只读 `type = 'lyric'`（翻译/音译不读）；
+     任何失败（文件不在 / schema 变了 / 读被拒 / 库里没这首）一律答 `nil`，**静默回落 LRCLIB**——
+     这层不抛错、不崩、不需要任何新权限（`Application Support` 不是 TCC 保护路径，
+     与读通知库那条 FDA 不同）。
 1. **候选查询阶梯**（新增纯逻辑 `LyricsQueryPlanner`，`components/Music/`）：
    `plan(title:artist:)` 产出**有序、去重、上限 5 条**的候选，**三档**各有各的问法与验法：
    - ① **原样**（恒在第一位且唯一）：歌名 + 歌手都是播放器报的原值，承载既有的 `bestLyricsMatch`
@@ -129,12 +144,20 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 4. **动态封面（live canvas）那一档的命中未上屏复核**：图形摘出命中链是代码层的兜底，
    现场只验过静态封面（LX Music 的专辑图）。
 5. 取词的 3 次请求是**串行等待**，没有进度反馈（悬浮层在拿到真实歌词行之前不出现）。
+6. **本地歌词缓存只覆盖「在 LX Music 歌单里的歌」**（映射表就是歌单表；本机 `music_info_other_source`
+   为空），且认的是 **LX Music 的默认数据目录**（用户若在 LX Music 里改过数据目录就找不到，回落
+   LRCLIB）；这一层是**为 LX Music 写的**，别的播放器没有对应缓存。schema 一旦被上游改掉，
+   本层静默失效（不崩、回落 LRCLIB）。
+7. **歌词只在岛收起时可见**（老口径，见上一条 3）——**这一条是「看不到歌词」最常见的误判来源**：
+   面板展开着的时候，桌面歌词层是**隐藏**的；用户 2026-10-16 的两次「不显示」都发生在这个状态下。
 
 ## 实际交付
 
 | 站点 | 内容 |
 |---|---|
 | `DynamicIsland/components/Music/LyricsQueryPlanner.swift`（新增） | 候选查询阶梯 + 接受闸 + 归一化 + 失败分类与重试节奏（全纯函数） |
+| `DynamicIsland/components/Music/LxMusicLyricsCache.swift`（新增） | LX Music 本地歌词库的只读读取器：歌名/歌手/时长匹配 + base64 → LRC（D-14） |
+| `DynamicIsland/components/Music/LyricsTextParser.swift`（新增） | LRC 时间轴解析（纯函数）：小数位 1～3、一行多标签（D-15） |
 | `DynamicIsland/managers/MusicManager.swift` | 取词走阶梯；瞬时故障抛错、不写缓存、不写「No lyrics found」；20s 一次自动重试；点歌词键强制取词；`openMusicApp()` 两条路；`os.Logger` |
 | `DynamicIsland/Modules/Takeover/MusicModule.swift` | 封面成为「打开播放器」入口（点击 + 指针 + `.help` + 图形不进命中） |
 | `DynamicIsland/Localizable.xcstrings` + `tests/test_general_ai_configuration.py` | 新键 `module.music.openPlayer`（en + zh-Hans）并登记进本地化守卫 |
@@ -148,10 +171,19 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
   变体对照：`樱花` + `茶季杨` → 200 空数组、只用歌名 → 5 条（都是**别人的**同名曲，故必须过同名闸）；
   `慕夏`（歌手 `邓寓君(等什么君)`）→ 空，换 `等什么君` → 5 条命中；`我也可以是流浪诗人`
   （`好妹妹乐队`）→ 空，换 `好妹妹` → 2 条命中。
+- **本机播放器歌词库**（2026-10-16 17:0x）：`lyric` 表 984 首有主歌词（`tlyric` 151 /
+  `rlyric` 22，且 0 首是「只有 lxlyric/tlyric 而没有 lyric」）；`万水` 的映射行 =
+  `wy_424057089 | 万水 | 李雨 | 02:58`，`lyric` 行解出来正是用户播放器界面上的逐行；
+  `music_info_other_source` 为空。
+- **接进应用后的实测**（`log show --info --predicate 'subsystem == "com.cmeng.gourd.music"'`）：
+  `取词命中：LX Music 本地缓存（不知归期的故人 — 房东的猫，5 行）`（解析修复前）→ 另一首
+  `揪心的玩笑与漫长的白日梦 — 万能青年旅店` 修复前后 **9 行 → 29 行**；桌面歌词层的窗口探针
+  `layer=2147483628 bounds=(2630,-170,179x75) alpha=1.0`（即歌词层在屏幕上；另两个 `layer=27`
+  是两块屏的面板窗）。
 - 窗口探针（`CGWindowListCopyWindowInfo`）：LX Music 现场只有 `122×128` 一枚窗（迷你窗）、
   主窗口不在屏上；`activate(options: [.activateAllWindows])` 之后 1.5s 复检 → 主窗口
   `1114x718@(221,132)` 出现（**这条就是「点了没反应」的反证**）。
-- 自动化：`xcodebuild test … -only-testing:DynamicIslandTests` → **911 测试 0 失败**（含新增 `LyricsQueryPlannerTests` 20 例）；
+- 自动化：`xcodebuild test … -only-testing:DynamicIslandTests` → **930 测试 0 失败**（含新增 `LyricsQueryPlannerTests` 20 例、`LxMusicLyricsCacheTests` 12 例、`LyricsTextParserTests` 7 例）；
   `python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle
   tests.test_general_ai_configuration` → 11 例通过；Release 构建通过。
 
@@ -177,3 +209,5 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 | D-11 | 第三档「**只按歌名 + 时长 ±3s**」（`acceptsTitleOnly`）；本机或词库任一侧时长取不到就不放行 | 用户反馈「重启后还是不管用」时实测出来的：`如果当时 / 许嵩` 在词库里是繁体的 `許嵩`/`Xu, Song`，`丢了幸福的猪 (烟嗓版)` 在词库里是 `姜玉阳` 那一版——只认歌手串会把这批全判掉；时长是同名之外唯一可验的身份凭据 |
 | D-12 | **不加第二个歌词源**（LRCLIB 仍是唯一源）；词库没有的歌就不显示 | 用户 2026-10-16 原话「没有歌词就不显示」 |
 | D-13 | 「打开播放器」的命中区从 36pt 封面**扩到整块**（进度条与控制键除外） | 用户第二次反馈圈的是整块；且那段窗口的日志里没有任何「打开音乐软件」记录——点击没进处理函数，就是命中区太小。同级的前台应用图标格在同一个面板里可点（既有实测），说明块内 tap 本身没问题 |
+| D-14 | 歌词取词**先读本机播放器（LX Music）的本地歌词缓存**，取不到再走 LRCLIB | 用户问「歌词不是从应用拿的吗」；系统不给歌词（Now Playing 载荷无歌词字段），但该播放器自己把歌词存在本地 SQLite 里，离线、与它界面上显示的逐行一致，且不需要新权限 |
+| D-15 | `parseLRC` 提成纯函数 `LyricsTextParser`，并修两处解析错：**小数位 1～3 位**（原来只认 1～2 位，`[00:06.100]` 这种毫秒时间轴整行被丢）与**一行多标签**（原来只认第一个，后面的标签残留在文本里） | 真数据实测：本地缓存里「不知归期的故人」27 行只解出 5 行、「揪心的玩笑与漫长的白日梦」修复前后 9 → 29 行；这两处都是上游老错，以前没喂过这类词条 |
