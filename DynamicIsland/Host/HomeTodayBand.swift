@@ -23,16 +23,20 @@
 //  本文件是中间那一条：**宿主直渲、不吃板、不可排**——它不是模块（数据跨「日历 + 农历 +
 //  节假日 + 工作日」四个域，做成模块只会把它拆成四份），也不进 `homeBlockOrder`。
 //
-//  两行四段：
+//  **一行四段**（2026-10-16 用户：「这个内容放在日期后面，不单独放一排」——原来「下一个」自己占
+//  第二行，整带 56pt；现在并进日期行，整带 32pt，省下的 24pt 归可变流）：
 //
-//      10月10日 周六 · 九月初十 · 国庆节（班）        本月剩 15 天 · 本季剩 59 天 · 今年剩 59 天
-//      下一个 · 评审会 · 14:00–15:00                   还有 1 小时 20 分
+//      10月10日 周六 · 九月初十 · 国庆节（班） · 下一个 · 评审会 · 14:00–15:00   本月剩 15 天 · 还有 1 小时 20 分
 //
-//  - **第一行**是「今天是什么日子」：公历（随语言）+ 农历（中文专名）+ 节假日名（2026 表内）；
-//  - **第二行**是「当务之急」：今天**还没结束**的下一条定时日程 + 距它还有多久（进行中的那条
-//    显示「进行中」与距结束）；
-//  - **右侧小字**是工作日剩余（本月 / 本季 / 今年），来自 `WorkdayCalendar.spanStats`——
-//    这是原「工作日统计」模块退场后的替身（docs/38 D-06：那块占 347×220 而价值低）。
+//  - 「今天是什么日子」：公历（随语言）+ 农历（中文专名）+ 节假日名（2026 表内）；
+//  - 「当务之急」：今天**还没结束**的下一条定时日程（+ 距它还有多久 / 进行中）；**字号都不动**，
+//    仍是 20pt 半粗，只是从「独占一行」改成「接在日期后面」；
+//  - 「工作日剩余」（本月 / 本季 / 今年）来自 `WorkdayCalendar.spanStats`——原「工作日统计」模块
+//    退场后的替身（docs/38 D-06：那块占 347×220 而价值低）；
+//  - **倒计时**（蓝色）留在最右：眼睛最后落在「还有多久」上。
+//
+//  **截断口径**：只有「下一个」那一段会截断（标题长时先吃中间的空档）；日期 / 工作日 / 倒计时三段
+//  都是 `fixedSize`，宽度不够时先缩「下一个」。
 //
 //  **四条口径**（docs/38 §做法 三）：
 //  ① 农历与节假日名**按中文输出、不分语言**——它们是中文日历的专名，翻成英文没有意义；
@@ -52,18 +56,19 @@ import SwiftUI
 
 /// 今天带的**尺寸**（唯一取值处；接缝的高度账本也读它）。
 enum HomeTodayBandLayout {
-    /// 整条带的高度 = 日期行 16 + 行间距 8 + 日程行 32。
-    static var height: CGFloat { headlineHeight + lineSpacing + nextLineHeight }
+    /// 整条带的**高度 = 单行 32**（2026-10-16：原来两行 16 + 8 + 32 = 56，用户要求并成一行）。
+    /// 省下的 24pt 归可变流——接缝的高度账本读的就是这个数。
+    static var height: CGFloat { nextLineHeight }
 
     /// 与两侧（环境带 / 可变流）之间的缝——**与块间距同值**（`HomeStripLayout.spacing`）。
     /// 改前这个位置是 `HomeCalendarRow.rowSpacing`（日历行与流之间的那道缝），值不变、换了个家。
     static let rowSpacing: CGFloat = 8
 
-    /// 日期行的高度（12pt 文字）。
+    /// 日期行的高度（12pt 文字）——并成一行后不再单独占高，保留给断言与将来复用。
     static let headlineHeight: CGFloat = 16
-    /// 两行之间的间距。
+    /// 两行之间的间距——并成一行后不再使用（保留理由同上）。
     static let lineSpacing: CGFloat = 8
-    /// 「下一个日程」那一行的高度（20pt 大字 + 16pt 倒计时）。
+    /// 这一行的高度（20pt「下一个」+ 16pt 倒计时）。
     static let nextLineHeight: CGFloat = 32
 
     /// 两行共用的左右内缩（与块的内容内缩同档：内容不贴板缘——本条没有板，但两侧与块的
@@ -351,45 +356,41 @@ struct HomeTodayBand: View {
     private func rows(now: Date) -> some View {
         let events = HomeTodayEvents.filtered(calendarManager.todayEvents, now: now, hideAllDayEvents: hideAllDayEvents)
         let pick = TodayNextEvent.pick(events: events, now: now)
-        return VStack(alignment: .leading, spacing: HomeTodayBandLayout.lineSpacing) {
-            HStack(spacing: 12) {
-                Text(TodayHeadline.text(for: now))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+        // **一行四段**（2026-10-16）：日期 · 下一个（会截断）· 工作日剩余 · 倒计时。
+        return HStack(spacing: 12) {
+            Text(TodayHeadline.text(for: now))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.62))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .fixedSize()
 
-                Spacer(minLength: 12)
+            Text(TodayNextEvent.headline(for: pick))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
-                Text(WorkdayRemainderLine.text(now: now))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
+            Spacer(minLength: 12)
+
+            Text(WorkdayRemainderLine.text(now: now))
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.45))
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
+
+            if let countdown = TodayNextEvent.countdown(for: pick) {
+                Text(countdown)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .foregroundStyle(.blue)
                     .lineLimit(1)
                     .fixedSize()
             }
-            .frame(height: HomeTodayBandLayout.headlineHeight)
-
-            HStack(spacing: 12) {
-                Text(TodayNextEvent.headline(for: pick))
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 12)
-
-                if let countdown = TodayNextEvent.countdown(for: pick) {
-                    Text(countdown)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.blue)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-            }
-            .frame(height: HomeTodayBandLayout.nextLineHeight)
         }
+        .frame(height: HomeTodayBandLayout.nextLineHeight)
         // 内容左缘与块的**内容左缘**对齐（块的内容内缩 5 + 板 = 块框，见 `HomeBlockChrome`）。
         .padding(.horizontal, HomeTodayBandLayout.horizontalInset)
         .frame(maxWidth: .infinity, alignment: .topLeading)
