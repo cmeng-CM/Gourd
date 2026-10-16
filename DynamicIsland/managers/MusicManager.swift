@@ -1625,7 +1625,17 @@ class MusicManager: ObservableObject {
 
             let match: [String: Any]?
             if query.isExact {
-                match = bestLyricsMatch(in: results, artist: query.artist, title: query.title, album: album)
+                // 原样那条：输入**逐字沿用改动前**的口径（三个串都先去变音符再打分），
+                // 行为因此零变化（见 `docs/50` §做法 1）。
+                let folded = { (value: String) -> String in
+                    value.folding(options: .diacriticInsensitive, locale: .current)
+                }
+                match = bestLyricsMatch(
+                    in: results,
+                    artist: folded(query.artist),
+                    title: folded(query.title),
+                    album: folded(album)
+                )
             } else {
                 match = results.first {
                     LyricsQueryPlanner.accepts(
