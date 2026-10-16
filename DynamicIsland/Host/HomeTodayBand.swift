@@ -32,7 +32,7 @@
 //  - 「当务之急」：今天**还没结束**的下一条定时日程（+ 距它还有多久 / 进行中）；**字号都不动**，
 //    仍是 20pt 半粗，只是从「独占一行」改成「接在日期后面」；
 //  - 「工作日剩余」（本月 / 本季 / 今年）来自 `WorkdayCalendar.spanStats`——原「工作日统计」模块
-//    退场后的替身（docs/38 D-06：那块占 347×220 而价值低）；
+//    退场后的替身（docs/38 D-06：那块占 347×220 而价值低）；**三段都是胶囊**（2026-10-16 二轮）；
 //  - **倒计时**（蓝色）留在最右：眼睛最后落在「还有多久」上。
 //
 //  **截断口径**：只有「下一个」那一段会截断（标题长时先吃中间的空档）；日期 / 工作日 / 倒计时三段
@@ -92,14 +92,18 @@ enum HomeTodayBandLayout {
     static let countdownPillPadding: CGFloat = 10
     /// 段② 左缘那条日历色竖条的宽度。
     static let nextBarWidth: CGFloat = 3
-    /// 日期段胶囊的底（白 6%）与下一个段胶囊的底（白 10%）——两档不同的「有底」。
-    static let datePillFill: Double = 0.06
-    static let nextPillFill: Double = 0.10
+    /// 三段**都是胶囊**（2026-10-16 第二轮：日期与工作日也做成胶囊，「看着不太清晰」）——
+    /// 三档底色：日期 8%（上下文）/ 下一个 12%（当务之急，最实）/ 工作日 6%（注脚，最浅）。
+    static let datePillFill: Double = 0.08
+    static let nextPillFill: Double = 0.12
+    static let workdayPillFill: Double = 0.06
+    /// 工作日段胶囊的高度（11pt 文字 + 上下各 4）。
+    static let workdayPillHeight: CGFloat = 24
     /// 农历比公历亮一档（同一段内的层次）。
     static let datePrimaryOpacity: Double = 0.62
     static let lunarOpacity: Double = 0.9
-    /// 工作日段（最弱的一档）。
-    static let workdayOpacity: Double = 0.42
+    /// 工作日段的文字（最弱的一档，但要读得清：0.42 → 0.55）。
+    static let workdayOpacity: Double = 0.55
 }
 
 // MARK: - 农历（中文专名）
@@ -420,6 +424,20 @@ struct HomeTodayBand: View {
             .fill(.white.opacity(HomeTodayBandLayout.datePillFill)))
     }
 
+    /// 段③：本月 / 本季 / 今年剩——也是胶囊（最浅的一档底），文字最弱但要读得清。
+    private func workdaySegment(now: Date) -> some View {
+        Text(WorkdayRemainderLine.text(now: now))
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(HomeTodayBandLayout.workdayOpacity))
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .frame(height: HomeTodayBandLayout.workdayPillHeight)
+            .background(RoundedRectangle(cornerRadius: HomeTodayBandLayout.pillRadius, style: .continuous)
+                .fill(.white.opacity(HomeTodayBandLayout.workdayPillFill)))
+    }
+
     /// 段②：「下一个」前缀 · 标题（会截断的唯一一段）· 起止时间 · 倒计时蓝胶囊；左缘一条事件日历色。
     private func nextSegment(pick: TodayNextEvent.Pick) -> some View {
         let parts = TodayNextEvent.parts(for: pick)
@@ -483,12 +501,7 @@ struct HomeTodayBand: View {
             dateSegment(now: now)
             nextSegment(pick: pick)
             Spacer(minLength: HomeTodayBandLayout.segmentSpacing)
-            Text(WorkdayRemainderLine.text(now: now))
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(HomeTodayBandLayout.workdayOpacity))
-                .monospacedDigit()
-                .lineLimit(1)
-                .fixedSize()
+            workdaySegment(now: now)
         }
         .frame(height: HomeTodayBandLayout.nextLineHeight)
         // 内容左缘与块的**内容左缘**对齐（块的内容内缩 5 + 板 = 块框，见 `HomeBlockChrome`）。

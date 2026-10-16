@@ -83,12 +83,15 @@ final class HomeTodayBandTests: XCTestCase {
         XCTAssertEqual(HomeTodayBandLayout.nextPillHeight, 30, "下一个段胶囊 30（19pt 标题 + 上下 5）")
         XCTAssertEqual(HomeTodayBandLayout.countdownPillHeight, 28)
         XCTAssertEqual(HomeTodayBandLayout.nextBarWidth, 3, "左侧日历色条 3pt")
-        XCTAssertLessThan(HomeTodayBandLayout.datePillFill, HomeTodayBandLayout.nextPillFill,
-                          "两段的底是两档（下一个更实一点）")
+        // 三段都是胶囊（2026-10-16 二轮）：三档底色，下一个最实、工作日最浅。
+        XCTAssertLessThan(HomeTodayBandLayout.workdayPillFill, HomeTodayBandLayout.datePillFill)
+        XCTAssertLessThan(HomeTodayBandLayout.datePillFill, HomeTodayBandLayout.nextPillFill)
+        XCTAssertEqual(HomeTodayBandLayout.workdayPillHeight, 24)
         XCTAssertGreaterThan(HomeTodayBandLayout.lunarOpacity, HomeTodayBandLayout.datePrimaryOpacity,
                              "同一段里农历比公历亮一档")
         XCTAssertLessThan(HomeTodayBandLayout.workdayOpacity, HomeTodayBandLayout.datePrimaryOpacity,
-                          "工作日段是最弱的一档")
+                          "工作日段的文字仍是最弱的一档（但要比原来亮：0.55）")
+        XCTAssertGreaterThanOrEqual(HomeTodayBandLayout.workdayOpacity, 0.5, "注脚也要读得清")
     }
 
     /// 固定日历：格里高利 + GMT + `en_US_POSIX`（构造夹具时刻的时区与语言都钉死，同文件其余日历用例同口径）。
