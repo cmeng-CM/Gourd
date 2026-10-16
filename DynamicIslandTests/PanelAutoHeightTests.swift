@@ -1075,6 +1075,17 @@ final class PanelAutoHeightTests: XCTestCase {
         )
         XCTAssertEqual(PanelAutoHeight.homeOnlyVerticalPadding, 16, "= NotchHomeView 的 8 + 8")
 
+        // **首页底部那一份归可变流**（docs/51 D-01）：= NotchHomeView 下侧 8 + ContentView 底边 12。
+        // 它是**从 `homeVerticalPadding` 里划出去给流**的那一段（面板高因此没变），所以必须
+        // ① 等于这两项之和、② 严格小于首页那份总内边距（顶部那几项不在其中）。
+        XCTAssertEqual(PanelAutoHeight.homeFlowBottomCredit, 8 + 12, "= NotchHomeView 的 8 + ContentView 的 12")
+        XCTAssertEqual(PanelAutoHeight.homeFlowBottomCredit, 20)
+        XCTAssertLessThan(
+            PanelAutoHeight.homeFlowBottomCredit,
+            PanelAutoHeight.homeVerticalPadding,
+            "只让出底部那一份；顶部 8 + 出血 4 + 缝 8 不在其中"
+        )
+
         // 换算：+ 表头、− 首页独有的 16；非有限项各自按 0。
         XCTAssertEqual(
             PanelAutoHeight.measuredContentHeight(naturalHeight: 300, headerHeight: 28), 312

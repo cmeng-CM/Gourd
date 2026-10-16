@@ -194,16 +194,32 @@ public enum HomeFlowLayout {
     /// **p13 起没有「日历行」这一项**（docs/38 D-07）：全宽日历行整条退休，本函数不再为它
     /// 预留高度、也不再按它做取舍（改前是"先收日历行、再收尾部行"）。
     ///
+    /// **`lastRowStretchLimit`（docs/51 D-01，用户 2026-10-16）**：可用高有富余时，**最后一行**
+    /// 长高吃掉这份富余（行高 = 该行申报高 + 吃到的量），它上面的行一律保持申报高；吃到的量**最多
+    /// 就是这个上限**，多出来的富余照旧留在流末尾。首页底部那 20pt 空玻璃因此变成两块的板高
+    /// （接缝用一条负底部内缩把这 20pt 交给本流，上限也取同一个常数
+    /// `PanelAutoHeight.homeFlowBottomCredit`）。
+    ///
+    /// 为什么要有上限而不是"有多少吃多少"：**手动高度档**下面板可能比内容高出几百 pt，那是用户
+    /// 选的框、不是「留白」，不该被块吃掉（否则两块会长成一整屏的大板）。上限还有一个作用是让
+    /// **两条调用路径的差别只剩这一个数**：账本那一份传缺省的 0。
+    ///
+    /// 缺省 `0` = 改动前的逐字行为，**账本那一份必须用缺省**：内容自然高按「块的申报高之和」算
+    /// （`PanelAutoHeight.contentHeight(from:)`），拿开着的 plan 去写账本，末行会被撑到预算上限、
+    /// 面板跟着涨到上界。
+    ///
     /// - Parameters:
     ///   - items: 全部块的声明（顺序即显示顺序）。
     ///   - availableWidth: 流的可用宽度（宿主给的是面板内扣掉内边距之后的整条宽）。
     ///   - availableHeight: 流的可用高度（**已扣掉环境带与今天带**，由接缝算好）。
     ///   - metrics: 度量（列间距 / 行间距 / 提示位宽）。
+    ///   - lastRowStretchLimit: 末行最多长高多少（缺省 0 = 不吃；口径见上）。
     public static func plan(
         items: [Item],
         availableWidth: CGFloat,
         availableHeight: CGFloat,
-        metrics: Metrics
+        metrics: Metrics,
+        lastRowStretchLimit: CGFloat = 0
     ) -> Plan {
         let available = max(0, availableWidth)
         let height = max(0, availableHeight)
@@ -225,6 +241,13 @@ public enum HomeFlowLayout {
             usedHeight = need
             drawnRows += 1
         }
+
+        // 末行长高：`usedHeight` 里**已含行间距**，因此把吃到的量整份加到最后一行的行高上，
+        // 「各行高之和 + 行间距」于是正好等于 `usedHeight + 吃到的量`。一行都没画时富余无处可去
+        // （没有末行）——留空。
+        let lastRowGrowth = drawnRows > 0 && lastRowStretchLimit > 0
+            ? min(max(0, height - usedHeight), lastRowStretchLimit)
+            : 0
 
         let droppedByHeight = max(0, rowIndices.count - drawnRows)
         let reservesHint = droppedByHeight > 0 && hintWidth > 0 && available >= hintWidth
@@ -251,7 +274,7 @@ public enum HomeFlowLayout {
                 Row(
                     indices: Array(indices.prefix(rowPlan.visibleCount)),
                     widths: rowPlan.widths,
-                    height: rowHeights[rowIndex],
+                    height: rowHeights[rowIndex] + (isLastDrawn ? lastRowGrowth : 0),
                     showsHint: showsHint,
                     droppedCount: rowPlan.droppedCount
                 )

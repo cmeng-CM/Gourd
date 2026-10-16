@@ -1417,12 +1417,16 @@ struct HomeBandedHomeView: View {
             )
 
             // **画出来的那一份** plan 用的仍是当前可用高：面板多高就画多满，
-            // 预算里装不下的行不画（`HomeFlowLayout` 的整行进出）。
+            // 预算里装不下的行不画（`HomeFlowLayout` 的整行进出）。**末行长高吃掉底部呼吸**
+            // （docs/51 D-01）：上限取接缝从「面板底部呼吸」让出来的那 20pt（同一条负内缩，见下），
+            // 因此手动高度档下多出来的几百 pt 不会被块吃掉。**账本那一份（下面）不开这一档**——
+            // 那一份逐字算申报高之和，开了会把面板撑到上界。
             let plan = HomeFlowLayout.plan(
                 items: items,
                 availableWidth: bandWidth,
                 availableHeight: max(0, geometry.size.height - hostBandsHeight),
-                metrics: Self.flowMetrics
+                metrics: Self.flowMetrics,
+                lastRowStretchLimit: PanelAutoHeight.homeFlowBottomCredit
             )
 
             // —— 「面板贴内容」的高度账本（p5-home-blocks / T6，docs/29 §做法 机制六）——
@@ -1499,6 +1503,16 @@ struct HomeBandedHomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // **底部呼吸归可变流**（docs/51 D-01，用户 2026-10-16「消息和日程的内容高度增加，铺满首页
+        // 下面这条留白」）：面板下缘到两块板底之间那 20pt 空玻璃（`NotchHomeView` 下侧 8 +
+        // `ContentView` 底边 12）自本批起交给这条流——**负内缩**让内容区多拿这 20pt（内容照常画在
+        // 面板原来的框里，多出来的一段正好落在那两处透明内边距上，裁剪仍只由面板的 `clipShape` 做），
+        // 流按 `lastRowStretchLimit` 把它吃成**末行的行高**，两块因此贴到面板下缘。
+        //
+        // 为什么用负内缩而不是把那两处 `.padding` 改成 0：那两处是**所有页共用**的（`ContentView`
+        // 的底边还给其它 tab 的「量高 → 面板高」换算当基准，`PanelAutoHeight.panelVerticalPadding`
+        // 里那一项删不得），这里只在首页这一支上把「谁用掉这 20pt」改掉，别处逐字不动。
+        .padding(.bottom, -PanelAutoHeight.homeFlowBottomCredit)
         // 面板打开时把日历窗口对齐到**今天**（p13：改前这一步是日历行的 `.onAppear` 做的，
         // 那条行退休后由接缝接手）——今天带与今日清单读的都是这一份窗口。
         .task { await CalendarManager.shared.updateCurrentDate(Date()) }

@@ -113,6 +113,22 @@ enum PanelAutoHeight {
     /// 且整页**填满**内容区时（量出来的自然高 = 内容区高）面板高**一步回到原值**（不动点）。
     static let homeOnlyVerticalPadding: CGFloat = homeVerticalPadding - panelVerticalPadding
 
+    /// 首页**底部**那两项宿主内边距之和 = `NotchHomeView` 的 `.padding(8)`（下侧那 8）
+    /// + `ContentView` 展开态的底边 12 = **20**（出处与 `homeVerticalPadding` 的表逐项同源）。
+    ///
+    /// **这份留白自本批起归可变流**（docs/51 D-01，用户 2026-10-16：「消息和日程的内容高度增加，
+    /// 铺满首页下面这条留白」）：面板可见黑框到底部两块板底之间原本留 20pt 空玻璃，接缝把这 20pt
+    /// 让给可变流的**末行**（`HomeFlowLayout.plan(…:lastRowStretchLimit:)` 长高，块跟着变高），
+    /// 两块因此贴到面板下缘。
+    ///
+    /// **账本口径一个字没动**：`homeVerticalPadding` 仍是 40，`contentHeight(from:)` 仍只算
+    /// 「块的申报高之和 + 带 + 表头」——首页的内容自然高与这份留白无关，所以**面板高度也没变**，
+    /// 变的只是「这 20pt 由谁用掉」（改前空着，改后归流）。
+    ///
+    /// **口径边界**：只动**底部**。顶部那 8（`NotchHomeView` 上侧）+ 顶出血 4 + 表头↔内容的缝 8
+    /// 与折叠态无关地照旧——它们不是「面板下缘的留白」，也不在用户那条反馈的范围里。
+    static let homeFlowBottomCredit: CGFloat = 8 + 12
+
     /// 测量出来的**自然高** → 账本口径的内容高（含表头，`PanelContentHeight.current`）的换算
     /// （纯函数，p5-home-blocks / T7）。
     ///
