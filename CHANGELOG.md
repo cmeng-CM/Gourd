@@ -5,6 +5,56 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-16
+
+自 0.2.0 起累计 111 个提交。本版重点是**通用 AI 独立配置**、**日历面板第二轮**（一张表单 + 显式生成 +
+列表行就地操作）、**会议入口**与**桌面歌词取词**，以及首页/通知/今天带的一批尺寸与观感修订。
+
+### 新增
+
+- **通用 AI 独立配置**（[docs/45](docs/45-ai-calendar-and-meeting-actions.md)、ADR-0020）：供应商 / 接口地址 /
+  密钥 / 模型分开配置，本机模型与各家兼容接口走同一条契约；**日程生成止于可确认的草稿**（生成失败只留一行
+  原因 + 重试 + 改为手工填写，不会写坏已有内容）。
+- **面板日历第二轮**（[docs/48](docs/48-calendar-editor-form-and-mode-size.md)、[docs/49](docs/49-calendar-list-actions-fonts-and-generation.md)）：
+  编辑 / 新增统一成**一张两列表单**（目标日历与全天 / 起止 / 地点与链接并排，标题与备注整宽）；
+  800ms 自动解析改为**显式「生成」**（⌘↩ 同效，输入不再被后台改写）；列表行**整行点开浮窗**、行内编辑与删除
+  （删除需原地确认）；编辑页与列表卡片**字号 +3**；**编辑档高度按档自适应**（一屏放完三种入口，不出滚动条）。
+- **会议入口一键直达**（[docs/47](docs/47-meeting-entry-and-one-click-open.md)）：识别出会议号后一枚 22pt 按钮
+  直接打开（华为 cloudlink / 腾讯 wemeet 深链），右键给其余动作（最多 4 项，含入会密码）；**多个候选不猜**。
+- **桌面歌词取词兜底**（[docs/50](docs/50-music-lyrics-lookup-and-open-player.md)）：先读**本机播放器自己的
+  歌词缓存**，再走候选查询阶梯（歌手别名 / 团体后缀 / 多歌手 / 歌名版本标注 / 只按歌名 + 时长吻合）；
+  词库的瞬时故障（503）不再被当成「这首歌没有歌词」缓存下来；**首页音乐块的封面点一下打开正在播放的音乐软件**。
+- **通知浮层可指定屏幕**（[docs/53](docs/53-notification-hud-screen-scope.md)）：默认**只在主屏**弹出，
+  设置页新增「**在外接显示器上也显示**」开关（改设置下一条通知即生效，不用重启）。
+- **面板右键菜单加「退出」**（[docs/52](docs/52-panel-context-menu-quit.md)）：走与菜单栏同一条终止链
+  （含着陆时的日历草稿收尾），菜单栏图标关掉时它是唯一的退出入口。
+
+### 变更
+
+- **首页底部留白归可变流**（[docs/51](docs/51-home-flow-fills-bottom-reserve.md)）：原本空着的那 20pt 里
+  **12pt 给通知与今日两块**（两块变高、贴到面板下缘之上）、**8pt 留作缝**；面板高度不变。
+- **今天带「下一个」段居中**（[docs/38](docs/38-home-v5-layout.md) §三）：两侧的缝等宽（改前富余全落在右侧，
+  左 13.5 / 右 48pt，现在 31 / 30.5pt）。
+- 设置页「通知浮层」一节此前整段是**英文直显**，本版补齐中英双语并更正了与「只上主屏」冲突的段脚注。
+
+### 修复
+
+- **日历草稿假提示**（[docs/49](docs/49-calendar-list-actions-fonts-and-generation.md) D-39）：打开一条日程、
+  一个字不改就回到月历，列表顶部不再冒出「有未保存的日程 · 继续编辑」——离开编辑档时**没改过的稿直接丢掉**，
+  改过的照旧留着（切条目只在真有改动时才拦，D-36 的另一半补齐）。
+- **歌词层被拖出屏幕后找不回来**（[docs/50](docs/50-music-lyrics-lookup-and-open-player.md)）：显示前夹回屏内。
+- 编辑 / 新增档**整个期间**不再被自动收起打断（docs/49 D-37）；盒子里的打开音乐软件命中区从封面 36pt 扩到整块。
+
+### 安装与分发
+
+- 本机一键安装：`tools/install-local.sh`（等价于 `build.sh --install` 并启动一次）。
+
+### 说明
+
+- **未公证**（本项目不付费走 Apple 开发者计划）：首次打开会被 Gatekeeper 拦一次，放行路径见 README / Release 正文。
+- **没有应用内更新**：升级用新 DMG 覆盖安装，或重跑命令行安装脚本；偏好、权限、登录项都不会丢。
+- **只出 arm64**（Apple 芯片）；要求 macOS 26（Tahoe）及以上。
+
 ## [0.2.0] - 2026-10-12
 
 自 0.1.0 起累计 105 个提交。本版重点是**首页 v5 三带改版**、**首页与日历的轻量交互**，以及一批可读性与
