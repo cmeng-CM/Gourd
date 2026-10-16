@@ -456,12 +456,15 @@ final class CalendarPanelSession: ObservableObject {
     }
 
     private func requestDraft(_ newDraft: CalendarDraft, context: DraftContext) {
-        guard draft == nil else {
-            pendingDraft = PendingDraft(draft: newDraft, context: context)
-            pendingConfirmation = .draftConflict
+        // **只有「有未保存改动」的稿才拦人**（2026-10-16 上屏反馈：点左栏另一条时，明明一个字没改
+        // 也弹「已有未保存草稿。继续旧稿，或放弃旧稿后开始此事项？」——那是把「存在稿」当成了「有改动」）。
+        // 稿与基线一致时直接换：丢掉它不损失任何用户输入（「改过」的口径见 `hasDirtyDraft`）。
+        guard let existing = draft, existing != baseline else {
+            installDraft(newDraft, context: context)
             return
         }
-        installDraft(newDraft, context: context)
+        pendingDraft = PendingDraft(draft: newDraft, context: context)
+        pendingConfirmation = .draftConflict
     }
 
     private func installDraft(_ newDraft: CalendarDraft, context: DraftContext) {

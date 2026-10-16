@@ -10311,6 +10311,48 @@ final class CalendarInteractionTests: XCTestCase {
         )
     }
 
+    /// 切条目的三种情形（2026-10-16 上屏反馈）：**只有真的会丢东西才拦人**——
+    /// ① 点当前那一条 → 什么都不做；② 稿没改过 → 静默换；③ 稿改过 → 才弹三选一。
+    func testSwitchingItemsOnlyPromptsWhenTheDraftHasUnsavedChanges() throws {
+        let backend = panelBackend()
+        let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
+        let session = panelSession(service: backend)
+
+        // ① 点当前那一条：同一个 id → 静默（`resumeDraft`），不进任何确认态。
+        session.beginEdit(event)
+        let identity = session.draftIdentity
+        session.beginEdit(event)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draftIdentity, identity, "同一条重复点：稿与身份都不动")
+        XCTAssertNil(session.pendingConfirmation)
+
+        // ② 稿没改过（`draft == baseline`）→ 点别处直接换稿，不弹框。
+        XCTAssertFalse(session.hasDirtyDraft, "前提：刚开出来的稿与基线一致")
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        XCTAssertNil(session.pendingConfirmation, "没改过就不该弹「已有未保存草稿」")
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertNil(session.draft?.eventID, "已经换成了新建稿")
+
+        // ③ 稿改过（`draft != baseline`）→ 才拦人：三选一。
+        session.beginEdit(event)
+        session.draft?.title = "改过的标题"
+        XCTAssertTrue(session.hasDirtyDraft, "前提：这条稿确实有改动")
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        XCTAssertEqual(session.pendingConfirmation, .draftConflict, "有改动才弹三选一")
+        // 取消 → 什么都不动（还停在原来那条）。
+        session.resolveDraftConflict(.cancel)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertEqual(session.draft?.eventID, event.id, "取消 = 留在原稿")
+        // 继续旧草稿同样留在原稿；放弃后开始才换。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.resolveDraftConflict(.resume)
+        XCTAssertEqual(session.draft?.eventID, event.id, "继续旧草稿 = 回原稿")
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.resolveDraftConflict(.discardAndStart)
+        XCTAssertNil(session.draft?.eventID, "放弃后开始 = 换成新稿")
+        XCTAssertNil(session.pendingConfirmation)
+    }
+
     private func panelBackend(count: Int = 9) -> CalendarInteractionMemoryService {
         CalendarInteractionFixtures.makeBackend(count: count, on: date(day: 11), calendar: testCalendar)
     }
