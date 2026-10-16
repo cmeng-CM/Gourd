@@ -171,6 +171,10 @@ struct CalendarSelectableText: NSViewRepresentable {
     var color: NSColor = .white
     var maximumLines: Int = 0
     var strikethrough = false
+    /// 「点了一下」（不是拖选）时的回调：列表行据此就地弹详情浮窗（docs/49 D-22）。
+    /// 判定在 `CalendarReadOnlyTextView.mouseDown` 里——**必须在** `super.mouseDown` 之后，
+    /// 因为 NSTextView 的选择跟踪循环会把 mouseUp 吃在它内部。
+    var onPlainClick: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> CalendarReadOnlyTextView {
         let view = CalendarReadOnlyTextView(frame: .zero, textContainer: nil)
@@ -182,6 +186,7 @@ struct CalendarSelectableText: NSViewRepresentable {
     func updateNSView(_ view: CalendarReadOnlyTextView, context: Context) {
         view.connect(to: vm)
         view.payload = payload
+        view.onPlainClick = onPlainClick
         view.configure(text: text, font: font, color: color, maximumLines: maximumLines,
                        strikethrough: strikethrough)
     }
@@ -196,6 +201,8 @@ struct CalendarSelectableText: NSViewRepresentable {
 @MainActor
 final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
     var payload = CalendarCopyPayload(title: "", fullInformation: "")
+    /// 「点了一下」回调（不是拖选）：列表行据此就地弹详情浮窗（docs/49 D-22）。
+    var onPlainClick: (() -> Void)?
     private(set) var interaction: CalendarTextInteraction?
     private weak var viewModel: DynamicIslandViewModel?
     private var subscriptions = Set<AnyCancellable>()
@@ -282,13 +289,23 @@ final class CalendarReadOnlyTextView: NSTextView, NSMenuDelegate {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    /// 「点了一下」的位置容差（pt）：位移小于它且没有选中，就当作单击而不是拖选。
+    static let plainClickTolerance: CGFloat = 4
+
     override func mouseDown(with event: NSEvent) {
         let owner = interaction
         owner?.mouseDown()
         installUpMonitor()
         // NSTextView may consume mouseUp inside its own tracking loop.
         defer { owner?.trackingReturned(); removeUpMonitor() }
+        let downPoint = convert(event.locationInWindow, from: nil)
         super.mouseDown(with: event)
+        // 跟踪循环已结束：此刻的鼠标位置 ≈ 抬起位置，选区也已成定局。
+        guard let onPlainClick else { return }
+        let upPoint = convert(window?.mouseLocationOutsideOfEventStream ?? downPoint, from: nil)
+        let moved = max(abs(upPoint.x - downPoint.x), abs(upPoint.y - downPoint.y))
+        guard moved < Self.plainClickTolerance, selectedRange().length == 0 else { return }
+        onPlainClick()
     }
 
     override func mouseUp(with event: NSEvent) {

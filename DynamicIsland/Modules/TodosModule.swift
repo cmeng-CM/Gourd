@@ -1496,7 +1496,8 @@ struct TodosHomeBlockView: View {
                           tier: .full, session: session, details: details,
                           canOpenDetail: canOpenDetail && !session.isSubmitting && completingItemID == nil,
                           isSubmitting: session.isSubmitting || completingItemID != nil,
-                          openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo)
+                          openEvent: openDetail, openTodo: openTodo, completeTodo: completeTodo,
+                          editEvent: editEvent, deleteEvent: deleteEventRecord, deleteItem: deleteItem)
     }
 
     private var summary: TodoBucketing.Summary {
@@ -1543,6 +1544,26 @@ struct TodosHomeBlockView: View {
         }
         // 详情浮层挂在**块的滚动视口之外**（锚点由行上报，浮层不会随滚动被裁）。
         .calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)
+        // 删除确认弹框（2026-10-16 第 6 条）：挂在浮层**之上**，遮罩吃掉下面所有点击。
+        .overlay {
+            if let target = deleteTargetID.flatMap(homeDetailLookup) {
+                CalendarDeleteConfirmation(
+                    event: target,
+                    onConfirm: {
+                        deleteTargetID = nil
+                        Task {
+                            if await session.delete(target) {
+                                actionError = nil
+                            } else {
+                                actionError = session.error
+                                    ?? CalendarMutationError.readOnlyCalendar.localizedDescription
+                            }
+                        }
+                    },
+                    onCancel: { deleteTargetID = nil }
+                )
+            }
+        }
         .task { await store.refresh() }
         .onChange(of: vm.notchState) { _, state in
             if state != .open { details.clear(); deleteTargetID = nil }
@@ -1558,6 +1579,30 @@ struct TodosHomeBlockView: View {
     private func openDetail(_ event: EventModel) {
         guard canOpenDetail, !session.isSubmitting else { return }
         details.togglePin(event.id)
+    }
+
+    /// 行内 ✎：收到浮窗、进日历模块的编辑档（岛内编辑只有一个表单）。
+    private func editEvent(_ event: EventModel) {
+        guard event.canModifyInIsland, !session.isSubmitting else { return }
+        details.clear()
+        session.beginEdit(event)
+        vm.coordinator.selectModule(CalendarModule.moduleID)
+    }
+
+    /// 行内 🗑：走就地确认（弹框）。待办先映射到记录，取不到就提示。
+    private func deleteItem(_ item: TodoBucketing.Item) {
+        guard let event = calendarManager.event(withID: item.id) ?? store.reminderRecords[item.id] else {
+            actionError = CalendarMutationError.recordNotFound.localizedDescription
+            return
+        }
+        deleteEventRecord(event)
+    }
+
+    /// 行内 / 浮窗里的删除都走这里：收浮窗 → 出确认弹框（C2 硬规则①③）。
+    private func deleteEventRecord(_ event: EventModel) {
+        guard CalendarPanelSession.canDeleteInIsland(event) else { return }
+        details.clear()
+        deleteTargetID = event.id
     }
 
     /// 浮层按 id 取条目：今日带的行来自 `todayEvents` + `store.reminderRecords`，
@@ -1584,30 +1629,8 @@ struct TodosHomeBlockView: View {
                 session.beginEdit(event)
                 vm.coordinator.selectModule(CalendarModule.moduleID)
             } : nil,
-            delete: CalendarPanelSession.canDeleteInIsland(event) ? {
-                details.clear()
-                deleteTargetID = event.id
-                details.togglePin(event.id)
-            } : nil,
-            meeting: source.hasMeetingInformation ? { MeetingActionView(source: source, session: session) } : nil,
-            deleteConfirmation: deleteTargetID == event.id ? (
-                onConfirm: {
-                    deleteTargetID = nil
-                    details.clear()
-                    Task {
-                        // 首页没有面板那条 `calendar-error` 行：失败要在这里自己说出来（M-2）。
-                        if await session.delete(event) {
-                            actionError = nil
-                        } else {
-                            actionError = session.error ?? CalendarMutationError.readOnlyCalendar.localizedDescription
-                        }
-                    }
-                },
-                onCancel: {
-                    deleteTargetID = nil
-                    details.clear()
-                }
-            ) : nil
+            delete: CalendarPanelSession.canDeleteInIsland(event) ? { deleteEventRecord(event) } : nil,
+            meeting: source.hasMeetingInformation ? { MeetingActionView(source: source, session: session) } : nil
         )
     }
 
@@ -1721,20 +1744,28 @@ struct TodoHomeTodayList: View {
     let openEvent: (EventModel) -> Void
     let openTodo: (TodoBucketing.Item) -> Void
     let completeTodo: (TodoBucketing.Item) -> Void
+    /// 行内动作（2026-10-16 第 1 条）：编辑 → 日历模块的编辑档；删除 → 就地确认（弹框）。
+    let editEvent: (EventModel) -> Void
+    let deleteEvent: (EventModel) -> Void
+    let deleteItem: (TodoBucketing.Item) -> Void
 
     func withTier(_ tier: TodosHomeBlockLayout.Tier) -> TodoHomeTodayList {
         TodoHomeTodayList(entries: entries, reminderRecords: reminderRecords, tier: tier, session: session,
                           details: details,
                           canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
-                          openEvent: openEvent, openTodo: openTodo, completeTodo: completeTodo)
+                          openEvent: openEvent, openTodo: openTodo, completeTodo: completeTodo,
+                          editEvent: editEvent, deleteEvent: deleteEvent, deleteItem: deleteItem)
     }
     func eventRow(_ event: EventModel) -> TodoHomeEventRow {
-        TodoHomeEventRow(event: event, session: session, canOpenDetail: canOpenDetail, open: { openEvent(event) })
+        TodoHomeEventRow(event: event, session: session, canOpenDetail: canOpenDetail,
+                         open: { openEvent(event) },
+                         edit: { editEvent($0) }, delete: { deleteEvent($0) })
     }
     func todoRow(_ item: TodoBucketing.Item) -> TodoHomeRow {
         TodoHomeRow(item: item, event: reminderRecords[item.id], tier: tier, session: session,
                     canOpenDetail: canOpenDetail, isSubmitting: isSubmitting,
-                    open: { openTodo(item) }, complete: { completeTodo(item) })
+                    open: { openTodo(item) }, complete: { completeTodo(item) },
+                    edit: { editEvent($0) }, delete: { deleteItem($0) })
     }
 
     private var eventEntries: [TodosHomeBlockLayout.ScheduleEntry] {
@@ -1789,6 +1820,9 @@ struct TodoHomeEventRow: View {
     let session: CalendarPanelSession
     let canOpenDetail: Bool
     let open: () -> Void
+    /// 行内动作（2026-10-16 上屏反馈第 1 条：首页行也要 ✎ / 🗑，去掉旧详情档留下的 › 箭头）。
+    let edit: (EventModel) -> Void
+    let delete: (EventModel) -> Void
 
     var meetingAction: MeetingActionView? {
         let source = CalendarMeetingSource(event: event)
@@ -1801,20 +1835,58 @@ struct TodoHomeEventRow: View {
                 .fill(Color(event.calendar.color)).frame(width: 4, height: 24)
             CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
                                    font: .systemFont(ofSize: 11, weight: .semibold),
-                                   color: .white.withAlphaComponent(0.95), maximumLines: 1)
+                                   color: .white.withAlphaComponent(0.95), maximumLines: 1,
+                                   onPlainClick: { if canOpenDetail { open() } })
+                .layoutPriority(1)
             Text(TodoText.eventTimeLabel(for: event))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .monospacedDigit().foregroundStyle(.white.opacity(0.6)).lineLimit(1).fixedSize()
-            if let meetingAction { meetingAction }
-            Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
-                .buttonStyle(.plain).disabled(!canOpenDetail)
-                .accessibilityLabel(Text("calendar.panel.details"))
+            TodoHomeRowActions(event: event, meeting: meetingAction,
+                               edit: { edit(event) }, delete: { delete(event) })
                 .accessibilityIdentifier("home-item-" + event.id)
         }.frame(height: TodosHomeBlockLayout.eventRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 整行可点 = 就地弹浮窗（D-22 的同款口径；完成圈 / 会议按钮 / › 各自吞自己的点击）。
+            // 整行可点 = 就地弹浮窗（D-22 的同款口径；完成圈 / 会议按钮 / ✎ / 🗑 各自吞自己的点击）。
             .contentShape(Rectangle())
             .onTapGesture { if canOpenDetail { open() } }
+    }
+}
+
+/// 首页行的右端动作组（与面板列表行同一套判据：会议信息给会议按钮；✎ 只给可写日程；
+/// 🗑 只给岛内可删的记录，`CalendarPanelSession.canDeleteInIsland`）。
+struct TodoHomeRowActions: View {
+    let event: EventModel
+    let meeting: MeetingActionView?
+    let edit: () -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let meeting { meeting }
+            if event.canModifyInIsland, !event.type.isReminder {
+                homeIconButton("calendar.panel.editItem", systemImage: "pencil", action: edit)
+                    .accessibilityIdentifier("home-edit-" + event.id)
+            }
+            if CalendarPanelSession.canDeleteInIsland(event) {
+                homeIconButton("calendar.panel.delete", systemImage: "trash", action: delete)
+                    .accessibilityIdentifier("home-delete-" + event.id)
+            }
+        }
+    }
+
+    private func homeIconButton(_ labelKey: LocalizedStringKey, systemImage: String,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(.white.opacity(0.10)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(Text(labelKey))
+        .accessibilityLabel(Text(labelKey))
     }
 }
 
@@ -1828,6 +1900,9 @@ struct TodoHomeRow: View {
     let isSubmitting: Bool
     let open: () -> Void
     let complete: () -> Void
+    /// 行内动作（2026-10-16 上屏反馈第 1 条）：待办只给 🗑（岛内不给编辑提醒，D-10）。
+    let edit: (EventModel) -> Void
+    let delete: (TodoBucketing.Item) -> Void
 
     var meetingAction: MeetingActionView? {
         let source = event.map { CalendarMeetingSource(event: $0) } ?? CalendarMeetingSource(item: item)
@@ -1847,16 +1922,21 @@ struct TodoHomeRow: View {
             CalendarSelectableText(text: item.title, payload: event.map { CalendarCopyPayload(event: $0) } ?? CalendarCopyPayload(item: item),
                                    font: .systemFont(ofSize: 11, weight: .medium),
                                    color: .white.withAlphaComponent(item.isCompleted ? 0.4 : 0.95),
-                                   maximumLines: 1, strikethrough: item.isCompleted)
+                                   maximumLines: 1, strikethrough: item.isCompleted,
+                                   onPlainClick: { if canOpenDetail { open() } })
+                .layoutPriority(1)
             if tier == .full, TodoText.isOverdue(item) {
                 Text(LocalizedStringKey("module.todos.overdue"))
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(.red).fixedSize()
             }
-            if let meetingAction { meetingAction }
-            Button(action: open) { Image(systemName: "chevron.right").font(.system(size: 10)) }
-                .buttonStyle(.plain).disabled(!canOpenDetail)
-                .accessibilityLabel(Text("calendar.panel.details"))
-                .accessibilityIdentifier("home-item-" + item.id)
+            if let event {
+                TodoHomeRowActions(event: event, meeting: meetingAction,
+                                   edit: { edit(event) }, delete: { delete(item) })
+                    .accessibilityIdentifier("home-item-" + item.id)
+            } else {
+                // 取不到记录（极少）：只留会议按钮（若有），行本身仍可点。
+                if let meetingAction { meetingAction }
+            }
         }.frame(height: TodosHomeBlockLayout.todoRowHeightInSchedule)
             .contentShape(Rectangle())
             .onTapGesture { if canOpenDetail { open() } }

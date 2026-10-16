@@ -188,6 +188,16 @@ struct CalendarPanelPages: View {
             }
             footer
         }
+        // 删除确认弹框（2026-10-16 第 6 条：由「行下方确认条」改为弹框）：挂在浮层之上。
+        .overlay {
+            if let target = deleteTargetID.flatMap({ id in events.first { $0.id == id } }) {
+                CalendarDeleteConfirmation(
+                    event: target,
+                    onConfirm: { Task { await confirmDelete(target) } },
+                    onCancel: { deleteTargetID = nil }
+                )
+            }
+        }
         .environment(\.calendarMeetingSession, session)
         .font(.callout)
         .buttonStyle(.plain)
@@ -311,7 +321,8 @@ struct CalendarPanelPages: View {
                 VStack(alignment: .leading, spacing: 3) {
                     CalendarSelectableText(text: event.title, payload: CalendarCopyPayload(event: event),
                                            font: CalendarPanelTypography.appKitTitle(.medium),
-                                           maximumLines: showFullEventTitles ? 0 : 2)
+                                           maximumLines: showFullEventTitles ? 0 : 2,
+                                           onPlainClick: { details.togglePin(event.id) })
                     HStack(spacing: 8) {
                         Text(dueOrTimeText(event))
                             .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
@@ -322,7 +333,6 @@ struct CalendarPanelPages: View {
                 rowActionGroup(event)
             }
             .padding(.horizontal, 11).padding(.vertical, 8)
-            if deleteTargetID == event.id { deleteConfirmationBar(event) }
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(hoveredID == event.id ? 0.06 : 0.03)))
         .opacity(isCompleted(event) ? 0.55 : 1)
@@ -397,32 +407,6 @@ struct CalendarPanelPages: View {
         deleteTargetID = event.id
     }
 
-    /// 就地删除确认条（C2）：行下方一条，不弹系统窗；Esc / 「取消」都不改任何东西。
-    private func deleteConfirmationBar(_ event: EventModel) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(String(format: String(localized: "Are you sure you want to delete \"%@\"?"),
-                            event.title))
-                    .font(CalendarPanelTypography.action).foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(event.type.isReminder ? "calendar.panel.deleteReminderConsequence"
-                                           : "calendar.panel.deleteEventConsequence")
-                    .font(CalendarPanelTypography.cardSecondary).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button("calendar.panel.delete") { Task { await confirmDelete(event) } }
-                .font(CalendarPanelTypography.action).foregroundStyle(.red)
-                .accessibilityIdentifier("calendar-delete-confirm")
-            Button("Cancel") { deleteTargetID = nil }
-                .font(CalendarPanelTypography.action)
-                .accessibilityIdentifier("calendar-delete-cancel")
-        }
-        .padding(.horizontal, 11).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.06)))
-        .accessibilityIdentifier("calendar-delete-confirmation")
-    }
-
     private func confirmDelete(_ event: EventModel) async {
         guard await session.delete(event) else { return }
         deleteTargetID = nil
@@ -473,8 +457,9 @@ struct CalendarPanelPages: View {
     private var editorPage: some View {
         ScrollView(.vertical) {
             if let draft = session.draft {
-                // 行距 8（D-17）：+3 号字号下把整页收进 400 的编辑档高——不动字号、控件尺寸与内外边距。
-                VStack(alignment: .leading, spacing: 8) {
+                // 行距 7（D-17 的杠杆再收 1pt，2026-10-16）：+3 号字号 + 大文本框 2 行之后，
+                // 待办表单刚好落进编辑档可视区（336），面板不再冒滚动条。
+                VStack(alignment: .leading, spacing: 7) {
                     // 新建可点、编辑锁定（而不是不渲染）：四种入口的版式不再跳。
                     Picker("calendar.panel.kind", selection: kindBinding) {
                         Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)

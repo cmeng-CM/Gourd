@@ -1269,6 +1269,7 @@ struct MonthGridView: View {
 struct CalendarEditorSidebar: View {
     @ObservedObject var session: CalendarPanelSession
     @ObservedObject var manager: CalendarManager
+    @State private var hoveredID: String?
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
     @Default(.showFullEventTitles) private var showFullEventTitles
@@ -1312,21 +1313,42 @@ struct CalendarEditorSidebar: View {
 
     /// 卡片分派：日程 → `CalendarEventCard`（只读）；提醒 → `ReminderCard`，勾选走**既有写回链路**
     /// （`manager.setReminderCompleted`，与 `CalendarEventCardList.cardBody` 逐字同款——不新造写回路径）。
+    ///
+    /// **可点 = 切到那一条的编辑稿**（2026-10-16 上屏反馈第 5 条：左栏原来只是展示，点了没反应）：
+    /// 点一条 → `beginEdit`（有未保存的稿时由会话弹出既有的「继续编辑 / 放弃并切换 / 取消」）；
+    /// 不可写的记录（只读日历 / 重复 / 生日 / 会议邀请 / 提醒）由会话给出原有原因提示，只高亮不切页。
     @ViewBuilder
     private func card(for event: EventModel) -> some View {
-        if event.type.isReminder {
-            ReminderCard(
-                event: event,
-                showFullEventTitles: showFullEventTitles,
-                onToggle: { completed in
-                    Task {
-                        await manager.setReminderCompleted(reminderID: event.id, completed: completed)
+        Group {
+            if event.type.isReminder {
+                ReminderCard(
+                    event: event,
+                    showFullEventTitles: showFullEventTitles,
+                    onToggle: { completed in
+                        Task {
+                            await manager.setReminderCompleted(reminderID: event.id, completed: completed)
+                        }
                     }
-                }
-            )
-        } else {
-            CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles, detailEnabled: false)
+                )
+            } else {
+                CalendarEventCard(event: event, showFullEventTitles: showFullEventTitles, detailEnabled: false)
+            }
         }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isEditing(event) ? Color.effectiveAccent.opacity(0.18)
+                      : Color.white.opacity(hoveredID == event.id ? 0.08 : 0))
+        )
+        .contentShape(Rectangle())
+        .onHover { hoveredID = $0 ? event.id : nil }
+        .onTapGesture { session.beginEdit(event) }
+        .accessibilityIdentifier("calendar-editor-sidebar-item-\(event.id)")
+    }
+
+    /// 右栏正在编辑的那一条（草稿的 eventID）：左栏给它一层底色，点别条就是切换。
+    private func isEditing(_ event: EventModel) -> Bool {
+        session.draft?.eventID == event.id
     }
 }
 

@@ -803,14 +803,21 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
     /// 空框时在框内画的占位文字（本地化键；复用既有键，不新增）。nil = 不画。
     var placeholder: String?
     var onFocus: (Bool) -> Void
-    /// 可见高度上限（行数）：原文区与备注都收在这一档，再多就框内滚动。
-    var maximumLines: Int = CalendarEditableTextView.defaultMaximumLines
+    /// 可见高度（行数）：原文区与备注都收在这一档，再多就框内滚动。
+    /// 2026-10-16（上屏反馈第 7 条）：3 → 2 行——+3 号字号下 3 行的表单比编辑档可视区高，
+    /// 面板因此冒出一条滚动条；收到 2 行后待办场景刚好放得下（日程多一行「地点｜链接」，仍会滚）。
+    var maximumLines: Int = CalendarEditableTextView.visibleLines
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
-        scroll.drawsBackground = true
-        scroll.backgroundColor = NSColor.white.withAlphaComponent(CalendarEditableTextView.fillAlpha)
+        // **不要**让 AppKit 自绘底：`drawsBackground = true` 会生成一层 `_NSScrollViewContentBackgroundView`，
+        // 它填的是系统色（浅色外观下是白）——白字压白底，输入内容就看不见了（2026-10-16 上屏反馈第 4 条）。
+        // 底色改由本视图的 layer 画（白 6%），描边另画一层。
+        scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false
+        scroll.layer?.backgroundColor = NSColor.white
+            .withAlphaComponent(CalendarEditableTextView.fillAlpha).cgColor
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -885,7 +892,8 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
     static let cornerRadius: CGFloat = 6
     static let fillAlpha: CGFloat = 0.06
     static let borderAlpha: CGFloat = 0.18
-    static let defaultMaximumLines = 3
+    /// 大文本框的**可见行数**（2026-10-16 起 2 行；改前 3 行）。
+    static let visibleLines = 2
     static let defaultFontSize: CGFloat = CalendarPanelTypography.bigEditorPointSize
 
     var onFocus: (Bool) -> Void = { _ in }
@@ -932,7 +940,7 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
     /// 可见高度**就是** `defaultMaximumLines` 行（含上下内缩）：不是下限而是定高——内容更多时框内滚动。
     /// 行高取布局管理器的默认行高（≈16pt @13），`boundingRectForFont` 会把字体的升部余量算进去（≈17pt），
     /// 三行就多出 3pt —— 那 3pt 正是编辑档可视区容不下的部分。
-    func cappedHeight(lines: Int = CalendarEditableTextView.defaultMaximumLines) -> CGFloat {
+    func cappedHeight(lines: Int = CalendarEditableTextView.visibleLines) -> CGFloat {
         let font = self.font ?? .systemFont(ofSize: Self.defaultFontSize)
         let measured = layoutManager?.defaultLineHeight(for: font) ?? 0
         let lineHeight = measured > 0 ? measured : ceil(font.boundingRectForFont.height)

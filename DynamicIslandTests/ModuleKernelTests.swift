@@ -15024,7 +15024,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
                                                         details: CalendarEventDetailsModel(),
                                                         canOpenDetail: false, isSubmitting: false,
                                                         openEvent: { _ in XCTFail("Must not navigate") },
-                                                        openTodo: { _ in XCTFail("Must not navigate") }, completeTodo: { _ in })
+                                                        openTodo: { _ in XCTFail("Must not navigate") }, completeTodo: { _ in },
+                                                        editEvent: { _ in }, deleteEvent: { _ in }, deleteItem: { _ in })
         let row = unavailableCalendarList.eventRow(event(notes: MeetingInvitationFixtures.huawei))
         XCTAssertFalse(row.canOpenDetail)
         let action = try XCTUnwrap(row.meetingAction)
@@ -15085,7 +15086,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
                                      details: CalendarEventDetailsModel(),
-                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
+                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in },
+                                    completeTodo: { _ in }, editEvent: { _ in }, deleteEvent: { _ in }, deleteItem: { _ in })
         for notes in [MeetingInvitationFixtures.huaweiHTTPS,
                       MeetingInvitationFixtures.huaweiHTTPS + "\n" + MeetingInvitationFixtures.tencent,
                       String(repeating: "长备注\n", count: 5_000) + MeetingInvitationFixtures.huaweiHTTPS,
@@ -15119,7 +15121,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let owned = makeSession()
         let list = TodoHomeTodayList(entries: [], reminderRecords: [:], tier: .full, session: owned,
                                      details: CalendarEventDetailsModel(),
-                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in }, completeTodo: { _ in })
+                                    canOpenDetail: false, isSubmitting: false, openEvent: { _ in }, openTodo: { _ in },
+                                    completeTodo: { _ in }, editEvent: { _ in }, deleteEvent: { _ in }, deleteItem: { _ in })
         for notes in ["请参加会议室保洁工作", "欢迎加入会议室保洁工作", "邀请你参加会议室保洁工作",
                       "请参加会议记录整理", "请加入会议材料准备", "制作会议邀请函模板",
                       "Please join the meetingroom cleaning task", "Please join the meeting room cleaning task",
@@ -15572,11 +15575,11 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(Double(border.redComponent), 1, accuracy: 0.01)
         XCTAssertEqual(Double(border.alphaComponent), 0.18, accuracy: 0.01,
                        "描边是白 18%（设计值；浅到不抢内容、又看得出落点）")
-        // 框高 = 3 行：用布局管理器的行高**独立算**一遍（改 cappedHeight 的实现也不会骗过它）。
+        // 框高 = 2 行（2026-10-16 上屏反馈第 7 条：3 → 2 行）：用布局管理器的行高**独立算**一遍。
         let lineHeight = try XCTUnwrap(notes.layoutManager).defaultLineHeight(
             for: try XCTUnwrap(notes.font))
-        XCTAssertEqual(box.frame.height, ceil(lineHeight) * 3 + 2 * notes.textContainerInset.height,
-                       accuracy: 0.5, "框高 = 3 行（D-04）")
+        XCTAssertEqual(box.frame.height, ceil(lineHeight) * 2 + 2 * notes.textContainerInset.height,
+                       accuracy: 0.5, "框高 = 2 行")
         XCTAssertTrue(notes.string.isEmpty)
         XCTAssertEqual(notes.placeholder, NSLocalizedString("calendar.panel.notes", comment: ""))
         // 生产形态：文档视图住在 clip view 里（不是裸放），纵向自增长只发生在框内。
@@ -15587,7 +15590,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         session.draft?.notes = (1...20).map { "第\($0)行" }.joined(separator: "\n")
         settle(host)
         XCTAssertEqual(try XCTUnwrap(notes.enclosingScrollView).frame.height,
-                       ceil(lineHeight) * 3 + 2 * notes.textContainerInset.height, accuracy: 0.5,
+                       ceil(lineHeight) * 2 + 2 * notes.textContainerInset.height, accuracy: 0.5,
                        "20 行备注也不能把框顶高")
         XCTAssertGreaterThan(notes.frame.height, box.frame.height, "文档视图比框高 → 框内可滚动")
         XCTAssertEqual(box.hasVerticalScroller, true)
@@ -15741,15 +15744,20 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertFalse(deletedReadOnly, "只读记录：会话层也不许删（D-12 的第二道门）")
 
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
-        XCTAssertTrue(panel.contains("if deleteTargetID == event.id { deleteConfirmationBar(event) }"),
-                      "行下方就地确认条")
+        XCTAssertTrue(panel.contains("CalendarDeleteConfirmation("),
+                      "删除确认改成**弹框**（2026-10-16 第 6 条）")
+        XCTAssertFalse(panel.contains("deleteConfirmationBar"),
+                       "行下方确认条已退休")
         XCTAssertTrue(panel.contains("private func requestDelete(_ event: EventModel)"),
                       "行内 🗑 只叫确认条")
         XCTAssertTrue(panel.contains("guard await session.delete(event) else { return }"),
                       "确认后才真的删，删成功再把锚点挪到邻近条目")
-        XCTAssertTrue(panel.contains("calendar.panel.deleteReminderConsequence")
-                      && panel.contains("calendar.panel.deleteEventConsequence"),
-                      "确认文案写清后果（C2 硬规则②）")
+        let detailSource = try repositorySource("DynamicIsland/components/Calendar/CalendarEventDetail.swift")
+        XCTAssertTrue(detailSource.contains("calendar.panel.deleteReminderConsequence")
+                      && detailSource.contains("calendar.panel.deleteEventConsequence"),
+                      "弹框里写清后果（C2 硬规则②）")
+        XCTAssertTrue(detailSource.contains(".accessibilityIdentifier(\"calendar-delete-scrim\")"),
+                      "遮罩（点它 = 取消）")
         let sessionSource = try repositorySource("DynamicIsland/models/CalendarPanelSession.swift")
         XCTAssertTrue(sessionSource.contains("guard !isSubmitting, Self.canDeleteInIsland(event) else { return false }"),
                       "删除的唯一判据是 canDeleteInIsland（不再卡 route == .detail）")
@@ -15806,11 +15814,16 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // 锚点：两种行都上报。
         XCTAssertEqual(todos.components(separatedBy: ".anchorPreference(key: CalendarEventAnchorKey.self, value: .bounds)").count - 1, 2,
                        "日程行与待办行各上报一次锚点")
-        // 行形态不动（D-18）：首页两种行都没有 ✎ / 🗑 的构造，会议入口仍是默认 `.icon`。
+        // 行形态（2026-10-16 第 1 条改口径）：首页行**加了** ✎ / 🗑，并去掉旧详情档留下的 ›；
+        // 会议入口仍是默认 `.icon` 那一枚。
+        XCTAssertTrue(todos.contains("struct TodoHomeRowActions"), "首页行的右端动作组")
+        XCTAssertTrue(todos.contains("home-edit-"), "可写日程给 ✎")
+        XCTAssertTrue(todos.contains("home-delete-"), "可删记录给 🗑")
+        XCTAssertTrue(todos.contains("CalendarPanelSession.canDeleteInIsland(event)"),
+                      "🗑 与面板同一判据")
+        XCTAssertFalse(todos.contains("chevron.right"), "首页行不再有 › 箭头（第 1 条）")
         let eventRow = try XCTUnwrap(todos.range(of: "struct TodoHomeEventRow"))
         let rowBody = String(todos[eventRow.lowerBound...].prefix(2600))
-        XCTAssertFalse(rowBody.contains("pencil"), "首页行不加编辑键")
-        XCTAssertFalse(rowBody.contains("trash"), "首页行不加删除键")
         XCTAssertTrue(rowBody.contains("MeetingActionView(source: source, session: session)"),
                       "会议入口仍是那枚单图标（默认 .icon）")
         XCTAssertFalse(rowBody.contains("style: .row"))
@@ -15819,13 +15832,16 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let overlayIndex = try XCTUnwrap(todos.range(of: ".calendarEventDetails(model: details, actions: homeDetailActions, lookup:"))
         XCTAssertLessThan(scrollIndex.lowerBound, overlayIndex.lowerBound)
         // 删除仍先确认（C2 硬规则①）：浮窗里换成确认行，确认后才真删。
-        XCTAssertTrue(todos.contains("deleteConfirmation: deleteTargetID == event.id ?"),
-                      "首页浮窗里的删除走确认行")
-        XCTAssertTrue(todos.contains("if await session.delete(event) {"),
+        XCTAssertTrue(todos.contains("CalendarDeleteConfirmation("),
+                      "首页的删除也走**弹框**（第 6 条），遮罩 + 居中卡片")
+        XCTAssertTrue(todos.contains("calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)")
+                      && todos.contains(".overlay {"),
+                      "弹框挂在浮层之上")
+        XCTAssertTrue(todos.contains("if await session.delete(target) {"),
                       "确认后才调删除，且失败要在首页说出来（M-2）")
         let detail = try repositorySource("DynamicIsland/components/Calendar/CalendarEventDetail.swift")
-        XCTAssertTrue(detail.contains("if let deleteConfirmation = actions.deleteConfirmation"),
-                      "卡片支持就地确认（首页那一份）")
+        XCTAssertTrue(detail.contains("struct CalendarDeleteConfirmation"),
+                      "确认弹框是共用组件（面板 / 首页同一份）")
         // 取数兜底：首页的行来自 todayEvents + store.reminderRecords（含**不在当日窗口**的过期条目），
         // 浮层必须用同一份数据查，否则那些行点了什么都不画（审查 I-2）。
         XCTAssertTrue(todos.contains("calendarEventDetails(model: details, actions: homeDetailActions, lookup: homeDetailLookup)"))
@@ -16037,6 +16053,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let content = box.convert(box.bounds, to: host).maxY - region.minY
         XCTAssertLessThanOrEqual(content, StandaloneCalendarView.editorPaneHeight,
                                  "表单内容高 \(content) 必须 ≤ 编辑档自然高 400")
+        // 2026-10-16 起**待办表单连可视区也放得下**（大文本框 2 行 + 行距 7）→ 恢复严格断言：
+        // 面板不该再为待办表单冒出一条滚动条（日程多一行「地点｜链接」，仍会滚，见 docs/49 已知限制）。
+        XCTAssertLessThanOrEqual(content, region.height,
+                                 "新建待办表单 \(content) 必须落在可视区 \(region.height) 之内")
         print("校准读数：新建待办表单内容高 \(content)，可视区 \(region.height) → 差额 \(content - region.height)")
     }
 
@@ -16106,8 +16126,8 @@ final class CalendarPageLayoutTests: XCTestCase {
         let frame = view.frame, ranges = view.selectedRanges, string = view.string
         // 框是**定高**：不再有「随内容量出不同高度」的路径（旧 `measuredSize` 已随 D-04 删除）。
         let lineHeight = try XCTUnwrap(view.layoutManager).defaultLineHeight(for: try XCTUnwrap(view.font))
-        XCTAssertEqual(boxHeight, ceil(lineHeight) * 3 + 2 * view.textContainerInset.height, accuracy: 0.5,
-                       "框高 = 3 行（D-04；用行高独立算一遍，不镜像 cappedHeight 的实现）")
+        XCTAssertEqual(boxHeight, ceil(lineHeight) * 2 + 2 * view.textContainerInset.height, accuracy: 0.5,
+                       "框高 = 2 行（2026-10-16 起；用行高独立算一遍，不镜像 cappedHeight 的实现）")
         for _ in 0..<4 {
             XCTAssertEqual(view.cappedHeight(), boxHeight, accuracy: 1e-9, "测量不许改框高、也不许有副作用")
             XCTAssertEqual(view.frame, frame)

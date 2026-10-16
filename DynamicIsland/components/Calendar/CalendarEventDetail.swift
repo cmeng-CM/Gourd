@@ -90,9 +90,6 @@ struct CalendarEventDetailActions {
     var edit: (() -> Void)?
     var delete: (() -> Void)?
     var meeting: (() -> MeetingActionView)?
-    /// 就地删除确认（首页浮窗用：那里没有「行下方确认条」可用）。非空时卡片底部换成
-    /// 一行确认 + 删除 / 取消（C2 硬规则①「删除必须先确认」在浮窗里也成立）。
-    var deleteConfirmation: (onConfirm: () -> Void, onCancel: () -> Void)?
 
     var isEmpty: Bool {
         openSystem == nil && complete == nil && edit == nil && delete == nil && meeting == nil
@@ -171,13 +168,15 @@ struct CalendarEventDetailCard: View {
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // **不透明底**（2026-10-16 上屏反馈第 3 条）：卡片压在列表行上，白 7% 的半透明底会让
+        // 下面的字透上来（读成「叠加显示错了」）。取面板底色再实一档 + 一圈更亮的描边。
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.07))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(white: 0.16))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
         )
     }
 
@@ -213,24 +212,7 @@ struct CalendarEventDetailCard: View {
     /// 底部动作行（H2 / D-20）：图标 + 顶上一道细分隔线；`actions` 为空时整行不画。
     @ViewBuilder
     private var actionRow: some View {
-        if let deleteConfirmation = actions.deleteConfirmation {
-            Divider().overlay(Color.white.opacity(0.16))
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(event.type.isReminder ? "calendar.panel.deleteReminderConsequence"
-                                           : "calendar.panel.deleteEventConsequence")
-                    .font(CalendarPanelTypography.cardSecondary)
-                    .foregroundColor(.white.opacity(MonthGridLayout.cardSecondaryOpacity))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                Button("calendar.panel.delete") { deleteConfirmation.onConfirm() }
-                    .font(CalendarPanelTypography.action).foregroundColor(.red)
-                    .accessibilityIdentifier("calendar-delete-confirm")
-                Button("Cancel") { deleteConfirmation.onCancel() }
-                    .font(CalendarPanelTypography.action)
-                    .accessibilityIdentifier("calendar-delete-cancel")
-            }
-            .buttonStyle(.plain)
-        } else if !actions.isEmpty {
+        if !actions.isEmpty {
             Divider().overlay(Color.white.opacity(0.16))
             HStack(spacing: 6) {
                 if let meeting = actions.meeting { meeting() }
@@ -261,6 +243,57 @@ struct CalendarEventDetailCard: View {
             .buttonStyle(.plain)
             .help(Text(labelKey))
             .accessibilityLabel(Text(labelKey))
+        }
+    }
+}
+
+// MARK: - 删除确认弹框
+
+/// 就地删除确认**弹框**（2026-10-16 上屏反馈第 6 条）：遮罩 + 居中卡片，面板与首页共用一份。
+///
+/// 为什么不用系统 `NSAlert`：面板是**非激活 NSPanel**，系统弹窗会抢焦点、还可能排不上队；
+/// 自绘遮罩 + 卡片的观感与「面板内自绘浮层」同族（C2 的硬规则①③仍在：先确认、同屏只留一个浮层）。
+struct CalendarDeleteConfirmation: View {
+    let event: EventModel
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            // 遮罩：点它 = 取消（与 Esc 同义，不动任何数据）。
+            Color.black.opacity(0.35)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onCancel)
+                .accessibilityIdentifier("calendar-delete-scrim")
+            VStack(alignment: .leading, spacing: 12) {
+                Text(String(format: String(localized: "Are you sure you want to delete \"%@\"?"), event.title))
+                    .font(CalendarPanelTypography.cardTitle)
+                    .foregroundColor(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(event.type.isReminder ? "calendar.panel.deleteReminderConsequence"
+                                           : "calendar.panel.deleteEventConsequence")
+                    .font(CalendarPanelTypography.action)
+                    .foregroundColor(.white.opacity(0.7))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    Button("Cancel", action: onCancel)
+                        .font(CalendarPanelTypography.action)
+                        .foregroundColor(.white.opacity(0.85))
+                        .accessibilityIdentifier("calendar-delete-cancel")
+                    Button("calendar.panel.delete", action: onConfirm)
+                        .font(CalendarPanelTypography.action)
+                        .foregroundColor(.red)
+                        .accessibilityIdentifier("calendar-delete-confirm")
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(18)
+            .frame(maxWidth: 380, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(white: 0.16)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+            .accessibilityIdentifier("calendar-delete-dialog")
         }
     }
 }
