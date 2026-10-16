@@ -60,6 +60,11 @@ final class CalendarEditorLifecycle: ObservableObject {
         session.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] in
             self?.updateProtection()
         }.store(in: &subscriptions)
+        // 保护窗口还跟着 route / isSubmitting 走，而 `@Published` 是**变更前**发的——
+        // 订阅这个「改完之后」的计数器，离开编辑档那一刻才会立刻释放（2026-10-16）。
+        session.$autoCloseProtectionRevision.sink { [weak self] _ in
+            self?.updateProtection()
+        }.store(in: &subscriptions)
         viewModel.$notchState.dropFirst().sink { [weak self] state in
             if state == .closed { self?.departLocally() }
         }.store(in: &subscriptions)

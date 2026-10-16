@@ -80,7 +80,13 @@ final class CalendarPanelSession: ObservableObject {
     enum Confirmation: Equatable { case discardDraft, draftConflict }
 
     /// 只有两种档位（T6 / D-11：详情档退休，详情内容改由列表行的浮层承担）。
-    @Published private(set) var route: CalendarPanelRoute = .list
+    @Published private(set) var route: CalendarPanelRoute = .list {
+        didSet { if oldValue != route { autoCloseProtectionRevision += 1 } }
+    }
+    /// **变更之后**才发的信号（`@Published` 是 willSet 发的，拿它重算会读到旧值）：
+    /// 保护窗口（`shouldProtectAutoClose`）依赖 route / isSubmitting，宿主据此在**改完之后**重算，
+    /// 否则「离开编辑档」那一下会读到旧的 `.editor`，保护永远撤不掉。
+    @Published private(set) var autoCloseProtectionRevision: Int = 0
     @Published var selectedDate: Date {
         didSet { if oldValue != selectedDate { navigationGeneration += 1 } }
     }
@@ -97,7 +103,9 @@ final class CalendarPanelSession: ObservableObject {
     @Published private(set) var generationState: CalendarGenerationState = .idle
     @Published private(set) var generationError: String?
     @Published private(set) var baseline: CalendarDraft?
-    @Published private(set) var isSubmitting = false
+    @Published private(set) var isSubmitting = false {
+        didSet { if oldValue != isSubmitting { autoCloseProtectionRevision += 1 } }
+    }
     @Published private(set) var error: String?
     /// 首页只展示本次完成动作的错误，不能读到先前保存草稿的错误。
     @Published private(set) var completionError: String?
@@ -114,8 +122,15 @@ final class CalendarPanelSession: ObservableObject {
     /// 丢掉输入框的本地 `@State`。今天不存在「不卸载编辑页的同 route 换稿」路径（见
     /// `testDraftSwapsNeverChangeIdentityWhileTheEditorSubtreeStaysMounted`），所以 `.id` 尚未被独立验证。
     var draftIdentity: UUID? { draftID }
+    /// 面板**不该自动收起**的判据（宿主 `ContentView` 的收面板决策 + `CalendarEditorLifecycle`
+    /// 经 `vm.setAutoCloseSuppression` 接进 `vm.isAutoCloseSuppressed`）。
+    ///
+    /// 2026-10-16（用户）：**编辑 / 新增档整个期间都抑制自动收起**——鼠标移出面板不再把正在写的稿收走；
+    /// 离开编辑档只有用户动作：点「保存」/「取消」（或 Esc、点面板外、切页）。
+    /// 改前只在「输入框有焦点 / 有菜单元 / 日期弹层开着」时抑制，鼠标一移开就可能被收走。
+    /// 注：列表档的**详情浮窗**不在此列（D-23：浮窗随面板一起关，不扣住面板）。
     var shouldProtectAutoClose: Bool {
-        isSubmitting || (route == .editor && (editorHasFocus || ownedMenuCount > 0 || datePopoverPresented))
+        isSubmitting || route == .editor
     }
 
     private struct DraftContext {

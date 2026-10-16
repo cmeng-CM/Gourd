@@ -9625,7 +9625,10 @@ final class CalendarInteractionTests: XCTestCase {
         withExtendedLifetime(protection) {}
     }
 
-    func testLifecycleViewingAndDirtyDraftAloneDoNotProtectAutoClose() {
+    /// **2026-10-16 口径反转**（用户：编辑 / 新增场景阻止灵动岛自动收起）：过去是「只有输入焦点 /
+    /// 菜单 / 日期弹层才保护，光在看或光有草稿不保护」；现在**整个编辑档都保护**，释放只发生在
+    /// 离开编辑档（保存 / 取消 / 挂起 / 收面板）那一刻。
+    func testLifecycleEditorSessionProtectsAutoCloseUntilTheEditorCloses() {
         let session = panelSession(service: panelBackend())
         var protected = false
         var hoverChecks = 0
@@ -9635,14 +9638,38 @@ final class CalendarInteractionTests: XCTestCase {
         session.draft?.title = "Retained input"
         lifecycle.setEditorFocus(false)
         XCTAssertTrue(session.hasDirtyDraft)
-        XCTAssertFalse(protected)
+        XCTAssertTrue(protected, "编辑档一开出来就保护——不看焦点、也不看有没有改过")
         lifecycle.setEditorFocus(true)
         XCTAssertTrue(protected)
         lifecycle.setEditorFocus(false)
+        XCTAssertTrue(protected, "焦点走掉仍保护（旧口径在这里会释放）")
+        XCTAssertEqual(hoverChecks, 0, "保护没撤，就不该复查 hover")
+        // 离开编辑档才释放：`suspend()`（保存 / 取消 / 切页 / 收面板都经它或 route 变化）。
+        // 真实链路里，页面在 `.onChange(of: session.route)` 里调 `clearLocalInput()`——用例照它走
+        // （`connect(to:)` 才装发布订阅，而那个入口会把 `setProtection` 换成 vm 的那份）。
+        session.suspend()
+        lifecycle.clearLocalInput()
         XCTAssertFalse(protected)
-        XCTAssertEqual(hoverChecks, 1, "释放输入保护后复查 hover")
-        XCTAssertEqual(session.draft?.title, "Retained input")
+        XCTAssertEqual(hoverChecks, 1, "释放保护后复查 hover")
+        XCTAssertEqual(session.draft?.title, "Retained input", "挂起保留草稿")
         lifecycle.stop()
+    }
+
+    /// 保护窗口的**变更后信号**：`@Published` 是 willSet 发的，宿主若拿它重算会读到旧 route；
+    /// 会话因此在 route / isSubmitting 变完之后补发一次 `autoCloseProtectionRevision`。
+    func testProtectionRevisionFiresAfterRouteAndSubmissionChanges() {
+        let session = panelSession(service: panelBackend())
+        var revisions: [Int] = []
+        let subscription = session.$autoCloseProtectionRevision.sink { revisions.append($0) }
+        defer { subscription.cancel() }
+        XCTAssertEqual(revisions, [0], "订阅时先来一条当前值")
+
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        XCTAssertEqual(revisions.count, 2, "进编辑档：改完之后发一条")
+        XCTAssertEqual(session.route, .editor, "发的时候 route 已经是新值（这是这条信号存在的理由）")
+        session.suspend()
+        XCTAssertEqual(revisions.count, 3, "离开编辑档：再发一条")
+        XCTAssertEqual(session.route, .list)
     }
 
     func testLifecycleLocalTeardownKeepsOtherOwnerAndUnrelatedTokens() {
@@ -10353,6 +10380,51 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertNil(session.pendingConfirmation)
     }
 
+    /// 2026-10-16（用户）：**编辑 / 新增档整个期间都抑制自动收起**——不是只有「有焦点 / 有菜单 /
+    /// 有日期弹层」时才抑制；离开编辑档（保存 / 取消 / 挂起）保护随之释放。
+    func testEditorSessionProtectsAutoCloseUntilItIsLeft() throws {
+        let backend = panelBackend()
+        let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
+        let session = panelSession(service: backend)
+        let owner = UUID()
+
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertTrue(session.shouldProtectAutoClose, "新建档一开出来就保护（不看焦点/菜单/弹层）")
+        XCTAssertFalse(session.editorHasFocus)
+        XCTAssertEqual(session.ownedMenuCount, 0)
+        XCTAssertFalse(session.datePopoverPresented)
+
+        // 有焦点、有菜单、有弹层都仍然保护（老口径是新口径的子集）。
+        session.setEditorFocus(true, ownerID: owner)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.setEditorFocus(false, ownerID: owner)
+        session.setOwnedMenuCount(1, ownerID: owner)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.setOwnedMenuCount(0, ownerID: owner)
+        session.setDatePopoverPresented(true, ownerID: owner)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.setDatePopoverPresented(false, ownerID: owner)
+        XCTAssertTrue(session.shouldProtectAutoClose, "全清掉之后仍在编辑档 → 仍保护")
+
+        // 撤销/取消（`requestCancel` 的两条出口之一：无改动直接撤）→ 回列表 → 释放。
+        session.requestCancel()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertFalse(session.shouldProtectAutoClose, "离开编辑档 = 释放保护")
+
+        // 编辑档同样保护；`suspend()`（点面板外 / 切页）也释放。
+        session.beginEdit(event)
+        XCTAssertTrue(session.shouldProtectAutoClose)
+        session.suspend()
+        XCTAssertEqual(session.route, .list)
+        XCTAssertFalse(session.shouldProtectAutoClose)
+
+        // 提交期间也保护（既有口径）。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.requestCancel()
+        XCTAssertFalse(session.shouldProtectAutoClose)
+    }
+
     private func panelBackend(count: Int = 9) -> CalendarInteractionMemoryService {
         CalendarInteractionFixtures.makeBackend(count: count, on: date(day: 11), calendar: testCalendar)
     }
@@ -10500,7 +10572,9 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(publications, 2, "最后 owner 释放时立即发布两项真实变化")
         XCTAssertFalse(session.editorHasFocus)
         XCTAssertFalse(session.datePopoverPresented)
-        XCTAssertFalse(session.shouldProtectAutoClose)
+        // 2026-10-16 起：保护窗口 = 整个编辑档（不再是「有焦点 / 有菜单 / 有弹层」）——
+        // 这里仍停在编辑档，所以保护照旧；ownership 的账本才是本用例的主体。
+        XCTAssertTrue(session.shouldProtectAutoClose)
         XCTAssertEqual(session.route, .editor)
         XCTAssertEqual(session.draft, draft)
     }
@@ -10526,7 +10600,7 @@ final class CalendarInteractionTests: XCTestCase {
         session.setOwnedMenuCount(-1, ownerID: ownerB)
         XCTAssertEqual(publications, 4)
         XCTAssertEqual(session.ownedMenuCount, 0)
-        XCTAssertFalse(session.shouldProtectAutoClose)
+        XCTAssertTrue(session.shouldProtectAutoClose, "菜单归零也在编辑档里 → 保护不撤")
         session.clearOwnership(ownerB)
         XCTAssertEqual(publications, 4)
     }
