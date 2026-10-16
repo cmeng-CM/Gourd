@@ -495,12 +495,22 @@ struct HomeTodayBand: View {
     private func rows(now: Date) -> some View {
         let events = HomeTodayEvents.filtered(calendarManager.todayEvents, now: now, hideAllDayEvents: hideAllDayEvents)
         let pick = TodayNextEvent.pick(events: events, now: now)
-        // **三段式**（2026-10-16 变体 A，设计图 F5）：① 日期（白 6% 胶囊）② 下一个 + 倒计时
-        // （白 10% 胶囊 + 事件日历色左条，倒计时做蓝胶囊贴在段内右端）③ 工作日（无底，最弱一档）。
+        // **三段式**（2026-10-16 变体 A，设计图 F5）：① 日期（白 8% 胶囊）② 下一个 + 倒计时
+        // （白 12% 胶囊 + 事件日历色左条，倒计时做蓝胶囊贴在段内右端）③ 工作日（白 6% 胶囊）。
+        //
+        // **中段两侧的缝必须等宽**（2026-10-16 用户第二次反馈：「中间的显示要居中，现在左右边距
+        // 不一致」，实测左 10pt / 右 65pt）：改前只在②③之间放了一个 `Spacer`，富余**全落在中段
+        // 右侧**——中段的宽度是它自己的内容宽（标题没长到把整行填满时它不会拉伸），剩下的空间就
+        // 都被那一个 Spacer 吃掉了。现在**两侧各一个 `Spacer`**：富余等分，中段因此在①③之间居中；
+        // 标题长到把行填满时两个 Spacer 都归零，两侧各留 `segmentSpacing`，依然对称。
+        //
+        // **为什么不让②拉满整行**：标题短的时候（「评审会」）会变成一条巨大的空胶囊 ✗——
+        // 胶囊应该裹住内容，居中交给两侧的缝。
         return HStack(spacing: HomeTodayBandLayout.segmentSpacing) {
             dateSegment(now: now)
+            Spacer(minLength: 0)
             nextSegment(pick: pick)
-            Spacer(minLength: HomeTodayBandLayout.segmentSpacing)
+            Spacer(minLength: 0)
             workdaySegment(now: now)
         }
         .frame(height: HomeTodayBandLayout.nextLineHeight)

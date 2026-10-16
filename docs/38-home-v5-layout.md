@@ -94,14 +94,22 @@
 
 ### 三、今天带（D-05 / D-06）
 
-四段文案，两条线（左对齐主信息 + 右对齐次要信息）：
+**一行三段**（D-05；2026-10-16 二轮并成一行后定稿）：**① 日期段 · ②「下一个」段 · ③ 工作日段**。
+下表是这条行上四块文案的**来源**（②段内部按「前缀 · 标题 · 起止时间 · 倒计时胶囊」排）——不表示
+四段四列：
 
 | 位置 | 内容 | 来源 | 纯函数 |
 |---|---|---|---|
-| 左上 | `10月10日 周六 · 九月初十 · 国庆节（班）` | 公历 + `Calendar(identifier: .chinese)` + 节假日名表 | `TodayHeadline.text(for:calendar:lunar:)` |
-| 右上 | `本月剩 15 天 · 本季剩 59 天 · 今年剩 59 天` | `WorkdayCalendar.spanStats(.month/.quarter/.year)` 的 `remainingWorkdays` | `WorkdayRemainderLine.text(...)` |
-| 左下（大字） | `下一个 · 评审会 · 14:00–15:00` | `CalendarManager` 当天窗口里**还没结束**的下一条定时日程 | `TodayNextEvent.pick(events:now:)` |
-| 右下（强调色） | `还有 1 小时 20 分` / `进行中 · 还有 40 分` / `今天没有更多日程` | 上一条 + `now` | `TodayCountdown.text(for:now:)` |
+| 段①（日期胶囊） | `10月16日 · 周五 九月初七` | 公历 + `Calendar(identifier: .chinese)` + 节假日名表 | `TodayHeadline.text(for:calendar:lunar:)` |
+| 段③（工作日胶囊） | `本月剩 10 天 · 本季剩 54 天 · 今年剩 54 天` | `WorkdayCalendar.spanStats(.month/.quarter/.year)` 的 `remainingWorkdays` | `WorkdayRemainderLine.text(...)` |
+| 段②（19pt 大字） | `下一个 · 评审会 · 19:00–20:00` | `CalendarManager` 当天窗口里**还没结束**的下一条定时日程 | `TodayNextEvent.pick(events:now:)` |
+| 段②右端（强调色胶囊） | `还有 1 小时 20 分` / `进行中 · 还有 40 分` / `今天没有更多日程` | 上一条 + `now` | `TodayCountdown.text(for:now:)` |
+
+**段②两侧的缝必须等宽**（2026-10-16 用户第二轮：「中间的显示要居中，现在左右边距不一致」）：
+段②的宽度**是它自己的内容宽**（标题没长到把整行填满时它不会拉伸），所以改前只在②③之间放的那**一个**
+`Spacer` 会把富余全吃掉——实测**左 13.5pt / 右 48.0pt**。现在**两侧各一个 `Spacer`**、富余等分：
+**左 31.0 / 右 30.5pt**（本机 1126pt 面板实测）。**不让②拉满整行**：标题短的时候（「评审会」）
+会变成一条巨大的空胶囊——胶囊该裹住内容，居中交给两侧的缝。
 
 四条口径：
 
