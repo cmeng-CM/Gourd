@@ -58,6 +58,7 @@ import AppKit
 import Combine
 import Defaults
 import SwiftUI
+import os
 
 @MainActor
 final class LyricsOverlayWindowManager: ObservableObject {
@@ -67,6 +68,9 @@ final class LyricsOverlayWindowManager: ObservableObject {
     /// 岛底边到歌词层顶边的间距（docs/35「岛下方一档间距」）。取 8 与
     /// `FlyoutFrameCalculator.screenInset` / 岛 hover 的 8pt 档同值。
     private static let anchorSpacing: CGFloat = 8
+
+    /// 位置夹回时的日志（`log show --info --predicate 'subsystem == "com.cmeng.gourd.music"'`）。
+    private let log = os.Logger(subsystem: "com.cmeng.gourd.music", category: "lyrics-overlay")
 
     private var window: NSPanel?
     private var hostingView: NSHostingView<LyricsOverlayView>?
@@ -388,14 +392,42 @@ final class LyricsOverlayWindowManager: ObservableObject {
     }
 
     /// 锚点 = 该屏 `frame.midX` 居中、岛底边（`frame.maxY − effectiveClosedNotchHeight`）
-    /// 下方一档间距，再叠加两个偏移键。返回窗口左上角（AppKit 坐标，取整）。
+    /// 下方一档间距，再叠加两个偏移键；结果**夹回屏内**（见 `clampedOrigin`）。返回窗口左上角
+    /// （AppKit 坐标，取整）。
     private func anchorOrigin(on screen: NSScreen, windowSize: CGSize, viewModel: DynamicIslandViewModel) -> CGPoint {
         let screenFrame = screen.frame
         let islandBottom = screenFrame.maxY - viewModel.effectiveClosedNotchHeight
         let x = screenFrame.midX - windowSize.width / 2 + CGFloat(Defaults[.lyricsOverlayOffsetX])
         let y = islandBottom - Self.anchorSpacing - windowSize.height + CGFloat(Defaults[.lyricsOverlayOffsetY])
-        return CGPoint(x: x.rounded(), y: y.rounded())
+        let origin = CGPoint(x: x.rounded(), y: y.rounded())
+        let clamped = Self.clampedOrigin(origin, windowSize: windowSize, screenFrame: screenFrame)
+        if clamped != origin {
+            log.info("歌词层位置夹回屏内：\(Int(origin.x), privacy: .public),\(Int(origin.y), privacy: .public) → \(Int(clamped.x), privacy: .public),\(Int(clamped.y), privacy: .public)（偏移 \(Int(Defaults[.lyricsOverlayOffsetX]), privacy: .public),\(Int(Defaults[.lyricsOverlayOffsetY]), privacy: .public)）")
+        }
+        return clamped
     }
+
+    /// 整窗必须与目标屏**至少相交 `minimumVisibleExtent`**（两轴各自算）——不够就夹回来。
+    ///
+    /// 为什么需要这道闸（2026-10-16 实测）：位置 = 锚点 + 用户拖拽写下的两个偏移键，而偏移是**自由
+    /// 值**、还会跟着屏幕布局变化重新套用。用户那次把歌词层拖到了 `偏移 (+247, +143)`，窗口落到
+    /// `y = −170`（屏顶在 `−35`）——**整层完全在屏幕之外**，于是「歌词开关开着、歌词也取到了、
+    /// 屏幕上却什么都没有」，而且**鼠标再也抓不到它**（唯一退路是设置页的「重置位置」）。夹一道以后，
+    /// 拖过头最多贴边，不会消失。
+    static func clampedOrigin(_ origin: CGPoint, windowSize: CGSize, screenFrame: CGRect) -> CGPoint {
+        let extent = min(minimumVisibleExtent, windowSize.width, windowSize.height)
+        let minX = screenFrame.minX - windowSize.width + extent
+        let maxX = screenFrame.maxX - extent
+        let minY = screenFrame.minY - windowSize.height + extent
+        let maxY = screenFrame.maxY - extent
+        return CGPoint(
+            x: min(max(origin.x, minX), maxX),
+            y: min(max(origin.y, minY), maxY)
+        )
+    }
+
+    /// 至少留多少可见（pt）：够鼠标抓住去拖回来（窗口只有十几行字，40 已经是一大块）。
+    static let minimumVisibleExtent: CGFloat = 40
 }
 
 private extension LyricsOverlayView {

@@ -16705,3 +16705,61 @@ final class LyricsTextParserTests: XCTestCase {
         XCTAssertTrue(LyricsTextParser.parseLRC("\n\n").isEmpty)
     }
 }
+
+// MARK: - 歌词层位置夹回屏内（2026-10-16 / docs/50 D-16）
+
+/// 素材是**实测的那个现场**：用户把歌词层拖到偏移 (+247, +143)，窗口落到 `y = −170`，
+/// 而他那块屏的顶边在 `−35` —— 整层在屏幕之外，于是「开关开着、歌词取到了、屏幕上什么都没有」，
+/// 且鼠标再也抓不回来（唯一退路是设置页的「重置位置」）。
+@MainActor
+final class LyricsOverlayClampTests: XCTestCase {
+
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)   // 本机内建屏（AppKit）
+
+    func testOriginInsideTheScreenIsUntouched() {
+        let origin = CGPoint(x: 600, y: 800)
+        XCTAssertEqual(
+            LyricsOverlayWindowManager.clampedOrigin(origin, windowSize: CGSize(width: 179, height: 75), screenFrame: screen),
+            origin,
+            "正常位置不许动（这条是「别把好位置也夹走」的护栏）"
+        )
+    }
+
+    func testOriginDraggedAboveTheScreenIsClampedBack() {
+        let origin = CGPoint(x: 830, y: 1073)   // 实测那一次：屏顶 982 + 偏移把它顶到屏外
+        let clamped = LyricsOverlayWindowManager.clampedOrigin(
+            origin,
+            windowSize: CGSize(width: 179, height: 75),
+            screenFrame: screen
+        )
+        XCTAssertLessThan(clamped.y, 982, "必须回到屏幕上")
+        XCTAssertEqual(clamped.y, 982 - LyricsOverlayWindowManager.minimumVisibleExtent, accuracy: 1e-9,
+                       "夹到「至少留 40pt 可见」的那一档")
+        XCTAssertEqual(clamped.x, origin.x, accuracy: 1e-9, "另一轴不受影响")
+    }
+
+    func testEveryEdgeKeepsTheMinimumVisibleExtent() {
+        let size = CGSize(width: 179, height: 75)
+        let corners = [
+            CGPoint(x: -10_000, y: -10_000), CGPoint(x: 10_000, y: 10_000),
+            CGPoint(x: -10_000, y: 10_000), CGPoint(x: 10_000, y: -10_000),
+        ]
+        for origin in corners {
+            let clamped = LyricsOverlayWindowManager.clampedOrigin(origin, windowSize: size, screenFrame: screen)
+            let frame = CGRect(origin: clamped, size: size)
+            let overlap = frame.intersection(screen)
+            XCTAssertGreaterThanOrEqual(overlap.width, LyricsOverlayWindowManager.minimumVisibleExtent - 1e-6,
+                                        "任一方向拖出屏外都要留够可见宽度：\(origin)")
+            XCTAssertGreaterThanOrEqual(overlap.height, LyricsOverlayWindowManager.minimumVisibleExtent - 1e-6,
+                                        "任一方向拖出屏外都要留够可见高度：\(origin)")
+        }
+    }
+
+    func testMinimumExtentNeverExceedsTheWindowSize() {
+        let tiny = CGSize(width: 20, height: 12)
+        let clamped = LyricsOverlayWindowManager.clampedOrigin(CGPoint(x: -500, y: -500), windowSize: tiny, screenFrame: screen)
+        let overlap = CGRect(origin: clamped, size: tiny).intersection(screen)
+        XCTAssertGreaterThan(overlap.width, 0, "窗口比 40pt 还小时，至少也要留一部分可见（不死循环、不把整窗推出去）")
+        XCTAssertGreaterThan(overlap.height, 0)
+    }
+}

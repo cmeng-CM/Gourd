@@ -106,6 +106,11 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
    反馈时圈的是**整块**（截图里那个框覆盖封面 + 曲名 + 进度那一带）并说「点击音乐区域，还是没能
    唤出音乐软件」；而那段窗口的日志里**连一条「打开音乐软件」都没有**——点击根本没进处理函数，
    即命中区太小（D-13）。
+9. **歌词层位置夹回屏内**（`LyricsOverlayWindowManager.clampedOrigin`，纯函数）：位置 = 锚点 +
+   用户拖拽写下的两个偏移键，而偏移是自由值、还会跟着屏幕布局重新套用——**2026-10-16 实测**：
+   用户那份偏移是 `(+247, +143)`，窗口落到 `y = −170`，而他那块屏的顶边在 `−35`——**整层在屏幕之外**，
+   于是「开关开着、歌词也取到了、屏幕上什么都没有」，而且**鼠标再也抓不回来**（唯一退路是设置页的
+   「重置位置」）。现在显示前夹一道：整窗与目标屏**至少相交 40pt**（两轴各自算），拖过头最多贴边。
 8. **`openMusicApp()` 两条路**：进程还在 → `activate(options: [.activateAllWindows])`；没跑 /
    激活被系统拒绝 → `openApplication(at:configuration:)`；拿不到 `bundleIdentifier` 时只记日志，
    不假装成功。全部走 `os.Logger(subsystem: "com.cmeng.gourd.music")`（原来是 `print`，
@@ -150,6 +155,8 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
    本层静默失效（不崩、回落 LRCLIB）。
 7. **歌词只在岛收起时可见**（老口径，见上一条 3）——**这一条是「看不到歌词」最常见的误判来源**：
    面板展开着的时候，桌面歌词层是**隐藏**的；用户 2026-10-16 的两次「不显示」都发生在这个状态下。
+8. ~~拖出屏幕就找不回来~~ **已修**（D-16）：位置现在会被夹回屏内（至少留 40pt 可见）。偏移本身仍会
+   记在 `lyricsOverlayOffsetX/Y` 里，想归位仍走设置页/右键菜单的「重置位置」。
 
 ## 实际交付
 
@@ -158,6 +165,7 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 | `DynamicIsland/components/Music/LyricsQueryPlanner.swift`（新增） | 候选查询阶梯 + 接受闸 + 归一化 + 失败分类与重试节奏（全纯函数） |
 | `DynamicIsland/components/Music/LxMusicLyricsCache.swift`（新增） | LX Music 本地歌词库的只读读取器：歌名/歌手/时长匹配 + base64 → LRC（D-14） |
 | `DynamicIsland/components/Music/LyricsTextParser.swift`（新增） | LRC 时间轴解析（纯函数）：小数位 1～3、一行多标签（D-15） |
+| `DynamicIsland/managers/LyricsOverlayWindowManager.swift` | 显示前把歌词层位置**夹回屏内**（D-16，纯函数 `clampedOrigin` + 夹回时记日志） |
 | `DynamicIsland/managers/MusicManager.swift` | 取词走阶梯；瞬时故障抛错、不写缓存、不写「No lyrics found」；20s 一次自动重试；点歌词键强制取词；`openMusicApp()` 两条路；`os.Logger` |
 | `DynamicIsland/Modules/Takeover/MusicModule.swift` | 封面成为「打开播放器」入口（点击 + 指针 + `.help` + 图形不进命中） |
 | `DynamicIsland/Localizable.xcstrings` + `tests/test_general_ai_configuration.py` | 新键 `module.music.openPlayer`（en + zh-Hans）并登记进本地化守卫 |
@@ -183,7 +191,7 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 - 窗口探针（`CGWindowListCopyWindowInfo`）：LX Music 现场只有 `122×128` 一枚窗（迷你窗）、
   主窗口不在屏上；`activate(options: [.activateAllWindows])` 之后 1.5s 复检 → 主窗口
   `1114x718@(221,132)` 出现（**这条就是「点了没反应」的反证**）。
-- 自动化：`xcodebuild test … -only-testing:DynamicIslandTests` → **930 测试 0 失败**（含新增 `LyricsQueryPlannerTests` 20 例、`LxMusicLyricsCacheTests` 12 例、`LyricsTextParserTests` 7 例）；
+- 自动化：`xcodebuild test … -only-testing:DynamicIslandTests` → **934 测试 0 失败**（含新增 `LyricsQueryPlannerTests` 20 例、`LxMusicLyricsCacheTests` 12 例、`LyricsTextParserTests` 7 例、`LyricsOverlayClampTests` 4 例）；
   `python3 -m unittest tests.test_privacy_configuration tests.test_timer_lifecycle
   tests.test_general_ai_configuration` → 11 例通过；Release 构建通过。
 
@@ -211,3 +219,4 @@ docs/50 沿用）；不改歌词的**出口**（仍是 docs/35 的桌面悬浮�
 | D-13 | 「打开播放器」的命中区从 36pt 封面**扩到整块**（进度条与控制键除外） | 用户第二次反馈圈的是整块；且那段窗口的日志里没有任何「打开音乐软件」记录——点击没进处理函数，就是命中区太小。同级的前台应用图标格在同一个面板里可点（既有实测），说明块内 tap 本身没问题 |
 | D-14 | 歌词取词**先读本机播放器（LX Music）的本地歌词缓存**，取不到再走 LRCLIB | 用户问「歌词不是从应用拿的吗」；系统不给歌词（Now Playing 载荷无歌词字段），但该播放器自己把歌词存在本地 SQLite 里，离线、与它界面上显示的逐行一致，且不需要新权限 |
 | D-15 | `parseLRC` 提成纯函数 `LyricsTextParser`，并修两处解析错：**小数位 1～3 位**（原来只认 1～2 位，`[00:06.100]` 这种毫秒时间轴整行被丢）与**一行多标签**（原来只认第一个，后面的标签残留在文本里） | 真数据实测：本地缓存里「不知归期的故人」27 行只解出 5 行、「揪心的玩笑与漫长的白日梦」修复前后 9 → 29 行；这两处都是上游老错，以前没喂过这类词条 |
+| D-16 | 歌词层显示前把位置**夹回屏内**（至少 40pt 可见，两轴各自算）；夹回时记一条日志 | 用户报「没显示啊」：查出来是偏移 `(+247,+143)` 把整层送到 `y=−170`（屏顶 `−35`）——完全在屏外，且**鼠标再也抓不回来**。这条闸同时兜住「屏幕布局变了导致偏移失效」的情形 |
