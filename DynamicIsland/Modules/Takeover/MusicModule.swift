@@ -304,7 +304,7 @@ private struct MusicHomeBlockView: View {
     var body: some View {
         if showsAlbumArt {
             HStack(alignment: .top, spacing: Metrics.albumArtSpacing) {
-                AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+                albumArtButton
                     .frame(width: Metrics.albumArtSide, height: Metrics.albumArtSide)
                 MusicControlsView()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -326,6 +326,52 @@ private struct MusicHomeBlockView: View {
     /// 组成紧凑条的装宽度 `5×26 + 4×6 + 36 + 6 = 196 ≤ min 200`，四个数必须同源——
     /// 真源是 `MusicControlsView.CompactMetrics`（那边有算式与依据的注释）。
     private typealias Metrics = MusicControlsView.CompactMetrics
+
+    /// **封面 = 「打开正在放歌的那个音乐软件」的入口**（2026-10-16 / docs/50 D-06）。
+    ///
+    /// 上游极简档的封面本来就是这个行为（`MinimalisticMusicPlayerView.albumArtButton` →
+    /// `MusicManager.openMusicApp()`），首页音乐块接管（T5）时这一步漏了——用户 2026-10-16 的
+    /// 原话是「点击音乐软件，要打开对应的音乐软件」。`openMusicApp()` 按**此刻会话的
+    /// `bundleIdentifier`** 走，所以放歌的是谁就开谁（LX Music / Spotify / Apple Music 都行）。
+    ///
+    /// 命中区 = 封面那 36pt 那一格：下面的进度条拖拽改播放位置、再下面的控制键各是一枚按钮，
+    /// 都不碰。**封面关掉（`showAlbumArt = false`）时没有这个入口**——块里没有代表「哪个软件」
+    /// 的图形，这是已知限制（docs/50 §已知限制 1）。
+    ///
+    /// 指针在封面上变成手（与 `NotchColorPickerView` 同一条 `NSCursor` 用法），并给
+    /// `.help` 提示：这是个**藏起来的**动作，得让人有地方看出来它能点。
+    ///
+    /// **图形不参与命中**（`allowsHitTesting(false)` + 外层 `contentShape`）：封面那一层是
+    /// `DynamicIslandArtworkSourceView`，开启动态封面时它是**一个 AppKit 视图**（AVPlayerLayer）——
+    /// p17 那条教训（浮层吃了命中，鼠标点永远到不了按钮）在这里同样成立，所以把内容摘出命中链，
+    /// 由外层那一格定义热区。
+    @State private var hoveringAlbumArt = false
+
+    private var albumArtButton: some View {
+        ZStack {
+            AlbumArtThumbnailView(albumArtNamespace: albumArtNamespace ?? fallbackNamespace)
+                .allowsHitTesting(false)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: HomeBandChrome.hoverCornerRadius, style: .continuous))
+        .onTapGesture { MusicManager.shared.openMusicApp() }
+        .onHover { isHovering in
+            hoveringAlbumArt = isHovering
+            if isHovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .onDisappear {
+            // 悬停中消失（切页 / 块被换掉）时把指针还回去，不然手会「粘」在鼠标上。
+            if hoveringAlbumArt {
+                NSCursor.pop()
+                hoveringAlbumArt = false
+            }
+        }
+        .help(Text("module.music.openPlayer"))
+        .accessibilityLabel(Text("module.music.openPlayer"))
+    }
 }
 
 /// 紧凑条里的**小封面**（36pt 圆角方，T2 起；T3 是 40pt）：封面来源那一层与改动前逐字相同

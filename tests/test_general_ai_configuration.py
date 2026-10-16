@@ -114,6 +114,9 @@ LOCALE_KEYS = (
     'calendar.panel.deleteReminderConsequence',
     'calendar.panel.sourceTimeZoneFormat',
     'calendar.panel.url',
+    # docs/50（2026-10-16）：首页音乐块的封面成了「打开正在放歌的那个音乐软件」的入口，
+    # 这条是该入口的 tooltip 与可访问性文案（en + zh-Hans）。
+    'module.music.openPlayer',
 )
 
 # docs/45 → docs/47 的会议入口返工（T1–T6）删掉了「用 AI 识别会议」、行内状态文字、时间闸门

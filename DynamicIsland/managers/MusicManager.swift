@@ -25,6 +25,7 @@ import Combine
 import Defaults
 import Foundation
 import SwiftUI
+import os
 
 // MARK: - Lyric Data Structures
 struct LyricLine: Identifiable, Codable, Equatable {
@@ -522,7 +523,21 @@ class MusicManager: ObservableObject {
     // Task used to periodically sync displayed lyric with playback position
     private var lyricSyncTask: Task<Void, Never>?
     private var lyricsFetchTask: Task<Void, Never>?
+    /// 瞬时故障（缓存不写、只延迟重试）之后的**一次**自动重试任务（docs/50 D-05）。
+    private var lyricsTransportRetryTask: Task<Void, Never>?
     private var lyricsFetchKey: LyricsLookupKey?
+
+    /// 取词侧的日志（`print` 在 GUI 里查不到东西——`log show --subsystem com.cmeng.gourd.music`）。
+    /// **必须写全 `os.Logger`**：本模块有一个同名的 `Logger` 结构（`utils/Logger.swift`），
+    /// 裸写 `Logger(...)` 会解析到它（构造参数对不上，直接编译不过）。
+    private let lyricsLog = os.Logger(subsystem: "com.cmeng.gourd.music", category: "lyrics")
+
+    /// **取词失败**（网络 / 超时 / 429 / 5xx）——与「词库确实没有这条」严格分开：
+    /// 前者**不写缓存**、不报「No lyrics found」，换回这首歌或再点一次歌词键时会重新去问。
+    struct LyricsFetchFailure: Error {
+        let reason: String
+        let attempts: Int
+    }
     // Identity of the fetch that is allowed to write lyrics state. A cancelled
     // task can still reach its completion handler, and the key alone does not
     // tell it apart from a newer fetch for the same track.
@@ -1360,24 +1375,43 @@ class MusicManager: ObservableObject {
         )
     }
 
+    /// 把**此刻在放歌的那个 app** 弄到前面来（首页音乐块的封面点一下就走这里，docs/50 D-06）。
+    ///
+    /// 两条路，按「用户此刻看得到什么」分（与前台应用块同一条经验，docs/38 §已知限制 9）：
+    /// 1. **进程还在** → `activate(options: [.activateAllWindows])`。实测（2026-10-16，LX Music
+    ///    `cn.toside.music.desktop`）：它当时只有一枚 122×128 的迷你窗在屏上、主窗口是隐藏的，
+    ///    这条一调，主窗口（1114×718）当场回来——**这是音乐软件最常见的状态**（窗口藏起来放歌），
+    ///    也是「点了没反应」的成因；
+    /// 2. **没在跑 / 激活被系统拒绝** → `openApplication(at:configuration:)`（程序坞点一下：
+    ///    启动或投递 reopen）。
+    ///
+    /// 拿不到 `bundleIdentifier`（会话在做但曲目来源不明）时只记一条日志，不假装成功。
+    /// 失败路径**一律进日志**（`log show --subsystem com.cmeng.gourd.music`）。
     func openMusicApp() {
-        guard let bundleID = bundleIdentifier else {
-            print("Error: appBundleIdentifier is nil")
+        guard let bundleID = bundleIdentifier, !bundleID.isEmpty else {
+            lyricsLog.notice("打开音乐软件失败：当前会话没有 bundleIdentifier")
             return
         }
 
-        let workspace = NSWorkspace.shared
-        if let appURL = workspace.urlForApplication(withBundleIdentifier: bundleID) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            workspace.openApplication(at: appURL, configuration: configuration) { (app, error) in
-                if let error = error {
-                    print("Failed to launch app with bundle ID: \(bundleID), error: \(error)")
-                } else {
-                    print("Launched app with bundle ID: \(bundleID)")
-                }
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+           running.activate(options: [.activateAllWindows]) {
+            lyricsLog.info("打开音乐软件：激活 \(running.localizedName ?? bundleID, privacy: .public)（\(bundleID, privacy: .public)）")
+            return
+        }
+
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            lyricsLog.notice("打开音乐软件失败：系统里找不到 \(bundleID, privacy: .public) 对应的包")
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { [weak self] app, error in
+            if let error {
+                self?.lyricsLog.notice("打开音乐软件失败：\(bundleID, privacy: .public) / \(error.localizedDescription, privacy: .public)")
+            } else {
+                self?.lyricsLog.info("打开音乐软件：启动 \(app?.localizedName ?? bundleID, privacy: .public)（\(bundleID, privacy: .public)）")
             }
-        } else {
-            print("Failed to find app with bundle ID: \(bundleID)")
         }
     }
 
@@ -1403,7 +1437,10 @@ class MusicManager: ObservableObject {
         showLyrics = isEnabled
 
         if isEnabled {
-            prepareLyricsForCurrentTrack(prioritizeVisibleResult: true)
+            // 用户主动打开歌词 = **现在就去问一次**（docs/50 D-03）。原来这条走缓存：上一次若因为
+            // 503 / 网络抖动存进了一个空数组，光把开关打开什么都不会发生——用户看到的就是
+            // 「歌词标志点了没用」。手上已经有这首歌的歌词时才吃缓存（不重复打网络）。
+            prepareLyricsForCurrentTrack(forceFetch: syncedLyrics.isEmpty, prioritizeVisibleResult: true)
         } else {
             discardLyrics()
         }
@@ -1416,13 +1453,24 @@ class MusicManager: ObservableObject {
         lyricsFetchID = nil
         lyricsFetchTask?.cancel()
         lyricsFetchTask = nil
+        lyricsTransportRetryTask?.cancel()
+        lyricsTransportRetryTask = nil
         syncedLyrics = []
         currentLyrics = ""
         currentLyricIndex = -1
         stopLyricSync()
     }
 
-    private func prepareLyricsForCurrentTrack(forceFetch: Bool = false, prioritizeVisibleResult: Bool = false) {
+    /// - Parameters:
+    ///   - forceFetch: 跳过缓存（用户主动要歌词 / 重试时用）。
+    ///   - prioritizeVisibleResult: 期间显示「Loading lyrics...」占位。
+    ///   - allowTransportRetry: 瞬时故障后是否排一次自动重试。**自动重试自己传 false**
+    ///     ——否则失败会每 20s 自转一次，把一次取词变成常驻流量。
+    private func prepareLyricsForCurrentTrack(
+        forceFetch: Bool = false,
+        prioritizeVisibleResult: Bool = false,
+        allowTransportRetry: Bool = true
+    ) {
         // `enableLyrics` reached only as far as the display: with lyrics switched
         // off the placeholder was suppressed, but the track title and artist were
         // still sent to LRCLIB on every track change, and nothing consumed the
@@ -1462,6 +1510,8 @@ class MusicManager: ObservableObject {
         }
 
         lyricsFetchTask?.cancel()
+        // 新一次取词 = 上一次的「稍后重试」作废（同一条 key 的重试也在其中：这次就是最新的那次问）。
+        lyricsTransportRetryTask?.cancel()
         lyricsFetchKey = key
         let fetchID = UUID()
         lyricsFetchID = fetchID
@@ -1492,9 +1542,14 @@ class MusicManager: ObservableObject {
                     self.lyricsFetchID = nil
                     self.lyricsFetchTask = nil
                     self.applyLyricsToDisplay(lyrics)
+                    if lyrics.isEmpty {
+                        self.lyricsLog.info("词库确实没有这条：\(lookup.requestTitle, privacy: .public) — \(lookup.requestArtist, privacy: .public)")
+                    } else {
+                        self.lyricsLog.info("取词命中：\(lookup.requestTitle, privacy: .public) — \(lookup.requestArtist, privacy: .public)，\(lyrics.count) 行")
+                    }
                 }
             } catch {
-                print("Failed to fetch lyrics: \(error)")
+                self.lyricsLog.error("取词失败（不算「没有歌词」、不写缓存）：\(String(describing: error), privacy: .public)")
                 await MainActor.run {
                     guard self.lyricsFetchID == fetchID, self.activeLyricsKey == key else { return }
                     self.lyricsFetchKey = nil
@@ -1502,20 +1557,100 @@ class MusicManager: ObservableObject {
                     self.lyricsFetchTask = nil
                     self.syncedLyrics = []
                     self.currentLyricIndex = -1
-                    self.currentLyrics = "No lyrics found"
+                    // **不写「No lyrics found」**：那是「词库确实没有这条」的措辞（docs/50 D-04）。
+                    // 这里只是这一次没问出来，字幕位置留空，别给用户一个假结论。
+                    self.currentLyrics = ""
                     self.stopLyricSync()
+                    if allowTransportRetry {
+                        self.scheduleTransportRetry(for: key)
+                    }
                 }
             }
         }
     }
 
-    private func fetchLyricsFromAPI(artist: String, title: String, album: String) async throws -> [LyricLine] {
-        guard !artist.isEmpty, !title.isEmpty else { return [] }
+    /// 瞬时故障之后排**一次**延迟重试（docs/50 D-05）：LRCLIB 的 503 是秒级抖动，等 20s 再问一次
+    /// 常常就有了——用户不必为此去点歌词键。只一次：重试自己带 `allowTransportRetry: false`，
+    /// 不会自转成轮询。切歌 / 关歌词时被 `discardLyrics` / 新一次取词取消。
+    private func scheduleTransportRetry(for key: LyricsLookupKey) {
+        lyricsTransportRetryTask?.cancel()
+        lyricsTransportRetryTask = Task { [weak self] in
+            try? await Task.sleep(
+                nanoseconds: UInt64(LyricsFetchPolicy.transientAutoRetryDelaySeconds * 1_000_000_000)
+            )
+            guard !Task.isCancelled, let self else { return }
+            await MainActor.run {
+                guard self.activeLyricsKey == key, self.syncedLyrics.isEmpty else { return }
+                // 这一枚已经用掉了：清空引用，免得下面那次取词把自己取消掉（`isCancelled` 会传染给
+                // 整条 URLSession 请求，重试反而变成「永远取消」）。
+                self.lyricsTransportRetryTask = nil
+                self.prepareLyricsForCurrentTrack(
+                    forceFetch: true,
+                    prioritizeVisibleResult: false,
+                    allowTransportRetry: false
+                )
+            }
+        }
+    }
 
+    /// 取词：按 `LyricsQueryPlanner` 的候选阶梯依次问 LRCLIB（docs/50 D-01/D-02）。
+    ///
+    /// 两个返回态必须分清（这是「歌词按钮点了没用」的根因）：
+    /// - **返回 `[]`** = 词库**确实没有这条**（原样与所有变体都问过、都是 200 且空）→ 调用方可缓存；
+    /// - **抛 `LyricsFetchFailure`** = 这一次**没问出来**（网络 / 超时 / 429 / 5xx）→ 调用方
+    ///   **不许**缓存、不许当成「没有歌词」。
+    ///
+    /// 变体查询的结果要过 `LyricsQueryPlanner.accepts` 的同名闸；**原样那条沿用既有打分匹配**
+    /// （`bestLyricsMatch` 取最高分），行为与改动前逐字一致。
+    private func fetchLyricsFromAPI(artist: String, title: String, album: String) async throws -> [LyricLine] {
+        let queries = LyricsQueryPlanner.variants(title: title, artist: artist)
+        guard !queries.isEmpty else { return [] }
+
+        var lastFailure: LyricsFetchFailure?
+        for (index, query) in queries.enumerated() {
+            let results: [[String: Any]]
+            do {
+                results = try await searchLRCLIB(trackName: query.title, artistName: query.artist)
+            } catch let failure as LyricsFetchFailure {
+                // 这条查询的瞬时故障：不为它再叠变体（重试已在 `searchLRCLIB` 里用完），
+                // 留给调用方决定要不要稍后再来。
+                lastFailure = failure
+                break
+            }
+            guard !results.isEmpty else { continue }
+
+            let match: [String: Any]?
+            if query.isExact {
+                match = bestLyricsMatch(in: results, artist: query.artist, title: query.title, album: album)
+            } else {
+                match = results.first {
+                    LyricsQueryPlanner.accepts(
+                        resultTitle: $0["trackName"] as? String ?? "",
+                        resultArtist: $0["artistName"] as? String ?? "",
+                        query: query
+                    )
+                }
+            }
+
+            guard let match else { continue }
+            let lines = lyricLines(from: match)
+            guard !lines.isEmpty else { continue }
+            if index > 0 {
+                lyricsLog.info("取词命中用的是变体查询 #\(index)：\(query.title, privacy: .public) — \(query.artist, privacy: .public)")
+            }
+            return lines
+        }
+
+        if let lastFailure { throw lastFailure }
+        lyricsLog.info("词库没有这条（原样 + \(queries.count - 1) 条变体都问过）：\(title, privacy: .public) — \(artist, privacy: .public)")
+        return []
+    }
+
+    /// 问一次 LRCLIB（**带瞬时故障重试**，`LyricsFetchPolicy`）。空数组 = 词库没有这条。
+    private func searchLRCLIB(trackName: String, artistName: String) async throws -> [[String: Any]] {
         // Normalize input and percent-encode
-        let cleanArtist = artist.folding(options: .diacriticInsensitive, locale: .current)
-        let cleanTitle = title.folding(options: .diacriticInsensitive, locale: .current)
-        let cleanAlbum = album.folding(options: .diacriticInsensitive, locale: .current)
+        let cleanArtist = artistName.folding(options: .diacriticInsensitive, locale: .current)
+        let cleanTitle = trackName.folding(options: .diacriticInsensitive, locale: .current)
         guard let encodedArtist = cleanArtist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let encodedTitle = cleanTitle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return []
@@ -1524,52 +1659,85 @@ class MusicManager: ObservableObject {
         // Use LRCLIB search endpoint which returns an array JSON with `plainLyrics` and/or `syncedLyrics`.
         let urlString = "https://lrclib.net/api/search?track_name=\(encodedTitle)&artist_name=\(encodedArtist)"
         guard let url = URL(string: urlString) else { return [] }
+        var request = URLRequest(url: url)
+        // LRCLIB 是公共免费服务、明确要求带上可识别的 UA（默认的 CFNetwork 串什么都没有）。
+        request.setValue("Gourd/\(MusicManager.lyricsUserAgentVersion) (macOS lyrics lookup)", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-            // Try parse as array JSON (preferred)
-            if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-               let bestMatch = bestLyricsMatch(in: jsonArray, artist: cleanArtist, title: cleanTitle, album: cleanAlbum) {
-                let first = bestMatch
-                let plain = (first["plainLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let synced = (first["syncedLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if !synced.isEmpty {
-                    return parseLRC(synced)
-                } else if !plain.isEmpty {
-                    return [LyricLine(timestamp: 0, text: plain)]
-                } else {
+        let delays = LyricsFetchPolicy.retryDelaysMilliseconds
+        var attempt = 0
+        while true {
+            attempt += 1
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+                switch LyricsFetchPolicy.classify(statusCode: status) {
+                case .ok:
+                    return Self.parsedResults(from: data)
+                case .permanent:
+                    // 请求本身不对（4xx 里除 408/425/429）：没有重试的价值，按「没有这条」处理。
+                    lyricsLog.warning("LRCLIB 确定性失败 HTTP \(status)，按「没有这条」处理")
                     return []
-                }
-            } else {
-                // Fallback: try to decode as UTF8 and handle as LRC or plain text
-                if let lrcString = String(data: data, encoding: .utf8) {
-                    let trimmed = lrcString.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    if trimmed.isEmpty  {
-                        return []
+                case .transient:
+                    guard attempt <= delays.count else {
+                        throw LyricsFetchFailure(reason: "HTTP \(status)", attempts: attempt)
                     }
-
-                    // If it contains a syncedLyrics key in an object, try that
-                    if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
-                        if let dict = json as? [String: Any],
-                            let synced = dict["syncedLyrics"] as? String
-                        {
-                            return parseLRC(synced)
-                        }
-                        if let array = json as? [Any], array.isEmpty {
-                            return []
-                        }
-                    }
-
-                    // Otherwise treat as plain lyrics blob
-                    return [LyricLine(timestamp: 0, text: trimmed)]
+                    lyricsLog.warning("LRCLIB 瞬时故障 HTTP \(status)（第 \(attempt) 次），\(delays[attempt - 1])ms 后重试")
                 }
-                return []
+            } catch let failure as LyricsFetchFailure {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard attempt <= delays.count else {
+                    throw LyricsFetchFailure(reason: error.localizedDescription, attempts: attempt)
+                }
+                lyricsLog.warning("LRCLIB 请求失败（第 \(attempt) 次）：\(error.localizedDescription, privacy: .public)")
             }
-        } else {
-            return []
+            try? await Task.sleep(nanoseconds: UInt64(delays[attempt - 1]) * 1_000_000)
         }
+    }
+
+    /// LRCLIB 的 UA 版本段（仓库版本号，避免每次发版漏更新——取不到就回落 `1.0`）。
+    private static let lyricsUserAgentVersion: String = {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+    }()
+
+    /// 把一次 200 的响应体变成「候选结果数组」。
+    ///
+    /// 数组那一支是 LRCLIB 的正常形态；非数组那一支是既有实现的兜底（把响应体当 LRC / 纯文本整段
+    /// 处理），本次**逐字保留**，只是把它折叠成同一个类型——`plainLyrics` / `syncedLyrics` 两个键
+    /// 就是它的两种落点，下游 `lyricLines(from:)` 因此只有一条路。
+    private static func parsedResults(from data: Data) -> [[String: Any]] {
+        if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            return jsonArray
+        }
+
+        guard let body = String(data: data, encoding: .utf8) else { return [] }
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
+            if let dict = json as? [String: Any], let synced = dict["syncedLyrics"] as? String {
+                return [["syncedLyrics": synced]]
+            }
+            if let array = json as? [Any], array.isEmpty { return [] }
+        }
+
+        // Otherwise treat as plain lyrics blob
+        return [["plainLyrics": trimmed]]
+    }
+
+    /// 从一条结果里取歌词行（synced 优先，其次 plain）。
+    private func lyricLines(from result: [String: Any]) -> [LyricLine] {
+        let plain = (result["plainLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let synced = (result["syncedLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if !synced.isEmpty {
+            return parseLRC(synced)
+        } else if !plain.isEmpty {
+            return [LyricLine(timestamp: 0, text: plain)]
+        }
+        return []
     }
 
     private func currentLyricsLookupContext() -> (key: LyricsLookupKey, requestArtist: String, requestTitle: String, requestAlbum: String)? {
