@@ -8457,8 +8457,9 @@ final class LauncherScannerRankingTests: XCTestCase {
 
 // MARK: - 启动台：分区与拖放（p7：上区「快捷启动」/ 下区网格）
 
-/// `LauncherPartition` 与 `LauncherQuickDrop` 的口径（docs/31-home-workday-launcher.md
-/// §接口与数据形状 2）：上区顺序 = 固定先后、下区剔除固定项且保序、拖放四象限与未知/外来输入的 no-op。
+/// `LauncherPartition` / `LauncherQuickDrop` / `LauncherQuickReorder` 的口径
+/// （docs/31-home-workday-launcher.md §接口与数据形状 2）：上区顺序 = 固定先后（可手动重排）、
+/// 下区剔除固定项且保序、拖放四象限与未知/外来输入的 no-op。
 ///
 /// 两个类型都是**纯函数**：不读 `Defaults`、不碰文件系统、不查 Spotlight——夹具是构造的
 /// `LauncherApp` 值，没有临时目录、没有盘上状态。扫描 / 排序 / 过滤的用例在同文件的
@@ -8569,6 +8570,62 @@ final class LauncherPartitionDropTests: XCTestCase {
         let pinned = ["a"]
         _ = LauncherQuickDrop.resolve(draggedID: "c", target: .quick, pinnedIDs: pinned, knownIDs: known)
         XCTAssertEqual(pinned, ["a"], "resolve 不修改输入")
+    }
+
+    /// 上区内部拖动排序（2026-10-19）：方向 = 拖拽项在目标之前 → 落目标之后，反之落目标之前。
+    ///
+    /// 双向都钉：往后拖 / 往前拖 / 相邻互换 / 首末项、同项与未知项 no-op、重复脏数据收敛成一份，
+    /// 以及**纯函数不改输入**（落盘是 store 的事）。
+    func testLauncherQuickReorderMovesIntoTheTargetSlot() {
+        // 往后拖：A 在 C 之前 → 落在 C 之后（首项拖到末项 = 到表尾，不差一格）
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("a", onto: "c", in: ["a", "b", "c"]),
+            ["b", "c", "a"]
+        )
+        // 往前拖：C 在 A 之后 → 落在 A 之前（末项拖到首项 = 到表首）
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("c", onto: "a", in: ["a", "b", "c"]),
+            ["c", "a", "b"]
+        )
+        // 相邻：两个方向都是互换
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("a", onto: "b", in: ["a", "b", "c"]),
+            ["b", "a", "c"]
+        )
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("b", onto: "a", in: ["a", "b", "c"]),
+            ["b", "a", "c"]
+        )
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("b", onto: "c", in: ["a", "b", "c"]),
+            ["a", "c", "b"]
+        )
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("c", onto: "b", in: ["a", "b", "c"]),
+            ["a", "c", "b"]
+        )
+
+        // no-op：拖到自己 / 拖拽项不在表里（未固定、外来 id）/ 目标不在表里
+        XCTAssertNil(LauncherQuickReorder.moving("b", onto: "b", in: ["a", "b", "c"]))
+        XCTAssertNil(LauncherQuickReorder.moving("c", onto: "a", in: ["a", "b"]))
+        XCTAssertNil(LauncherQuickReorder.moving("a", onto: "ghost", in: ["a", "b"]))
+        XCTAssertNil(LauncherQuickReorder.moving("ghost", onto: "a", in: ["a", "b"]))
+        XCTAssertNil(LauncherQuickReorder.moving("", onto: "a", in: ["a", "b"]))
+
+        // 单项 / 空表：没有可换的位置
+        XCTAssertNil(LauncherQuickReorder.moving("a", onto: "a", in: ["a"]))
+        XCTAssertNil(LauncherQuickReorder.moving("a", onto: "b", in: []))
+
+        // 拖拽项的重复脏数据（手改 UserDefaults）：挪完只留一份，位置按本次落点算
+        XCTAssertEqual(
+            LauncherQuickReorder.moving("a", onto: "b", in: ["a", "a", "b"]),
+            ["b", "a"]
+        )
+
+        // 纯函数：只返回新表，不改传入的表
+        let pinned = ["a", "b", "c"]
+        _ = LauncherQuickReorder.moving("a", onto: "c", in: pinned)
+        XCTAssertEqual(pinned, ["a", "b", "c"], "moving 不修改输入")
     }
 }
 
@@ -8902,6 +8959,57 @@ final class LauncherModuleTests: XCTestCase {
         XCTAssertEqual(disk.writes, 3, "重复取消不再落盘")
         XCTAssertEqual(store.quickApps.map(\.name), ["Alpha"])
         XCTAssertEqual(store.gridApps.map(\.name), ["Beta", "Gamma"])
+    }
+
+    /// 上区内部拖动排序（2026-10-19）：走生产的 `LauncherStore.reorder`（内存假体 `LauncherPins`），
+    /// 断言**先落盘再刷新**、两区立即跟随，以及拖回原位 / 拖未固定项到格子上都是 no-op（不写盘）。
+    func testLauncherStoreReorderQuickAppsPersistsOrder() async throws {
+        let root = try fixtureRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, folderName: "Alpha.app", bundleID: "com.example.alpha")
+        try makeApp(in: root, folderName: "Beta.app", bundleID: "com.example.beta")
+        try makeApp(in: root, folderName: "Gamma.app", bundleID: "com.example.gamma")
+
+        let disk = PinDisk()
+        let store = LauncherStore(
+            logger: logger(),
+            roots: [root],
+            pins: disk.pins,
+            settings: { LauncherSettings(iconSize: 44, density: 1, showRecents: false) },
+            fetchUsage: { _ in [:] }
+        )
+        store.prepare()
+        await store.load()
+
+        let alpha = try XCTUnwrap(store.apps.first { $0.name == "Alpha" })
+        let beta = try XCTUnwrap(store.apps.first { $0.name == "Beta" })
+        let gamma = try XCTUnwrap(store.apps.first { $0.name == "Gamma" })
+
+        // 底座：按固定先后排（Beta 先固定 → 上区 Beta、Alpha）
+        store.pin(beta)
+        store.pin(alpha)
+        XCTAssertEqual(store.quickApps.map(\.name), ["Beta", "Alpha"], "底座：上区顺序 = 固定先后")
+        XCTAssertEqual(disk.writes, 2)
+
+        // 往前拖：Alpha（在 Beta 之后）拖到 Beta 上 → 落在 Beta 之前
+        store.reorder(alpha, onto: beta)
+        XCTAssertEqual(disk.table, ["com.example.alpha", "com.example.beta"], "排序已落盘")
+        XCTAssertEqual(store.pinned, disk.table, "内存镜像 = 盘上值")
+        XCTAssertEqual(store.quickApps.map(\.name), ["Alpha", "Beta"], "上区立即跟随")
+        XCTAssertEqual(store.gridApps.map(\.name), ["Gamma"], "下区不受排序影响")
+        XCTAssertEqual(disk.writes, 3, "重排一次落盘一次")
+
+        // 往后拖：Alpha（现在在 Beta 之前）拖到 Beta 上 → 落在 Beta 之后
+        store.reorder(alpha, onto: beta)
+        XCTAssertEqual(disk.table, ["com.example.beta", "com.example.alpha"])
+        XCTAssertEqual(store.quickApps.map(\.name), ["Beta", "Alpha"])
+        XCTAssertEqual(disk.writes, 4)
+
+        // no-op：拖到自己 / 拖一个未固定项到上区格子 → 表不变、不写盘
+        store.reorder(beta, onto: beta)
+        store.reorder(gamma, onto: alpha)
+        XCTAssertEqual(disk.writes, 4, "no-op 不产生写盘")
+        XCTAssertEqual(store.quickApps.map(\.name), ["Beta", "Alpha"])
     }
 
     // MARK: 排序接入（先名称、后 Spotlight、固定恒优先）
@@ -11905,12 +12013,14 @@ private final class AISecretMemory: AISecretStore {
     var readFails = false
     var writeFails = false
     var deleteFails = false
+    var readCounts: [UUID: Int] = [:]
     var writtenReferences: [UUID] = []
     var deletedReferences: [UUID] = []
     var deleteFailures: [UUID: Set<Int>] = [:]
     var failedDeleteNumbers: Set<Int> = []
     var deleteCounts: [UUID: Int] = [:]
     func read(reference: UUID) throws -> String? {
+        readCounts[reference, default: 0] += 1
         if readFails { throw AIError.secretReadFailed }
         return values[reference]
     }
@@ -11975,6 +12085,72 @@ final class AIConfigurationTests: XCTestCase {
         XCTAssertNil(restored.configuration.defaultTextProfileID)
         XCTAssertNil(secrets.values[references[0]])
         XCTAssertEqual(restored.profiles.count, 1)
+    }
+
+    /// 凭据迁移 + 会话缓存（2026-10-19 用户反馈「每次生成都弹钥匙串」）：
+    /// 首次读 v1 旧条目 → 以当前 App 新建 v2 → 同一次启动内不再碰 Keychain；
+    /// 写入只落 v2，旧条目保留以便回滚；删除两代一起清。
+    func testMigratingSecretStoreReadsLegacyOnceAndCachesForTheSession() throws {
+        let current = AISecretMemory()
+        let legacy = AISecretMemory()
+        let reference = UUID()
+        legacy.values[reference] = "fixture-legacy"
+        let store = AIMigratingSecretStore(current: current, legacy: legacy)
+
+        XCTAssertEqual(try store.read(reference: reference), "fixture-legacy")
+        XCTAssertEqual(current.values[reference], "fixture-legacy", "旧值已复制到当前服务")
+        XCTAssertEqual(legacy.readCounts[reference], 1)
+        XCTAssertEqual(current.readCounts[reference], 1, "第一次先查 v2（未命中）")
+
+        XCTAssertEqual(try store.read(reference: reference), "fixture-legacy")
+        XCTAssertEqual(legacy.readCounts[reference], 1, "缓存命中后不再回退旧条目")
+        XCTAssertEqual(current.readCounts[reference], 1, "缓存命中后不再碰 Keychain")
+
+        try store.write("fixture-new", reference: reference)
+        XCTAssertEqual(try store.read(reference: reference), "fixture-new", "写入后缓存立即更新")
+        XCTAssertEqual(current.values[reference], "fixture-new")
+        XCTAssertEqual(legacy.values[reference], "fixture-legacy", "旧条目保留（回滚旧版本仍可读）")
+
+        try store.delete(reference: reference)
+        XCTAssertNil(current.values[reference])
+        XCTAssertNil(legacy.values[reference])
+        XCTAssertNil(try store.read(reference: reference))
+    }
+
+    /// 2026-10-21：AI 凭据改存本机 Application Support 文件；目录 0700、文件 0600，
+    /// 不再走 Keychain 授权读取。
+    func testFileSecretStoreWritesRestrictedFilesAndDeletes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-ai-secret-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AIFileSecretStore(directory: directory)
+        let reference = UUID()
+        XCTAssertNil(try store.read(reference: reference))
+        try store.write("fixture-secret", reference: reference)
+        let file = directory.appendingPathComponent("\(reference.uuidString).key")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "fixture-secret")
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600, "密钥文件必须 0600")
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700, "凭据目录必须 0700")
+        XCTAssertEqual(try store.read(reference: reference), "fixture-secret")
+        try store.delete(reference: reference)
+        XCTAssertNil(try store.read(reference: reference))
+        XCTAssertNoThrow(try store.delete(reference: reference), "重复删除是幂等的")
+    }
+
+    func testFileSecretStoreRejectsMalformedUTF8() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gourd-ai-invalid-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let reference = UUID()
+        let file = directory.appendingPathComponent("\(reference.uuidString).key")
+        try Data([0xFF]).write(to: file)
+        let store = AIFileSecretStore(directory: directory)
+        XCTAssertThrowsError(try store.read(reference: reference)) {
+            XCTAssertEqual($0 as? AIError, .secretReadFailed)
+        }
     }
 
     func testMissingDefaultsCapabilityAndInvalidEndpointsAreExplicit() throws {
@@ -12194,6 +12370,37 @@ final class AIServiceTests: XCTestCase {
                 XCTAssertEqual(messages[1]["images"] as? [String], ["AQID"])
             }
         }
+    }
+
+    /// DeepSeek 的思考模式默认打开；只有请求显式关闭且端点/模型明确指向 DeepSeek 时才发
+    /// thinking:disabled，避免把供应商私有字段发给其他 OpenAI 兼容实现。
+    func testDeepSeekThinkingIsDisabledOnlyWhenRequestedAndSupported() async throws {
+        let fake = AITransportFake()
+        let ai = try service(fake)
+        let deepseek = AIModelProfile(displayName: "deepseek", apiProtocol: .openAICompatible,
+                                      baseURL: "https://api.deepseek.com", modelID: "deepseek-flash")
+        let disabled = AIRequest(purpose: "fixture", messages: [AIMessage(role: .user, text: "question")],
+                                 disablesReasoning: true)
+        let normal = AIRequest(purpose: "fixture", messages: [AIMessage(role: .user, text: "question")])
+        func body(_ index: Int) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(fake.requests[index].httpBody)) as? [String: Any])
+        }
+        _ = try await ai.complete(disabled, profile: deepseek, apiKey: "fixture-key")
+        XCTAssertEqual((try body(0)["thinking"] as? [String: String])?["type"], "disabled")
+        _ = try await ai.complete(normal, profile: deepseek, apiKey: "fixture-key")
+        XCTAssertNil(try body(1)["thinking"])
+        var other = deepseek
+        other.baseURL = "https://fixture.invalid"
+        other.modelID = "test-model"
+        _ = try await ai.complete(disabled, profile: other, apiKey: "fixture-key")
+        XCTAssertNil(try body(2)["thinking"])
+        var anthropic = deepseek
+        anthropic.apiProtocol = .anthropic
+        fake.handler = { _ in
+            AIHTTPResponse(statusCode: 200, body: Data(#"{"content":[{"type":"text","text":"ok"}]}"#.utf8))
+        }
+        _ = try await ai.complete(disabled, profile: anthropic, apiKey: "fixture-key")
+        XCTAssertNil(try body(3)["thinking"])
     }
 
     func testEndpointNormalizationAndProtocolIndependentConnections() throws {
@@ -13188,11 +13395,16 @@ final class ScheduleGenerationTests: XCTestCase {
     private func date(_ day: Int, hour: Int = 0, minute: Int = 0) -> Date {
         calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute))!
     }
-    private func output(date: String? = "2026-10-13", evidence: String? = "明天", start: String? = "17:00", startEvidence: String? = "下午五点", end: String? = nil, endEvidence: String? = nil, url: String? = nil, zone: String = "Asia/Shanghai", allDay: Bool = false) -> [String: Any] {
-        ["title": "周会", "date": date as Any? ?? NSNull(), "dateEvidence": evidence as Any? ?? NSNull(),
-         "start": start as Any? ?? NSNull(), "startEvidence": startEvidence as Any? ?? NSNull(),
-         "end": end as Any? ?? NSNull(), "endEvidence": endEvidence as Any? ?? NSNull(),
-         "isAllDay": allDay, "location": "", "notes": "", "url": url as Any? ?? NSNull(), "timeZoneIdentifier": zone]
+    /// 旧 evidence 参数只为既有用例调用兼容而保留；新契约由模型直出规范字段，
+    /// 应用不再读取或校验原文证据。新增用例用 needs*Confirmation 表达模型判断。
+    private func output(date: String? = "2026-10-13", evidence: String? = nil, start: String? = "17:00", startEvidence: String? = nil, end: String? = nil, endEvidence: String? = nil, url: String? = nil, zone: String = "Asia/Shanghai", allDay: Bool = false, needsDateConfirmation: Bool = false, needsTimeConfirmation: Bool = false) -> [String: Any] {
+        _ = (evidence, startEvidence, endEvidence)
+        return ["title": "周会", "date": date as Any? ?? NSNull(),
+                "start": start as Any? ?? NSNull(), "end": end as Any? ?? NSNull(),
+                "isAllDay": allDay, "location": "", "notes": "", "url": url as Any? ?? NSNull(),
+                "timeZoneIdentifier": zone,
+                "needsDateConfirmation": needsDateConfirmation,
+                "needsTimeConfirmation": needsTimeConfirmation]
     }
     private func parse(_ text: String, output object: [String: Any], reference: Date? = nil) async throws -> (ScheduleCandidate, ScheduleAIStub) {
         let ai = ScheduleAIStub(object)
@@ -13240,14 +13452,13 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.generationState, .ready)
         await module.deactivate()
     }
-    func testExplicitGMTContradictionAndInventedAllDayFail() async {
-        for (text, object) in [
-            ("明天下午五点 GMT+09:00", output()),
-            ("明天进行周会", output(start: nil, startEvidence: nil, allDay: true))
-        ] {
-            do { _ = try await parse(text, output: object); XCTFail() }
-            catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
-        }
+    func testExplicitGMTContradictionAndInventedAllDayRequireConfirmation() async throws {
+        let (gmt, _) = try await parse("明天下午五点 GMT+09:00", output: output())
+        XCTAssertTrue(gmt.confirmations.contains(.date))
+        XCTAssertTrue(gmt.confirmations.contains(.time))
+        let (allDay, _) = try await parse("明天进行周会", output: output(start: nil, allDay: true))
+        XCTAssertTrue(allDay.isAllDay)
+        XCTAssertEqual(allDay.confirmations, [.date])
     }
     func testExpiredSuccessCannotPopulateReplacementDraft() async {
         let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
@@ -13284,16 +13495,16 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(value.end, date(13, hour: 18))
         XCTAssertTrue(value.confirmations.isEmpty)
     }
-    func testWeekdayMorningHasDateButNoInventedClock() async throws {
-        let (value, _) = try await parse("本周四上午开发xxx需求", output: output(date: "2026-10-15", evidence: "本周四", start: nil, startEvidence: nil))
+    func testWeekdayMorningVaguePeriodUsesModelTimeConfirmation() async throws {
+        let (value, _) = try await parse("本周四上午开发xxx需求", output: output(date: "2026-10-15", start: nil))
         XCTAssertEqual(value.date, date(15))
         XCTAssertNil(value.start)
         XCTAssertNil(value.end)
         XCTAssertEqual(value.confirmations, [.time])
-        do {
-            _ = try await parse("本周四上午开发xxx需求", output: output(date: "2026-10-15", evidence: "本周四", start: "09:00", startEvidence: "上午"))
-            XCTFail("A vague period must not substantiate 09:00")
-        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+        let (flagged, _) = try await parse("本周四上午开发xxx需求",
+                                          output: output(date: "2026-10-15", start: "09:00", needsTimeConfirmation: true))
+        XCTAssertEqual(flagged.start, date(15, hour: 9))
+        XCTAssertEqual(flagged.confirmations, [.time])
     }
     func testMissingDateAndTimeRequireConfirmation() async throws {
         let (value, _) = try await parse("开发需求", output: output(date: nil, evidence: nil, start: nil, startEvidence: nil))
@@ -13301,11 +13512,11 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(value.confirmations, [.date, .time])
     }
     func testHuaweiAndTencentInvitationsUseAIAndOriginalLinks() async throws {
-        for (text, dateText, end, link) in [
-            (MeetingInvitationFixtures.huawei, "2026-10-13", "10:45", MeetingInvitationFixtures.huaweiHTTPS),
-            (MeetingInvitationFixtures.tencent, "2026/10/13", "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz")
+        for (text, end, link) in [
+            (MeetingInvitationFixtures.huawei, "10:45", MeetingInvitationFixtures.huaweiHTTPS),
+            (MeetingInvitationFixtures.tencent, "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz")
         ] {
-            let (value, _) = try await parse(text, output: output(evidence: dateText, start: "10:00", startEvidence: "10:00", end: end, endEvidence: end, url: link))
+            let (value, _) = try await parse(text, output: output(start: "10:00", end: end, url: link))
             XCTAssertEqual(value.start, date(13, hour: 10))
             XCTAssertEqual(value.url?.absoluteString, link)
             XCTAssertTrue(value.confirmations.isEmpty)
@@ -13324,24 +13535,24 @@ final class ScheduleGenerationTests: XCTestCase {
         4008208888,,384462190
         """
         for reference in [date(12), date(13)] {
-            let (value, _) = try await parse(text, output: output(evidence: "10月13日", start: "15:00", startEvidence: "15:00", end: "16:30", endEvidence: "16:30", url: "https://vc.feishu.cn/j/384462190"), reference: reference)
+            let (value, _) = try await parse(text, output: output(start: "15:00", end: "16:30", url: "https://vc.feishu.cn/j/384462190", needsDateConfirmation: true), reference: reference)
             XCTAssertEqual(value.start, date(13, hour: 15))
             XCTAssertEqual(value.confirmations, [.date])
         }
-        let (conflict, _) = try await parse("2026-10-13 (明天) 15:00", output: output(evidence: "2026-10-13", start: "15:00", startEvidence: "15:00"), reference: date(13))
+        let (conflict, _) = try await parse("2026-10-13 (明天) 15:00", output: output(start: "15:00", needsDateConfirmation: true), reference: date(13))
         XCTAssertEqual(conflict.confirmations, [.date])
     }
     func testModelChoosingRelativeDateCannotHideYearlessInvitationConflict() async throws {
-        let (value, _) = try await parse("10月13日 (明天) 下午五点", output: output(date: "2026-10-14"), reference: date(13))
+        let (value, _) = try await parse("10月13日 (明天) 下午五点", output: output(date: "2026-10-14", needsDateConfirmation: true), reference: date(13))
         XCTAssertEqual(value.date, date(14))
         XCTAssertEqual(value.confirmations, [.date])
     }
     func testURLPrefixAndFabricationAreRejected() async {
         for url in ["https://meeting.tencent.com/dm/VUYt", "https://meeting.tencent.com/dm/invented"] {
             do {
-                _ = try await parse(MeetingInvitationFixtures.tencent, output: output(evidence: "2026/10/13", start: "10:00", startEvidence: "10:00", url: url))
+                _ = try await parse(MeetingInvitationFixtures.tencent, output: output(start: "10:00", url: url))
                 XCTFail("Only a complete original token is evidence")
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
         }
     }
     func testStrictSchemaAndInvalidDateRejected() async {
@@ -13494,97 +13705,52 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.error, CalendarMutationError.unrepresentableReminderTime.localizedDescription)
     }
 
-    func testUnicodeSourceDatesNeverIndexUnconvertedComponents() async throws {
-        for evidence in ["２０２６-１０-１３", "٢٠٢٦-١٠-١٣", "2026年10月13日"] {
-            let (value, _) = try await parse("明天下午五点，参考日期" + evidence, output: output())
-            XCTAssertEqual(value.date, date(13))
-            XCTAssertTrue(value.confirmations.isEmpty)
-            let (selected, _) = try await parse(evidence + " 下午五点", output: output(evidence: evidence))
-            XCTAssertEqual(selected.date, date(13))
-        }
-        let (conflict, _) = try await parse("明天下午五点，参考日期２０２６-１０-１４", output: output())
-        XCTAssertEqual(conflict.confirmations, [.date])
-    }
-    func testInvalidSourceDateCannotNormalizeIntoConfirmedCandidate() async throws {
-        for source in ["2026-02-30", "2026年02月30日", "2月30日", "2/30", "2026-13-02", "2026-00-13"] {
-            let (value, _) = try await parse(source + " 17:00", output: output(date: "2026-03-02", evidence: source, startEvidence: "17:00"))
-            XCTAssertTrue(value.confirmations.contains(.date), source)
-        }
-    }
-    func testWholeSourceNumericMonthDayAndWeekdayConflictsCannotBeOmitted() async throws {
-        for text in ["10/12（明天）下午五点", "10-12（明天）下午五点", "本周四（明天）下午五点", "１０/１２（明天）下午五点"] {
-            let (value, _) = try await parse(text, output: output())
-            XCTAssertTrue(value.confirmations.contains(.date), text)
-        }
-        let (same, _) = try await parse("10/13（明天）下午五点", output: output())
-        XCTAssertTrue(same.confirmations.contains(.date), "The year is missing even when the hints agree")
-    }
     func testRelativeDatesUseReferenceZoneBeforeConstructingSourceZone() async throws {
         let westReference = date(13, hour: 0, minute: 30)
-        let (west, _) = try await parse("明天 17:00 America/New_York", output: output(date: "2026-10-14", startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
+        let (west, _) = try await parse("明天 17:00 America/New_York", output: output(date: "2026-10-14", zone: "America/New_York"), reference: westReference)
         XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(west.start)), "2026-10-14T21:00:00Z")
         XCTAssertTrue(west.confirmations.isEmpty)
-        do {
-            _ = try await parse("明天 17:00 America/New_York", output: output(startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
-            XCTFail("Source-zone yesterday must not shift the relative day")
-        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
         let eastReference = date(12, hour: 23, minute: 30)
-        let (east, _) = try await parse("明天 17:00 Pacific/Auckland", output: output(startEvidence: "17:00", zone: "Pacific/Auckland"), reference: eastReference)
+        let (east, _) = try await parse("明天 17:00 Pacific/Auckland", output: output(start: "17:00", zone: "Pacific/Auckland"), reference: eastReference)
         XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(east.start)), "2026-10-13T04:00:00Z")
         XCTAssertTrue(east.confirmations.isEmpty)
-        let (week, _) = try await parse("本周四 17:00 America/New_York", output: output(date: "2026-10-15", evidence: "本周四", startEvidence: "17:00", zone: "America/New_York"), reference: westReference)
+        let (week, _) = try await parse("本周四 17:00 America/New_York", output: output(date: "2026-10-15", start: "17:00", zone: "America/New_York"), reference: westReference)
         XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(week.start)), "2026-10-15T21:00:00Z")
     }
     func testExplicitOffsetUsesSourceClockAfterDSTTransition() async throws {
-        let (value, _) = try await parse("2026-11-01 17:00 GMT-08:00 America/Los_Angeles", output: output(date: "2026-11-01", evidence: "2026-11-01", startEvidence: "17:00", zone: "America/Los_Angeles"))
+        let (value, _) = try await parse("2026-11-01 17:00 GMT-08:00 America/Los_Angeles", output: output(date: "2026-11-01", start: "17:00", zone: "America/Los_Angeles"))
         XCTAssertEqual(ISO8601DateFormatter().string(from: try XCTUnwrap(value.start)), "2026-11-02T01:00:00Z")
         XCTAssertTrue(value.confirmations.isEmpty)
     }
-    func testPartialClockEvidenceCannotDiscardAfternoonContext() async throws {
-        let (wrong, _) = try await parse("明天下午10:00开会", output: output(start: "10:00", startEvidence: "10:00"))
-        XCTAssertTrue(wrong.confirmations.contains(.time))
-        let (correct, _) = try await parse("明天下午10:00开会", output: output(start: "22:00", startEvidence: "10:00"))
-        XCTAssertEqual(correct.start, date(13, hour: 22))
-        XCTAssertTrue(correct.confirmations.isEmpty)
-    }
-    func testUnresolvedModifierOrApproximationRetainsTimeConfirmation() async throws {
-        for text in ["明天下午约10:00开会", "明天10:00 PM开会", "明天10:00左右开会", "明天晚上3:00开会"] {
-            let (value, _) = try await parse(text, output: output(start: text.contains("3:00") ? "03:00" : "10:00", startEvidence: text.contains("3:00") ? "3:00" : "10:00"))
+    func testModelTimeConfirmationCoversApproximationAndPeriodAmbiguity() async throws {
+        for (text, start) in [
+            ("明天下午约10:00开会", "10:00"), ("明天10:00 PM开会", "10:00"),
+            ("明天10:00左右开会", "10:00"), ("明天晚上3:00开会", "03:00")
+        ] {
+            let (value, _) = try await parse(text, output: output(start: start, needsTimeConfirmation: true))
             XCTAssertTrue(value.confirmations.contains(.time), text)
         }
     }
-    func testExplicitEndOmissionDoesNotUseDefaultOneHour() async throws {
-        for text in ["明天 10:00-12:00开会", "明天 10:00到12:00开会", "明天 10:00开始，12:00结束", "明天 10:00开会两小时"] {
-            let (value, _) = try await parse(text, output: output(start: "10:00", startEvidence: "10:00"))
-            XCTAssertNil(value.end, text)
-            XCTAssertTrue(value.confirmations.contains(.time), text)
-        }
-        let (range, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", startEvidence: "10:00", end: "12:00", endEvidence: "12:00"))
-        XCTAssertEqual(range.end, date(13, hour: 12))
-        XCTAssertTrue(range.confirmations.isEmpty)
+    func testMissingEndDefaultsOneHourAndExplicitEndIsUsed() async throws {
+        let (defaulted, _) = try await parse("明天 10:00 开会", output: output(start: "10:00"))
+        XCTAssertEqual(defaulted.end, date(13, hour: 11))
+        XCTAssertTrue(defaulted.confirmations.isEmpty)
+        let (explicit, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", end: "12:00"))
+        XCTAssertEqual(explicit.end, date(13, hour: 12))
+        XCTAssertTrue(explicit.confirmations.isEmpty)
+        do {
+            _ = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", end: "09:00"))
+            XCTFail("End must be after start")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
     }
-    func testRangePeriodInheritanceAndMismatchedEndRequireConfirmation() async throws {
+    func testRangeUsesCanonicalStartAndEndAndHonorsTimeConfirmation() async throws {
         let text = "明天下午10:00-11:00开会"
-        let (correct, _) = try await parse(text, output: output(start: "22:00", startEvidence: "10:00", end: "23:00", endEvidence: "11:00"))
+        let (correct, _) = try await parse(text, output: output(start: "22:00", end: "23:00"))
         XCTAssertEqual(correct.start, date(13, hour: 22))
         XCTAssertEqual(correct.end, date(13, hour: 23))
         XCTAssertTrue(correct.confirmations.isEmpty)
-        let (wrong, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", startEvidence: "10:00", end: "11:00", endEvidence: "12:00"))
-        XCTAssertTrue(wrong.confirmations.contains(.time))
-    }
-    func testWholeSourceIndependentClocksRequireConfirmationRegardlessOfSelectedStart() async throws {
-        for (text, start) in [
-            ("2026-10-14 17:00开会，改到18:00，19:00结束", "17:00"),
-            ("2026-10-14 17:00开会，改到18:00，19:00结束", "18:00"),
-            ("2026-10-14 17:00开始，19:00结束，20:00复盘", "17:00")
-        ] {
-            let (value, _) = try await parse(text, output: output(date: "2026-10-14", evidence: "2026-10-14", start: start, startEvidence: start, end: "19:00", endEvidence: "19:00"))
-            XCTAssertEqual(value.confirmations, [.time], text + " selected " + start)
-        }
-        let (control, _) = try await parse("2026-10-14 17:00开会，19:00结束", output: output(date: "2026-10-14", evidence: "2026-10-14", startEvidence: "17:00", end: "19:00", endEvidence: "19:00"))
-        XCTAssertEqual(control.start, date(14, hour: 17))
-        XCTAssertEqual(control.end, date(14, hour: 19))
-        XCTAssertTrue(control.confirmations.isEmpty)
+        let (ambiguous, _) = try await parse("明天 10:00-12:00开会", output: output(start: "10:00", end: "11:00", needsTimeConfirmation: true))
+        XCTAssertTrue(ambiguous.confirmations.contains(.time))
     }
     func testInvitationNumericMetadataDoesNotBecomeIndependentClockConflict() async throws {
         let feishu = MeetingInvitationFixtures.feishu + """
@@ -13593,12 +13759,12 @@ final class ScheduleGenerationTests: XCTestCase {
         会议 ID：384 462 190
         手机拨号一键入会：+862122504720,,384462190 或 4008208888,,384462190
         """
-        for (text, evidence, start, end, url) in [
-            (MeetingInvitationFixtures.huawei, "2026-10-13", "10:00", "10:45", MeetingInvitationFixtures.huaweiHTTPS),
-            (MeetingInvitationFixtures.tencent, "2026/10/13", "10:00", "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"),
-            (feishu, "2026-10-13", "15:00", "16:30", "https://vc.feishu.cn/j/384462190")
+        for (text, start, end, url) in [
+            (MeetingInvitationFixtures.huawei, "10:00", "10:45", MeetingInvitationFixtures.huaweiHTTPS),
+            (MeetingInvitationFixtures.tencent, "10:00", "10:30", "https://meeting.tencent.com/dm/VUYtCU0Ssrfz"),
+            (feishu, "15:00", "16:30", "https://vc.feishu.cn/j/384462190")
         ] {
-            let (value, _) = try await parse(text, output: output(evidence: evidence, start: start, startEvidence: start, end: end, endEvidence: end, url: url))
+            let (value, _) = try await parse(text, output: output(start: start, end: end, url: url))
             XCTAssertTrue(value.confirmations.isEmpty, text)
             XCTAssertEqual(value.url?.absoluteString, url)
         }
@@ -13611,7 +13777,7 @@ final class ScheduleGenerationTests: XCTestCase {
             ("2026-10-14 17:00开会，19:00结束", "17:00", false)
         ] {
             let backend = backend(), session = session(backend)
-            session.configureAI(ScheduleAIStub(output(date: "2026-10-14", evidence: "2026-10-14", start: start, startEvidence: start, end: "19:00", endEvidence: "19:00")))
+            session.configureAI(ScheduleAIStub(output(date: "2026-10-14", start: start, end: "19:00", needsTimeConfirmation: conflict)))
             session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
             session.updateSourceText(text)
             await session.parseSource()
@@ -13657,7 +13823,7 @@ final class ScheduleGenerationTests: XCTestCase {
             formatter.timeZone = referenceCalendar.timeZone
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "yyyy-MM-dd"
-            return self.output(date: formatter.string(from: tomorrow), startEvidence: "17:00", zone: "America/New_York")
+            return self.output(date: formatter.string(from: tomorrow), start: "17:00", zone: "America/New_York")
         }
         session.configureAI(ai)
         session.beginCreate(kind: .event, on: date(13), calendarID: "fixture-events")
@@ -13705,7 +13871,7 @@ final class ScheduleGenerationTests: XCTestCase {
             do {
                 _ = try await parse("明天下午五点开会 " + queried, output: output(url: truncated))
                 XCTFail("Valid query punctuation must not be treated as removable prose")
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
         }
     }
     func testPairedHuaweiFallbackKeepsFullHTTPSWithSentencePunctuationAndQuery() async throws {
@@ -13729,7 +13895,7 @@ final class ScheduleGenerationTests: XCTestCase {
             do {
                 _ = try await parse(text, output: output(url: truncated))
                 XCTFail("Paired fallback evidence must retain the complete original URL bytes")
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
         }
     }
     func testGenerationErrorsResolveActualBilingualCatalogValues() throws {
@@ -14010,136 +14176,81 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertTrue(source.contains(".keyboardShortcut(.return, modifiers: .command)"))
     }
 
-    // MARK: - T1 解析层：半点/点分解码与生成失败回归（docs/49 做法 1）
+    // MARK: - 模型直出契约（2026-10-21）
 
-    /// T1 主回归：原文同时含「X点半」钟点与「时长一个点」。半小时必须解得开，
-    /// 时长说法落回应用既有的「默认一小时」，而不是抛 invalidEvidence。
-    func testHalfHourClockWithDurationFallsBackToDefaultHourInsteadOfFailing() async throws {
-        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
-        let (value, _) = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "下午三点半"))
-        XCTAssertEqual(value.start, date(12, hour: 15, minute: 30))
-        XCTAssertEqual(value.end, date(12, hour: 16, minute: 30), "只有时长说法时应用默认补一小时")
+    /// 用户原文含全角冒号、空格、会议 ID；模型直出规范字段即可成功，代码不再解析原文证据。
+    func testArbitrarySourcePunctuationUsesCanonicalModelOutput() async throws {
+        let text = "时间 10 月 22 日星期四上午 9：30 分 \n\n\n\n化小易会议ID: 968335564\n入会密码: 无\n会议地点: 无"
+        let (value, ai) = try await parse(text, output: output(date: "2026-10-22", start: "09:30"))
+        XCTAssertEqual(value.start, date(22, hour: 9, minute: 30))
+        XCTAssertEqual(value.end, date(22, hour: 10, minute: 30))
+        XCTAssertEqual(value.timeZoneIdentifier, "Asia/Shanghai")
         XCTAssertTrue(value.confirmations.isEmpty)
+        XCTAssertTrue(ai.requests[0].disablesReasoning)
+        XCTAssertEqual(ai.requests[0].maxOutputTokens, 800)
+        XCTAssertEqual(ai.requests[0].messages.last?.text, text)
     }
 
-    /// T1：「三点十五分」「三点一刻」与「三点半」同类可解——修好之前它们会被判无效。
-    func testChineseMinuteAndQuarterClockFormsDecode() async throws {
-        for (evidence, clock) in [("下午三点十五分", "15:15"), ("下午三点一刻", "15:15")] {
-            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
-            XCTAssertEqual(value.start, date(12, hour: 15, minute: 15), evidence)
-            XCTAssertTrue(value.confirmations.isEmpty, evidence)
+    /// 模型用两个布尔量表达歧义；应用只映射为既有确认项，不再自己猜年份/时段。
+    func testModelConfirmationFlagsMapToTheDraft() async throws {
+        let (dated, _) = try await parse("某天下午三点开会", output: output(date: "2026-10-22", start: "15:00", needsDateConfirmation: true))
+        XCTAssertEqual(dated.confirmations, [.date])
+        let (timed, _) = try await parse("明天下午开会", output: output(date: "2026-10-13", start: nil, needsTimeConfirmation: true))
+        XCTAssertEqual(timed.confirmations, [.time])
+    }
+
+    /// 只对模型输出做结构校验：非法日期/时刻、结束不晚于开始、全天无日期、旧证据字段都拒绝。
+    func testCanonicalShapeAndImpossibleCombinationsAreRejected() async {
+        var extra = output()
+        extra["dateEvidence"] = "旧字段"
+        for object in [output(date: "2026-02-30"), output(start: "25:00"), output(start: "10:00", end: "09:00"), output(date: nil, allDay: true), extra] {
+            do { _ = try await parse("明天下午五点", output: object); XCTFail() }
+            catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
         }
     }
 
-    /// T1：模型把证据归一化成原文里没有的 `15:30`，证据校验仍必须确定性拒绝（不静默放行）。
-    func testNormalizedClockEvidenceAbsentFromSourceIsStillRejected() async {
-        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
+    /// 已知会议链接仍然要求来自原文；普通链接只做结构校验，避免把编造的入会地址写进日程。
+    func testKnownMeetingURLStillRequiresSourceEvidence() async throws {
+        let source = "明天下午五点开会 https://meeting.tencent.com/dm/VUYtCU0Ssrfz"
         do {
-            _ = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "15:30"))
-            XCTFail("原文里没有 15:30，证据必须是原文片段")
-        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
+            _ = try await parse(source, output: output(url: "https://meeting.tencent.com/dm/invented"))
+            XCTFail("Known meeting links must come from the source")
+        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidResponse) }
+        let (generic, _) = try await parse("明天下午五点开会 https://example.com/x", output: output(url: "https://example.com/other"))
+        XCTAssertEqual(generic.url?.absoluteString, "https://example.com/other")
     }
 
-    /// T1 不变量：`timePattern` 认得的每一种词形，`clockEvidence` 都要解得开。
-    /// 逐一走真实解析器——两边漏一侧都会红：缺 pattern 会落时间确认，缺解码会抛 invalidEvidence。
-    func testEverySupportedClockFormDecodesWithoutConfirmation() async throws {
-        let forms: [(String, String, Date)] = [
-            ("15:30", "15:30", date(12, hour: 15, minute: 30)),
-            ("15:30:45", "15:30:45", date(12, hour: 15, minute: 30).addingTimeInterval(45)),
-            ("三点", "03:00", date(12, hour: 3)),
-            ("三点半", "03:30", date(12, hour: 3, minute: 30)),
-            ("三点十五分", "03:15", date(12, hour: 3, minute: 15)),
-            ("三点一刻", "03:15", date(12, hour: 3, minute: 15))
-        ]
-        for (evidence, clock, expected) in forms {
-            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
-            XCTAssertEqual(value.start, expected, evidence)
-            XCTAssertTrue(value.confirmations.isEmpty, "词形 \(evidence) 不该再要求时间确认")
-        }
+    /// 模型换了来源时区但原文没有依据时，降级为日期/时间确认，而不是整单失败。
+    func testZoneChangeWithoutSourceExplanationRequiresConfirmation() async throws {
+        let (unexplained, _) = try await parse("明天下午五点开会", output: output(date: "2026-10-13", start: "17:00", zone: "America/New_York"))
+        XCTAssertTrue(unexplained.confirmations.contains(.date))
+        XCTAssertTrue(unexplained.confirmations.contains(.time))
+        let (explained, _) = try await parse("明天下午五点 America/New_York", output: output(date: "2026-10-13", start: "17:00", zone: "America/New_York"))
+        XCTAssertFalse(explained.confirmations.contains(.date))
+        XCTAssertFalse(explained.confirmations.contains(.time))
     }
 
-    /// T1：支持集合之外的词形（如「三点三刻半」）仍确定性拒绝，不静默放行。
-    func testUnsupportedClockWordingsStayDeterministicallyRejected() async {
-        for evidence in ["三点三刻半", "三点半半"] {
-            do {
-                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:45", startEvidence: evidence))
-                XCTFail("不支持的词形必须拒绝：" + evidence)
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
-        }
+    /// 模型擅自标全天时要求日期确认；原文明确「全天」则不再确认。
+    func testAllDayWithoutExplicitSourceTextRequiresDateConfirmation() async throws {
+        let (implicit, _) = try await parse("明天开会", output: output(date: "2026-10-13", start: nil, allDay: true))
+        XCTAssertTrue(implicit.isAllDay)
+        XCTAssertEqual(implicit.confirmations, [.date])
+        let (explicit, _) = try await parse("明天全天开会", output: output(date: "2026-10-13", start: nil, allDay: true))
+        XCTAssertFalse(explicit.confirmations.contains(.date))
     }
 
-    /// T1：分钟的中文数词要真能认 0–59（「三点二十五分」「三点四十五分」这类必须可用）。
-    func testChineseMinuteNumeralsZeroThroughFiftyNineDecode() async throws {
-        let pairs: [(String, Int)] = [
-            ("零", 0), ("一", 1), ("九", 9), ("十", 10), ("十一", 11), ("十九", 19),
-            ("二十", 20), ("二十五", 25), ("二十九", 29), ("三十", 30), ("三十五", 35),
-            ("四十", 40), ("四十五", 45), ("五十", 50), ("五十五", 55), ("五十九", 59)
-        ]
-        for (numeral, minute) in pairs {
-            let (value, _) = try await parse("今天三点\(numeral)分开会", output: output(date: "2026-10-12", evidence: "今天", start: String(format: "%02d:%02d", 3, minute), startEvidence: "三点\(numeral)分"))
-            XCTAssertEqual(value.start, date(12, hour: 3, minute: minute), numeral)
-            XCTAssertTrue(value.confirmations.isEmpty, numeral)
-        }
-    }
-
-    /// V2：新 prompt 要求模型在「只有时长说法」时把 end 与 endEvidence 一起留空。
-    /// 这条钉的是**万一模型没照做**——把时长短语当 endEvidence 喂回来，也必须确定性拒绝、
-    /// 不能静默接受（否则等于放行了一条原文里没有钟点的「结束时间」）。
-    func testDurationPhraseAsEndEvidenceIsStillRejected() async {
-        let text = "精准维修云平台周会，今天下午三点半，会议时长一个点"
-        do {
-            _ = try await parse(text, output: output(date: "2026-10-12", evidence: "今天", start: "15:30", startEvidence: "下午三点半", end: "16:30", endEvidence: "会议时长一个点"))
-            XCTFail("时长短语不是钟点证据，必须拒绝")
-        } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence) }
-    }
-
-    /// 审查 I1：小时也走 0–59 词法后，合法的「十三点 / 二十三点 / 三点零零分」解得开
-    /// （旧实现只到「十二」且不认「零零」，模型逐字引用它们会恒被 invalidEvidence 拒绝）。
-    func testLegalExtendedChineseClockWordingsDecode() async throws {
-        for (evidence, clock, expected) in [
-            ("十三点", "13:00", date(12, hour: 13)),
-            ("二十三点", "23:00", date(12, hour: 23)),
-            ("三点零零分", "03:00", date(12, hour: 3))
-        ] {
-            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
-            XCTAssertEqual(value.start, expected, evidence)
-            XCTAssertTrue(value.confirmations.isEmpty, evidence)
-        }
-    }
-
-    /// 审查 I1/I3/I4：越界取值（时 >23、分 >59）与畸形词法（`十零`/`一十`/阿拉伯「刻」）
-    /// 仍按原路径确定性拒绝——小时走同一词法、但范围守卫与「刻只认一二三」两侧口径保持不变。
-    func testOutOfRangeAndMalformedClockWordingsAreRejected() async {
-        for evidence in ["二十五点", "三点六十分", "三点十零分", "三点一十分", "三点3刻"] {
-            do {
-                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:00", startEvidence: evidence))
-                XCTFail("必须确定性拒绝：" + evidence)
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
-        }
-    }
-
-    /// 审查二：`零X` 读法（「三点零五分」「零点零五分」是极常见的口语写法）——解得开，
-    /// 且 `timeHints` 与证据同值，不落时间确认。
-    func testLeadingZeroReadingDecodesWithoutConfirmation() async throws {
-        for (evidence, clock, expected) in [
-            ("三点零五分", "03:05", date(12, hour: 3, minute: 5)),
-            ("三点零一分", "03:01", date(12, hour: 3, minute: 1)),
-            ("零点零五分", "00:05", date(12, hour: 0, minute: 5))
-        ] {
-            let (value, _) = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: clock, startEvidence: evidence))
-            XCTAssertEqual(value.start, expected, evidence)
-            XCTAssertTrue(value.confirmations.isEmpty, evidence)
-        }
-    }
-
-    /// 审查二：`零X` 只认「零 + 单个个位数」——`零十`、三位「零」前缀仍是 nil。
-    func testMalformedLeadingZeroWordingsAreRejected() async {
-        for evidence in ["三点零十", "三点零零五分"] {
-            do {
-                _ = try await parse("今天\(evidence)开会", output: output(date: "2026-10-12", evidence: "今天", start: "03:05", startEvidence: evidence))
-                XCTFail("必须确定性拒绝：" + evidence)
-            } catch { XCTAssertEqual(error as? ScheduleParsingError, .invalidEvidence, evidence) }
-        }
+    /// 日程解析请求显式关思考，prompt 只要求规范字段与确认标志，不再要求原文证据。
+    func testScheduleRequestDisablesReasoningAndOmitsEvidenceGrammar() async throws {
+        let (_, ai) = try await parse("明天下午五点", output: output())
+        let request = ai.requests[0]
+        XCTAssertTrue(request.disablesReasoning)
+        XCTAssertEqual(request.maxOutputTokens, 800)
+        let prompt = request.messages[0].text
+        XCTAssertTrue(prompt.contains("needsDateConfirmation"))
+        XCTAssertTrue(prompt.contains("needsTimeConfirmation"))
+        XCTAssertTrue(prompt.contains("arbitrary"))
+        XCTAssertFalse(prompt.contains("Evidence"))
+        XCTAssertFalse(prompt.contains("dateEvidence"))
     }
 }
 
@@ -15121,8 +15232,18 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertNil(MeetingActionPresentation.rowProviderName(for: codeOnly), "判不出平台就不显示 provider 名")
         XCTAssertEqual(MeetingActionPresentation.rowValue(for: codeOnly), "939130533", ".row 显示纯数字")
         Defaults[.meetingCodeOpener] = MeetingProvider.tencent.rawValue
-        XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: codeOnly),
-                       localized("calendar.meeting.provider.tencent"), "记住的客户端进 provider 名（D-09）")
+        XCTAssertNil(MeetingActionPresentation.rowProviderName(for: codeOnly),
+                     "记住的客户端只影响动作，不能冒充本条证据的平台名（2026-10-21 用户反馈）")
+
+        // 原文标签能判出平台：化小易 = 华为云会议；即使全局记住了腾讯，行标与主动作都必须走华为。
+        let huaweiCode = MeetingActionModel(event: event(notes: "化小易会议ID：968335564"), session: session,
+                                            opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertEqual(huaweiCode.determinedProvider, .huawei)
+        XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: huaweiCode),
+                       localized("calendar.meeting.provider.huawei"), "华为会议号不能被标成腾讯")
+        XCTAssertEqual(MeetingActionPresentation.rowValue(for: huaweiCode), "968335564")
+        guard case let .open(_, provider) = huaweiCode.primary else { return XCTFail("应能按号码打开华为会议") }
+        XCTAssertEqual(provider, .huawei, "标签能判出平台时，不能让记住的腾讯抢走主动作")
 
         Defaults.reset(Defaults.Keys.meetingCodeOpener.name)
         let linked = MeetingActionModel(event: event(notes: MeetingInvitationFixtures.feishu), session: session,
@@ -15130,6 +15251,14 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(MeetingActionPresentation.rowProviderName(for: linked), "Feishu", "没有记忆时 provider 名回到证据平台")
         XCTAssertEqual(MeetingActionPresentation.rowValue(for: linked), "https://vc.feishu.cn/j/384462190",
                        "没有会议号时显示入口链接")
+
+        // 没有任何会议内容：不许贴平台名、不许画键。
+        let none = MeetingActionModel(event: event(notes: "找元培沟通漏扫事项"), session: session,
+                                      opener: MeetingFakeOpener([]), copyText: { _ in })
+        XCTAssertNil(none.determinedProvider)
+        XCTAssertNil(MeetingActionPresentation.rowProviderName(for: none), "没有会议内容就不贴平台名")
+        XCTAssertNil(MeetingActionPresentation.rowValue(for: none))
+        XCTAssertTrue(MeetingActionPresentation.rowKeys(for: none).isEmpty)
     }
 
     /// `.row` 的退化态（审查 I-1）：键名必须与行为一致 —— 判不出平台（主动作是复制）时只有「复制」；
@@ -15630,9 +15759,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     }
 
     /// T2 / D-01·D-02·D-05：四种入口渲染出**同一套字段**，差异只有三处 —— 类型控件可点 / 锁定、
-    /// 生成行有无、时间块两格 / 一格 + 地点有无。取证分两半：
-    /// ① 挂载：能观察到的本地控件给出**数量与几何**（备注整宽、目标占半格、生成行只在新建、
-    ///    日程比待办多一个时刻控件与一个地点输入框）；
+    /// 时间块两格 / 一格 + 地点有无。取证分两半：
+    /// ① 挂载：能观察到的本地控件给出**数量与几何**（备注整宽、目标占半格、生成行四种入口都有
+    ///    （2026-10-19 起编辑也可再次分析）、日程比待办多一个时刻控件与一个地点输入框）；
     /// ② 源码检索：SwiftUI 原生 `HStack`/`Text` 在宿主里不是 `NSView`，因此「目标｜全天」「地点｜链接」
     ///    的并排关系与类型控件的 `disabled` 只能按源码取证。
     func testUnifiedEditorFormPairsFieldsAndHidesBoilerplate() throws {
@@ -15656,8 +15785,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
             XCTAssertEqual(signature.targetTitles.count, 1, name)
             XCTAssertEqual(signature.targetWidth, (signature.notesWidth - 8) / 2, accuracy: 1,
                            "\(name)：目标与「全天」并排各占半宽")
-            // 生成行只有新建有。
-            XCTAssertEqual(signature.sourceEditors, editing ? 0 : 1, name)
+            // 生成行四种入口都有：编辑既有记录也能再次输入文本做模型分析（2026-10-19）。
+            XCTAssertEqual(signature.sourceEditors, 1, name)
             // 时间两格 / 一格：日程多一个时刻控件（开始 + 结束，待办只有「截止」）。
             XCTAssertEqual(signature.datePickers, isEvent ? 2 : 1, "\(name)：时间块 \(isEvent ? "两格" : "一格")")
             // 地点有无：日程多一个输入框（标题 + 地点 + 链接 / 标题 + 链接）。
@@ -15723,8 +15852,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertTrue(panel.contains("CalendarAISettingsNavigation.open()"), "齿轮仍接 AI 设置页的入口")
     }
 
-    /// T3 / V5（D-07·D-09）：日历页**按档报自然高**——编辑档列高 400（账本 = 400 + 表头 − 16）、列表档仍是
-    /// `monthGridHeight`（2026-10 = 278）；编辑档左栏宽 260、两栏高 400、编辑区宽 = 宿主内容宽 −
+    /// T3 / V5（D-07·D-09）：日历页**按档报自然高**——编辑档列高 560（账本 = 560 + 表头 − 16）、列表档仍是
+    /// `monthGridHeight`（2026-10 = 278）；编辑档左栏宽 260、两栏高 560、编辑区宽 = 宿主内容宽 −
     /// 260 − 栏间距 12 − 该栏自身内边距（**关系式，不写死 615**）。三层判据照
     /// `PanelAutoHeightTests.testCalendarIsAMeasuredTab`：① 键字面量 ② 名单含它 ③ 账本行为。
     func testCalendarPageReportsEditorModeNaturalHeight() throws {
@@ -15735,11 +15864,11 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(calendarPanelTabKey(route: .list), CalendarModule.moduleID,
                        "T6：详情档退休，非编辑档只有列表这一档")
 
-        // ② 名单：编辑档有自然高 400，因此在名单里（探针据此进门）。
+        // ② 名单：编辑档有自然高 560，因此在名单里（探针据此进门）。
         XCTAssertTrue(PanelContentHeight.measuredTabs.contains(PanelContentHeight.calendarEditorTab))
         XCTAssertTrue(PanelContentHeight.isMeasuredTab(PanelContentHeight.calendarEditorTab))
 
-        // ③ 账本行为：编辑档自然高 448 → 448 + 表头 28 − 16 = 460；切回列表档**回落**当月自然高。
+        // ③ 账本行为：编辑档自然高 560 → 560 + 表头 28 − 16 = 572；切回列表档**回落**当月自然高。
         let ledger = PanelContentHeight.shared
         ledger.reset()
         defer { ledger.reset() }
@@ -15755,28 +15884,28 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
                        "列表档：当月自然高 278 → 账本 290（表头取测试桩 28）")
 
-        // 编辑档：两栏都钉 448（视图声明的常量，2026-10-16 由 400 抬高），账本口径走真实换算 → 460。
-        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 448, "编辑档列高 = 448（视图声明）")
+        // 编辑档：两栏都钉 560（视图声明的常量，2026-10-21 由 448 抬高），账本口径走真实换算 → 572。
+        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 560, "编辑档列高 = 560（视图声明）")
         ledger.selectTab(PanelContentHeight.calendarEditorTab)
         XCTAssertEqual(ledger.activeTab, PanelContentHeight.calendarEditorTab)
         ledger.report(PanelAutoHeight.measuredContentHeight(
             naturalHeight: StandaloneCalendarView.editorPaneHeight, headerHeight: 28
         ), for: PanelContentHeight.calendarEditorTab)
-        XCTAssertEqual(ledger.current ?? 0, 460, accuracy: 1e-9,
-                       "编辑档：账本值 = measuredContentHeight(列高 448, 表头取测试桩 28) = 460")
+        XCTAssertEqual(ledger.current ?? 0, 572, accuracy: 1e-9,
+                       "编辑档：账本值 = measuredContentHeight(列高 560, 表头取测试桩 28) = 572")
         XCTAssertEqual(
-            PanelAutoHeight.panelHeight(contentHeight: 460, mode: PanelAutoHeight.modeAuto,
+            PanelAutoHeight.panelHeight(contentHeight: 572, mode: PanelAutoHeight.modeAuto,
                                         manualHeight: 682, screenVisibleHeight: nil),
-            500, accuracy: 1e-9,
-            "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 460 = 448 + 表头(测试桩 28) − 16"
-                + "；真机表头 32 → 真机面板 504（448 + 32 − 16 + 40）——抬高编辑器高度后（2026-10-16 方案一）"
-                + "面板比列表档那档高约 48pt（manual 档面板高由 openNotchHeight 决定）"
+            612, accuracy: 1e-9,
+            "auto 档：面板高 = 账本值 + homeVerticalPadding(40)；账本值 572 = 560 + 表头(测试桩 28) − 16"
+                + "；真机表头 32 → 真机面板 616（560 + 32 − 16 + 40）——2026-10-21 抬高原文/备注后"
+                + "面板比旧版高约 112pt（manual 档面板高由 openNotchHeight 决定）"
         )
 
-        // 切回列表档：读缓存一步回落（不是停在编辑档的 412）——失败信号「切回列表档后高度没回落」的反证。
+        // 切回列表档：读缓存一步回落（不是停在编辑档的 572）——失败信号「切回列表档后高度没回落」的反证。
         ledger.selectTab(CalendarModule.moduleID)
         XCTAssertEqual(ledger.current ?? 0, 290, accuracy: 1e-9,
-                       "切回列表档 → 回落当月自然高（编辑档的 460 不留在列表档）")
+                       "切回列表档 → 回落当月自然高（编辑档的 572 不留在列表档）")
 
         // 几何：编辑档挂进 `NSHostingView`——编辑区内容宽随宿主宽**线性**变化（左栏 260 与栏间距 12
         // 在两次里都固定）。**两个不同宿主宽**各挂一次，断言两次读数的差 = 宿主宽之差：
@@ -15810,10 +15939,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // 左栏 260 / 两栏 400 是 SwiftUI 原生视图（不是 NSView），按源码取证（派发片段裁决 7 允许的降级）。
         let source = try repositorySource("DynamicIsland/components/Calendar/DynamicIslandCalendar.swift")
         XCTAssertTrue(source.contains("static let editorSidebarWidth: CGFloat = 260"), "左栏宽 260")
-        XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 448"),
-                      "两栏高 448（2026-10-16 由 400 抬高，见设计图 F2 方案一）")
+        XCTAssertTrue(source.contains("static let editorPaneHeight: CGFloat = 560"),
+                      "两栏高 560（2026-10-21 由 448 抬高）")
         XCTAssertTrue(source.contains(".frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight"),
-                      "编辑档左栏钉宽 260 + 钉高 448")
+                      "编辑档左栏钉宽 260 + 钉高 560")
     }
 
     /// T3 / 失败信号反证：「选中日记录很多时编辑档自然高 > 400（左栏没钉高）」。
@@ -15901,8 +16030,8 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         XCTAssertEqual(fields[1], content, accuracy: 1.5, "「标题」整宽")
     }
 
-    /// V3 / D-04：备注有可见落点——编辑器住进带描边的框（白 18% 描边、圆角 6），空框时框内画占位文字
-    /// （复用 `calendar.panel.notes` 键，不新增本地化键）。
+    /// V3 / D-04：备注有可见落点——编辑器住进带描边的框（自适应底色 + 分隔线、圆角 6），空框时框内画占位文字
+    /// （复用 `calendar.panel.notes` 键，不新增本地化键）。2026-10-21：框高至少 4 行，浅色外观下也看得出边界。
     func testNotesEditorDrawsAVisibleBoxWithPlaceholderInsideIt() throws {
         let (session, manager) = editorSession(kind: .reminder, editing: false)
         let host = mountStandaloneCalendar(session: session, manager: manager, width: 887)
@@ -15914,14 +16043,18 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         // `NSColor.components` 在非 RGB 色彩空间下长度不定（灰阶只有 2 个）——先转 sRGB 再读分量。
         let border = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(box.layer?.borderColor))?
             .usingColorSpace(.sRGB))
-        XCTAssertEqual(Double(border.redComponent), 1, accuracy: 0.01)
-        XCTAssertEqual(Double(border.alphaComponent), 0.18, accuracy: 0.01,
-                       "描边是白 18%（设计值；浅到不抢内容、又看得出落点）")
-        // 框高 = 2 行（2026-10-16 上屏反馈第 7 条：3 → 2 行）：用布局管理器的行高**独立算**一遍。
+        XCTAssertGreaterThan(border.alphaComponent, 0.05, "描边可见（自适应分隔线，不再是白 18%）")
+        let fill = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(box.layer?.backgroundColor))?
+            .usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(fill.alphaComponent, 0.3,
+                             "框有可见底色，浅色外观下不会和背景融在一起")
+        // 框高：4 行是**下限**；有富余高度就铺满（2026-10-19 用户反馈「内容没有铺满剩余的高度、一大片留白」）。
         let lineHeight = try XCTUnwrap(notes.layoutManager).defaultLineHeight(
             for: try XCTUnwrap(notes.font))
-        XCTAssertEqual(box.frame.height, ceil(lineHeight) * 2 + 2 * notes.textContainerInset.height,
-                       accuracy: 0.5, "框高 = 2 行")
+        let fourLineHeight = ceil(lineHeight) * 4 + 2 * notes.textContainerInset.height
+        XCTAssertGreaterThanOrEqual(box.frame.height, fourLineHeight - 0.5, "框高至少 4 行")
+        XCTAssertGreaterThan(box.frame.height, fourLineHeight, "有富余高度时备注框要铺满，而不是固定 4 行")
+        let initialBoxHeight = box.frame.height
         XCTAssertTrue(notes.string.isEmpty)
         XCTAssertEqual(notes.placeholder, NSLocalizedString("calendar.panel.notes", comment: ""))
         // 生产形态：文档视图住在 clip view 里（不是裸放），纵向自增长只发生在框内。
@@ -15932,12 +16065,33 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         session.draft?.notes = (1...20).map { "第\($0)行" }.joined(separator: "\n")
         settle(host)
         XCTAssertEqual(try XCTUnwrap(notes.enclosingScrollView).frame.height,
-                       ceil(lineHeight) * 2 + 2 * notes.textContainerInset.height, accuracy: 0.5,
-                       "20 行备注也不能把框顶高")
+                       initialBoxHeight, accuracy: 0.5,
+                       "20 行备注也不能把框顶高（框高由剩余空间决定，内容在框内滚动）")
         XCTAssertGreaterThan(notes.frame.height, box.frame.height, "文档视图比框高 → 框内可滚动")
         XCTAssertEqual(box.hasVerticalScroller, true)
         XCTAssertEqual(host.fittingSize.height, pageHeightBefore, accuracy: 1,
                        "长内容不许把整页顶高（旧形态「编辑框随内容在页内长高」的护栏）")
+    }
+
+    /// 2026-10-19 用户反馈：新建默认应为「日程」（不是待办）；编辑既有记录也要能再次打开
+    /// 「用文字生成」做模型分析；两个大文本框吃剩余高度。源码级接线断言，行为用例在
+    /// `CalendarGenerationAndMeetingActionTests` / `CalendarQuickAddTests`。
+    func testCalendarAddDefaultsToEventAndEditKeepsGenerationControls() throws {
+        let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
+        XCTAssertTrue(
+            panel.contains("beginCreate(kind: .event, on: session.selectedDate, calendarID: manager.preferredEventCalendarID)"),
+            "新建默认日程"
+        )
+        XCTAssertFalse(
+            panel.contains("beginCreate(kind: .reminder, on: session.selectedDate"),
+            "新建不再默认待办"
+        )
+        XCTAssertFalse(
+            panel.contains("if draft.eventID == nil { generationControls(draft) }"),
+            "编辑档不再隐藏生成区"
+        )
+        XCTAssertTrue(panel.contains("generationControls(draft)"), "四种入口共用同一生成区")
+        XCTAssertTrue(panel.contains("fillsAvailableHeight: true"), "编辑页大文本框吃剩余高度")
     }
 
     // MARK: - T5（本轮 docs/49）：列表行整行点开详情浮层 + 行内编辑/删除（V7 / V8 / V9）
@@ -16359,8 +16513,9 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
 
         // ③ 失败行只剩两样：一行红字 + 「改为手工填写」；重试不再是独立入口。
         // 失败行（生成行下方那一条）只放「改为手工填写」一枚按钮。
+        // 原文框已从 2 行抬到 4 行，失败行随之下移；band 要覆盖整个生成区高度，不能只按旧 2 行算 60。
         let failureBand = NSRect(x: 0, y: slots[0].1.maxY + 1, width: slots[0].1.maxX + 76,
-                                 height: 60)
+                                 height: 140)
         let failureRowButtons = collectViews(host) { String(describing: type(of: $0)).contains("FocusRing") }
             .map { $0.convert($0.bounds, to: host) }
             .filter { $0.intersects(failureBand) }
@@ -16387,23 +16542,22 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         XCTAssertTrue(panel.contains("VStack(alignment: .leading, spacing: 8)"), "编辑页行距 = 8（D-17）")
         // 挂载用的宿主高就是编辑档高（`mountStandaloneCalendar` 按它钉框），所以这里断言**声明**本身：
-        // 2026-10-16 由 400 抬到 448（设计图 F2 方案一），页面的自然高口径见 `PanelAutoHeightTests`。
-        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 448, "编辑档高 = 448")
+        // 2026-10-21 由 448 抬到 560（原文/备注各 4 行），页面的自然高口径见 `PanelAutoHeightTests`。
+        XCTAssertEqual(StandaloneCalendarView.editorPaneHeight, 560, "编辑档高 = 560")
 
         let notes = try XCTUnwrap(notesEditors(in: host).first)
         let box = try XCTUnwrap(notes.enclosingScrollView)
         let region = try XCTUnwrap(formRegion(in: host), "找不到表单可视区（页级滚动视图）")
         let content = box.convert(box.bounds, to: host).maxY - region.minY
         XCTAssertLessThanOrEqual(content, StandaloneCalendarView.editorPaneHeight,
-                                 "表单内容高 \(content) 必须 ≤ 编辑档自然高 400")
-        // 2026-10-16 起**待办表单连可视区也放得下**（大文本框 2 行 + 行距 7）→ 恢复严格断言：
-        // 面板不该再为待办表单冒出一条滚动条（日程多一行「地点｜链接」，仍会滚，见 docs/49 已知限制）。
+                                 "表单内容高 \(content) 必须 ≤ 编辑档自然高 560")
+        // 2026-10-21 起原文/备注各 4 行，待办与日程都应落在可视区之内。
         XCTAssertLessThanOrEqual(content, region.height,
                                  "新建待办表单 \(content) 必须落在可视区 \(region.height) 之内")
         print("校准读数：新建待办表单内容高 \(content)，可视区 \(region.height) → 差额 \(content - region.height)")
 
-        // 同一把尺子量**日程**（多一行「地点｜链接」，是这次抬高编辑档的理由）：
-        // 2026-10-16 方案一把编辑档 400 → 448，日程表单因此也一屏放完（改前 378 > 336 会出滚动条）。
+        // 同一把尺子量**日程**（多一行「地点｜链接」）：
+        // 2026-10-21 方案一把编辑档 448 → 560，原文/备注各 4 行后仍应一屏放完。
         let (eventSession, eventManager) = editorSession(kind: .event, editing: false)
         let eventHost = mountStandaloneCalendar(session: eventSession, manager: eventManager, width: 887)
         settle(eventHost)

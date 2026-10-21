@@ -424,6 +424,28 @@ struct HomeTodayBand: View {
             .fill(.white.opacity(HomeTodayBandLayout.datePillFill)))
     }
 
+    /// 今天带右端的「新增」入口：直接切到日历面板的新建页（默认日程，可在页内切换待办）。
+    private var addButton: some View {
+        Button {
+            let today = Date()
+            let session = CalendarPanelSession.shared
+            session.selectedDate = Calendar.autoupdatingCurrent.startOfDay(for: today)
+            session.beginCreate(kind: .event, on: today,
+                                calendarID: CalendarManager.shared.preferredEventCalendarID)
+            DynamicIslandViewCoordinator.shared.selectModule(CalendarModule.moduleID)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.78))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(Text("calendar.quickAdd.addNew"))
+        .accessibilityLabel(Text("calendar.quickAdd.addNew"))
+        .accessibilityIdentifier("home-calendar-add")
+    }
+
     /// 段③：本月 / 本季 / 今年剩——也是胶囊（最浅的一档底），文字最弱但要读得清。
     private func workdaySegment(now: Date) -> some View {
         Text(WorkdayRemainderLine.text(now: now))
@@ -512,6 +534,7 @@ struct HomeTodayBand: View {
             nextSegment(pick: pick)
             Spacer(minLength: 0)
             workdaySegment(now: now)
+            addButton
         }
         .frame(height: HomeTodayBandLayout.nextLineHeight)
         // 内容左缘与块的**内容左缘**对齐（块的内容内缩 5 + 板 = 块框，见 `HomeBlockChrome`）。

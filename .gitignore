@@ -40,10 +40,15 @@ Package.resolved
 *.local.json
 secrets/
 config.local.json
+# 运行时 AI 凭据（Application Support 目录与单条 .key；永不入库）
+AICredentials/
+*.key
 
-# 临时产物
+# 临时产物 / 本地交付记录 / 编译采样
 /tmp/
 *.log
+.delivery/
+*.profraw
 
 # ---------------------------------------------------------------------
 # 二、上游 Atoll 规则（原样保留）

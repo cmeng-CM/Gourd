@@ -43,10 +43,14 @@
 //     否则同样输入的输出顺序取决于文件系统枚举顺序，界面上会看到随机跳动。
 //
 //  p7 追加一层（`LauncherPartition` / `LauncherQuickDrop`，docs/31 §接口与数据形状 2）：
-//  **上区（快捷启动）的顺序 = 固定先后**（`pinnedIDs` 的表序），**不**用 rank 序——上区只回答
-//  「我固定的先后」，Spotlight 数据与下区的重排都影响不到它。`rank` 的「固定项恒在前」服务的是
+//  **上区（快捷启动）的顺序 = 固定先后**（`pinnedIDs` 的表序，2026-10-19 起可在上区拖动重排），
+//  **不**用 rank 序——上区只回答「我固定的先后」，Spotlight 数据与下区的重排都影响不到它。`rank` 的「固定项恒在前」服务的是
 //  「固定项还混在网格里」时的旧行为（下区如今由分区剔除固定项），是另一件事：分区在 `rank`
 //  之外另起一层，`rank` 的既有语义一行不改。两区都是纯函数：不读 `Defaults`、不落盘。
+//
+//  2026-10-19 追加 `LauncherQuickReorder`：上区内部可**拖动排序**——落点仍是那张
+//  `pinnedIDs` 表（顺序即用户看到的顺序），因此不新增第二份状态；纯函数只算新表，落盘仍走
+//  `LauncherPins`。方向判定见 `moving(_:onto:in:)` 的注释。
 //
 
 import Foundation
@@ -181,5 +185,50 @@ enum LauncherQuickDrop {
             guard LauncherPinning.isPinned(draggedID, in: pinnedIDs) else { return nil }
             return LauncherPinning.removing(draggedID, from: pinnedIDs)
         }
+    }
+}
+
+// MARK: - 启动台上区手动排序
+
+/// 上区「快捷启动」内部的**拖动排序**（2026-10-19 用户要求）。
+///
+/// 数据仍是同一张 `pinnedIDs` 表：上区的显示顺序 = 表序，手动排序 = 改表序，
+/// 因此不需要第二份「顺序」状态，也不会出现「屏幕上一套、盘上另一套」。
+///
+/// 纯函数、不落盘：只回答「这次拖动等价于哪张新表」，写入由 `LauncherStore.reorder`
+/// 经 `LauncherPins.move` 完成（先落盘再刷新，与固定 / 取消固定同一条接缝）。
+enum LauncherQuickReorder {
+
+    /// 把 `draggedID` 挪到 `targetID` 的位置，返回新表；**nil = 不写盘**。
+    ///
+    /// **方向**（拖拽项当前在目标之前 / 之后决定落点在目标之后 / 之前）：
+    /// - 拖拽项在目标**之前** → 落在目标**之后**（往后拖一格就是互换，拖到最后一项 = 移到表尾；
+    ///   否则永远「差一格」，把首项拖到末项会停在倒数第二位）；
+    /// - 拖拽项在目标**之后** → 落在目标**之前**（往前拖同理：拖到首项 = 移到表首）。
+    ///
+    /// 这等价于「占目标那一格」：相邻两项双向拖动都是互换，非相邻拖动落在目标的近侧。
+    ///
+    /// 返回 nil 的四种（与 `LauncherQuickDrop.resolve` 同口径的 no-op）：
+    /// 拖拽项与目标相同；拖拽项不在表里（未固定 / 外来 id）；目标不在表里；挪完与挪前相同。
+    /// 同 id 的脏数据（手改 `UserDefaults` 塞重复项）一并清掉、只留一份——与
+    /// `LauncherPinning.removing` 的重复项口径一致。
+    static func moving(_ draggedID: String, onto targetID: String,
+                       in pinnedIDs: [String]) -> [String]? {
+        guard draggedID != targetID,
+              let draggedIndex = pinnedIDs.firstIndex(of: draggedID),
+              let targetIndex = pinnedIDs.firstIndex(of: targetID)
+        else { return nil }
+
+        // 先移除拖拽项（连同重复项），再在**剩下的表**里找目标：目标的下标因此不会因移除而错位。
+        let remaining = pinnedIDs.filter { $0 != draggedID }
+        guard let targetIndexInRemaining = remaining.firstIndex(of: targetID) else { return nil }
+
+        let insertIndex = draggedIndex < targetIndex
+            ? targetIndexInRemaining + 1   // 往后拖：落在目标之后
+            : targetIndexInRemaining       // 往前拖：落在目标之前
+        var updated = remaining
+        updated.insert(draggedID, at: insertIndex)
+
+        return updated == pinnedIDs ? nil : updated
     }
 }

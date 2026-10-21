@@ -38,6 +38,8 @@ flowchart LR
 
 独立设置「AI 模型」管理连接配置、协议、Base URL、模型 ID、文本/视觉能力与默认模型。提供 OpenAI compatible、Anthropic、Gemini、Ollama 协议适配；协议不等于厂商。多个配置互不覆盖。新密钥只写 Keychain，配置只保存引用；测试连接使用当前表单快照，成功不自动保存。屏幕助手既有 Defaults 密钥和模型选择完全不迁移。
 
+> **2026-10-21 更新**：AI API Key 已改为应用运行时文件存储（Application Support，0700/0600），不再写 Keychain；见文末同日小节。
+
 AIHandle 只暴露请求/响应及错误，不暴露密钥。默认模型缺失、能力不匹配、非法端点、响应格式异常均返回可读错误。无自动重试、无工具执行；每个请求独立取消。设置和日历分别消费同一服务，其他内置模块经 ModuleContext.ai 获得接口；不扩展第三方插件 RPC 或新增隐式权限。
 
 ### 2. 原文输入与草稿状态
@@ -132,6 +134,8 @@ stateDiagram-v2
 保存延续 EventKit 重新读取及个人可写记录限制，不增加重复会议或他人组织会议的编辑权限。提醒 dueDateComponents 使用完整时分或明确 date-only，不偷偷丢掉已解析时间。
 
 编辑页日期控件与全天转换使用草稿来源 calendar/timeZone，和保存校验一致。提醒时刻按秒精度验证 DateComponents 读回：不能保全绝对时刻时拒绝保存并保留草稿，不用固定偏移悄悄替换来源 IANA 标识。
+
+> **2026-10-21 更新**：日程解析已改为模型直出规范字段，下列 `dateEvidence/startEvidence/endEvidence` 契约与 D-15 的原文证据硬校验不再适用；见文末同日小节。会议链接的来源校验继续有效。
 
 解析 JSON 必须且只能含 `title/date/dateEvidence/start/startEvidence/end/endEvidence/isAllDay/location/notes/url/timeZoneIdentifier`；缺值为 null，日期为 YYYY-MM-DD，时刻为 HH:mm 或 HH:mm:ss，证据是原文连续片段。不能仅凭模型选中的局部证据消除原文其他日期或时间提示；来源日期须严格回读校验，不能由 Foundation 进位。相对日和本周规则先在请求参考时区求年月日，再于日程来源时区构造该自然日。候选起止共同确定后，使用与选中证据相同的 `timeHints` 词法核对全文时刻：保留 range 的时段继承和 GMT/UTC 偏移排除，不能由模型选择或「改到」措辞推断旧提示已被废弃。任何无法解释或不等于候选起止的独立时刻保留 `.time` 确认；合法两个独立起止不会额外确认，邀请中的日期、会议号和电话沿既有词法处理。证据不足或范围遗漏保留确认；只有原文确实缺结束时间才使用一小时默认。
 
@@ -307,3 +311,28 @@ T7 界面边界：会议操作菜单可提前查看候选、复制或点击 AI �
 T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全文、备注首段与末尾及原文/备注实际输入；它使用本日研究Debug支撑依赖，隔离VM/生命周期，不能当作实际ContentView完整验收。T2新完整门attempt `20261014T110220-86f83961f6a1436a97866a52ca3e4750` 已succeeded：830个XCTest实际执行且0失败/0跳过、Python11例、十阶段均0，原生8例与布局3例各方法实际通过一次。本次宿主前后Pear均false。新Debug最终68图已有根控制器代表28图摘要绑定；独立复审核实全部68图SHA与已实看图一致，并核新Debug产品、本地化与几何。安装前整体终审对 `417a7ee7..ea332b64` 给出Ready=Yes且0/0/0，随后本轮重新安装已完成。原四类别安装后人工确认、真实入会/模型/系统写入项仍未完成，安装事实不替代它们。
 
 安装与实际启动：控制器证据绑定同一成功attempt，七个安装checks严格true、六命令退出0；源产物前后与proof一致，安装包deep/strict和Gourd Local签名通过，Info仅Name更名、资源/链接/模式与临时去签名执行文件相同。installed snapshot digest为 `c80c17e6797efe280079497bd0a1e85567daad39c1a0c51ba3aed359f70c0c98`。kernel ps核旧PID57700退出，新PID6883于2026-10-14 11:20:35启动，实际路径 `/Applications/壶中天.app/Contents/MacOS/Gourd`。本次只回写文档，仍待同一整体审查者核安装/文档差量并重绑最终JSON，以及最终engine verify/close；没有因文档变化重跑宿主或页面图，人工四项仍未完成。
+
+## 2026-10-19 凭据读取修复（用户反馈）
+
+旧凭据条目创建于 2026-10-14，由当时的构建写入 legacy Keychain；ACL 不认当前 /Applications 构建，导致每次「生成」都弹钥匙串授权。修复：AIKeychainSecretStore 服务升至 com.cmeng.gourd.ai.credentials.v2，新增 AIMigratingSecretStore 在首次读取时把 v1 值复制到 v2（旧条目保留可回滚），并按会话缓存凭据；write 只写 v2，delete 两代一起删。升级后第一次生成可能仍提示一次，允许后不再提示；重新保存一次密钥可直接写 v2、完全避开旧条目。详见 [54-calendar-editor-feedback-and-keychain-migration.md](54-calendar-editor-feedback-and-keychain-migration.md)。
+
+## 2026-10-21 日程解析改为模型直出规范字段（用户反馈）
+
+用户反馈两点：① 不能要求用户输入的数据格式百分百 OK，原文可以交给模型，让模型输出正确格式，代码不应再按原文语法硬校验；② 这类日程语义解析不需要思考模式，模型思考让返回变慢。
+
+**解析契约**：模型收到任意原文与参考时刻/时区，直接返回规范字段 `title/date/start/end/isAllDay/location/notes/url/timeZoneIdentifier/needsDateConfirmation/needsTimeConfirmation`；日期 YYYY-MM-DD，时刻 HH:mm 或 HH:mm:ss，时区 IANA。相对日期由模型按参考时刻/参考时区解析；不确定时用两个 needs*Confirmation 布尔量表达，应用只映射为既有 `.date/.time` 确认项。
+
+**应用只做结构校验**：日期/时刻范围、`end > start`、全天必须有日期、时区有效；不再要求或重新解析原文证据（旧 `dateEvidence/startEvidence/endEvidence` 字段删除）。已知会议链接仍必须来自原文，普通链接只做结构校验；显式 GMT/UTC 与返回时区冲突、模型改了来源时区但原文没有依据、全天但原文没有「全天」时，降级为日期/时间确认，不整单失败。
+
+**思考关闭**：日程请求带 `disablesReasoning: true`；OpenAI 兼容且 host/model 明确指向 DeepSeek 时发送 `thinking: {"type": "disabled"}`（DeepSeek 默认开启思考，见 <https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/>）。其他兼容端点不发送该私有字段；Anthropic 等默认不启用思考的协议保持不变。日程输出上限从 2048 收到 800 tokens。
+
+**取舍**：原文证据硬校验曾用于防模型编造时间；现在由模型直出规范值 + needs*Confirmation + 结构校验承担。代价是模型若把歧义标成 exact，应用不会再从原文反证；换来任意标点、空格、中文数词、会议 ID 混排都不再导致整单失败。已知限制与旧版相同：无法表示的跨夜/结束早于开始的时刻仍要求手工修改。
+
+## 2026-10-21 AI 凭据改为应用数据文件（用户决定）
+
+用户明确：模型连接信息配置在应用里，不应每次生成都向钥匙串要权限；选择把 API Key 存到应用自己的运行时目录。
+
+- 新增 `AIFileSecretStore`：`~/Library/Application Support/Gourd/AICredentials/<UUID>.key`，目录 0700、文件 0600；非秘密配置仍只存 UUID 引用。生产 `AIConfigurationStore(defaults:secretStore:)` 默认改用它。
+- 旧 Keychain v1/v2 **不再读取**；生产路径不调用 `AIKeychainSecretStore.read` / `AIMigratingSecretStore`，两者只保留为历史回归。升级后第一次生成会提示“未配置凭据”，在设置里重新输入一次即可。
+- 安全取舍：文件是明文、本机用户可读，弱于 Keychain。为此 `AGENTS.md` 增加不可协商红线：密钥不得进入仓库、提交、PR、截图、日志、测试夹具、文档、App 包、DMG 或发布资产；`tools/build.sh` 打包前扫描当前凭据内容，发现即中止。
+- 引导：升级后如果第一次生成提示“未配置凭据”，在「设置 → 集成 → AI 模型」重新输入一次 API Key 即可，之后不会再有任何钥匙串弹框。

@@ -1263,7 +1263,7 @@ struct MonthGridView: View {
 ///   取数与卡片沿用既有口径（`CalendarEventFilters.filtered` + `CalendarEventCardList.ordered`），
 ///   **不新造取数路径**；日程卡只读（`detailEnabled: false`），提醒卡的勾选走**既有写回链路**
 ///   （`manager.setReminderCompleted`，与 `CalendarEventCardList.cardBody` 同款）。
-/// - **定高 + 内滚**：高度由宿主钉成 `editorPaneHeight`（448）+ `.clipped()` 兜底，清单条目再多也在
+/// - **定高 + 内滚**：高度由宿主钉成 `editorPaneHeight`（560）+ `.clipped()` 兜底，清单条目再多也在
 ///   **栏内**滚动，绝不顶高整页理想高（那是「面板跟着内容长」的反馈环）。
 /// - **回到月历**：顶部的按钮走 `session.showList(on:)` 把路由切回列表档（面板高随之回落到当月自然高）。
 struct CalendarEditorSidebar: View {
@@ -1390,18 +1390,13 @@ struct StandaloneCalendarView: View {
     static let editorSidebarWidth: CGFloat = 260
 
     /// **编辑档两栏的高度**（T3 / docs/48 D-07）：由**内容**声明、不由备注字数算（那是「打字时面板
-    /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它 → 这一页的自然高即 400。**auto 档**：
-    /// 账本值 = 400 + 表头 − 16，面板高 = 账本值 + `homeVerticalPadding`(40)；表头 =
-    /// `max(24, effectiveClosedNotchHeight)`（测试桩 28 → 452；真机 32 → 456 = 400 + 32 − 16 + 40），
-    /// 设计图 ⑤ 的 474 = 456 + `notchShadowPaddingStandard`(18)（窗口高 = 可见黑框 + 阴影带）。
-    /// **manual 档**：面板高由 `openNotchHeight` 决定。
-    /// 编辑档两栏的高度（2026-10-16：400 → **448**，用户按设计图 F2「方案一」拍板）。
-    ///
-    /// 为什么抬：可视区 = 高度 − 表头 30 − 底部动作 34；400 时只剩 336，而 +3 号字号下
-    /// **新建日程**的表单要高 378（多一行「地点｜链接」），于是面板右侧冒出一条滚动条。
-    /// 448 → 可视区 384：待办 330 / 日程 378 / 编辑 283 三种入口都一屏放完。
-    /// 代价（已知）：编辑档的面板高从 456 变 504——比列表档高约 48pt，切页时面板会变高。
-    static let editorPaneHeight: CGFloat = 448
+    /// 一格格长高」，用户 2026-10-14 明确否掉）。两栏都钉它。**auto 档**：
+    /// 账本值 = 高度 + 表头 − 16，面板高 = 账本值 + `homeVerticalPadding`(40)；表头 =
+    /// `max(24, effectiveClosedNotchHeight)`。**manual 档**：面板高由 `openNotchHeight` 决定。
+    /// 2026-10-21 用户反馈：原文/备注两个输入框太矮、面板整体不够高。448 → **560**：
+    /// 原文与备注各 4 行下限，富余高度继续由两者分；可视区约 496，日程/待办都不再冒滚动条。
+    /// 真机面板高约 616（560 + 32 − 16 + 40），比旧版高约 112pt。
+    static let editorPaneHeight: CGFloat = 560
 
     /// 视图持有的**显示日历**（周起点 = 周一，唯一落点 `Calendar.gourdDisplay`，docs/34 §做法 机制一）：
     /// 左栏高度（`monthGridHeight`）由它算；网格本体在 `MonthGridView` 里从同一枚取数。
@@ -1440,7 +1435,7 @@ struct StandaloneCalendarView: View {
         HStack(alignment: .top, spacing: Self.paneSpacing) {
             if session.route == .editor {
                 // **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
-                // 左栏**钉宽 260 + 钉高 448**（`editorPaneHeight`，与右栏同高）——条目再多也顶不高整页
+                // 左栏**钉宽 260 + 钉高 560**（`editorPaneHeight`，与右栏同高）——条目再多也顶不高整页
                 // 理想高（清单在栏内滚动，外面再 `.clipped()` 兜底：那是「面板跟着内容长」的反馈环）。
                 CalendarEditorSidebar(session: session, manager: calendarManager)
                     .frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight,
@@ -1483,7 +1478,7 @@ struct StandaloneCalendarView: View {
             }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 // 右栏拿**同一个高度**（宽度是剩下的 60%）：列表档 = `monthGridHeight`（事件列在里面滚动 / 裁剪）；
-                // 编辑档 = `editorPaneHeight`（448，与左栏同高）——它不参与「这一页要多高」，两档都由左栏
+                // 编辑档 = `editorPaneHeight`（560，与左栏同高）——它不参与「这一页要多高」，两档都由左栏
                 // 那个数定（旧结构正是靠 `paneHeight` 把它钉住的，T3 换成按档的自然高）。
                 .frame(height: session.route == .editor ? Self.editorPaneHeight : monthGridHeight,
                        alignment: .topLeading)

@@ -45,14 +45,19 @@ public struct AIRequest: Equatable, Sendable {
     public let profileID: UUID?
     public let requiredCapability: AICapability
     public let maxOutputTokens: Int
+    /// 结构化/短输出请求可以关掉供应商的思考模式，避免等待思维链。
+    /// 具体是否生效由协议适配器与端点能力决定；默认不改变既有调用。
+    public let disablesReasoning: Bool
 
     public init(purpose: String, messages: [AIMessage], profileID: UUID? = nil,
-                requiredCapability: AICapability = .text, maxOutputTokens: Int = 2048) {
+                requiredCapability: AICapability = .text, maxOutputTokens: Int = 2048,
+                disablesReasoning: Bool = false) {
         self.purpose = purpose
         self.messages = messages
         self.profileID = profileID
         self.requiredCapability = requiredCapability
         self.maxOutputTokens = maxOutputTokens
+        self.disablesReasoning = disablesReasoning
     }
 }
 

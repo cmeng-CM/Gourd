@@ -11,6 +11,7 @@ import SwiftUI
 enum CalendarMeetingEvidence {
     static func resolve(textFields: [String], structuredURLs: [URL] = []) -> [MeetingJoinTarget] {
         let resolver = MeetingLinkResolver()
+        let hint = MeetingLinkResolver.providerHint(in: textFields)
         let patterns = [
             #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"“”]+"#,
             #"(?i)(?:#腾讯会议|腾讯会议|会议\s*(?:ID|号)|meeting\s*(?:ID|code))\s*[:：]\s*([0-9](?:[0-9 -]{3,18})[0-9])(?![0-9])"#
@@ -21,11 +22,11 @@ enum CalendarMeetingEvidence {
         func collect(_ raw: String) {
             guard raw.count <= MeetingLinkResolver.maximumSourceCharacters else { return }
             // Resolve the COMPLETE candidate first. The scanner never authorizes a prefix.
-            for target in resolver.resolve(text: raw) {
+            for target in resolver.resolve(text: raw, providerHint: hint) {
                 let values = (target.sourceURL == nil ? [] : [target.sourceText]) + target.meetingCodes.map(\.sourceText)
                 for value in values where seen.insert(value).inserted {
                     fragments.append(value)
-                    independentTargets += resolver.resolve(text: value)
+                    independentTargets += resolver.resolve(text: value, providerHint: hint)
                 }
             }
         }
@@ -43,7 +44,9 @@ enum CalendarMeetingEvidence {
         // Pair only when the COMPLETE evidence set fits the validator's input contract.
         // Splitting it into batches could wrongly make an ambiguous fallback look unique.
         let evidence = fragments.joined(separator: "\n")
-        if evidence.count <= MeetingLinkResolver.maximumSourceCharacters { return resolver.resolve(text: evidence) }
+        if evidence.count <= MeetingLinkResolver.maximumSourceCharacters {
+            return resolver.resolve(text: evidence, providerHint: hint)
+        }
         return independentTargets
     }
 }

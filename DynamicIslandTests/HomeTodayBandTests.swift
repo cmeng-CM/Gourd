@@ -94,6 +94,19 @@ final class HomeTodayBandTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(HomeTodayBandLayout.workdayOpacity, 0.5, "注脚也要读得清")
     }
 
+    /// 首页今天带右端的「新增」入口：直接切到日历面板的新建页（默认日程，页内可切待办）。
+    func testTodayBandExposesCalendarAddEntry() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("DynamicIsland/Host/HomeTodayBand.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("home-calendar-add"))
+        XCTAssertTrue(source.contains("calendar.quickAdd.addNew"))
+        XCTAssertTrue(source.contains("session.beginCreate(kind: .event"))
+        XCTAssertTrue(source.contains("CalendarManager.shared.preferredEventCalendarID"))
+        XCTAssertTrue(source.contains("selectModule(CalendarModule.moduleID)"))
+    }
+
     /// 固定日历：格里高利 + GMT + `en_US_POSIX`（构造夹具时刻的时区与语言都钉死，同文件其余日历用例同口径）。
     private func fixtureCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)

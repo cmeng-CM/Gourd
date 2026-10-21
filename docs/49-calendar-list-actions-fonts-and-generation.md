@@ -208,3 +208,18 @@ enum CalendarPanelRoute { case list, editor }                       // .detail �
 | D-34 | **编辑档高度 400 → 448**（设计图 F2「方案一」，用户 2026-10-16 拍板）：可视区 384 → 待办 330 / 日程 378（余 6）/ 编辑 283 三种入口都一屏放完；代价见已知限制（编辑档面板 456 → 504） | 用户（2026-10-16「按方案一进行」） |
 | D-35 | 备选**方案二**（大文本框 2 → 1 行 + 行距 6，面板高度不动）**不采用**：原文区只剩 1 行读不了、余量 1pt 会回退 | 用户（2026-10-16 选方案一） |
 | D-18 | 首页今日行的形态不动：会议入口仍是那枚 22×22 单图标（点 = 打开 / 复制、右键 = 操作项菜单），行内**不加** ✎ / 🗑（动作在浮窗里）；「打开 / 复制 两键 + ✎ + 🗑」只用于**面板列表行** | 用户（2026-10-15 指出设计图把它画成了两键） |
+
+## 2026-10-19 后续改判（用户四项反馈）
+
+- 大文本框不再固定 2 行：D-31 / D-34 的「2 行定高」被改为「2 行下限，有富余就铺满编辑档剩余高度」。CalendarGrowingTextEditor.fillsAvailableHeight + GeometryReader/minHeight 实现；内容超出仍在框内滚动，不顶高整页。
+- 编辑档也显示「用文字生成」：原来只在 draft.eventID == nil 时渲染的生成区改为四种入口都渲染；解析合并口径不变（只覆盖未改过的字段）。
+- 新建默认改为日程：列表「+」入口从 .reminder 改为 .event，分段控件仍可切换待办。
+- 详细实施与测试见 [54-calendar-editor-feedback-and-keychain-migration.md](54-calendar-editor-feedback-and-keychain-migration.md)。
+
+## 2026-10-21 编辑页输入框与高度（用户反馈）
+
+- 原文区去掉可见「用文字生成」标签；输入框改用**标题输入框同款的实心输入框**（`textBackgroundColor` 底 + `labelColor` 28% 描边，聚焦时 `controlAccentColor`），文字/占位/光标改用 `labelColor` / `secondaryLabelColor`——浅色外观下不再是白字压在灰底上，空框也看得出边界。
+- 点击文本视图时显式 `makeFirstResponder`，避免非激活面板里按键落到日期选择器；`typingAttributes` 同步为标签色，键入不再出现不可见文字。
+- `updateNSView` / `textDidChange` 在 `hasMarkedText()` 期间不重置、不写回绑定，避免拼音/注音组字被 SwiftUI 回写打断（只剩已提交数字的现象）。
+- 原文与备注最低 **4 行**（`fillsAvailableHeight` 仍可继续铺满），编辑档两栏高 448 → **560**；auto 档面板约 616（560 + 32 − 16 + 40）。
+- 待办/日程共用同一个 `editorPage`，两项同时生效。

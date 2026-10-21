@@ -73,6 +73,12 @@ enum AIWireAdapter {
                         }
                         return ["role": message.role.rawValue, "content": content]
                     }]
+            // DeepSeek 的思考模式默认打开；结构化短输出显式关闭，见
+            // https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/ 。只对 DeepSeek
+            // 端点发该字段，避免把供应商私有参数发给严格的 OpenAI 兼容实现。
+            if request.disablesReasoning, Self.supportsThinkingSwitch(profile) {
+                body["thinking"] = ["type": "disabled"]
+            }
             if let apiKey, !apiKey.isEmpty { http.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         case .anthropic:
             guard let apiKey, !apiKey.isEmpty else { throw AIError.missingCredential }
@@ -117,6 +123,15 @@ enum AIWireAdapter {
         do { http.httpBody = try JSONSerialization.data(withJSONObject: body) }
         catch { throw AIError.invalidRequest }
         return http
+    }
+
+    /// thinking 是 DeepSeek 的 OpenAI 兼容扩展；其他兼容端点未必接受未知字段，
+    /// 因此只在 host 或模型名能明确指向 DeepSeek 时发送。
+    static func supportsThinkingSwitch(_ profile: AIModelProfile) -> Bool {
+        guard profile.apiProtocol == .openAICompatible else { return false }
+        let host = URLComponents(string: profile.baseURL)?.host?.lowercased() ?? ""
+        return host == "api.deepseek.com" || host.hasSuffix(".deepseek.com")
+            || profile.modelID.lowercased().hasPrefix("deepseek")
     }
 
     static func response(_ data: Data, protocol apiProtocol: AIProtocol) throws -> AIResponse {

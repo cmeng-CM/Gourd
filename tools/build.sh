@@ -90,6 +90,39 @@ verify_signature() {
   fi
 }
 
+# 发布门禁三：运行期 AI 凭据不得进入 App 包。凭据在用户 Application Support 里，
+# 正常构建不会带进去；这里把本机每个 .key 当固定字符串扫一遍，发现即中止。
+verify_no_credentials() {
+  target="$1"
+  cred_dir="$HOME/Library/Application Support/Gourd/AICredentials"
+  if [ ! -d "$cred_dir" ]; then
+    echo "密钥扫描：未发现本机凭据目录，跳过"
+    return 0
+  fi
+  count=0
+  for file in "$cred_dir"/*.key; do
+    [ -f "$file" ] || continue
+    [ -s "$file" ] || continue
+    count=$((count + 1))
+    set +e
+    grep -R -F -q -f "$file" "$target" 2>/dev/null
+    rc=$?
+    set -e
+    case "$rc" in
+      0)
+        echo "中止：$target 内发现本机 AI 凭据内容（$file）；拒绝打包/安装。"
+        exit 1
+        ;;
+      1) ;;
+      *)
+        echo "中止：密钥扫描失败（grep 退出码 $rc）——请人工核对 $target。"
+        exit 1
+        ;;
+    esac
+  done
+  echo "密钥扫描：$count 个本机凭据均未出现在 $target 内"
+}
+
 xcodebuild build \
   -project DynamicIsland.xcodeproj \
   -scheme DynamicIsland \
@@ -106,6 +139,7 @@ echo "===== 产物 ====="
 echo "$app"
 plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist"
 plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
+verify_no_credentials "$app"
 
 if [ "$do_install" = true ]; then
   # 同名应用会抢刘海位，先退出正在运行的实例（按 bundle id，两个配置都试）
@@ -161,6 +195,7 @@ if [ "$do_dmg" = true ]; then
   stage="$(mktemp -d)"
   ditto "$app" "$stage/壶中天.app"
   stamp_product_name "$stage/壶中天.app"
+  verify_no_credentials "$stage/壶中天.app"
   verify_signature "$stage/壶中天.app"
   ln -s /Applications "$stage/Applications"
   rm -f "$out/Gourd-$ver.dmg"

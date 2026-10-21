@@ -47,7 +47,8 @@
 //    = §改动点设计 3；
 //  - 排序接入：先按名称（空 `usage`）立即渲染，Spotlight 回来再重排 = §改动点设计 4；
 //  - 两区（p7 / T5，docs/31-home-workday-launcher.md §接口与数据形状 2/6）：上区「快捷启动」=
-//    固定项（顺序 = **固定先后**，`LauncherPartition.split` 现算），下区 = 排名剔除固定项后过搜索；
+//    固定项（顺序 = **固定先后**，`LauncherPartition.split` 现算；2026-10-19 起可在区内拖动重排），
+//    下区 = 排名剔除固定项后过搜索；
 //    拖上 = 固定、拖下 = 取消固定，与右键菜单**共用 `LauncherPins` 唯一接缝**（先落盘再刷新、幂等）。
 //
 //  文案走 Localizable key（06 §3.3 R5）：`module.launcher.name` / `.summary` /
@@ -115,8 +116,8 @@ enum LauncherPinning {
 
     /// 固定：追加到**表尾**。已在表里 → 原样返回（幂等，不产生重复项）。
     ///
-    /// 顺序（表尾追加）本身不影响排序——`LauncherRanking.rank` 只把这张表当集合用；
-    /// 保留动作顺序是为了让盘上的值与用户的操作顺序一致（将来若做"固定项按固定先后排"不必迁移数据）。
+    /// 表序就是上区显示顺序（2026-10-19 起可拖动重排，`LauncherQuickReorder` 直接改写它）；
+    /// `LauncherRanking.rank` 只把这张表当集合用，因此表序不影响下区排序。
     static func adding(_ id: String, to pinned: [String]) -> [String] {
         guard !pinned.contains(id) else { return pinned }
         return pinned + [id]
@@ -170,6 +171,15 @@ struct LauncherPins {
     /// 取反（右键菜单走它）。返回落盘后的表。
     @discardableResult
     func toggle(_ id: String) -> [String] { update { LauncherPinning.toggled(id, in: $0) } }
+
+    /// 上区内部拖动排序（2026-10-19）：把 `id` 挪到 `targetID` 的位置。返回落盘后的表。
+    ///
+    /// 方向判定与脏数据清理在纯函数 `LauncherQuickReorder.moving`（返回 nil = no-op）；
+    /// 落到这里仍是「读 → 改 → 落盘 → 返回」，因此挪到原位 / 未知 id 都不会产生多余的写盘。
+    @discardableResult
+    func move(_ id: String, onto targetID: String) -> [String] {
+        update { LauncherQuickReorder.moving(id, onto: targetID, in: $0) ?? $0 }
+    }
 
     /// 读 → 改 → 落盘 → 返回。**表没变就不写**：重复固定 / 重复取消不该产生一次多余的写盘
     /// （幂等的另一半——表不变，盘也就不动）。
@@ -386,7 +396,7 @@ final class LauncherStore: ObservableObject {
         LauncherRanking.rank(apps, pinned: pinned, usage: usage)
     }
 
-    /// 上区「快捷启动」：固定项，顺序 = **固定先后**（`pinnedApps` 表序）；本次扫描里不存在的
+    /// 上区「快捷启动」：固定项，顺序 = **固定先后**（`pinnedApps` 表序，可拖动重排）；本次扫描里不存在的
     /// 固定 id 由 `split` 丢掉。上区**不受搜索影响**（搜索是找未固定应用的主路径，D-15）。
     var quickApps: [LauncherApp] { partition.quick }
 
@@ -527,6 +537,18 @@ final class LauncherStore: ObservableObject {
         let updated = pins.unpin(app.id)
         pinned = updated
         logger.info("取消固定：\(app.name)（\(app.id)），现有固定项 \(updated.count) 个")
+    }
+
+    /// 上区内部拖动排序（2026-10-19）：把 `app` 挪到 `target` 的位置。
+    ///
+    /// 与固定 / 取消固定同一条接缝（`LauncherPins.move`，**先落盘再刷新**）；方向与 no-op
+    /// 判定全在纯函数 `LauncherQuickReorder` 里，这里只负责「盘上改了才换内存值」——
+    /// 拖回原位 / 拖到未知项时表不变，`@Published pinned` 也不发一声多余的通知。
+    func reorder(_ app: LauncherApp, onto target: LauncherApp) {
+        let updated = pins.move(app.id, onto: target.id)
+        guard updated != pinned else { return }
+        pinned = updated
+        logger.info("重排：\(app.name)（\(app.id)）→ \(target.name) 的位置，现有固定项 \(updated.count) 个")
     }
 
     /// 点图标：启动 App → **收起面板**（与待办 / 通知同口径：动作完成即收起，不要求用户再按一次）。
@@ -731,8 +753,9 @@ final class LauncherModule: GourdModule {
 
 /// 展开面板的启动台（本批唯一的 surface）：**顶部搜索框 + 上下两区**（p7 / T5）。
 ///
-/// - **上区「快捷启动」**：固定项（顺序 = 固定先后），小标题 + 网格或空态虚线提示格；
-///   常驻、**不受搜索影响**（上区是「固定」语义，D-15）；是拖放的接收容器 → `store.pin`。
+/// - **上区「快捷启动」**：固定项（顺序 = 固定先后，可拖动重排），小标题 + 网格或空态虚线提示格；
+///   常驻、**不受搜索影响**（上区是「固定」语义，D-15）；是拖放的接收容器 → `store.pin`；
+///   区内还可**拖动排序**（落到某一格 = 挪到那一格，`store.reorder`，2026-10-19）。
 /// - **下区**：现有应用网格，数据源 = `LauncherRanking.filter(store.gridApps, query:)`
 ///   （排名剔除固定项后再过搜索）；搜索无命中**只替换这一区**；同样是拖放接收容器 → `store.unpin`。
 /// - `isScanning` / `apps.isEmpty` 走既有整页占位、**不画上区**（扫不到应用时提示格是空承诺）。
@@ -756,6 +779,9 @@ private struct LauncherModuleView: View {
     @State private var query = ""
     /// 上区是不是拖拽会话当前悬停的目标（上区高亮的唯一来源）。
     @State private var isQuickTargeted = false
+    /// 本次拖拽的应用 id（起拖时记、`endDragSuppression` 清）。只用于一件事：
+    /// 拖的是**上区已固定项**时不上整区高亮（那是「拖进来固定」的提示），改由目标格子的描边反馈。
+    @State private var draggedAppID: String?
     /// 面板内拖拽的**自动收起抑制令牌**（挂载见 `dragItem(for:)`，释放见 `endDragSuppression`）。
     @State private var dragSuppressionToken: UUID?
     /// 抑制看门狗的**代数**（每次起拖自增；看门狗只在「自己仍是最新那一代」时才有权释放）。
@@ -780,6 +806,13 @@ private struct LauncherModuleView: View {
     /// 下区的内容：排名剔除固定项后，再过搜索（上区不受搜索影响，见 `quickSection`）。
     private var visibleGridApps: [LauncherApp] {
         LauncherRanking.filter(store.gridApps, query: query)
+    }
+
+    /// 这次拖拽的起点是不是上区的一项（已固定）。是 → 整区高亮让位给目标格子的描边：
+    /// 用户在上区内部排序时，「拖到这里固定」的整区提示是错的语义。
+    private var isReorderingQuick: Bool {
+        guard let draggedAppID else { return false }
+        return LauncherPinning.isPinned(draggedAppID, in: store.pinned)
     }
 
     var body: some View {
@@ -825,6 +858,7 @@ private struct LauncherModuleView: View {
     ///
     /// 空时一枚虚线提示格（「将应用拖到这里固定」）——拖拽的可发现性全靠它。整区是拖放接收容器：
     /// 拖拽会话悬停时叠一层 0.06 白高亮（`isTargeted`），落点判定交给 `LauncherQuickDrop.resolve`。
+    /// 区内排序时整区高亮让位（`isReorderingQuick`），由目标格子的描边回答「落在哪一格」。
     private var quickSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(LocalizedStringKey("module.launcher.quickLaunch"))
@@ -839,14 +873,18 @@ private struct LauncherModuleView: View {
                     spacing: metrics.itemSpacing
                 ) {
                     ForEach(store.quickApps) { app in
-                        LauncherGridCell(
+                        // 上区格子多一层排序落点：把同区另一个固定项拖到它上面即换位。
+                        LauncherQuickCell(
                             app: app,
                             icon: icons.icon(for: app),
                             metrics: metrics,
                             isPinned: LauncherPinning.isPinned(app.id, in: store.pinned),
                             dragItem: { dragItem(for: app) },
                             onLaunch: { store.launch(app) },
-                            onTogglePin: { store.togglePin(app) }
+                            onTogglePin: { store.togglePin(app) },
+                            onDrop: { providers in
+                                handleDrop(providers, target: .quick, onto: app.id)
+                            }
                         )
                     }
                 }
@@ -858,7 +896,7 @@ private struct LauncherModuleView: View {
             handleDrop(providers, target: .quick)
         }
         .overlay {
-            if isQuickTargeted {
+            if isQuickTargeted, !isReorderingQuick {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(.white.opacity(0.06))
                     .allowsHitTesting(false)
@@ -961,6 +999,8 @@ private struct LauncherModuleView: View {
     private func dragItem(for app: LauncherApp) -> NSItemProvider {
         dragSuppressionGeneration += 1
         let generation = dragSuppressionGeneration
+        // 记下起点（只影响上区高亮的取舍，见 `isReorderingQuick`）；释放时与令牌一起清。
+        draggedAppID = app.id
 
         if dragSuppressionToken == nil {
             let token = UUID()
@@ -995,6 +1035,7 @@ private struct LauncherModuleView: View {
     /// 看到结果），已离开才按正常悬停退出收起。
     /// 顺序要紧：先释放令牌，复核里的 `shouldPreventAutoClose()` 才不再被本令牌挡下。
     private func endDragSuppression() {
+        draggedAppID = nil
         guard let token = dragSuppressionToken else { return }
         vm.setAutoCloseSuppression(false, token: token)
         dragSuppressionToken = nil
@@ -1016,7 +1057,12 @@ private struct LauncherModuleView: View {
     ///   无论早退（没有可加载的 provider）还是异步分支失败，抑制都在这里结束；
     /// - `vm.dropEvent = true` **同步**置位（同既有四处 dropEvent 的口径）：面板自己的
     ///   「这次抬手是落点、不是点空白」记账要赶得上当次 `!isTargeted`，等异步回来就晚了。
-    private func handleDrop(_ providers: [NSItemProvider], target: LauncherDropRegion) -> Bool {
+    /// `onto` = 落点上区格子的 id（只有上区格子会传；整区 / 下区传 nil）。
+    /// 已固定项落到上区格子上 = **排序**，落盘走 `store.reorder`；其余情况照旧走
+    /// `LauncherQuickDrop.resolve`（上区固定 / 下区取消）。两路共用同一条落盘接缝，
+    /// 抑制释放与 `dropEvent` 置位仍只在这里做一次。
+    private func handleDrop(_ providers: [NSItemProvider], target: LauncherDropRegion,
+                            onto targetID: String? = nil) -> Bool {
         defer { endDragSuppression() }
         vm.dropEvent = true
 
@@ -1025,7 +1071,7 @@ private struct LauncherModuleView: View {
                 guard let draggedID = object as? String else { return }
                 // 回调在后台队列，回到主线程再改 `@Published` 状态（同 `MusicSlotConfigurationView`）。
                 DispatchQueue.main.async {
-                    applyDrop(draggedID: draggedID, target: target)
+                    applyDrop(draggedID: draggedID, target: target, onto: targetID)
                 }
             }
             return true
@@ -1033,18 +1079,31 @@ private struct LauncherModuleView: View {
         return false
     }
 
-    /// `resolve` 校验 + 落到 store（先落盘再刷新）。`knownIDs` = 本次扫描的**全量**清单
-    /// （不经搜索过滤——搜索只影响下区画什么，不影响"这个 id 是否存在"）。
+    /// 落点收口：上区格子上的**排序**优先，其余走 `resolve` 校验 + 落到 store（先落盘再刷新）。
+    /// `knownIDs` = 本次扫描的**全量**清单（不经搜索过滤——搜索只影响下区画什么，
+    /// 不影响"这个 id 是否存在"）。
     ///
     /// 抑制的释放与 `dropEvent` 的置位都在 `handleDrop`（同步、第一行）完成，这里只做落点判定
-    /// 与写入；`resolve` 判 nil（外来文本 / 反向拖 / 未知 id）就到此为止，不落盘、不刷新。
-    private func applyDrop(draggedID: String, target: LauncherDropRegion) {
+    /// 与写入；排序 no-op（同项 / 目标未知）与 `resolve` 判 nil（外来文本 / 反向拖 / 未知 id）
+    /// 都到此为止，不落盘、不刷新。
+    private func applyDrop(draggedID: String, target: LauncherDropRegion, onto targetID: String?) {
+        guard let app = store.apps.first(where: { $0.id == draggedID }) else { return }
+
+        // 上区格子上的落点：拖拽项已固定 → 排序（纯函数判方向，未知 / 同项为 no-op）；
+        // 未固定（从下区拖上来）→ 不在这里处理，落到下面的 resolve 分支追加到表尾。
+        if target == .quick, let targetID,
+           LauncherPinning.isPinned(draggedID, in: store.pinned),
+           let targetApp = store.apps.first(where: { $0.id == targetID }) {
+            store.reorder(app, onto: targetApp)
+            return
+        }
+
         guard LauncherQuickDrop.resolve(
             draggedID: draggedID,
             target: target,
             pinnedIDs: store.pinned,
             knownIDs: Set(store.apps.map(\.id))
-        ) != nil, let app = store.apps.first(where: { $0.id == draggedID }) else { return }
+        ) != nil else { return }
 
         switch target {
         case .quick: store.pin(app)
@@ -1137,6 +1196,44 @@ private struct LauncherGridCell: View {
         }
         // 拖拽载体 = 应用 id 的纯文本；挂最外层、Button 的点击启动不变（见类型注释）。
         .onDrag(dragItem)
+    }
+}
+
+/// 上区的一个格子：普通格子 + **排序落点**（把同区另一个固定项拖到它上面即换位）。
+///
+/// 只有上区需要这一层：下区的顺序由排名决定，不接受手动排序（拖到下区 = 取消固定）。
+/// 描边只在**拖拽悬停**时出现（`isTargeted`）：整区高亮已表达「可以拖进来」，这里回答
+/// 「落在哪一格」；方向与 no-op 判定在纯函数 `LauncherQuickReorder`，视图不自己判。
+private struct LauncherQuickCell: View {
+    let app: LauncherApp
+    let icon: NSImage
+    let metrics: LauncherGridMetrics
+    let isPinned: Bool
+    let dragItem: () -> NSItemProvider
+    let onLaunch: () -> Void
+    let onTogglePin: () -> Void
+    let onDrop: ([NSItemProvider]) -> Bool
+
+    @State private var isTargeted = false
+
+    var body: some View {
+        LauncherGridCell(
+            app: app,
+            icon: icon,
+            metrics: metrics,
+            isPinned: isPinned,
+            dragItem: dragItem,
+            onLaunch: onLaunch,
+            onTogglePin: onTogglePin
+        )
+        .overlay {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.white.opacity(0.7), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.utf8PlainText], isTargeted: $isTargeted, perform: onDrop)
     }
 }
 

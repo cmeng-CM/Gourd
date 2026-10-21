@@ -244,7 +244,8 @@ struct CalendarPanelPages: View {
             Spacer(minLength: 0)
             if session.route == .list {
                 CalendarQuickAddButton {
-                    session.beginCreate(kind: .reminder, on: session.selectedDate, calendarID: manager.preferredReminderCalendarID)
+                    // 2026-10-19 用户要求：新建默认是「日程」，不是「待办」；分段控件仍可切到待办。
+                    session.beginCreate(kind: .event, on: session.selectedDate, calendarID: manager.preferredEventCalendarID)
                 }
                 .accessibilityIdentifier("calendar-add")
             }
@@ -459,77 +460,87 @@ struct CalendarPanelPages: View {
 
 
     private var editorPage: some View {
-        ScrollView(.vertical) {
-            if let draft = session.draft {
-                // 行距 7（D-17 的杠杆再收 1pt，2026-10-16）：+3 号字号 + 大文本框 2 行之后，
-                // 待办表单刚好落进编辑档可视区（336），面板不再冒滚动条。
-                VStack(alignment: .leading, spacing: 7) {
-                    // 新建可点、编辑锁定（而不是不渲染）：四种入口的版式不再跳。
-                    Picker("calendar.panel.kind", selection: kindBinding) {
-                        Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
-                        Text("calendar.quickAdd.kindEvent").tag(CalendarDraft.Kind.event)
-                    }
-                    .pickerStyle(.segmented).controlSize(.regular)
-                    .disabled(draft.eventID != nil)
-                    .accessibilityIdentifier("calendar-kind")
-                    if draft.eventID == nil { generationControls(draft) }
-                    fieldRow("calendar.panel.title") {
-                        TextField("calendar.quickAdd.title", text: stringBinding(\.title), axis: .vertical)
-                            .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
-                            .focused($focusedField, equals: .title)
-                            .accessibilityIdentifier("calendar-title")
-                    }
-                    // 目标｜全天
-                    HStack(spacing: 8) {
-                        targetPicker(draft).frame(maxWidth: .infinity, alignment: .leading)
-                        fieldRow("All-day") {
-                            Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox).labelsHidden()
-                                .accessibilityIdentifier("calendar-all-day")
+        // 2026-10-19 用户反馈「内容没有铺满剩余高度、一大片留白」：给表单一个不小于视口的高度，
+        // 两个大文本框（原文 / 备注）各带 `.frame(maxHeight: .infinity)`，富余高度由它们吸收；
+        // 字段多到装不下时退回 2 行下限，整页照旧滚动。
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                if let draft = session.draft {
+                    // 行距 7（D-17 的杠杆再收 1pt，2026-10-16）：+3 号字号 + 大文本框 2 行之后，
+                    // 待办表单刚好落进编辑档可视区（336），面板不再冒滚动条。
+                    VStack(alignment: .leading, spacing: 7) {
+                        // 新建可点、编辑锁定（而不是不渲染）：四种入口的版式不再跳。
+                        Picker("calendar.panel.kind", selection: kindBinding) {
+                            Text("calendar.quickAdd.kindReminder").tag(CalendarDraft.Kind.reminder)
+                            Text("calendar.quickAdd.kindEvent").tag(CalendarDraft.Kind.event)
                         }
-                    }
-                    if let identifier = draft.timeZoneIdentifier, identifier != TimeZone.current.identifier {
-                        Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
-                            .font(CalendarPanelTypography.action).foregroundStyle(.secondary)
-                    }
-                    // 日程：开始｜结束 一行、地点｜链接 一行；待办：截止｜链接 一行（不留任何空半格）
-                    if draft.kind == .event {
-                        HStack(spacing: 8) {
-                            dateRow("calendar.panel.start", field: .start, date: draft.start, allDay: draft.isAllDay)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            dateRow("calendar.panel.end", field: .end, date: CalendarPanelDates.includedEnd(of: draft), allDay: draft.isAllDay)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        .pickerStyle(.segmented).controlSize(.regular)
+                        .disabled(draft.eventID != nil)
+                        .accessibilityIdentifier("calendar-kind")
+                        // 2026-10-19：编辑既有日程也保留「用文字生成」——用户要能在编辑档里再次
+                        // 输入文本做模型分析；解析结果仍按「只覆盖未改过的字段」合并（CalendarPanelSession）。
+                        generationControls(draft)
+                        fieldRow("calendar.panel.title") {
+                            TextField("calendar.quickAdd.title", text: stringBinding(\.title), axis: .vertical)
+                                .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
+                                .focused($focusedField, equals: .title)
+                                .accessibilityIdentifier("calendar-title")
                         }
+                        // 目标｜全天
                         HStack(spacing: 8) {
-                            fieldRow("calendar.panel.location") {
-                                TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
-                                    .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
-                                    .focused($focusedField, equals: .location)
-                                    .accessibilityIdentifier("calendar-location")
+                            targetPicker(draft).frame(maxWidth: .infinity, alignment: .leading)
+                            fieldRow("All-day") {
+                                Toggle("All-day", isOn: allDayBinding).toggleStyle(.checkbox).labelsHidden()
+                                    .accessibilityIdentifier("calendar-all-day")
                             }
-                            urlField
                         }
-                    } else {
-                        HStack(spacing: 8) {
-                            dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            urlField
+                        if let identifier = draft.timeZoneIdentifier, identifier != TimeZone.current.identifier {
+                            Text(String(format: String(localized: "calendar.panel.sourceTimeZoneFormat"), identifier))
+                                .font(CalendarPanelTypography.action).foregroundStyle(.secondary)
                         }
+                        // 日程：开始｜结束 一行、地点｜链接 一行；待办：截止｜链接 一行（不留任何空半格）
+                        if draft.kind == .event {
+                            HStack(spacing: 8) {
+                                dateRow("calendar.panel.start", field: .start, date: draft.start, allDay: draft.isAllDay)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                dateRow("calendar.panel.end", field: .end, date: CalendarPanelDates.includedEnd(of: draft), allDay: draft.isAllDay)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            HStack(spacing: 8) {
+                                fieldRow("calendar.panel.location") {
+                                    TextField("calendar.panel.location", text: stringBinding(\.location), axis: .vertical)
+                                        .textFieldStyle(.roundedBorder).font(CalendarPanelTypography.fieldInput)
+                                        .focused($focusedField, equals: .location)
+                                        .accessibilityIdentifier("calendar-location")
+                                }
+                                urlField
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                dateRow("calendar.panel.dueDate", field: .start, date: draft.start, allDay: draft.isAllDay)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                urlField
+                            }
+                        }
+                        // 备注的落点由框本身承担（浅边框 + 框内占位文字，D-04）：不再另起一行标签。
+                        CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
+                                                  placeholder: "calendar.panel.notes",
+                                                  onFocus: setNativeEditorFocus,
+                                                  maximumLines: 4, fillsAvailableHeight: true)
+                            .frame(maxHeight: .infinity)
+                            .accessibilityIdentifier("calendar-notes")
+                        confirmationControls(draft)
+                        if !hasAccess { Text("Calendar access is required.").font(CalendarPanelTypography.action).foregroundStyle(.secondary) }
                     }
-                    // 备注的落点由框本身承担（浅边框 + 框内占位文字，D-04）：不再另起一行标签。
-                    CalendarGrowingTextEditor(text: stringBinding(\.notes), label: "calendar.panel.notes",
-                                              placeholder: "calendar.panel.notes",
-                                              onFocus: setNativeEditorFocus)
-                        .accessibilityIdentifier("calendar-notes")
-                    confirmationControls(draft)
-                    if !hasAccess { Text("Calendar access is required.").font(CalendarPanelTypography.action).foregroundStyle(.secondary) }
+                    .disabled(session.isSubmitting)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: proxy.size.height, alignment: .top)
+                    .padding(.trailing, 4)
                 }
-                .disabled(session.isSubmitting)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, 4)
             }
+            .accessibilityIdentifier("calendar-editor-scroll")
+            .onHover { lifecycle.setScrolling($0) }
         }
-        .accessibilityIdentifier("calendar-editor-scroll")
-        .onHover { lifecycle.setScrolling($0) }
         .onAppear { focusedField = session.draft?.sourceText.isEmpty == true ? .title : nil }
     }
 
@@ -564,7 +575,8 @@ struct CalendarPanelPages: View {
     }
 
     private func generationControls(_ draft: CalendarDraft) -> some View {
-        CalendarSourceGeneration(session: session, initialText: draft.sourceText, onFocus: setNativeEditorFocus)
+        CalendarSourceGeneration(session: session, initialText: draft.sourceText,
+                                 fillsAvailableHeight: true, onFocus: setNativeEditorFocus)
             .id(session.draftIdentity)
     }
 
@@ -809,20 +821,25 @@ enum CalendarGenerationPrimary: Equatable {
 /// route 换稿」路径，所以它未被独立验证（见 `DynamicIslandTests` 的换稿用例与报告 I3）。
 private struct CalendarSourceGeneration: View {
     @ObservedObject var session: CalendarPanelSession
+    let fillsAvailableHeight: Bool
     let onFocus: (Bool) -> Void
     @State private var sourceDraft: String
 
-    init(session: CalendarPanelSession, initialText: String, onFocus: @escaping (Bool) -> Void) {
+    init(session: CalendarPanelSession, initialText: String,
+         fillsAvailableHeight: Bool = false, onFocus: @escaping (Bool) -> Void) {
         self.session = session
+        self.fillsAvailableHeight = fillsAvailableHeight
         self.onFocus = onFocus
         _sourceDraft = State(initialValue: initialText)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("calendar.generation.source").font(CalendarPanelTypography.fieldLabel).foregroundStyle(.secondary)
-            HStack(alignment: .center, spacing: 8) {
-                CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source", onFocus: onFocus)
+            HStack(alignment: fillsAvailableHeight ? .top : .center, spacing: 8) {
+                CalendarGrowingTextEditor(text: $sourceDraft, label: "calendar.generation.source",
+                                          onFocus: onFocus, maximumLines: 4,
+                                          fillsAvailableHeight: fillsAvailableHeight)
+                    .frame(maxHeight: fillsAvailableHeight ? .infinity : nil)
                     .accessibilityIdentifier("calendar-generation-source")
                 // 生成中的 mini 指示器（C4 ②）：槽位**恒定**占宽，按钮三态才不会左右挪。
                 ProgressView().controlSize(.mini)
@@ -853,6 +870,8 @@ private struct CalendarSourceGeneration: View {
                 manualEntryButton
             }
         }
+        // 让原文区也能分到父布局的富余高度；没有富余时退回 2 行下限。
+        .frame(maxHeight: fillsAvailableHeight ? .infinity : nil, alignment: .top)
     }
 
     /// 三态共用同一格、同一尺寸（76 × 26 的白 14% 圆角胶囊），只换文案——不存在「按钮不见了」这一态。

@@ -40,3 +40,12 @@ Write descriptive subjects; history includes Chinese summaries, `T1:`/`F1:` task
 ## Architecture, Configuration & Licensing
 
 Read [decisions](docs/00-decisions.md), [architecture](docs/01-architecture.md), and [module protocol](docs/06-module-protocol.md) before changing modules. Inject dependencies through `ModuleContext`; keep lifecycle methods idempotent and `content(for:)` synchronous. Preserve GPL-3.0 and upstream notices. Exclude private configuration, signing keys, and generated build output from commits.
+
+## Secrets & Packaging Red Lines (non-negotiable)
+
+- **Never** put API keys, tokens, passwords, `.key` files, credential JSON, Keychain dumps, real `secretReference` values, or filled AI configuration into the repository, commits, PRs, issues, screenshots, logs, test fixtures, docs, app bundles, DMGs, or release assets.
+- The AI API key is **runtime-only**: `~/Library/Application Support/Gourd/AICredentials/<UUID>.key`, directory `0700`, file `0600`. It is created by the user after install and is never part of the repo or build products. The app config stores only the UUID reference.
+- Tests must use injected fakes or temporary directories; never read the real credential directory or the user's Keychain.
+- Before commit, upload, or packaging, run the repository secret scan. If a secret is found, stop, remove it from the artifact, and **rotate the key**; deleting it later does not undo the exposure.
+- `tools/build.sh` must fail rather than package an app bundle that contains any current credential value. Do not weaken or bypass that gate.
+- Use only placeholders such as `fixture-secret` and `<your-key>` in tests, docs, and examples.

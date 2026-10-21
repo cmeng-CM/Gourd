@@ -148,7 +148,8 @@ final class MeetingActionModel: ObservableObject {
         }
         guard let target = targets.first(where: { !$0.meetingCodes.isEmpty }),
               let number = Self.number(in: target) else { return .none }
-        if let provider = rememberedProvider { return .open(target, provider) }
+        // 原文标签能判出平台时以标签为准；只有判不出时才用用户记住的客户端。
+        if let provider = target.provider ?? rememberedProvider { return .open(target, provider) }
         return .copyCode(number)
     }
 
@@ -427,14 +428,11 @@ enum MeetingActionPresentation {
         }
     }
 
-    /// `.row` 左侧的 provider 名：**与本条证据同源**（`primary` / tooltip 都用本条链接的平台），
-    /// 只有本条判不出平台时才回落到记住的客户端（D-09）。
-    ///
-    /// 终审 I-1：`meetingCodeOpener` 是全局记忆，若在这里先取 `rememberedProvider`，一条带华为链接的邀请
-    /// 会被贴成「腾讯会议」的行标，而 tooltip 与点开走的却是华为 —— 三者必须同源。
+    /// `.row` 左侧的 provider 名：**只认本条证据**。判不出平台（即使全局记住了某个客户端）就
+    /// 不贴平台名——不能让一条没有会议内容的记录、或一条只写了「会议ID」的记录被默认标成腾讯。
     @MainActor
     static func rowProviderName(for model: MeetingActionModel) -> String? {
-        let name = providerName(model.determinedProvider ?? model.rememberedProvider)
+        let name = providerName(model.determinedProvider)
         return name.isEmpty ? nil : name
     }
 
@@ -792,6 +790,37 @@ private struct MeetingActionIcon: NSViewRepresentable {
     }
 }
 
+/// 自适应外观的输入框容器：浅色下用浅底 + 分隔线，深色下用深底 + 分隔线，
+/// 空框也看得出是有边界的输入落点。
+private final class CalendarEditorScrollView: NSScrollView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyBoxAppearance()
+    }
+
+    private var isFocused = false
+
+    func setFocused(_ focused: Bool) {
+        guard isFocused != focused else { return }
+        isFocused = focused
+        applyBoxAppearance()
+    }
+
+    func applyBoxAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            // 用标准文本底色（浅色白 / 深色深底），和标题输入框同一种「实心输入框」观感。
+            layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+            layer?.borderColor = isFocused
+                ? NSColor.controlAccentColor.cgColor
+                : NSColor.labelColor.withAlphaComponent(0.28).cgColor
+        }
+        layer?.borderWidth = isFocused ? 1.5 : 1
+        layer?.cornerRadius = CalendarEditableTextView.cornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+    }
+}
+
 /// Editable text sits in its own clip view: the box follows the text up to `maximumLines` and then
 /// holds that height, so a pasted paragraph scrolls inside the box instead of stretching the form
 /// (docs/49 D-04). The box draws its own outline + fill, so an empty field still reads as a place
@@ -803,32 +832,24 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
     /// 空框时在框内画的占位文字（本地化键；复用既有键，不新增）。nil = 不画。
     var placeholder: String?
     var onFocus: (Bool) -> Void
-    /// 可见高度（行数）：原文区与备注都收在这一档，再多就框内滚动。
-    /// 2026-10-16（上屏反馈第 7 条）：3 → 2 行——+3 号字号下 3 行的表单比编辑档可视区高，
-    /// 面板因此冒出一条滚动条；收到 2 行后待办场景刚好放得下（日程多一行「地点｜链接」，仍会滚）。
+    /// 可见高度（行数）：编辑页原文区与备注显式传 4 行，再多就框内滚动；默认 2 行给其它调用方。
     var maximumLines: Int = CalendarEditableTextView.visibleLines
+    /// 是否吃掉父布局给出的剩余高度（2026-10-19 反馈「内容没有铺满、留白一大片」）：
+    /// true 时 `maximumLines` 只是下限，有富余就长高；false 保持定高（既有调用方不受影响）。
+    var fillsAvailableHeight = false
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        // **不要**让 AppKit 自绘底：`drawsBackground = true` 会生成一层 `_NSScrollViewContentBackgroundView`，
-        // 它填的是系统色（浅色外观下是白）——白字压白底，输入内容就看不见了（2026-10-16 上屏反馈第 4 条）。
-        // 底色改由本视图的 layer 画（白 6%），描边另画一层。
+        let scroll = CalendarEditorScrollView()
+        // 不让 AppKit 自绘背景；底色与描边由 layer 统一画，并随浅色/深色外观更新。
         scroll.drawsBackground = false
         scroll.contentView.drawsBackground = false
-        scroll.layer?.backgroundColor = NSColor.white
-            .withAlphaComponent(CalendarEditableTextView.fillAlpha).cgColor
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = CalendarEditableTextView.cornerRadius
-        scroll.layer?.cornerCurve = .continuous
-        scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = NSColor.white
-            .withAlphaComponent(CalendarEditableTextView.borderAlpha).cgColor
-        scroll.layer?.masksToBounds = true
+        scroll.applyBoxAppearance()
 
         let view = CalendarEditableTextView(frame: .zero, textContainer: nil)
         view.delegate = context.coordinator
@@ -839,7 +860,7 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         // 内容超过 3 行时它比框高，多出来的部分在框内滚动（D-04）。
         // 高度下限走 `minSize`（布局参数），**不**在任何测量回调里对活视图改 frame。
         view.isVerticallyResizable = true
-        view.autoresizingMask = [.width]
+        view.autoresizingMask = fillsAvailableHeight ? [.width, .height] : [.width]
         view.minSize = NSSize(width: 0, height: view.cappedHeight(lines: maximumLines))
         view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         view.interaction = CalendarTextInteraction(
@@ -854,8 +875,10 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? CalendarEditableTextView else { return }
         view.onFocus = onFocus
+        view.autoresizingMask = fillsAvailableHeight ? [.width, .height] : [.width]
         view.minSize = NSSize(width: 0, height: view.cappedHeight(lines: maximumLines))
-        if view.string != text {
+        // 输入法组字期间绝不能被 SwiftUI 的绑定回写重置，否则拼音/注音只会留下已提交的数字。
+        if view.string != text, !view.hasMarkedText() {
             view.string = text
             view.needsDisplay = true
         }
@@ -870,7 +893,10 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         guard let view = nsView.documentView as? CalendarEditableTextView else { return nil }
         // 宽度兜底取**clip 宽**（不是滚动视图宽：常显滚动条那一档会宽出 15pt）。
         let width = proposal.width ?? (nsView.contentSize.width > 0 ? nsView.contentSize.width : 200)
-        return CGSize(width: width, height: view.cappedHeight(lines: maximumLines))
+        let minimum = view.cappedHeight(lines: maximumLines)
+        // 定高档：2 行是上限也是下限；铺满档：2 行是下限，父布局给多少就长多少。
+        let height = fillsAvailableHeight ? max(minimum, proposal.height ?? minimum) : minimum
+        return CGSize(width: width, height: height)
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         (scroll.documentView as? CalendarEditableTextView)?.stop()
@@ -880,6 +906,8 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
         init(_ parent: CalendarGrowingTextEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
+            // 组字中的 marked text 不写回草稿；提交后再同步，避免打断输入法。
+            guard !view.hasMarkedText() else { return }
             parent.text = view.string
         }
     }
@@ -887,12 +915,10 @@ struct CalendarGrowingTextEditor: NSViewRepresentable {
 
 @MainActor
 final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
-    /// 大文本框的视觉与高度口径（docs/49 D-04）：圆角 6 + 白 6% 底 + 白 18% 描边（由外层框画），
-    /// 可见高度 = `defaultMaximumLines` 行（见 `cappedHeight`）。
+    /// 大文本框的视觉与高度口径（docs/49 D-04）：圆角 6，底色/描边由外层滚动框按外观画，
+    /// 可见高度 = `maximumLines` 行（见 `cappedHeight`）。
     static let cornerRadius: CGFloat = 6
-    static let fillAlpha: CGFloat = 0.06
-    static let borderAlpha: CGFloat = 0.18
-    /// 大文本框的**可见行数**（2026-10-16 起 2 行；改前 3 行）。
+    /// 大文本框的默认**可见行数**；编辑页的原文/备注显式传 4 行。
     static let visibleLines = 2
     static let defaultFontSize: CGFloat = CalendarPanelTypography.bigEditorPointSize
 
@@ -923,11 +949,13 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         wantsLayer = true
         layer?.masksToBounds = true
         drawsBackground = true
-        backgroundColor = NSColor.white.withAlphaComponent(Self.fillAlpha)
-        textColor = .white
-        insertionPointColor = .white
+        backgroundColor = .clear
+        textColor = .labelColor
+        insertionPointColor = .labelColor
         allowsUndo = true
         font = .systemFont(ofSize: Self.defaultFontSize)
+        typingAttributes = [.font: font ?? NSFont.systemFont(ofSize: Self.defaultFontSize),
+                            .foregroundColor: NSColor.labelColor]
         textContainerInset = NSSize(width: 4, height: 4)
         self.textContainer?.lineFragmentPadding = 0
         self.textContainer?.widthTracksTextView = true
@@ -946,6 +974,24 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         let lineHeight = measured > 0 ? measured : ceil(font.boundingRectForFont.height)
         return ceil(lineHeight) * CGFloat(lines) + 2 * textContainerInset.height
     }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTextAppearance()
+    }
+
+    /// 文本、光标与已输入内容都跟随浅色/深色外观；否则浅色下白字会“消失”，深色下黑字会“消失”。
+    private func applyTextAppearance() {
+        textColor = .labelColor
+        insertionPointColor = .labelColor
+        typingAttributes[.font] = font ?? NSFont.systemFont(ofSize: Self.defaultFontSize)
+        typingAttributes[.foregroundColor] = NSColor.labelColor
+        if let storage = textStorage, storage.length > 0 {
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor,
+                                 range: NSRange(location: 0, length: storage.length))
+        }
+        needsDisplay = true
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         CalendarTextMeasurement.synchronize(self)
@@ -966,22 +1012,30 @@ final class CalendarEditableTextView: NSTextView, NSMenuDelegate {
         guard string.isEmpty, let placeholder, !placeholder.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: Self.defaultFontSize),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.35)
+            .foregroundColor: NSColor.secondaryLabelColor
         ]
         (placeholder as NSString).draw(at: NSPoint(x: textContainerInset.width, y: textContainerInset.height),
                                       withAttributes: attributes)
     }
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        if accepted { onFocus(true) }
+        if accepted {
+            (enclosingScrollView as? CalendarEditorScrollView)?.setFocused(true)
+            onFocus(true)
+        }
         return accepted
     }
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
-        if accepted { onFocus(false) }
+        if accepted {
+            (enclosingScrollView as? CalendarEditorScrollView)?.setFocused(false)
+            onFocus(false)
+        }
         return accepted
     }
     override func mouseDown(with event: NSEvent) {
+        // 非激活面板里点击必须显式把文本视图设为第一响应者；否则数字键可能落到日期选择器上。
+        window?.makeFirstResponder(self)
         let owner = interaction
         owner?.mouseDown()
         defer { owner?.trackingReturned() }

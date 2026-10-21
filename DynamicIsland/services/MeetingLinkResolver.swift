@@ -43,7 +43,7 @@ struct MeetingLinkResolver {
     static let maximumSourceCharacters = 20_000
 
     /// Returns every candidate; callers must ask for a choice when count > 1.
-    func resolve(text: String) -> [MeetingJoinTarget] {
+    func resolve(text: String, providerHint: MeetingProvider? = nil) -> [MeetingJoinTarget] {
         guard text.count <= Self.maximumSourceCharacters else { return [] }
         let codes = meetingCodes(in: text)
         let regex = try? NSRegularExpression(pattern: #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"“”]+"#)
@@ -95,10 +95,29 @@ struct MeetingLinkResolver {
             combined.append(target)
         }
         if combined.isEmpty, !codes.isEmpty {
-            combined.append(MeetingJoinTarget(provider: nil, sourceURL: nil, nativeURL: nil,
+            combined.append(MeetingJoinTarget(provider: providerHint, sourceURL: nil, nativeURL: nil,
                                              httpsURL: nil, urlIdentifier: nil, meetingCodes: codes, sourceText: text))
         }
         return combined
+    }
+
+    /// 只有会议号、没有链接时，从同一段文字里的平台名推断归属；出现多家或没有平台名时返回 nil。
+    /// 只做「标签→平台」的提示，不构造链接，也不改变号码校验。
+    static func providerHint(in texts: [String]) -> MeetingProvider? {
+        var found: Set<MeetingProvider> = []
+        for text in texts {
+            let value = text.lowercased()
+            if value.contains("化小易") || value.contains("华为云会议") || value.contains("华为会议")
+                || value.contains("welink") {
+                found.insert(.huawei)
+            }
+            if value.contains("腾讯会议") { found.insert(.tencent) }
+            if value.contains("飞书会议") || value.contains("feishu") { found.insert(.feishu) }
+            if value.contains("zoom") { found.insert(.zoom) }
+            if value.contains("microsoft teams") || value.contains("teams会议") { found.insert(.teams) }
+            if value.contains("webex") { found.insert(.webex) }
+        }
+        return found.count == 1 ? found.first : nil
     }
 
     func uniqueOpenTarget(text: String) -> MeetingJoinTarget? {
