@@ -10881,6 +10881,42 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(session.back(), .home(anchor: "todo-row-3"))
     }
 
+    /// **保存出口也按入口分叉**（2026-10-27 用户反馈「添加完保存还是回到日历面板」）：
+    /// 首页来源保存成功 → `shouldReturnHomeAfterSave` 为真（视图据此走回家路）；日历面板来源
+    /// 保存成功 → 假；保存失败（目标被掐掉）→ 档留在编辑档、判据为假。
+    @MainActor
+    func testPanelSaveExitFollowsEntryPoint() async throws {
+        let backend = panelBackend()
+        let session = panelSession(service: backend)
+
+        // 首页来源：新增 → 保存成功 → 判据为真、稿已清、路由回列表。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events",
+                            source: .home(anchor: "todo-row-3"))
+        session.draft?.title = "首页进的新日程"
+        let savedFromHome = await session.save()
+        XCTAssertTrue(savedFromHome)
+        XCTAssertEqual(session.route, .list)
+        XCTAssertNil(session.draft)
+        XCTAssertTrue(session.shouldReturnHomeAfterSave, "首页进的保存成功也走回家路")
+
+        // 日历面板来源：同样保存成功 → 判据为假（留在列表，不回家）。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        session.draft?.title = "面板进的新日程"
+        let savedFromPanel = await session.save()
+        XCTAssertTrue(savedFromPanel)
+        XCTAssertFalse(session.shouldReturnHomeAfterSave)
+
+        // 保存失败：档留在编辑档 → 判据为假（不抢在失败时把人踢走）。
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events",
+                            source: .home(anchor: "todo-row-3"))
+        session.draft?.title = "保存会失败的稿"
+        session.draft?.calendarID = nil   // 掐掉保存目标
+        let failed = await session.save()
+        XCTAssertFalse(failed)
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertFalse(session.shouldReturnHomeAfterSave)
+    }
+
     func testPanelCancelAndAllDraftConflictChoicesNeverSilentlyReplaceDraft() throws {
         let backend = panelBackend()
         let session = panelSession(service: backend)

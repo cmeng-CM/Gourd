@@ -528,6 +528,16 @@ final class CalendarPanelSession: ObservableObject {
         return false
     }
 
+    /// **保存出口**要不要「回家」（2026-10-27 用户反馈「添加完保存还是回到日历面板」）：
+    /// 视图在 `await save()` 返回后读一次——保存成功且档已退到列表、来源是首页 → `true`
+    ///（保存成功那一刻 `returnSource` 已写回来源，`draftContext` 已清空，所以这里读的是它）；
+    /// 保存失败 / 提交期间又敲了字（档还留在编辑档）/ 日历面板自己的入口 → `false`。
+    var shouldReturnHomeAfterSave: Bool {
+        guard route == .list else { return false }
+        if case .home = returnSource { return true }
+        return false
+    }
+
     /// 退出编辑档：回列表（详情档退休后这是唯一归宿），并把来源交回调用方。
     @discardableResult
     func back() -> CalendarPanelSource? {

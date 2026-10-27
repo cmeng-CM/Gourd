@@ -708,7 +708,16 @@ struct CalendarPanelPages: View {
                     Button("Cancel") { session.requestCancel() }.accessibilityIdentifier("calendar-cancel")
                     Spacer(minLength: 0)
                     if hasAccess {
-                        Button("calendar.panel.save") { Task { _ = await session.save() } }
+                        // 保存出口按入口分叉（docs/39 D-28）：保存成功、档已退到列表、来源是首页 →
+                        // 与「返回」同一条回家路；判据收在 shouldReturnHomeAfterSave 所在的会话层。
+                        Button("calendar.panel.save") {
+                            Task {
+                                _ = await session.save()
+                                if session.shouldReturnHomeAfterSave {
+                                    onReturnSource(.home(anchor: session.homeScrollAnchor))
+                                }
+                            }
+                        }
                             .disabled(targets.isEmpty || session.draft?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
                                       || session.draft?.generationMode == .required || session.draft?.confirmations.isEmpty != true)
                             .accessibilityIdentifier("calendar-save")
