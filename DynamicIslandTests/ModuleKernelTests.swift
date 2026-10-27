@@ -10838,6 +10838,49 @@ final class CalendarInteractionTests: XCTestCase {
         XCTAssertEqual(session.route, .list)
     }
 
+    /// **编辑档返回按入口分叉**（2026-10-27 用户要求「从首页进的添加 / 编辑，返回也回首页」）：
+    /// 首页入口显式传 `.home` 来源 → `back()` 交回 `.home`（宿主据此把面板切回首页）、锚点写回
+    /// `homeScrollAnchor`（待办块的滚动位）；缺省不传（日历面板自己的入口）→ 交回 `.calendar`，
+    /// 与加参数前逐字一致。编辑中途换目标（草稿冲突换稿）来源沿 `returnSource`，首页链不断。
+    func testPanelEditorReturnSourceFollowsEntryPoint() throws {
+        let backend = panelBackend()
+        let event = try XCTUnwrap(backend.event(withID: "fixture-event-01"))
+        let session = panelSession(service: backend)
+
+        // 缺省来源（日历面板入口）：列表档进编辑，back() 交回 .calendar——既有口径不动。
+        session.showList(on: date(day: 11), anchor: "calendar-tail")
+        session.beginCreate(kind: .event, on: date(day: 11), calendarID: "fixture-events")
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertFalse(session.editorReturnsHome)
+        XCTAssertEqual(session.back(), .calendar(date: date(day: 11), anchor: "calendar-tail"))
+
+        // 首页「新增」（今天带的 +）：显式 .home（带待办块锚点）→ back() 交回 .home。
+        session.beginCreate(kind: .event, on: date(day: 12), calendarID: "fixture-events",
+                            source: .home(anchor: "todo-row-3"))
+        XCTAssertEqual(session.route, .editor)
+        XCTAssertTrue(session.editorReturnsHome)
+        session.draft?.title = "首页进的稿"
+        XCTAssertEqual(session.back(), .home(anchor: "todo-row-3"))
+        XCTAssertEqual(session.homeScrollAnchor, "todo-row-3")
+        XCTAssertEqual(session.route, .list)
+        // 改过的稿 back() 后仍留在会话里（回来接着写）；下一段要开新稿，先丢弃。
+        session.discardDraft()
+
+        // 首页「编辑」（待办块 ✎ / 浮窗编辑）：beginEdit 同样吃显式来源。
+        session.showList(on: date(day: 11), anchor: event.id)
+        session.beginEdit(event, source: .home(anchor: nil))
+        XCTAssertTrue(session.editorReturnsHome)
+        XCTAssertEqual(session.back(), .home(anchor: nil))
+
+        // 编辑中途换目标（编辑档里再开一份新稿，无显式来源）：换稿沿 returnSource，首页链不断。
+        session.beginEdit(event, source: .home(anchor: "todo-row-3"))
+        session.draft?.title = "改过的稿"
+        session.beginCreate(kind: .reminder, on: date(day: 11), calendarID: "fixture-reminders")
+        session.resolveDraftConflict(.discardAndStart)
+        XCTAssertTrue(session.editorReturnsHome, "换稿不换来源：仍按首页链返回")
+        XCTAssertEqual(session.back(), .home(anchor: "todo-row-3"))
+    }
+
     func testPanelCancelAndAllDraftConflictChoicesNeverSilentlyReplaceDraft() throws {
         let backend = panelBackend()
         let session = panelSession(service: backend)
@@ -16015,7 +16058,10 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
 
         // 对照（反证上面的 400 不是「量什么都是 400」）：同一份左栏**不钉高**时，8 条记录的清单
         // 理想高远大于 400。钉高一旦被去掉，上面那条断言就会读到这个更大的数而红。
-        let looseSidebar = NSHostingView(rootView: CalendarEditorSidebar(session: session, manager: manager)
+        let looseSidebar = NSHostingView(rootView: CalendarEditorSidebar(
+            session: session, manager: manager,
+            onReturnSource: { _ in }  // 2026-10-27 起左栏返回按来源分叉，测试只量高度、给空实现
+        )
             .environmentObject(DynamicIslandViewModel()))
         looseSidebar.frame = CGRect(x: 0, y: 0, width: 260, height: 400)
         looseSidebar.layoutSubtreeIfNeeded()

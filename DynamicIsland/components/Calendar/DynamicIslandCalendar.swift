@@ -1265,10 +1265,15 @@ struct MonthGridView: View {
 ///   （`manager.setReminderCompleted`，与 `CalendarEventCardList.cardBody` 同款）。
 /// - **定高 + 内滚**：高度由宿主钉成 `editorPaneHeight`（560）+ `.clipped()` 兜底，清单条目再多也在
 ///   **栏内**滚动，绝不顶高整页理想高（那是「面板跟着内容长」的反馈环）。
-/// - **回到月历**：顶部的按钮走 `session.showList(on:)` 把路由切回列表档（面板高随之回落到当月自然高）。
+/// - **回到月历 / 返回首页**（2026-10-27 起按入口分叉）：来源是日历面板 → 顶部按钮走
+///   `session.showList(on:)` 回列表档（面板高随之回落到当月自然高）；来源是首页（首页「新增」、
+///   待办块 ✎ / 浮窗「编辑」传的 `.home`）→ 与表单顶部返回**同一条路**（`session.back()` 交回
+///   来源，宿主 `returnToSource` 把面板切回首页），文案也换成「返回首页」。
 struct CalendarEditorSidebar: View {
     @ObservedObject var session: CalendarPanelSession
     @ObservedObject var manager: CalendarManager
+    /// 编辑档「返回」把来源交回来的那条口子（宿主 `StandaloneCalendarView.returnToSource`）。
+    var onReturnSource: (CalendarPanelSource) -> Void
     @State private var hoveredID: String?
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
@@ -1290,9 +1295,18 @@ struct CalendarEditorSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                session.showList(on: session.selectedDate)
+                // 来源分叉（见本 struct 头注释）：首页入口走表单顶部返回同一条路，
+                // 日历面板入口保持「回到月历」原样。
+                if session.editorReturnsHome {
+                    if let source = session.back() { onReturnSource(source) }
+                } else {
+                    session.showList(on: session.selectedDate)
+                }
             } label: {
-                Label("calendar.panel.backToMonth", systemImage: "chevron.left")
+                let title: LocalizedStringKey = session.editorReturnsHome
+                    ? "calendar.panel.backToHome"
+                    : "calendar.panel.backToMonth"
+                Label(title, systemImage: "chevron.left")
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1369,6 +1383,13 @@ struct StandaloneCalendarView: View {
         CalendarPanelPages(session: session, manager: calendarManager, onReturnSource: onReturnSource)
     }
 
+    /// 编辑档「返回」的**共同接法**（表单顶部返回与左栏按钮两处都走它，2026-10-27 抽出）：
+    /// 来源是首页 → 把面板切回首页（会话已由 `back()` 留在列表档，回来时日历页就是月历）；
+    /// 其余（日历面板自己的入口）什么都不用做——`back()` / `showList(on:)` 已留在列表档。
+    private func returnToSource(_ source: CalendarPanelSource) {
+        if case .home = source { vm.coordinator.currentView = .home }
+    }
+
     /// 浏览日期只改共享路由；暂存稿的日期、目标和字段由会话保留。
     private var selectedDate: Binding<Date> {
         Binding(get: { session.selectedDate }, set: { session.showList(on: $0) })
@@ -1437,7 +1458,7 @@ struct StandaloneCalendarView: View {
                 // **编辑档左栏**（T3 / docs/48 D-07）：整月网格让位成 260pt 的「回到月历 + 当日清单」。
                 // 左栏**钉宽 260 + 钉高 560**（`editorPaneHeight`，与右栏同高）——条目再多也顶不高整页
                 // 理想高（清单在栏内滚动，外面再 `.clipped()` 兜底：那是「面板跟着内容长」的反馈环）。
-                CalendarEditorSidebar(session: session, manager: calendarManager)
+                CalendarEditorSidebar(session: session, manager: calendarManager, onReturnSource: returnToSource)
                     .frame(width: Self.editorSidebarWidth, height: Self.editorPaneHeight,
                            alignment: .topLeading)
                     .clipped()
@@ -1473,9 +1494,7 @@ struct StandaloneCalendarView: View {
                     .layoutPriority(1)
             }
 
-            panelPages { source in
-                if case .home = source { vm.coordinator.currentView = .home }
-            }
+            panelPages(onReturnSource: returnToSource)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 // 右栏拿**同一个高度**（宽度是剩下的 60%）：列表档 = `monthGridHeight`（事件列在里面滚动 / 裁剪）；
                 // 编辑档 = `editorPaneHeight`（560，与左栏同高）——它不参与「这一页要多高」，两档都由左栏

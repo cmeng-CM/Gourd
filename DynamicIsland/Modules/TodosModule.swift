@@ -1585,7 +1585,8 @@ struct TodosHomeBlockView: View {
     private func editEvent(_ event: EventModel) {
         guard event.canModifyInIsland, !session.isSubmitting else { return }
         details.clear()
-        session.beginEdit(event)
+        // 来源标首页：编辑档返回时回首页（2026-10-27），锚点带待办块当前滚动位。
+        session.beginEdit(event, source: .home(anchor: session.homeScrollAnchor))
         vm.coordinator.selectModule(CalendarModule.moduleID)
     }
 
@@ -1625,8 +1626,9 @@ struct TodosHomeBlockView: View {
             } : nil,
             edit: event.canModifyInIsland && !isReminder ? {
                 // 岛内编辑只在日历面板的编辑档里（本批不改首页那一屏）：收浮窗 + 切到日历模块的编辑档。
+                // 来源标首页：编辑档返回时回首页（2026-10-27）。
                 details.clear()
-                session.beginEdit(event)
+                session.beginEdit(event, source: .home(anchor: session.homeScrollAnchor))
                 vm.coordinator.selectModule(CalendarModule.moduleID)
             } : nil,
             delete: CalendarPanelSession.canDeleteInIsland(event) ? { deleteEventRecord(event) } : nil,

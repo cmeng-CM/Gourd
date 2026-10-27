@@ -430,8 +430,11 @@ struct HomeTodayBand: View {
             let today = Date()
             let session = CalendarPanelSession.shared
             session.selectedDate = Calendar.autoupdatingCurrent.startOfDay(for: today)
+            // 来源标首页（2026-10-27 用户要求「从首页进的添加，返回也回首页」）：
+            // 编辑档的返回链把面板切回首页；锚点带上待办块当前滚动位，回来还在原处。
             session.beginCreate(kind: .event, on: today,
-                                calendarID: CalendarManager.shared.preferredEventCalendarID)
+                                calendarID: CalendarManager.shared.preferredEventCalendarID,
+                                source: .home(anchor: session.homeScrollAnchor))
             DynamicIslandViewCoordinator.shared.selectModule(CalendarModule.moduleID)
         } label: {
             Image(systemName: "plus")

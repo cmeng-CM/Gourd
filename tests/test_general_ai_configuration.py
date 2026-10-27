@@ -113,6 +113,8 @@ LOCALE_KEYS = (
     'calendar.meeting.tooltip.multiple',
     'calendar.meeting.tooltip.open',
     'calendar.panel.backToMonth',
+    # 2026-10-27（编辑档返回按入口分叉）：从首页进的添加 / 编辑，左栏按钮换「返回首页」。
+    'calendar.panel.backToHome',
     'calendar.panel.deleteEventConsequence',
     'calendar.panel.deleteReminderConsequence',
     'calendar.panel.sourceTimeZoneFormat',

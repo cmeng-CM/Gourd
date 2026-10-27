@@ -443,7 +443,12 @@ final class CalendarPanelSession: ObservableObject {
         route = .list
     }
 
-    func beginCreate(kind: CalendarDraft.Kind, on date: Date, calendarID: String?) {
+    /// - Parameter source: **入口来源**（2026-10-27 用户要求「从首页进的添加 / 编辑，返回也回首页」）。
+    ///   缺省 `nil` = 按面板现状推（列表档 = `.calendar`，行为与加参数前逐字一致——日历面板自己的
+    ///   入口与既有用例都不用改）；首页的入口传 `.home(anchor:)`，返回链（`back()` 把来源交回
+    ///   `onReturnSource`）就会把面板切回首页、并把锚点还给待办块的滚动位。
+    func beginCreate(kind: CalendarDraft.Kind, on date: Date, calendarID: String?,
+                     source: CalendarPanelSource? = nil) {
         let day = calendar.startOfDay(for: date)
         let start = kind == .event ? CalendarQuickAdd.defaultStart(on: day, now: now(), calendar: calendar) : day
         let end = kind == .event ? CalendarQuickAdd.defaultEnd(start: start) : calendar.date(byAdding: .day, value: 1, to: day) ?? day
@@ -451,10 +456,11 @@ final class CalendarPanelSession: ObservableObject {
             kind: kind, eventID: nil, originalDate: day, title: "", start: start, end: end,
             isAllDay: kind == .reminder, calendarID: calendarID
         )
-        requestDraft(newDraft, context: currentContext())
+        requestDraft(newDraft, context: currentContext(override: source))
     }
 
-    func beginEdit(_ event: EventModel) {
+    /// - Parameter source: 入口来源，语义同 `beginCreate(kind:on:calendarID:source:)` 的那条。
+    func beginEdit(_ event: EventModel, source: CalendarPanelSource? = nil) {
         guard event.canModifyInIsland else {
             error = event.modificationRestriction?.localizedDescription
             return
@@ -466,12 +472,12 @@ final class CalendarPanelSession: ObservableObject {
             location: event.location ?? "", notes: event.notes ?? "", calendarID: event.calendar.id,
             url: event.url, timeZoneIdentifier: event.timeZone?.identifier
         )
-        requestDraft(newDraft, context: currentContext())
+        requestDraft(newDraft, context: currentContext(override: source))
     }
 
-    private func currentContext() -> DraftContext {
-        let source: CalendarPanelSource = route == .list
-            ? .calendar(date: selectedDate, anchor: calendarScrollAnchor) : returnSource
+    private func currentContext(override: CalendarPanelSource? = nil) -> DraftContext {
+        let source: CalendarPanelSource = override ?? (route == .list
+            ? .calendar(date: selectedDate, anchor: calendarScrollAnchor) : returnSource)
         return DraftContext(source: source)
     }
 
@@ -513,6 +519,13 @@ final class CalendarPanelSession: ObservableObject {
             installDraft(pending.draft, context: pending.context)
         case .cancel: break
         }
+    }
+
+    /// 编辑档当前稿的返回目标是不是**首页**（视图据此换左栏按钮的文案与出口；
+    /// 来源语义见 `beginCreate(kind:on:calendarID:source:)`）。没有稿（列表档）恒为 `false`。
+    var editorReturnsHome: Bool {
+        if case .home = draftContext?.source { return true }
+        return false
     }
 
     /// 退出编辑档：回列表（详情档退休后这是唯一归宿），并把来源交回调用方。

@@ -993,6 +993,22 @@
         }
       }
     },
+    "calendar.panel.backToHome": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to home"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返回首页"
+          }
+        }
+      }
+    },
     "calendar.panel.details": {
       "localizations": {
         "en": {
