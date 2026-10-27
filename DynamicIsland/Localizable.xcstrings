@@ -84317,6 +84317,38 @@
         }
       }
     },
+    "module.notifications.externalDisplays.off": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification overlay: main display only. Click to also show it on external displays."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知浮层：仅主屏显示。点按切换为在外接显示器上也显示。"
+          }
+        }
+      }
+    },
+    "module.notifications.externalDisplays.on": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification overlay: main display + external displays. Click to show it on the main display only."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知浮层：主屏 + 外接显示器都显示。点按切换为仅主屏显示。"
+          }
+        }
+      }
+    },
     "module.notifications.needsFullDiskAccess": {
       "localizations": {
         "en": {

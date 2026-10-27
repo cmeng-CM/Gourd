@@ -1548,6 +1548,36 @@ enum NotificationsHomeBlockLayout {
         itemCount > 0
     }
 
+    // MARK: - 外接显示器快捷开关（2026-10-27 / docs/53 D-08）
+
+    /// 表头「外接显示器」快捷开关显示不显示（纯函数，与 `showsClearAction` 同一条纪律：
+    /// 判据抽出来，视图只负责接上）。
+    ///
+    /// 判据：**浮层总开关（`enableNotificationHUD`）开着**才显示——总开关关掉时这颗按钮点了
+    /// 没有可见效果，挂在 16pt 表头里只会像坏了。设置页同一判据做的是 `.disabled`
+    /// （2026-10-16 / docs/53），这里直接**不画**：紧档表头里一颗永远灰的图标比少一颗更吵。
+    static func showsExternalDisplaysToggle(hudEnabled: Bool) -> Bool {
+        hudEnabled
+    }
+
+    /// 快捷开关的**图标两态**（纯函数）：开 = 实心 `rectangle.on.rectangle.fill`（主屏 +
+    /// 外接屏都显示），关 = 空心 `rectangle.on.rectangle`（仅主屏）；视图里亮度再差一档
+    /// （0.9 / 0.45），填充 + 亮度双重区分。两个名字都钉过 `NSImage(systemSymbolName:)`
+    /// 存在性（单测里逐个验，拼错名字 = 上屏一颗空白）。
+    static func externalDisplaysIconName(onExternalDisplays: Bool) -> String {
+        onExternalDisplays
+            ? "rectangle.on.rectangle.fill"
+            : "rectangle.on.rectangle"
+    }
+
+    /// 快捷开关的**悬停说明键两态**（纯函数）：两态各说清「现在怎样 + 点了会怎样」——
+    /// 状态只有悬停文案一层兜底，这把键必须跟状态一起换。
+    static func externalDisplaysHintKey(onExternalDisplays: Bool) -> String {
+        onExternalDisplays
+            ? "module.notifications.externalDisplays.on"
+            : "module.notifications.externalDisplays.off"
+    }
+
     /// **第一行**的文案：「App 名」。
     static func sourceLabel(appName: String, title: String) -> String {
         let name = NotificationText.singleLine(appName)
@@ -1619,6 +1649,11 @@ private struct NotificationsHomeBlockView: View {
     @State private var hoveredID: Int64?
     /// hover 抑制 token（docs/40 D-02）：一个视图一个，`onDisappear` 复位。
     @State private var scrollToken = UUID()
+    /// 外接显示器快捷开关的当前值与浮层总开关（2026-10-27 / docs/53 D-08）：与设置页
+    /// 「在外接显示器上也显示」**同一份存储**（`notificationHUDOnExternalDisplays`），这里
+    /// 只读不缓存；总开关关掉时按钮不显示（`showsExternalDisplaysToggle`）。
+    @Default(.notificationHUDOnExternalDisplays) private var notificationHUDOnExternalDisplays
+    @Default(.enableNotificationHUD) private var enableNotificationHUD
 
     var body: some View {
         VStack(alignment: .leading, spacing: NotificationsHomeBlockLayout.listSpacing) {
@@ -1683,6 +1718,31 @@ private struct NotificationsHomeBlockView: View {
                 .truncationMode(.tail)
 
             Spacer(minLength: 4)
+
+            // 外接显示器快捷开关（2026-10-27 用户要求「在通知这个位置加个按钮控制」）：
+            // 翻转的**就是设置页那颗开关**（`notificationHUDOnExternalDisplays`，docs/53）——
+            // 一处存储、两处入口；弹浮层那一刻才读键（docs/53 口径 4），这里点完
+            // **下一条通知就换口径**，不用重启。图标 / 悬停说明的两态收在
+            // `externalDisplaysIconName` / `externalDisplaysHintKey`（纯函数）。
+            // 与「清除」同夹 16pt 表头：**不带 capsule**（同 docs/42 D-02 的教训，
+            // 17pt 外框会把表头顶起来），用 `.frame(height:)` 兜底。
+            if NotificationsHomeBlockLayout.showsExternalDisplaysToggle(hudEnabled: enableNotificationHUD) {
+                Button {
+                    notificationHUDOnExternalDisplays.toggle()
+                } label: {
+                    Image(systemName: NotificationsHomeBlockLayout.externalDisplaysIconName(
+                        onExternalDisplays: notificationHUDOnExternalDisplays
+                    ))
+                        .font(.system(size: NotificationRowMetrics.refresh, weight: .medium))
+                        .foregroundStyle(.white.opacity(notificationHUDOnExternalDisplays ? 0.9 : 0.45))
+                        .frame(height: NotificationsHomeBlockLayout.headerHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(NotificationText.localized(
+                    NotificationsHomeBlockLayout.externalDisplaysHintKey(onExternalDisplays: notificationHUDOnExternalDisplays)
+                ))
+            }
 
             // 一键清除：只在有内容时出现（空列表上放一颗无效按钮只会让人以为坏了）。
             // **只把当前列表标记为已关闭**，系统通知中心里的条目一条都不动。

@@ -120,6 +120,10 @@ LOCALE_KEYS = (
     # docs/50（2026-10-16）：首页音乐块的封面成了「打开正在放歌的那个音乐软件」的入口，
     # 这条是该入口的 tooltip 与可访问性文案（en + zh-Hans）。
     'module.music.openPlayer',
+    # 2026-10-27（docs/53 D-08）：首页通知块表头的「外接显示器」快捷开关，两态悬停说明
+    # （设置页同一开关的快捷入口，键翻转同一个 notificationHUDOnExternalDisplays）。
+    'module.notifications.externalDisplays.off',
+    'module.notifications.externalDisplays.on',
     # 2026-10-16（通知浮层的屏口径，docs/53）：设置页「通知浮层」那一段的控件文案与段脚注。
     # 这五条（含段标题）此前**根本没有进 catalog**——整段是英文直显；本批顺手补齐 zh-Hans。
     # 段脚注原文写了「appears on every display at once」，与新口径（默认只上主屏）冲突，

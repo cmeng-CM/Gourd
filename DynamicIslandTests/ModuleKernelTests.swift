@@ -4502,6 +4502,44 @@ final class ModuleKernelTests: XCTestCase {
         }
     }
 
+    /// **外接显示器快捷开关**（2026-10-27 / docs/53 D-08）：首页通知块表头那颗多屏图标，
+    /// 翻转的**就是设置页「在外接显示器上也显示」的同一份存储**（`notificationHUDOnExternalDisplays`）。
+    /// 这里钉三件事：闸门（浮层总开关关掉就不显示，与设置页 `.disabled` 同判据）、
+    /// 两态图标、两态悬停说明键。
+    func testNotificationsHomeBlockExternalDisplaysToggleGateAndTwoStates() {
+        // 闸门：总开关关掉时按钮不出现——挂一颗点了没有可见效果的图标只会让人以为坏了。
+        XCTAssertFalse(
+            NotificationsHomeBlockLayout.showsExternalDisplaysToggle(hudEnabled: false),
+            "浮层总开关关掉时不显示"
+        )
+        XCTAssertTrue(
+            NotificationsHomeBlockLayout.showsExternalDisplaysToggle(hudEnabled: true),
+            "总开关开着就显示（与列表是否为空无关——它管的是浮层，不是这份列表）"
+        )
+
+        // 两态：图标必须换、说明键必须换（键不同 → 悬停文案必然不同），否则状态读不出来。
+        XCTAssertNotEqual(
+            NotificationsHomeBlockLayout.externalDisplaysIconName(onExternalDisplays: false),
+            NotificationsHomeBlockLayout.externalDisplaysIconName(onExternalDisplays: true),
+            "开 / 关必须换图标"
+        )
+        XCTAssertNotEqual(
+            NotificationsHomeBlockLayout.externalDisplaysHintKey(onExternalDisplays: false),
+            NotificationsHomeBlockLayout.externalDisplaysHintKey(onExternalDisplays: true),
+            "开 / 关必须换悬停说明键"
+        )
+
+        // 图标名必须是真实存在的 SF Symbol：拼错名字不报编译错，上屏就是一颗空白，
+        // 在单测里就该红（两态都验）。
+        for on in [false, true] {
+            let name = NotificationsHomeBlockLayout.externalDisplaysIconName(onExternalDisplays: on)
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: name, accessibilityDescription: nil),
+                "SF Symbol 不存在：\(name)"
+            )
+        }
+    }
+
     /// **首页「清除」复用的是面板同一个 `dismissAll()`**（docs/42 D-01/D-02）：**只从岛上移除**——
     /// 列表清空、把这批 id 追加进已关闭集合并落盘，而**通知库里的记录一条不动**
     /// （库里仍在 → 说明既没有删库记录、也没有走 AX 真关；`dismissAll` 压根不碰台账）。
