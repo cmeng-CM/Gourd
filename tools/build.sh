@@ -3,7 +3,8 @@
 #
 # 用法（在仓库内任意位置）：
 #   sh tools/build.sh                # 构建 Release 的 Gourd.app，打印产物路径
-#   sh tools/build.sh --install      # 构建后安装到 /Applications/壶中天.app（自动退出旧实例）
+#   sh tools/build.sh --install      # 构建后安装到 /Applications/壶中天.app（退出旧实例 + 启动新版本）
+#   sh tools/build.sh --install --no-open   # 同上，但装完不自动启动
 #   sh tools/build.sh --dmg          # 构建后在 dist/ 产出拖拽安装式 DMG
 #   sh tools/build.sh --install --dmg
 #   其余参数原样转给 xcodebuild（如 CODE_SIGN_IDENTITY=... 覆盖）。
@@ -31,11 +32,13 @@ installed_app="/Applications/壶中天.app"
 
 do_install=false
 do_dmg=false
+do_open=true
 extra=()
 for a in "$@"; do
   case "$a" in
     --install) do_install=true ;;
     --dmg) do_dmg=true ;;
+    --no-open) do_open=false ;;
     *) extra+=("$a") ;;
   esac
 done
@@ -141,10 +144,59 @@ plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist"
 plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
 verify_no_credentials "$app"
 
-if [ "$do_install" = true ]; then
-  # 同名应用会抢刘海位，先退出正在运行的实例（按 bundle id，两个配置都试）
+# 退出正在运行的实例（2026-10-22）：Apple Events 会被系统「自动化」权限拒绝
+# （实测 -10004 权限违例），旧版用 `|| true` 吞掉错误 → 「装成功、跑的还是旧进程」。
+# 现在逐级降级并校验结果：quit → SIGTERM → SIGKILL；仍退不掉就中止安装，
+# 绝不覆盖一个还在跑的二进制。
+gourd_running() { pgrep -x Gourd >/dev/null 2>&1; }
+
+quit_running_instances() {
+  local attempt
+  # 1) 请应用自己退（走正常退出路径）
   osascript -e 'tell application id "com.cmeng.gourd" to quit' >/dev/null 2>&1 || true
   osascript -e 'tell application id "com.cmeng.gourd.dev" to quit' >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5 6; do
+    gourd_running || return 0
+    sleep 0.5
+  done
+  # 2) 无响应或 Apple Events 被拒：降级到 SIGTERM
+  echo "提示：旧实例未响应退出请求（常因「自动化」权限被拒），改用 SIGTERM"
+  pkill -x Gourd >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5 6; do
+    gourd_running || return 0
+    sleep 0.5
+  done
+  # 3) 仍在：SIGKILL
+  echo "提示：SIGTERM 后旧实例仍在，改用 SIGKILL"
+  pkill -9 -x Gourd >/dev/null 2>&1 || true
+  for attempt in 1 2 3; do
+    gourd_running || return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# 装完直接启动（2026-10-22 用户要求）：仅在 GUI 会话里 open，避免起出没有 UI 会话的实例。
+launch_installed_app() {
+  if [ "$(launchctl managername 2>/dev/null || true)" != "Aqua" ]; then
+    echo "提示：当前不是 GUI 会话（launchctl managername ≠ Aqua），不自动启动；请手动打开 ${installed_app}"
+    return 0
+  fi
+  if open "$installed_app" >/dev/null 2>&1; then
+    echo "已启动 ${installed_app}"
+  else
+    echo "提示：自动启动失败，请手动打开 ${installed_app}"
+  fi
+}
+
+if [ "$do_install" = true ]; then
+  # 同名应用会抢刘海位，先退出正在运行的实例
+  if quit_running_instances; then
+    echo "已退出旧实例"
+  else
+    echo "中止：旧实例仍在运行，未安装。请手动退出「壶中天」后重试。" >&2
+    exit 1
+  fi
   # 两个历史落地名都查一遍（旧的 Gourd.app、新的 壶中天.app）；只删 bundle id 命中的，
   # 读到别人的 id 一律中止，不硬删非本工程应用
   for old in /Applications/Gourd.app "$installed_app"; do
@@ -182,6 +234,12 @@ if [ "$do_install" = true ]; then
     echo "已重新登记 ${installed_app}（避免半登记起成无 UI 会话的实例）"
   else
     echo "提示：重新登记 ${installed_app} 失败（若启动异常请手工 lsregister -f）"
+  fi
+  # 启动放在重新登记之后：否则 open 可能命中旧的半条登记或 DerivedData 副本。
+  if [ "$do_open" = true ]; then
+    launch_installed_app
+  else
+    echo "提示：已跳过自动启动（--no-open）"
   fi
   # 注意：变量后面紧跟中文全角括号时必须写 ${var}——`$var（` 会把全角括号的首字节
   # 当成变量名的一部分，`set -u` 下报 unbound variable（2026-10-12 实跑安装才暴露，
