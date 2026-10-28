@@ -5,6 +5,27 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-28
+
+系统门槛从 macOS 26 降到 **macOS 15（Sequoia）**。26 专属 API（液态玻璃一族）此前已全部
+有守卫（Debug 一直按 14.6 编译），Release 降到 15.0 实测零可用性错误。
+
+### 变更
+
+- **支持 macOS 15 起**：`MACOSX_DEPLOYMENT_TARGET` Release 26.0 → 15.0，安装声明的最低系统
+  与二进制最低系统随之自动降为 15.0。此前在 15.x 上安装会在启动时被系统弹「不能与此版本的
+  macOS 配合使用」拒绝（正是本版要解决的问题）。
+- **液态玻璃降级补圆角**：无 `NSGlassEffectView` 的系统（≤15）回落 `NSVisualEffectView`，
+  降级分支从矩形模糊改为与玻璃分支同圆角。
+- **命令行安装加系统版本门**（[install.sh](install.sh)）：低于 macOS 15 现在先明确提示
+  「需要 15.0 及以上」，不再装完才在启动时被拒。
+
+### 已知限制
+
+- **macOS 15 上没有 Liquid Glass**：液态玻璃相关观感自动降级——面板背景 / 通知浮层回落
+  普通模糊材质（带圆角），OSD 与锁屏的 liquid 选项在 26 以下不可选；核心功能不受影响。
+- 15.x 真机验收（装包 → 放行 → 主要功能）以当次发布报告为准。
+
 ## [0.4.0] - 2026-10-28
 
 自 0.3.0 起累计 7 个提交。本版重点是**日程解析改为模型直出**（AI Key 迁移到文件凭据）、

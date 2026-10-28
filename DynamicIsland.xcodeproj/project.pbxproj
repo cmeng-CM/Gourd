@@ -748,7 +748,7 @@
 				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1202;
+				CURRENT_PROJECT_VERSION = 1203;
 				DEVELOPMENT_ASSET_PATHS = "\"DynamicIsland/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -792,7 +792,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd.dev;
 				PRODUCT_MODULE_NAME = Gourd;
 				PRODUCT_NAME = Gourd;
@@ -827,7 +827,7 @@
 				CODE_SIGN_IDENTITY = "Gourd Local";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1202;
+				CURRENT_PROJECT_VERSION = 1203;
 				DEVELOPMENT_ASSET_PATHS = "\"DynamicIsland/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -875,7 +875,7 @@
 				// 实测零可用性错误。15 上面板液态玻璃走 LiquidGlassBackground 内置降级链
 				// （NSVisualEffectView + 圆角）。15.x 真机验收记录在发布报告（docs/33）。
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd;
 				PRODUCT_MODULE_NAME = Gourd;
 				PRODUCT_NAME = Gourd;
