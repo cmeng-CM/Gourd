@@ -500,10 +500,10 @@
 | 模型 ID | 按端点要求填写；Gemini 使用不含斜杠的裸模型 ID |
 | 文本/视觉能力 | 手动声明；声明视觉能力不代表已经实测 |
 | 默认文字/视觉模型 | 选择后立即保存；配置表单另点保存，两个动作独立 |
-| API 密钥 | 新密钥仅存 Keychain，配置只保留引用；空白输入保留原密钥，清除须勾选单独开关 |
+| API 密钥 | 新密钥仅存**本机应用数据目录**（`~/Library/Application Support/Gourd/AICredentials/`，目录 0700、文件 0600），配置只保留 UUID 引用；空白输入保留原密钥，清除须勾选单独开关。**0.4.0 起不再使用钥匙串** |
 | 测试连接 / 取消测试 | 用当前表单发送短文字探针；成功不保存，也不验证视觉能力 |
 
-OpenAI compatible 和 Ollama 可配置无认证端点；存在秘密引用但 Keychain 条目缺失时仍报错。加载配置失败会保留明确错误，修复落盘后须重启重新加载。连接失败、限额或能力错误显示可读提示；取消不能保证服务商已计费请求撤销。两套 AI 设置暂时并存，不迁移或删除旧屏幕助手的 Defaults 凭据。
+OpenAI compatible 和 Ollama 可配置无认证端点；存在引用但密钥文件缺失时仍报错；从 0.3.x 升级后第一次生成若提示「未配置凭据」，在设置里重新输入一次即可（见 [docs/54](../54-calendar-editor-feedback-and-keychain-migration.md)）。加载配置失败会保留明确错误，修复落盘后须重启重新加载。连接失败、限额或能力错误显示可读提示；取消不能保证服务商已计费请求撤销。两套 AI 设置暂时并存，不迁移或删除旧屏幕助手的 Defaults 凭据。
 
 修复前曾通过 815 个 XCTest、11 个 Python 回归及完整自动门十阶段，随后首次整体终审为 No。唯一修复波次 `23c34167` 后，新 attempt `20261013T192520-101cb7e60c2a4a1799d322d9805ec796` 实际通过 819 个 XCTest（0 失败/跳过）、11 个 Python 回归及完整自动门十阶段，Debug/Release 的 Gourd Local 签名检查通过。文档证据复核实际通过，fresh 独立整体终审 Ready to merge: Yes、未解决 Critical/Important/Minor 均为 0；已从此新 attempt 安装并启动 `/Applications/壶中天.app`（0.2.0、build 1200），安装内容与 Gourd Local deep/strict 签名核对通过。启动不等于界面验收；本次文档回写后的证据复核、真实模型线上兼容及 Keychain/设置界面与导航的人工确认仍待完成，四类别人工项 pending、工作流未关闭；人工项在安装后逐项确认，自动通过不等于人工验收，见 [设计及实际交付](../45-ai-calendar-and-meeting-actions.md)。
 
