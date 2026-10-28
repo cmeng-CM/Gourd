@@ -870,10 +870,11 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				// Modified for Gourd (2026-10-08): 对外声明 macOS 26 起（与 README、用户手册口径一致）。
-				// 代码对 26 专属 API 有守卫、Debug 仍按 14.6 编译，但只在 26+ 上验证过——
-				// 宁可让旧系统在启动前就被挡下，也别让人装上再崩。
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				// Modified for Gourd (2026-10-28): 对外声明降到 macOS 15 起（README、用户手册同步）。
+				// 26 专属 API（液态玻璃一族）全部有守卫，Debug 一直按 14.6 编译；Release@15.0
+				// 实测零可用性错误。15 上面板液态玻璃走 LiquidGlassBackground 内置降级链
+				// （NSVisualEffectView + 圆角）。15.x 真机验收记录在发布报告（docs/33）。
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 0.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cmeng.gourd;
 				PRODUCT_MODULE_NAME = Gourd;

@@ -33,6 +33,13 @@ if [ "$(uname -m)" != "arm64" ]; then
   die "当前芯片是 $(uname -m)，而「${APP_NAME}」目前只提供 Apple 芯片（arm64）构建。"
 fi
 
+# 系统门槛（2026-10-28，0.5.0 起）：应用声明 macOS 15 起可用。低于 15 的系统装得上但
+# 启动即被「不能与此版本的 macOS 配合使用」挡下——先在这里把话说清楚，别让人白装一遍。
+os_major="$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)"
+if [ -z "$os_major" ] || [ "$os_major" -lt 15 ]; then
+  die "当前系统是 macOS $(sw_vers -productVersion 2>/dev/null || echo 未知)，而「${APP_NAME}」需要 macOS 15.0 及以上。"
+fi
+
 [ -w /Applications ] || die "当前用户对 /Applications 没有写权限，请改用 README 里的 DMG 方式安装。"
 
 # ---- 1. 定版本 ------------------------------------------------------------

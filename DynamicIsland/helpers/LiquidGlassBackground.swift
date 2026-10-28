@@ -267,6 +267,11 @@ public struct LiquidGlassBackground<Content: View>: NSViewRepresentable {
         // Fallback for earlier macOS – use an ordinary blur.
         let fallback = NSVisualEffectView()
         fallback.material = .underWindowBackground
+        // 与玻璃分支同圆角（macOS 15 降级路径，2026-10-28）：面板/卡片都是圆角矩形，
+        // 矩形模糊会在四角露馅。
+        fallback.wantsLayer = true
+        fallback.layer?.cornerRadius = cornerRadius
+        fallback.layer?.masksToBounds = true
 
         let hosting = NSHostingView(rootView: content)
         hosting.translatesAutoresizingMaskIntoConstraints = false

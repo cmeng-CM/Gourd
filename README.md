@@ -27,7 +27,7 @@
 
 ## 安装
 
-要求 **macOS 26（Tahoe）及以上**、**Apple 芯片（arm64）**。
+要求 **macOS 15（Sequoia）及以上**、**Apple 芯片（arm64）**（液态玻璃观感需 macOS 26，低版本自动降级为普通模糊）。
 
 **方式一 · DMG**（推荐给使用者）：到 [Releases](../../releases) 下载 `Gourd-0.4.0.dmg`，打开后把「壶中天」拖进「应用程序」。
 
