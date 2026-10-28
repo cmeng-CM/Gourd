@@ -6,6 +6,25 @@
 >
 > 「壶中天」取意壶中天地——一个小容器里装下一整块工作台；屏幕顶部那个小口展开，就是你的全部工具。
 
+## 预览
+
+<p align="center">
+  <img src="docs/images/readme/hero-home.png" alt="首页三带：环境带 · 今天带 · 可变流" width="860">
+  <br><sub><b>首页</b>：环境带（音乐 · 前台应用 · 系统读数）→ 今天带（日期农历 · 剩余工作日 · 下一个日程）→ 可变流（今日清单 · 通知）</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/readme/calendar.png" alt="日历页" width="415">　<img src="docs/images/readme/launcher.png" alt="启动台" width="415">
+  <br><sub><b>日历页</b>（月历 + 农历 + 分色点与角标 · 右栏列表 / 编辑）与 <b>启动台</b>（可搜索、可固定、可拖动排序）</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/readme/idle.png" alt="收起态" width="380">
+  <br><sub><b>收起态</b>：左边待办、右边通知铃铛；计时器 / 下载 / 录屏 / 勿扰等状态也在这里显示</sub>
+</p>
+
+> 截图为真实界面；图中个人信息与第三方应用图标已做模糊处理，启动台配图为演示数据。完整图文手册（14 节，含权限与逐项设置参考）见 [docs/manual/manual-0.5.0.html](docs/manual/manual-0.5.0.html)。
+
 ## 与 Atoll 的关系
 
 - **代码来路**：应用工程 fork 自 [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll)（GPL-3.0），基线锁定 tag **`v2.3.3-beta.3`**（commit `c7305ec`）；上游完整历史保留在 `main`，季度同步走原生 `git merge`。
