@@ -41,13 +41,8 @@ struct CalendarDraft: Equatable {
     var generationMode: CalendarGenerationMode = .manual
     var confirmations: Set<ScheduleConfirmation> = []
 
-    func validateGeneration() throws {
-        guard generationMode != .required, confirmations.isEmpty else { throw ScheduleParsingError.confirmationRequired }
-    }
-
     func eventInput(calendar: Calendar = .current) throws -> CalendarEventInput {
         guard kind == .event else { throw CalendarMutationError.wrongRecordType }
-        try validateGeneration()
         try validateTarget()
         return try CalendarEventInput(
             title: title, start: start, end: end, isAllDay: isAllDay,
@@ -58,7 +53,6 @@ struct CalendarDraft: Equatable {
 
     func reminderInput() throws -> CalendarReminderInput {
         guard kind == .reminder else { throw CalendarMutationError.wrongRecordType }
-        try validateGeneration()
         try validateTarget()
         return CalendarReminderInput(
             title: title.trimmingCharacters(in: .whitespacesAndNewlines), due: start, isAllDay: isAllDay,
@@ -309,19 +303,6 @@ final class CalendarPanelSession: ObservableObject {
         }
         generationState = .cancelled
         generationError = nil
-    }
-
-    /// Explicit manual fallback still requires acknowledgment of current date and time.
-    func useManualEntry() {
-        cancelSourceParsing()
-        draft?.generationMode = .manual
-        draft?.confirmations = Set(ScheduleConfirmation.allCases)
-        generationState = .idle
-    }
-
-    func confirmSource(_ item: ScheduleConfirmation) {
-        guard draft?.generationMode != .required else { return }
-        draft?.confirmations.remove(item)
     }
 
     init(
@@ -624,7 +605,6 @@ final class CalendarPanelSession: ObservableObject {
             return false
         }
         do {
-            try submitted.validateGeneration()
             try submitted.validateTarget()
             if submitted.kind == .event { _ = try submitted.eventInput(calendar: calendar) }
             else { _ = try submitted.reminderInput().dueDateComponents(calendar: calendar) }

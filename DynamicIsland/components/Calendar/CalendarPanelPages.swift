@@ -529,7 +529,6 @@ struct CalendarPanelPages: View {
                                                   maximumLines: 4, fillsAvailableHeight: true)
                             .frame(maxHeight: .infinity)
                             .accessibilityIdentifier("calendar-notes")
-                        confirmationControls(draft)
                         if !hasAccess { Text("Calendar access is required.").font(CalendarPanelTypography.action).foregroundStyle(.secondary) }
                     }
                     .disabled(session.isSubmitting)
@@ -578,22 +577,6 @@ struct CalendarPanelPages: View {
         CalendarSourceGeneration(session: session, initialText: draft.sourceText,
                                  fillsAvailableHeight: true, onFocus: setNativeEditorFocus)
             .id(session.draftIdentity)
-    }
-
-    @ViewBuilder
-    private func confirmationControls(_ draft: CalendarDraft) -> some View {
-        if draft.generationMode == .required || !draft.confirmations.isEmpty {
-            Text("calendar.generation.blocked").font(CalendarPanelTypography.action).foregroundStyle(.secondary)
-                .accessibilityIdentifier("calendar-generation-blocked")
-            if draft.generationMode != .required {
-                ForEach(ScheduleConfirmation.allCases, id: \.rawValue) { item in
-                    if draft.confirmations.contains(item) {
-                        Button(LocalizedStringKey(item.labelKey)) { session.confirmSource(item) }
-                            .font(CalendarPanelTypography.action).accessibilityIdentifier("calendar-generation-confirm-" + item.rawValue)
-                    }
-                }
-            }
-        }
     }
 
     private func stringBinding(_ path: WritableKeyPath<CalendarDraft, String>) -> Binding<String> {
@@ -705,26 +688,55 @@ struct CalendarPanelPages: View {
             case .list: EmptyView()
             case .editor:
                 HStack(spacing: 12) {
-                    Button("Cancel") { session.requestCancel() }.accessibilityIdentifier("calendar-cancel")
+                    Button { session.requestCancel() } label: {
+                        Text("Cancel")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 22)
+                            .frame(height: 34)
+                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(0.10)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("calendar-cancel")
                     Spacer(minLength: 0)
-                    if hasAccess {
-                        // 保存出口按入口分叉（docs/39 D-28）：保存成功、档已退到列表、来源是首页 →
-                        // 与「返回」同一条回家路；判据收在 shouldReturnHomeAfterSave 所在的会话层。
-                        Button("calendar.panel.save") {
-                            Task {
-                                _ = await session.save()
-                                if session.shouldReturnHomeAfterSave {
-                                    onReturnSource(.home(anchor: session.homeScrollAnchor))
-                                }
-                            }
-                        }
-                            .disabled(targets.isEmpty || session.draft?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-                                      || session.draft?.generationMode == .required || session.draft?.confirmations.isEmpty != true)
-                            .accessibilityIdentifier("calendar-save")
-                    } else { authorizationButton }
-                }.disabled(session.isSubmitting).font(CalendarPanelTypography.action).frame(height: 28)
+                    if hasAccess { saveButton } else { authorizationButton }
+                }
+                .disabled(session.isSubmitting)
+                .frame(height: 40)
             }
         }
+    }
+
+    /// 保存只受「标题非空 + 有日历目标」约束：2026-10-22 起日期/时间确认项不再阻断保存，
+    /// 由用户自己核对表单里的值。按钮比正文大一号，主次靠底色区分。
+    ///
+    /// **保存出口也按入口分叉**（2026-10-27 用户反馈「添加完保存还是回到日历面板」）：
+    /// 保存成功、档已退到列表、来源是首页 → 与「返回」同一条回家路（`onReturnSource` 交回
+    /// `.home`，宿主把面板切回首页）；日历面板自己的入口照旧留在列表。判据收在
+    /// `CalendarPanelSession.shouldReturnHomeAfterSave`（保存后 `draftContext` 已清空，
+    /// 所以读的是保存成功那一刻写回的 `returnSource`）。
+    private var saveButton: some View {
+        let enabled = !targets.isEmpty
+            && session.draft?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        return Button {
+            Task {
+                _ = await session.save()
+                if session.shouldReturnHomeAfterSave {
+                    onReturnSource(.home(anchor: session.homeScrollAnchor))
+                }
+            }
+        } label: {
+            Text("calendar.panel.save")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(enabled ? 0.95 : 0.45))
+                .padding(.horizontal, 26)
+                .frame(height: 34)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(.white.opacity(enabled ? 0.18 : 0.07)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier("calendar-save")
     }
 
     @ViewBuilder
@@ -868,15 +880,10 @@ private struct CalendarSourceGeneration: View {
             // 状态词不再单独占行：只有失败时留一行「生成失败：<原因>」+ 改为手工填写。
             // 重试就是上面那枚常驻按钮——不再有第二个重试入口（设计图 C4）。
             if session.generationState == .failed {
-                HStack(spacing: 8) {
-                    (Text("calendar.generation.state.failed") + Text(session.generationError.map { "：" + $0 } ?? ""))
-                        .font(CalendarPanelTypography.action).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("calendar-generation-failed")
-                    manualEntryButton
-                }
-            } else if session.draft?.generationMode == .required || session.generationState == .cancelled {
-                manualEntryButton
+                (Text("calendar.generation.state.failed") + Text(session.generationError.map { "：" + $0 } ?? ""))
+                    .font(CalendarPanelTypography.action).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("calendar-generation-failed")
             }
         }
         // 让原文区也能分到父布局的富余高度；没有富余时退回 2 行下限。
@@ -910,18 +917,6 @@ private struct CalendarSourceGeneration: View {
         case .busy: session.cancelSourceParsing()
         case .ready, .failed: generate()
         }
-    }
-
-    /// 「改为手工填写」：浅底文字按钮（原来是一枚看不出能点的纯文字）。
-    private var manualEntryButton: some View {
-        Button { session.useManualEntry() } label: {
-            Text("calendar.generation.manual")
-                .font(CalendarPanelTypography.action)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.10)))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("calendar-generation-manual")
     }
 
     private var hasSource: Bool {

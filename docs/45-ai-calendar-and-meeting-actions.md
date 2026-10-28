@@ -320,7 +320,7 @@ T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全�
 
 用户反馈两点：① 不能要求用户输入的数据格式百分百 OK，原文可以交给模型，让模型输出正确格式，代码不应再按原文语法硬校验；② 这类日程语义解析不需要思考模式，模型思考让返回变慢。
 
-**解析契约**：模型收到任意原文与参考时刻/时区，直接返回规范字段 `title/date/start/end/isAllDay/location/notes/url/timeZoneIdentifier/needsDateConfirmation/needsTimeConfirmation`；日期 YYYY-MM-DD，时刻 HH:mm 或 HH:mm:ss，时区 IANA。相对日期由模型按参考时刻/参考时区解析；不确定时用两个 needs*Confirmation 布尔量表达，应用只映射为既有 `.date/.time` 确认项。
+**解析契约**：模型收到任意原文与参考时刻/时区，直接返回规范字段 `title/date/start/end/isAllDay/location/notes/url/timeZoneIdentifier/needsDateConfirmation/needsTimeConfirmation`；日期 YYYY-MM-DD，时刻 HH:mm 或 HH:mm:ss，时区 IANA。相对日期由模型按参考时刻/参考时区解析；不确定时用两个 needs*Confirmation 布尔量表达，应用只映射为既有 `.date/.time` 确认项。（2026-10-22 收紧：给出 `start` 时必须给出 `date`，见文末小节。）
 
 **应用只做结构校验**：日期/时刻范围、`end > start`、全天必须有日期、时区有效；不再要求或重新解析原文证据（旧 `dateEvidence/startEvidence/endEvidence` 字段删除）。已知会议链接仍必须来自原文，普通链接只做结构校验；显式 GMT/UTC 与返回时区冲突、模型改了来源时区但原文没有依据、全天但原文没有「全天」时，降级为日期/时间确认，不整单失败。
 
@@ -336,3 +336,21 @@ T1独立复审通过0/0/0，68张隐藏真实页面夹具图含中段地点全�
 - 旧 Keychain v1/v2 **不再读取**；生产路径不调用 `AIKeychainSecretStore.read` / `AIMigratingSecretStore`，两者只保留为历史回归。升级后第一次生成会提示“未配置凭据”，在设置里重新输入一次即可。
 - 安全取舍：文件是明文、本机用户可读，弱于 Keychain。为此 `AGENTS.md` 增加不可协商红线：密钥不得进入仓库、提交、PR、截图、日志、测试夹具、文档、App 包、DMG 或发布资产；`tools/build.sh` 打包前扫描当前凭据内容，发现即中止。
 - 引导：升级后如果第一次生成提示“未配置凭据”，在「设置 → 集成 → AI 模型」重新输入一次 API Key 即可，之后不会再有任何钥匙串弹框。
+
+## 2026-10-22 有时刻没有日期时不再丢掉时刻（用户反馈）
+
+用户输入「下午三点进行中蓝晨光的技术响应文件」，生成结果是表单默认的 10:00–11:00，而原文写的是 15:00。
+
+**根因**：提示词同时要求「把下午三点换算成 15:00」和「缺日期返回 null」，却没有一句规定「有时刻、无日期」怎么办；解析层又只在 `date` 与 `start` **同时存在**时才构造开始时刻（`if let day, let clock`）。两条叠加：模型给出的 15:00 被丢弃，草稿保留新建时的默认整点，界面只剩两枚确认项——用户看到的是一个「像解析结果」的默认值。
+
+**口径（不改响应格式、不设词表）**：语义仍然全部由模型解析，应用不保存任何中文时间词；`date` + `start` 两个字段保留，因为全天、只有日期、只有时刻三种形态需要各自可空，合并成单个时间串会丢掉「部分成功」。
+
+- 提示词收紧为「完全解析」契约：日词必须解析成 `YYYY-MM-DD`；**给出时刻就必须给出日期**（原文没写日期时用参考日，或参考时刻之后最近的一次）；只有既无日期又无时刻才返回双 null；两个 `needs*Confirmation` 的语义一并写死。
+- 解析层兜底：模型违约（有 `start`、无 `date`）时锚到**参考时区的参考日**（沿用「参考区求年月日、来源区构造该日」），保留解析出的时刻，并保留 `.date` 确认；不再丢弃时刻，也不猜小时。
+- 不变量：`start` 非空的候选一定带着可构造的那一天（`date` 或参考日），写在 `ScheduleCandidate` 的类型注释里。
+- 回归：`ScheduleGenerationTests.testClockWithoutDateKeepsTheClockAndAsksOnlyForTheDate`、`testClockWithoutDateAnchorsToTheReferenceZoneDay`；`testScheduleRequestDisablesReasoningAndOmitsEvidenceGrammar` 增加契约句断言。
+
+**已知代价**：相对日与时刻是否正确完全由模型保证，应用无法反证（2026-10-21 的取舍不变）。模型若按错误时区算日界，只会体现为日期不对，需要用户看表单核对；因此这一类问题只能在提示词层修，不能靠再加词表。
+
+**2026-10-22 后续（用户决定）：确认项不再作为保存门。**
+「确认日期 / 确认时间」两枚按钮、随附红字提示与「改为手工填写」全部移除；编辑页底部只留**保存 / 取消**，按钮放大（15pt、34 高、取消浅底、保存为主）。保存只校验标题非空、有可写日历目标；`draft.confirmations` / `generationMode` 仍由解析写入，只作元数据，不再阻断保存，也不再出现在界面上。回归用例改名为 `testUnconfirmedDraftIsStillSavable`、`testSourceRevisionChangeKeepsTheDraftSavable`、`testConflictingClocksAreRecordedWithoutBlockingTheWriter`、`testMissingAIFailsGenerationButKeepsTheDraftSavable`、`testCancelSourceParsingLeavesTheDraftSavable`。

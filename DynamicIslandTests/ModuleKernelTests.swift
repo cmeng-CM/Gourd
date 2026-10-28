@@ -13590,20 +13590,20 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.draft?.start, date(14))
         XCTAssertEqual(session.generationState, .idle)
     }
-    func testConfirmationStateIsDirtyAndGuardedOutsideSessionSave() async throws {
+    /// 2026-10-22：确认项不再阻断保存（用户要求去掉「确认日期/确认时间」两枚按钮，
+    /// 日期时间由用户自己核对）。解析仍记录待核对项，只作元数据。
+    func testUnconfirmedDraftIsStillSavable() async throws {
         let backend = backend(), session = session(backend)
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         session.draft?.title = "Manual"
         session.updateSourceText("unknown date")
-        XCTAssertThrowsError(try XCTUnwrap(session.draft).eventInput(calendar: calendar)) {
-            XCTAssertEqual($0 as? ScheduleParsingError, .confirmationRequired)
-        }
-        session.useManualEntry()
-        session.confirmSource(.date)
-        XCTAssertThrowsError(try XCTUnwrap(session.draft).eventInput(calendar: calendar))
-        session.confirmSource(.time)
+        XCTAssertEqual(session.draft?.confirmations, Set(ScheduleConfirmation.allCases))
         XCTAssertNoThrow(try XCTUnwrap(session.draft).eventInput(calendar: calendar))
         XCTAssertTrue(session.hasDirtyDraft)
+        let saved = await session.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(backend.writeAttempts, 1)
+        XCTAssertNil(session.error)
     }
 
     func testPreciseNaturalLanguageUsesAIAndDefaultsOneHourWithoutRecurrence() async throws {
@@ -13627,6 +13627,30 @@ final class ScheduleGenerationTests: XCTestCase {
         let (value, _) = try await parse("开发需求", output: output(date: nil, evidence: nil, start: nil, startEvidence: nil))
         XCTAssertNil(value.date)
         XCTAssertEqual(value.confirmations, [.date, .time])
+    }
+
+    /// 用户反馈（2026-10-22）：输入「下午三点」却生成表单默认的整点。时刻不能因为缺日期被丢掉：
+    /// 锚到参考日、照用解析出的时刻，只让用户确认日期。
+    func testClockWithoutDateKeepsTheClockAndAsksOnlyForTheDate() async throws {
+        let (value, _) = try await parse("下午三点整理技术文件",
+                                         output: output(date: nil, start: "15:00", end: "16:00"))
+        XCTAssertNil(value.date, "原文没有日期：date 表示「未陈述」，不等于锚定失败")
+        XCTAssertEqual(value.start, date(12, hour: 15))
+        XCTAssertEqual(value.end, date(12, hour: 16))
+        XCTAssertEqual(value.confirmations, [.date], "缺的只有日期，不需要再确认已经解析对的时刻")
+    }
+
+    /// 缺日期时锚的是**参考时区**的那一天（参考区求年月日、来源区构造该日），不是来源时区。
+    func testClockWithoutDateAnchorsToTheReferenceZoneDay() async throws {
+        // 参考瞬间 2026-10-12T23:30Z：上海已是 10-13 07:30，纽约还是 10-12 19:30。
+        let reference = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-12T23:30:00Z"))
+        let (value, _) = try await parse("晚上七点开会 America/New_York",
+                                         output: output(date: nil, start: "19:00", zone: "America/New_York"),
+                                         reference: reference)
+        var newYork = Calendar(identifier: .gregorian)
+        newYork.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        XCTAssertEqual(value.start, newYork.date(from: DateComponents(year: 2026, month: 10, day: 13, hour: 19)))
+        XCTAssertEqual(value.confirmations, [.date])
     }
     func testHuaweiAndTencentInvitationsUseAIAndOriginalLinks() async throws {
         for (text, end, link) in [
@@ -13716,7 +13740,8 @@ final class ScheduleGenerationTests: XCTestCase {
         XCTAssertEqual(session.draft?.start, date(14, hour: 11))
         XCTAssertEqual(session.draft?.confirmations, [.date, .time])
     }
-    func testSourceChangeImmediatelyBlocksSaveAndStaleSuccessCannotClearIt() async {
+    /// 改原文后旧请求的成功结果不得回填；保存本身不再被拦（2026-10-22 去掉确认门）。
+    func testSourceChangeKeepsDraftEditableAndDiscardsStaleSuccess() async {
         let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         session.draft?.title = "Initial"
@@ -13725,46 +13750,43 @@ final class ScheduleGenerationTests: XCTestCase {
         await wait(parser)
         session.updateSourceText("本周四上午开发需求")
         XCTAssertEqual(session.generationState, .debouncing)
-        let saved = await session.save()
-        XCTAssertFalse(saved)
+        XCTAssertEqual(session.draft?.generationMode, .required)
         parser.finish(candidate())
         await request.value
-        XCTAssertEqual(session.draft?.title, "Initial")
+        XCTAssertEqual(session.draft?.title, "Initial", "过期结果不得回填新稿")
         XCTAssertEqual(session.draft?.generationMode, .required)
+        let saved = await session.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(backend.writeAttempts, 1)
     }
-    func testConfirmedCandidateSourceRevisionBlocksDuringDebounceFailureAndClear() async {
+    /// 改原文后仍可保存：确认项与「未重新生成」都不再拦保存（2026-10-22）。
+    func testSourceRevisionChangeKeepsTheDraftSavable() async {
         let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         session.updateSourceText("明天下午五点进行周会")
         let first = Task { await session.parseSource(using: parser) }; await wait(parser)
         var ambiguous = candidate(); ambiguous.confirmations = [.date]
         parser.finish(ambiguous); await first.value
-        session.confirmSource(.date)
-        XCTAssertTrue(session.draft?.confirmations.isEmpty == true)
+        XCTAssertEqual(session.draft?.confirmations, [.date], "解析出的待核对项仍被记录，只作元数据")
         session.updateSourceText("上午开会")
-        let debounceSave = await session.save(); XCTAssertFalse(debounceSave)
-        let second = Task { await session.parseSource(using: parser) }; await wait(parser)
-        parser.fail(); await second.value
-        let failureSave = await session.save(); XCTAssertFalse(failureSave)
-        session.updateSourceText("")
-        let clearedSave = await session.save(); XCTAssertFalse(clearedSave)
         XCTAssertEqual(session.draft?.generationMode, .required)
+        let saved = await session.save()
+        XCTAssertTrue(saved, "改过原文、未重新生成也允许保存当前表单")
+        XCTAssertEqual(backend.writeAttempts, 1)
     }
-    func testCancelManualFallbackRequiresCurrentDateAndTimeConfirmation() async {
+    /// 取消解析后不再需要任何确认：当前表单直接可保存（2026-10-22 去掉确认门）。
+    func testCancelSourceParsingLeavesTheDraftSavable() async {
         let backend = backend(), session = session(backend), parser = ControlledScheduleParser()
         session.beginCreate(kind: .event, on: date(12), calendarID: "fixture-events")
         session.draft?.title = "Manual"
         session.updateSourceText("上午开会")
         let request = Task { await session.parseSource(using: parser) }; await wait(parser)
         session.cancelSourceParsing()
-        session.confirmSource(.date); session.confirmSource(.time)
-        let cancelledSave = await session.save(); XCTAssertFalse(cancelledSave)
-        session.useManualEntry()
-        let unconfirmedSave = await session.save(); XCTAssertFalse(unconfirmedSave)
-        session.confirmSource(.date); session.confirmSource(.time)
+        XCTAssertEqual(session.generationState, .cancelled)
+        let saved = await session.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(backend.writeAttempts, 1)
         parser.fail(); await request.value
-        XCTAssertEqual(session.generationState, .idle)
-        let saved = await session.save(); XCTAssertTrue(saved)
     }
     func testRetryAndNewDraftIsolateLateError() async {
         let backend = backend(), session = session(backend), first = ControlledScheduleParser(), second = ControlledScheduleParser()
@@ -13886,7 +13908,7 @@ final class ScheduleGenerationTests: XCTestCase {
             XCTAssertEqual(value.url?.absoluteString, url)
         }
     }
-    func testRealParserSessionBlocksConflictingClocksBeforeWriterUntilExplicitConfirmation() async {
+    func testConflictingClocksAreRecordedWithoutBlockingTheWriter() async {
         for (text, start, conflict) in [
             ("2026-10-14 17:00开会，改到18:00，19:00结束", "17:00", true),
             ("2026-10-14 17:00开会，改到18:00，19:00结束", "18:00", true),
@@ -13902,16 +13924,9 @@ final class ScheduleGenerationTests: XCTestCase {
             XCTAssertEqual(session.draft?.confirmations, conflict ? [.time] : [])
             XCTAssertEqual(backend.writeAttempts, 0)
             let saved = await session.save()
-            XCTAssertEqual(saved, !conflict)
-            XCTAssertEqual(backend.writeAttempts, conflict ? 0 : 1)
-            if conflict {
-                XCTAssertEqual(session.error, ScheduleParsingError.confirmationRequired.localizedDescription)
-                XCTAssertNotNil(session.draft)
-                session.confirmSource(.time)
-                let confirmedSave = await session.save()
-                XCTAssertTrue(confirmedSave)
-                XCTAssertEqual(backend.writeAttempts, 1)
-            }
+            XCTAssertTrue(saved, "待确认项只作提示，保存照常")
+            XCTAssertEqual(backend.writeAttempts, 1)
+            XCTAssertNil(session.error)
         }
     }
     func testRealParserSessionFreezesReferenceInstantAndZoneAcrossRetryAndCancellation() async throws {
@@ -14365,6 +14380,7 @@ final class ScheduleGenerationTests: XCTestCase {
         let prompt = request.messages[0].text
         XCTAssertTrue(prompt.contains("needsDateConfirmation"))
         XCTAssertTrue(prompt.contains("needsTimeConfirmation"))
+        XCTAssertTrue(prompt.contains("Never return start without a date"), "有时刻必须有日期：缺日期不得把时刻丢掉")
         XCTAssertTrue(prompt.contains("arbitrary"))
         XCTAssertFalse(prompt.contains("Evidence"))
         XCTAssertFalse(prompt.contains("dateEvidence"))
@@ -14985,16 +15001,14 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         gate.release(1)
         await drain { calls.count == 1 }
         XCTAssertEqual(calls, ["latest"])
-        session.useManualEntry()
-        session.confirmSource(.date)
-        session.confirmSource(.time)
+        session.cancelSourceParsing()
         debouncer.schedule(session: session, parse: { calls.append("unexpected") })
         await Task.yield()
         XCTAssertEqual(gate.waits.count, 2)
         XCTAssertEqual(calls.count, 1)
     }
 
-    func testCancelBeforeDelayDoesNotAutoResendOnRestoreAndManualRequiresBothConfirmations() async throws {
+    func testCancelBeforeDelayDoesNotAutoResendOnRestore() async throws {
         let session = makeSession(), gate = CalendarDebounceGate()
         let debouncer = CalendarSourceDebouncer(delay: { try await gate.delay() })
         var calls = 0
@@ -15010,30 +15024,22 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(session.draft?.sourceText, "retain original")
-        XCTAssertThrowsError(try session.draft!.eventInput())
-        session.useManualEntry()
         session.draft?.title = "Manual"
-        session.confirmSource(.date)
-        XCTAssertThrowsError(try session.draft!.eventInput())
-        session.confirmSource(.time)
-        XCTAssertNoThrow(try session.draft!.eventInput())
+        XCTAssertNoThrow(try session.draft!.eventInput(), "取消解析后表单仍可保存")
     }
 
-    func testMissingAIAndSourceChangesBlockSaveUntilManualConfirmation() async {
+    /// 没配置 AI 时生成失败，但当前表单仍可保存（2026-10-22 去掉确认门）。
+    func testMissingAIFailsGenerationButKeepsTheDraftSavable() async {
         let session = makeSession()
         session.draft?.title = "Manual title"
         session.updateSourceText("new invitation")
         await session.parseSource()
         XCTAssertEqual(session.generationState, .failed)
         XCTAssertNotNil(session.generationError)
-        let saved = await session.save()
-        XCTAssertFalse(saved)
-        session.useManualEntry()
-        session.confirmSource(.date)
-        session.confirmSource(.time)
-        session.updateSourceText("another revision")
         XCTAssertEqual(session.draft?.generationMode, .required)
         XCTAssertEqual(session.draft?.confirmations, Set(ScheduleConfirmation.allCases))
+        let saved = await session.save()
+        XCTAssertTrue(saved)
     }
 
     func testFutureMeetingStillOffersOpenBecauseTheTimeGateIsGone() async throws {
@@ -16587,7 +16593,7 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
     }
 
     /// V5 / D-05：生成区三态共用同一枚主按钮——就绪「生成」/ 生成中「取消」/ 失败「重新生成」，
-    /// 三种状态都渲染得出那枚按钮、且落在同一格；失败行只剩红字 + 改为手工填写（没有第二个重试入口）。
+    /// 三种状态都渲染得出那枚按钮、且落在同一格；失败行只剩一行红字（没有第二个重试入口）。
     func testGenerationPrimaryButtonExistsInEveryStateAlongOneSlot() async throws {
         // ① 纯函数：状态映射与文案键（设计图 C4 的三种状态逐字）。
         XCTAssertEqual(CalendarGenerationPrimary(.idle), .ready)
@@ -16631,19 +16637,18 @@ final class CalendarGenerationAndMeetingActionTests: XCTestCase {
             XCTAssertEqual(slot, slots[0].1, "\(state) 与就绪态必须是同一格（位置与尺寸都不变）")
         }
 
-        // ③ 失败行只剩两样：一行红字 + 「改为手工填写」；重试不再是独立入口。
-        // 失败行（生成行下方那一条）只放「改为手工填写」一枚按钮。
+        // ③ 失败行只剩一行红字（2026-10-22：去掉「改为手工填写」，操作按钮只剩保存/取消）。
         // 原文框已从 2 行抬到 4 行，失败行随之下移；band 要覆盖整个生成区高度，不能只按旧 2 行算 60。
         let failureBand = NSRect(x: 0, y: slots[0].1.maxY + 1, width: slots[0].1.maxX + 76,
                                  height: 140)
         let failureRowButtons = collectViews(host) { String(describing: type(of: $0)).contains("FocusRing") }
             .map { $0.convert($0.bounds, to: host) }
             .filter { $0.intersects(failureBand) }
-        XCTAssertEqual(failureRowButtons.count, 1,
-                       "失败行只有「改为手工填写」一枚按钮（实得 \(failureRowButtons.map(\.debugDescription))）")
+        XCTAssertEqual(failureRowButtons.count, 0,
+                       "失败行不再有按钮（实得 \(failureRowButtons.map(\.debugDescription))）")
         let panel = try repositorySource("DynamicIsland/components/Calendar/CalendarPanelPages.swift")
         XCTAssertFalse(panel.contains("Button(\"calendar.generation.retry\")"), "不许再出现第二个重试入口")
-        XCTAssertTrue(panel.contains("manualEntryButton"))
+        XCTAssertFalse(panel.contains("manualEntryButton"), "「改为手工填写」已随确认门一起移除")
         // 只有生成中的「取消」无条件可点：其余两态都要有原文（清空原文后的重试没有意义）。
         XCTAssertTrue(panel.contains("let enabled = primary == .busy || hasSource"))
         // 生成中的 mini 指示器槽位**恒定**占宽，按钮三态才不会左右挪。
