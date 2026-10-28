@@ -81,7 +81,8 @@ LOCALE_KEYS = (
     'calendar.copy.meetingInformation',
     'calendar.copy.selection',
     'calendar.copy.title',
-    'calendar.generation.blocked',
+    # 2026-10-22（docs/45）：确认项退出保存门——「阻断提示」与「改为手工填写」两处 UI 删除，
+    # 两条孤儿键（blocked / manual）随 catalog 一并移出，不再出现在 LOCALE_KEYS 里。
     'calendar.generation.confirm.date',
     'calendar.generation.confirm.time',
     'calendar.generation.error.confirmationRequired',
@@ -91,7 +92,6 @@ LOCALE_KEYS = (
     'calendar.generation.error.invalidResponse',
     'calendar.generation.error.sourceTooLarge',
     'calendar.generation.generate',
-    'calendar.generation.manual',
     'calendar.generation.retry',
     'calendar.generation.settings',
     'calendar.generation.source',

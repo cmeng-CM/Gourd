@@ -241,38 +241,6 @@
         }
       }
     },
-    "calendar.generation.manual": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switch to manual entry"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "改为手工填写"
-          }
-        }
-      }
-    },
-    "calendar.generation.blocked": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review the current date and time. Saving is blocked until generation and confirmations are complete."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请检查当前日期和时间。完成生成及确认前无法保存。"
-          }
-        }
-      }
-    },
     "calendar.generation.unconfigured": {
       "localizations": {
         "en": {
