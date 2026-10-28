@@ -5,6 +5,44 @@ All notable changes to Gourd (a fork of Atoll) will be documented in this file; 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-28
+
+自 0.3.0 起累计 7 个提交。本版重点是**日程解析改为模型直出**（AI Key 迁移到文件凭据）、
+**日历编辑按入口分叉与保存简化**，以及**通知块表头的外接显示器快捷开关**；安装脚本退出旧实例
+与装完自动启动更可靠。
+
+### 变更
+
+- **日程解析改为模型直出**（[docs/45](docs/45-ai-calendar-and-meeting-actions.md)）：原文交给模型，模型直接返回
+  规范字段（标题 / 日期 / 起止 / 全天 / 地点 / 链接 / 时区），代码不再按原文语法硬校验；
+  思考模式关闭，返回更快。
+- **AI Key 改存文件凭据**（[docs/54](docs/54-calendar-editor-feedback-and-keychain-migration.md)）：存
+  `~/Library/Application Support/Gourd/AICredentials/`（目录 0700、文件 0600），生产路径不再读
+  Keychain——升级后第一次生成若提示「未配置凭据」，在设置里重新输入一次即可。仓库与发布产物
+  永不包含密钥（AGENTS 红线 + 打包扫描门禁）。
+- **日历编辑按入口分叉**（[docs/39](docs/39-calendar-light-interactions.md) D-27/D-28）：从首页今天带进的编辑，
+  「返回」与「保存」后都回首页；从日历面板进的照旧回月历。
+- **有时刻无日期不再丢时刻**（[docs/45](docs/45-ai-calendar-and-meeting-actions.md)）：「下午三点进行技术响应」
+  不再退回表单默认整点——时刻保留、锚到参考时区的参考日，只把缺的日期留作确认。
+- **确认项不再阻断保存**（[docs/45](docs/45-ai-calendar-and-meeting-actions.md)）：「确认日期 / 确认时间」按钮、
+  红字提示与「改为手工填写」移除；保存只校验标题非空 + 可写日历目标，日期时间由用户在表单里
+  自己核对。编辑页底部按钮重做（取消浅底、保存为主）。
+- **会议行标识别修订**：化小易 / 华为标签识别为华为云会议；无会议内容不再默认贴腾讯。
+- 编辑页原文 / 备注至少 4 行、编辑档高 560；输入框改实心样式并修复焦点与输入法组字。
+
+### 新增
+
+- **通知块表头「外接显示器」快捷开关**（[docs/53](docs/53-notification-hud-screen-scope.md) D-08）：直连设置页
+  「在外接显示器上也显示」同一颗开关（零新键），表头一键翻转、下一条通知即生效。
+- **首页今天带「+」直达日历新建页**；启动台快捷启动支持拖动排序。
+- 安装脚本 `--install` 装完自动启动（仅 GUI 会话内），新增 `--no-open` 逃生口。
+
+### 修复
+
+- 安装脚本退出旧实例：Apple Events 被「自动化」权限拒绝时不再被吞错（此前会「装成功、跑的
+  还是旧进程」）；现按 quit → SIGTERM → SIGKILL 逐级降级并校验，仍退不掉就中止安装，
+  绝不覆盖一个还在跑的二进制。
+
 ## [0.3.0] - 2026-10-16
 
 自 0.2.0 起累计 111 个提交。本版重点是**通用 AI 独立配置**、**日历面板第二轮**（一张表单 + 显式生成 +
