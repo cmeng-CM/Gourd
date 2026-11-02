@@ -126,6 +126,40 @@ verify_no_credentials() {
   echo "密钥扫描：$count 个本机凭据均未出现在 $target 内"
 }
 
+# 发布门禁四：许可文本随分发物走（GPL/BSD/MIT/Apache/LGPL 的「复现声明」义务，
+# 见 NOTICE §四）。落点两处：app 内 Contents/Resources/Licenses/（装完常驻）与
+# DMG 根「开源许可/」（拿到安装包即见）。SPM 依赖的许可从**实际编译的** checkouts
+# 拷——与 pin 的 revision 一致，新增依赖自动带上；仓库自备的固定副本只兜
+# 「checkouts 里没有文本」的组件（AtollExtensionKit 的 pin revision 无 LICENSE，见 NOTICE §五）。
+# 调用时机：ditto 落地副本之后、stamp_product_name（重签）之前——塞文件必须在重签前，
+# 否则签名不覆盖新文件。
+stage_licenses() {
+  target="$1"
+  lic_dir="$target/Contents/Resources/Licenses"
+  mkdir -p "$lic_dir"
+  cp "$repo_root/LICENSE" "$lic_dir/GPL-3.0.txt"
+  cp "$repo_root/NOTICE" "$lic_dir/NOTICE.txt"
+  cp "$repo_root/Frameworks/LICENSE" "$lic_dir/mediaremote-adapter-BSD-3-Clause.txt"
+  cp "$repo_root/third-party-licenses/AtollExtensionKit-LICENSE" "$lic_dir/AtollExtensionKit-LGPL-3.0.txt"
+  local pkg lic_src
+  for pkg_dir in "$derived/SourcePackages/checkouts"/*/; do
+    [ -d "$pkg_dir" ] || continue
+    pkg="$(basename "$pkg_dir")"
+    # 仓库自备副本兜底的包（checkout 内无文本，如 AtollExtensionKit 的 pin revision）
+    # 不再要求 checkout 里有——约定：third-party-licenses/<包名>-LICENSE 即其许可来源
+    if [ -f "$repo_root/third-party-licenses/$pkg-LICENSE" ]; then
+      continue
+    fi
+    lic_src="$(find "$pkg_dir" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' \) | sort | head -1)"
+    if [ -z "$lic_src" ]; then
+      echo "中止：SPM 依赖 $pkg 的 checkout 内没有许可文本（LICENSE/COPYING）——"
+      echo "      先登记 NOTICE 并在 third-party-licenses/ 自备许可副本，才能对外分发。"
+      exit 1
+    fi
+    cp "$lic_src" "$lic_dir/spm-$pkg-license.txt"
+  done
+}
+
 xcodebuild build \
   -project DynamicIsland.xcodeproj \
   -scheme DynamicIsland \
@@ -209,6 +243,7 @@ if [ "$do_install" = true ]; then
     fi
   done
   ditto "$app" "$installed_app"
+  stage_licenses "$installed_app"
   stamp_product_name "$installed_app"
   echo "===== 已安装到 $installed_app ====="
   # 刷新 LaunchServices，免得系统里留下重复/失效条目；失败不致命，只提示
@@ -252,9 +287,21 @@ if [ "$do_dmg" = true ]; then
   mkdir -p "$out"
   stage="$(mktemp -d)"
   ditto "$app" "$stage/壶中天.app"
+  stage_licenses "$stage/壶中天.app"
   stamp_product_name "$stage/壶中天.app"
   verify_no_credentials "$stage/壶中天.app"
   verify_signature "$stage/壶中天.app"
+  # DMG 根放一份许可 + 源码指引（GPL §6 源码获取方式的书面落点；BSD/LGPL 文本随包可见）
+  mkdir -p "$stage/开源许可"
+  cp "$stage/壶中天.app/Contents/Resources/Licenses/"*.txt "$stage/开源许可/"
+  cat > "$stage/开源许可/源码与许可说明.txt" <<'EOF'
+壶中天（Gourd）是免费开源软件，以 GNU GPL-3.0 分发。
+
+本安装包对应的完整源码：https://github.com/cmeng-CM/Gourd
+（ Releases 页的 tag 与本安装包版本号一致，可自行构建）
+
+应用基于开源项目 Atoll（GPL-3.0）修改而来；内嵌第三方组件的许可文本见本目录。
+EOF
   ln -s /Applications "$stage/Applications"
   rm -f "$out/Gourd-$ver.dmg"
   hdiutil create -volname "壶中天" -srcfolder "$stage" -ov -format UDZO "$out/壶中天-$ver.dmg" >/dev/null
