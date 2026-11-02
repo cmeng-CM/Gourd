@@ -932,10 +932,22 @@ final class HomeStripLayoutTests: XCTestCase {
         // 2026-10 在两种周起点下都是 5 周（周日-first：9/27–10/31；周一-first：9/28–11/1）。
         assertMonth(monday, 2026, 10, weeks: 5)
 
-        // 生产入口（无月参的那一个）与纯函数逐字同值：宿主 plan 的预算与行的 frame 读的是同一份。
+        // 生产入口（forMonth: 那一个，宿主 plan 的预算与行的 frame 读的是同一份）逐档对值——
+        // 用固定月份验证，不依赖跑测试时的系统日期（旧断言写死「当前月 = 2026-10 的 5 周档」，
+        // 2026-11 起必然失败）。
         XCTAssertEqual(
-            MonthGridLayout.monthGridHeight(forMonth: Date()), 278, accuracy: 1e-9,
-            "2026-10（当前月）仍是 5 周那一档：43 × 5 + 63 = 278"
+            MonthGridLayout.monthGridHeight(
+                forMonth: Self.calendarRowMonth(monday, year: 2026, month: 10), calendar: monday
+            ),
+            43 * 5 + 63, accuracy: 1e-9,
+            "5 周那一档：43 × 5 + 63 = 278（2026-10，周一-first）"
+        )
+        XCTAssertEqual(
+            MonthGridLayout.monthGridHeight(
+                forMonth: Self.calendarRowMonth(sunday, year: 2026, month: 5), calendar: sunday
+            ),
+            43 * 6 + 63, accuracy: 1e-9,
+            "6 周那一档：43 × 6 + 63 = 321（2026-05，周日-first）"
         )
 
         // 两处宿主同源（首页行 / 独立日历页左栏）：`MonthGridLayout.monthGridHeight` 就是行高算式
