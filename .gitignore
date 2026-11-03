@@ -228,6 +228,10 @@ TemporaryAssets/
 # ---------------------------------------------------------------------
 !scripts/*.sh
 !tools/*.sh
+# Python 回归按 AGENTS.md 约定命名 tests/test_*.py；通配豁免后新增测试文件
+# 才能进 `git status`（上游只豁免两个具名文件，新增测试会被静默吞掉——
+# test_general_ai_configuration.py 靠"先跟踪后加规则"才幸存）。
+!tests/test_*.py
 *.pyc
 __pycache__/
 
