@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/readme/calendar.png" alt="日历页" width="415">　<img src="docs/images/readme/launcher.png" alt="启动台" width="415">
+  <img src="docs/images/readme/calendar.jpg" alt="日历页" width="415">　<img src="docs/images/readme/launcher.png" alt="启动台" width="415">
   <br><sub><b>日历页</b>（月历 + 农历 + 分色点与角标 · 右栏列表 / 编辑）与 <b>启动台</b>（可搜索、可固定、可拖动排序）</sub>
 </p>
 
